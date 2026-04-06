@@ -1,50 +1,16 @@
 # B-Snap
 
-## Project Overview
-Briefly describe your project here.
+## 1. Project Overview
 
-## Features
-- [ ] Feature 1
-- [ ] Feature 2
-- [ ] Feature 3
+## 2. Key Features
 
-## Tech Stack
-### Frontend
-- e.g., React, Vue, etc.
+## 3. Tech Stack
 
-### Backend
-- e.g., Node.js, Python, etc.
+## 4. Directory Structure
+- **frontend/**
+- **backend/**
+- **img_preprocessing/**
 
-### Database
-- e.g., PostgreSQL, MongoDB, etc.
+## 5. Getting Started
 
-## Getting Started
-### Prerequisites
-- Node.js (version)
-- npm or yarn
-
-### Installation
-1. Clone the repository
-   ```bash
-   git clone https://github.com/flecy0904/B-Snap.git
-   ```
-2. Install dependencies
-   ```bash
-   npm install
-   ```
-
-### Execution
-```bash
-npm start
-```
-
-## Project Structure
-```text
-Root
-├── src/
-├── public/
-└── README.md
-```
-
-## License
-MIT License
+## 6. License
