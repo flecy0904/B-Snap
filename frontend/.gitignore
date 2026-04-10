@@ -3,6 +3,7 @@ node_modules/
 .DS_Store
 dist/
 build/
+android/
 android/.gradle/
 android/build/
 ios/build/
