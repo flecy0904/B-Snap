@@ -2,6 +2,7 @@ import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Image, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { PdfPreview } from './pdf-preview';
+import { BlankNoteCanvas } from './blank-note-canvas';
 import { buildAiResponse, NoteSummaryContent } from './notes-shared';
 import { CaptureAsset, NoteEntry, NoteWorkspaceMode, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../types';
 import { InkStroke, InkTool, SelectionRect } from '../ui-types';
@@ -47,12 +48,16 @@ export function MobileNotesView(props: {
   onOpenNote: (id: number) => void;
   onOpenStudyDocument: (id: number | null) => void;
   onOpenSubject: (id: number) => void;
+  onCreateBlankNote: () => void;
+  onUploadPdf: () => void;
   onBackToSubjectList: () => void;
   onBackToNoteList: () => void;
   styles: any;
   blueColor: string;
 }) {
   const [inboxPanelOpen, setInboxPanelOpen] = React.useState(false);
+  const [subjectActionsOpen, setSubjectActionsOpen] = React.useState(false);
+  const [noteActionsOpen, setNoteActionsOpen] = React.useState(false);
   const { normalizedQuestion, aiResponse, aiResponseSections } = buildAiResponse(props.aiQuestion, props.selectionRect, false);
 
   if (props.noteMode === 'note' && props.studyDocument && props.subject) {
@@ -184,9 +189,12 @@ export function MobileNotesView(props: {
           {props.studyDocument.file ? (
             <PdfPreview file={props.studyDocument.file} page={1} inkTool={props.inkTool} inkStrokes={props.inkStrokes} selectionRect={props.selectionRect} onCommitInkStroke={props.onCommitInkStroke} onSelectionChange={props.onSelectionChange} styles={props.styles} />
           ) : (
-            <View style={props.styles.blankNotebookStage}>
-              <Text style={props.styles.blankNotebookTitle}>빈 노트</Text>
-            </View>
+            <BlankNoteCanvas
+              inkTool={props.inkTool}
+              inkStrokes={props.inkStrokes}
+              onCommitInkStroke={props.onCommitInkStroke}
+              styles={props.styles}
+            />
           )}
         </View>
         {props.aiPanelOpen ? (
@@ -233,8 +241,18 @@ export function MobileNotesView(props: {
             <Text style={props.styles.noteCenterTitle}>{props.subject.name}</Text>
             <Text style={props.styles.noteCenterDate}>{props.note.date}</Text>
           </View>
-          <Pressable style={props.styles.navIcon}><Text style={props.styles.navIconText}>⋯</Text></Pressable>
+          <Pressable style={props.styles.navIcon} onPress={() => setNoteActionsOpen((current) => !current)}><Text style={props.styles.navIconText}>⋯</Text></Pressable>
         </View>
+        {noteActionsOpen ? (
+          <View style={props.styles.mobileActionPanel}>
+            <Pressable style={props.styles.mobileActionButton} onPress={() => props.onChangeNoteTab('summary')}>
+              <Text style={props.styles.mobileActionButtonText}>AI 정리 보기</Text>
+            </Pressable>
+            <Pressable style={props.styles.mobileActionButton} onPress={() => props.onChangeNoteTab('original')}>
+              <Text style={props.styles.mobileActionButtonText}>원본 보기</Text>
+            </Pressable>
+          </View>
+        ) : null}
         <View style={props.styles.segment}>
           <Pressable style={[props.styles.segmentButton, props.noteTab === 'original' && props.styles.segmentButtonActive]} onPress={() => props.onChangeNoteTab('original')}><Text style={[props.styles.segmentText, props.noteTab === 'original' && props.styles.segmentTextActive]}>원본</Text></Pressable>
           <Pressable style={[props.styles.segmentButton, props.noteTab === 'summary' && props.styles.segmentButtonActive]} onPress={() => props.onChangeNoteTab('summary')}><Text style={[props.styles.segmentText, props.noteTab === 'summary' && props.styles.segmentTextActive]}>AI 정리</Text></Pressable>
@@ -261,8 +279,30 @@ export function MobileNotesView(props: {
         <View style={props.styles.centerTopBar}>
           <Pressable onPress={props.onBackToSubjectList} style={props.styles.navIcon}><Text style={props.styles.navIconText}>{'‹'}</Text></Pressable>
           <Text style={props.styles.centerTopTitle}>{currentSubject.name}</Text>
-          <Pressable style={props.styles.navIcon}><Text style={props.styles.navIconText}>⋯</Text></Pressable>
+          <Pressable style={props.styles.navIcon} onPress={() => setSubjectActionsOpen((current) => !current)}><Text style={props.styles.navIconText}>⋯</Text></Pressable>
         </View>
+        {subjectActionsOpen ? (
+          <View style={props.styles.mobileActionPanel}>
+            <Pressable
+              style={[props.styles.mobileActionButton, props.styles.mobileActionButtonPrimary]}
+              onPress={() => {
+                setSubjectActionsOpen(false);
+                props.onCreateBlankNote();
+              }}
+            >
+              <Text style={[props.styles.mobileActionButtonText, props.styles.mobileActionButtonTextPrimary]}>새 노트 만들기</Text>
+            </Pressable>
+            <Pressable
+              style={props.styles.mobileActionButton}
+              onPress={() => {
+                setSubjectActionsOpen(false);
+                props.onUploadPdf();
+              }}
+            >
+              <Text style={props.styles.mobileActionButtonText}>PDF 업로드</Text>
+            </Pressable>
+          </View>
+        ) : null}
         <View style={props.styles.segment}>
           <Pressable style={[props.styles.segmentButton, props.noteMode === 'photo' && props.styles.segmentButtonActive]} onPress={() => props.onChangeMode('photo')}><Text style={[props.styles.segmentText, props.noteMode === 'photo' && props.styles.segmentTextActive]}>Photo</Text></Pressable>
           <Pressable style={[props.styles.segmentButton, props.noteMode === 'note' && props.styles.segmentButtonActive]} onPress={() => props.onChangeMode('note')}><Text style={[props.styles.segmentText, props.noteMode === 'note' && props.styles.segmentTextActive]}>Note</Text></Pressable>

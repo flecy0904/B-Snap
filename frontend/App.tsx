@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
-import { Image, NativeModules, Platform, Pressable, StatusBar as NativeStatusBar, Text, useWindowDimensions, View } from 'react-native';
+import { Image, NativeModules, Platform, Pressable, StatusBar as NativeStatusBar, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import { subjects } from './app/data';
 import { Sidebar, TabIcon } from './app/components/navigation';
@@ -17,6 +17,12 @@ import { C, S } from './app/styles';
 import type { TabKey } from './app/types';
 
 const TABS: TabKey[] = ['schedule', 'notes', 'capture', 'profile'];
+
+interface AuthUser {
+  id: string;
+  email: string;
+  provider: 'email' | 'google' | 'naver' | 'kakao';
+}
 
 function normalizeBackendHttpUrl(value?: string) {
   if (typeof value !== 'string') return null;
@@ -65,6 +71,18 @@ function resolveBackendHttpUrl() {
 }
 
 export default function App() {
+  const [user, setUser] = useState<AuthUser | null>(null);
+
+  if (!user) {
+    return <LoginScreen onLogin={setUser} />;
+  }
+
+  return <AuthenticatedApp onLogout={() => setUser(null)} />;
+}
+
+function AuthenticatedApp(props: {
+  onLogout: () => void;
+}) {
   const syncBridge = useMemo(
     () => {
       const httpUrl = resolveBackendHttpUrl();
@@ -75,13 +93,145 @@ export default function App() {
 
   return (
     <SyncBridgeProvider bridge={syncBridge}>
-      <AppShell />
+      <AppShell onLogout={props.onLogout} />
     </SyncBridgeProvider>
   );
 }
 
-function AppShell() {
+function LoginScreen(props: {
+  onLogin: (user: AuthUser) => void;
+}) {
+  const isWeb = false;
+  const [email, setEmail] = useState('student@b-snap.app');
+  const [password, setPassword] = useState('bsnap1234');
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = () => {
+    const normalizedEmail = email.trim();
+    if (!normalizedEmail || !password.trim()) {
+      setError('이메일과 비밀번호를 입력해주세요.');
+      return;
+    }
+
+    setError(null);
+    props.onLogin({
+      id: 'mock-user',
+      email: normalizedEmail,
+      provider: 'email',
+    });
+  };
+
+  const loginWithProvider = (provider: AuthUser['provider']) => {
+    if (provider === 'email') {
+      submit();
+      return;
+    }
+
+    setError(null);
+    props.onLogin({
+      id: `mock-${provider}-user`,
+      email: `${provider}@b-snap.app`,
+      provider,
+    });
+  };
+
+  return (
+    <SafeAreaProvider>
+      <SafeAreaView style={S.safe} edges={['top', 'left', 'right']}>
+        <StatusBar style="dark" />
+        <NativeStatusBar barStyle="dark-content" />
+        <View style={S.loginScreen}>
+          <View style={[S.loginCard, isWeb && S.webLoginCard]}>
+            {isWeb ? (
+              <View style={S.webLoginIntro}>
+                <Text style={S.webLoginEyebrow}>B-SNAP WEB</Text>
+                <Text style={S.webLoginHeadline}>수업 자료와 노트를 브라우저에서 바로 정리하세요.</Text>
+                <Text style={S.webLoginBody}>시간표, 캡처, PDF 정리, AI 요약 흐름을 데스크톱 작업공간처럼 구성한 웹 프리뷰입니다.</Text>
+                <View style={S.webLoginFeatureList}>
+                  {['과목별 작업공간', 'PDF + 판서 정리 흐름', '실시간 캡처 inbox'].map((item) => (
+                    <View key={item} style={S.webLoginFeatureRow}>
+                      <View style={S.webLoginFeatureDot} />
+                      <Text style={S.webLoginFeatureText}>{item}</Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            ) : null}
+            <View style={isWeb ? S.webLoginForm : null}>
+              <View style={S.loginLogoWrap}>
+                <Image source={require('./assets/icon.png')} style={S.loginLogoImage} resizeMode="contain" />
+              </View>
+              <Text style={S.loginTitle}>B-SNAP</Text>
+              <Text style={S.loginSubtitle}>수업 자료와 노트를 한 번에 정리하세요.</Text>
+
+              <View style={S.loginFieldGroup}>
+                <Text style={S.loginLabel}>이메일</Text>
+                <TextInput
+                  value={email}
+                  onChangeText={setEmail}
+                  autoCapitalize="none"
+                  keyboardType="email-address"
+                  placeholder="student@b-snap.app"
+                  placeholderTextColor="#B8BFCC"
+                  style={S.loginInput}
+                />
+              </View>
+              <View style={S.loginFieldGroup}>
+                <Text style={S.loginLabel}>비밀번호</Text>
+                <TextInput
+                  value={password}
+                  onChangeText={setPassword}
+                  secureTextEntry
+                  placeholder="비밀번호"
+                  placeholderTextColor="#B8BFCC"
+                  style={S.loginInput}
+                />
+              </View>
+
+              {error ? <Text style={S.loginError}>{error}</Text> : null}
+
+              <Pressable style={S.loginButton} onPress={submit}>
+                <Text style={S.loginButtonText}>로그인</Text>
+              </Pressable>
+
+              <View style={S.loginDividerRow}>
+                <View style={S.loginDividerLine} />
+                <Text style={S.loginDividerText}>또는</Text>
+                <View style={S.loginDividerLine} />
+              </View>
+
+              <Pressable style={S.socialLoginButton} onPress={() => loginWithProvider('google')}>
+                <View style={[S.socialLoginMark, S.socialLoginMarkGoogle]}>
+                  <Text style={S.socialLoginMarkText}>G</Text>
+                </View>
+                <Text style={S.socialLoginButtonText}>Google로 계속하기</Text>
+              </Pressable>
+              <Pressable style={S.socialLoginButton} onPress={() => loginWithProvider('naver')}>
+                <View style={[S.socialLoginMark, S.socialLoginMarkNaver]}>
+                  <Text style={S.socialLoginMarkText}>N</Text>
+                </View>
+                <Text style={S.socialLoginButtonText}>Naver로 계속하기</Text>
+              </Pressable>
+              <Pressable style={S.socialLoginButton} onPress={() => loginWithProvider('kakao')}>
+                <View style={[S.socialLoginMark, S.socialLoginMarkKakao]}>
+                  <Text style={S.socialLoginMarkKakaoText}>K</Text>
+                </View>
+                <Text style={S.socialLoginButtonText}>Kakao로 계속하기</Text>
+              </Pressable>
+              <Text style={S.loginHint}>현재는 mock 로그인으로 메인 앱에 진입합니다.</Text>
+            </View>
+          </View>
+        </View>
+      </SafeAreaView>
+    </SafeAreaProvider>
+  );
+}
+
+function AppShell(props: {
+  onLogout: () => void;
+}) {
   const { width, height } = useWindowDimensions();
+  const isWeb = false;
   const wide = width >= 900 || (width >= 700 && width > height);
   const desktopCompact = wide && width < 1280;
   const [tab, setTab] = useState<TabKey>('schedule');
@@ -137,9 +287,9 @@ function AppShell() {
           </View>
         ) : null}
         {wide ? (
-          <View style={[S.desktop, desktopCompact && S.desktopCompact]}>
-            <Sidebar tab={tab} onTab={changeTab} compact={desktopCompact} styles={S} blueColor={C.blue} />
-            <View style={S.main}>
+          <View style={[S.desktop, desktopCompact && S.desktopCompact, isWeb && S.webDesktop]}>
+            <Sidebar tab={tab} onTab={changeTab} compact={desktopCompact} styles={S} blueColor={C.blue} isWeb={isWeb} />
+            <View style={[S.main, isWeb && S.webMainShell]}>
               {tab === 'schedule' && <DesktopSchedule semester={scheduleState.semester} onOpenSubject={notesState.openSubject} compact={desktopCompact} styles={S} />}
               {tab === 'notes' && (
                 <DesktopNotes
@@ -190,12 +340,15 @@ function AppShell() {
                   onOpenStudyDocument={notesState.openStudyDocument}
                   onOpenNote={notesState.openNote}
                   onOpenSubject={notesState.openSubject}
+                  onCreateBlankNote={notesState.createBlankNote}
+                  onUploadPdf={notesState.uploadPdfDocument}
                   onReset={notesState.resetNotes}
                   onSetCurrentPdfPage={notesState.setCurrentPdfPage}
                   onGoToPreviousDocumentPage={notesState.goToPreviousDocumentPage}
                   onGoToNextDocumentPage={notesState.goToNextDocumentPage}
                   styles={S}
                   blueColor={C.blue}
+                  isWeb={isWeb}
                 />
               )}
               {tab === 'capture' && (
@@ -212,9 +365,10 @@ function AppShell() {
                   onPickFromLibrary={captureState.pickImageFromLibrary}
                   onPickPdf={captureState.pickPdfDocument}
                   styles={S}
+                  isWeb={isWeb}
                 />
               )}
-              {tab === 'profile' && <DesktopProfile compact={desktopCompact} styles={S} />}
+              {tab === 'profile' && <DesktopProfile compact={desktopCompact} styles={S} onLogout={props.onLogout} isWeb={isWeb} />}
             </View>
           </View>
         ) : (
@@ -273,6 +427,8 @@ function AppShell() {
                   onOpenNote={notesState.openNote}
                   onOpenStudyDocument={notesState.openStudyDocument}
                   onOpenSubject={notesState.openSubject}
+                  onCreateBlankNote={notesState.createBlankNote}
+                  onUploadPdf={notesState.uploadPdfDocument}
                   onBackToSubjectList={notesState.resetToSubjectList}
                   onBackToNoteList={notesState.backToNoteList}
                   styles={S}
@@ -299,7 +455,7 @@ function AppShell() {
                   styles={S}
                 />
               )}
-              {tab === 'profile' && <MobileProfile styles={S} />}
+              {tab === 'profile' && <MobileProfile styles={S} onLogout={props.onLogout} />}
             </View>
             <View style={S.tabbar}>
               {TABS.map((item) => {

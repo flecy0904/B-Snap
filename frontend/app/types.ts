@@ -47,7 +47,7 @@ export interface StudyDocumentEntry {
   updatedAt: string;
   pageCount: number;
   preview: string;
-  file?: number;
+  file?: number | { uri: string };
 }
 
 export interface CaptureAsset {

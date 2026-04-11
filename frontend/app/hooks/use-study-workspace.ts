@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
+import * as DocumentPicker from 'expo-document-picker';
 import { notes, studyDocuments, subjects } from '../data';
 import { useSyncBridge } from './use-sync-bridge';
 import type { InkStroke, InkTool, SelectionRect } from '../ui-types';
-import type { CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NoteSummarySection, NoteWorkspaceMode, WorkspaceAttachment } from '../types';
+import type { CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NoteSummarySection, NoteWorkspaceMode, StudyDocumentEntry, WorkspaceAttachment } from '../types';
 
 function buildGeneratedSummary(asset: CaptureAsset): {
   summaryTitle: string;
@@ -87,14 +88,16 @@ export function useStudyWorkspace(props: {
   const [captureAssetsBySubject, setCaptureAssetsBySubject] = useState<Record<number, CaptureAsset[]>>({});
   const [attachmentsByDocument, setAttachmentsByDocument] = useState<Record<number, WorkspaceAttachment[]>>({});
   const [generatedPagesByDocument, setGeneratedPagesByDocument] = useState<Record<number, GeneratedWorkspacePage[]>>({});
+  const [userStudyDocuments, setUserStudyDocuments] = useState<StudyDocumentEntry[]>([]);
   const [currentPdfPageByDocument, setCurrentPdfPageByDocument] = useState<Record<number, number>>({});
   const [activePageByDocument, setActivePageByDocument] = useState<Record<number, DocumentPageView>>({});
   const [workspaceFeedback, setWorkspaceFeedback] = useState<string | null>(null);
   const [incomingBannerQueue, setIncomingBannerQueue] = useState<CaptureAsset[]>([]);
 
+  const allStudyDocuments = useMemo(() => [...userStudyDocuments, ...studyDocuments], [userStudyDocuments]);
   const subject = useMemo(() => subjects.find((value) => value.id === subjectId) ?? null, [subjectId]);
   const note = useMemo(() => notes.find((value) => value.id === noteId) ?? null, [noteId]);
-  const studyDocument = useMemo(() => studyDocuments.find((value) => value.id === studyDocumentId) ?? null, [studyDocumentId]);
+  const studyDocument = useMemo(() => allStudyDocuments.find((value) => value.id === studyDocumentId) ?? null, [allStudyDocuments, studyDocumentId]);
   const inkStrokes = studyDocumentId ? inkByDocument[studyDocumentId] ?? [] : [];
   const selectionRect = studyDocumentId ? selectionByDocument[studyDocumentId] ?? null : null;
   const captureInbox = useMemo(() => {
@@ -200,7 +203,7 @@ export function useStudyWorkspace(props: {
   }, [query, sort, subjectId]);
 
   const filteredStudyDocuments = useMemo(() => {
-    let list = subjectId ? studyDocuments.filter((value) => value.subjectId === subjectId) : studyDocuments;
+    let list = subjectId ? allStudyDocuments.filter((value) => value.subjectId === subjectId) : allStudyDocuments;
     const normalizedQuery = query.trim().toLowerCase();
 
     if (normalizedQuery) {
@@ -216,7 +219,7 @@ export function useStudyWorkspace(props: {
     }
 
     return sort === 'latest' ? list : [...list].reverse();
-  }, [query, sort, subjectId]);
+  }, [allStudyDocuments, query, sort, subjectId]);
 
   const openSubject = (id: number) => {
     props.onOpenNotesTab();
@@ -244,7 +247,7 @@ export function useStudyWorkspace(props: {
       return;
     }
 
-    const selected = studyDocuments.find((value) => value.id === id);
+    const selected = allStudyDocuments.find((value) => value.id === id);
     if (!selected) return;
 
     props.onOpenNotesTab();
@@ -256,6 +259,79 @@ export function useStudyWorkspace(props: {
       ...current,
       [id]: current[id] ?? { kind: 'pdf', pageNumber: currentPdfPageByDocument[id] ?? 1 },
     }));
+  };
+
+  const openCreatedStudyDocument = (document: StudyDocumentEntry, feedback: string) => {
+    setUserStudyDocuments((current) => [document, ...current]);
+    props.onOpenNotesTab();
+    setSubjectId(document.subjectId);
+    setNoteId(null);
+    setStudyDocumentId(document.id);
+    setNoteWorkspaceMode('note');
+    setInkTool('view');
+    setAiPanelOpen(false);
+    setWorkspaceFeedback(feedback);
+    setCurrentPdfPageByDocument((current) => ({
+      ...current,
+      [document.id]: 1,
+    }));
+    setActivePageByDocument((current) => ({
+      ...current,
+      [document.id]: { kind: 'pdf', pageNumber: 1 },
+    }));
+  };
+
+  const createBlankNote = () => {
+    const targetSubjectId = subjectId ?? subjects[0]?.id ?? null;
+    if (!targetSubjectId) return;
+
+    const targetSubject = subjects.find((value) => value.id === targetSubjectId);
+    const document: StudyDocumentEntry = {
+      id: Date.now(),
+      subjectId: targetSubjectId,
+      title: `${targetSubject?.name ?? '수업'} 새 노트`,
+      type: 'blank',
+      updatedAt: '방금 전',
+      pageCount: 1,
+      preview: '새로 만든 빈 필기 노트입니다.',
+    };
+
+    openCreatedStudyDocument(document, '새 빈 노트를 만들었습니다.');
+  };
+
+  const uploadPdfDocument = async () => {
+    const targetSubjectId = subjectId ?? subjects[0]?.id ?? null;
+    if (!targetSubjectId) return;
+
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: 'application/pdf',
+        multiple: false,
+        copyToCacheDirectory: true,
+      });
+
+      if (result.canceled || !result.assets.length) {
+        setWorkspaceFeedback('PDF 업로드를 취소했습니다.');
+        return;
+      }
+
+      const picked = result.assets[0];
+      const targetSubject = subjects.find((value) => value.id === targetSubjectId);
+      const document: StudyDocumentEntry = {
+        id: Date.now(),
+        subjectId: targetSubjectId,
+        title: picked.name || `${targetSubject?.name ?? '수업'} PDF`,
+        type: 'pdf',
+        updatedAt: '방금 전',
+        pageCount: 1,
+        preview: '파일 선택기에서 업로드한 수업 PDF입니다.',
+        file: { uri: picked.uri },
+      };
+
+      openCreatedStudyDocument(document, 'PDF 파일을 업로드했습니다.');
+    } catch {
+      setWorkspaceFeedback('PDF 파일을 가져오지 못했습니다.');
+    }
   };
 
   const resetNotes = () => {
@@ -563,6 +639,8 @@ export function useStudyWorkspace(props: {
     openSubject,
     openNote,
     openStudyDocument,
+    createBlankNote,
+    uploadPdfDocument,
     resetNotes,
     changeNoteWorkspaceMode,
     resetToSubjectList,

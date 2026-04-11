@@ -44,6 +44,8 @@ export function MobileNotes(props: {
   onOpenNote: (id: number) => void;
   onOpenStudyDocument: (id: number | null) => void;
   onOpenSubject: (id: number) => void;
+  onCreateBlankNote: () => void;
+  onUploadPdf: () => void;
   onBackToSubjectList: () => void;
   onBackToNoteList: () => void;
   styles: any;
@@ -100,12 +102,15 @@ export function DesktopNotes(props: {
   onOpenStudyDocument: (id: number | null) => void;
   onOpenNote: (id: number) => void;
   onOpenSubject: (id: number) => void;
+  onCreateBlankNote: () => void;
+  onUploadPdf: () => void;
   onReset: () => void;
   onSetCurrentPdfPage: (pageNumber: number) => void;
   onGoToPreviousDocumentPage: () => void;
   onGoToNextDocumentPage: () => void;
   styles: any;
   blueColor: string;
+  isWeb?: boolean;
 }) {
   return <DesktopNotesView {...props} />;
 }

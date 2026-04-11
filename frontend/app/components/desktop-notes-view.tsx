@@ -1,8 +1,9 @@
 import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { ActivityIndicator, Image, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Image, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { studyDocuments as allStudyDocuments, subjects as allSubjects } from '../data';
 import { PdfPreview } from './pdf-preview';
+import { BlankNoteCanvas } from './blank-note-canvas';
 import { buildAiResponse, NoteSummaryContent } from './notes-shared';
 import { resolvePreviewImage } from '../mock-preview-images';
 import { CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NoteEntry, NoteWorkspaceMode, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../types';
@@ -57,17 +58,21 @@ export function DesktopNotesView(props: {
   onOpenStudyDocument: (id: number | null) => void;
   onOpenNote: (id: number) => void;
   onOpenSubject: (id: number) => void;
+  onCreateBlankNote: () => void;
+  onUploadPdf: () => void;
   onReset: () => void;
   onSetCurrentPdfPage: (pageNumber: number) => void;
   onGoToPreviousDocumentPage: () => void;
   onGoToNextDocumentPage: () => void;
   styles: any;
   blueColor: string;
+  isWeb?: boolean;
 }) {
   const [inboxPanelOpen, setInboxPanelOpen] = React.useState(true);
   const [workspaceDockOpen, setWorkspaceDockOpen] = React.useState(false);
   const [selectedPreview, setSelectedPreview] = React.useState<{ source: 'incoming' | 'attachment' | 'inbox'; assetId: string } | null>(null);
   const { normalizedQuestion, aiResponse, aiResponseSections } = buildAiResponse(props.aiQuestion, props.selectionRect, true);
+  const webMode = false;
 
   React.useEffect(() => {
     if (props.incomingAssetSuggestion) {
@@ -111,7 +116,7 @@ export function DesktopNotesView(props: {
     const currentPageLabel =
       props.currentDocumentPage?.kind === 'generated'
         ? `${props.activeGeneratedPage?.insertAfterPage ?? props.currentPdfPage}-${activeGeneratedOrdinal} 정리`
-        : `${props.currentPdfPage} / ${props.totalDocumentPageCount} · 원본 PDF`;
+        : `${props.currentPdfPage} / ${props.totalDocumentPageCount} · ${props.studyDocument.type === 'pdf' ? '원본 PDF' : '빈 노트'}`;
     const previewedIncoming =
       selectedPreview?.source === 'incoming' && props.incomingAssetSuggestion?.id === selectedPreview.assetId
         ? props.incomingAssetSuggestion
@@ -144,6 +149,211 @@ export function DesktopNotesView(props: {
       resolvePreviewImage(activeGeneratedAttachment?.previewImageKey) ??
       props.activeGeneratedPage?.previewImage ??
       activeGeneratedAttachment?.previewImage;
+
+    if (webMode) {
+      return (
+        <ScrollView style={props.styles.main} contentContainerStyle={[props.styles.desktopPage, props.styles.webDesktopPage]}>
+          <View style={props.styles.webPageHeader}>
+            <View style={props.styles.webPageHeaderMeta}>
+              <Text style={props.styles.webPageEyebrow}>NOTES WORKSPACE</Text>
+              <Text style={props.styles.webPageTitle}>{props.studyDocument.title}</Text>
+              <Text style={props.styles.webPageBody}>{props.subject.name} 자료를 웹 작업공간에서 탐색, 주석, 정리하도록 재구성했습니다.</Text>
+            </View>
+            <View style={props.styles.webHeaderBadgeRow}>
+              <View style={props.styles.webHeaderBadge}>
+                <Text style={props.styles.webHeaderBadgeText}>{currentPageLabel}</Text>
+              </View>
+            </View>
+          </View>
+          <View style={props.styles.webWorkspaceShell}>
+            <View style={props.styles.webWorkspaceRail}>
+              <Pressable style={props.styles.webWorkspaceBack} onPress={() => props.onOpenStudyDocument(null)}>
+                <Text style={props.styles.webWorkspaceBackText}>← 문서 목록으로</Text>
+              </Pressable>
+              <View style={props.styles.webWorkspaceRailCard}>
+                <Text style={props.styles.webWorkspaceRailEyebrow}>CURRENT SUBJECT</Text>
+                <Text style={props.styles.webWorkspaceRailTitle}>{props.subject.name}</Text>
+                <Text style={props.styles.webWorkspaceRailBody}>{props.studyDocument.type === 'pdf' ? 'PDF 문서' : '빈 노트'} · {props.studyDocument.pageCount}페이지</Text>
+              </View>
+              <View style={props.styles.webWorkspaceRailCard}>
+                <Text style={props.styles.webWorkspaceRailEyebrow}>SHORTCUTS</Text>
+                <Pressable style={props.styles.webWorkspaceRailAction} onPress={() => props.onChangeInkTool('view')}><Text style={props.styles.webWorkspaceRailActionText}>읽기 모드</Text></Pressable>
+                <Pressable style={props.styles.webWorkspaceRailAction} onPress={() => props.onChangeInkTool('pen')}><Text style={props.styles.webWorkspaceRailActionText}>펜 주석</Text></Pressable>
+                <Pressable style={props.styles.webWorkspaceRailAction} onPress={() => props.onChangeInkTool('select')}><Text style={props.styles.webWorkspaceRailActionText}>영역 선택</Text></Pressable>
+              </View>
+              {props.workspaceAttachments.length ? (
+                <View style={props.styles.webWorkspaceRailCard}>
+                  <Text style={props.styles.webWorkspaceRailEyebrow}>GENERATED PAGES</Text>
+                  {props.workspaceAttachments.slice(0, 4).map((asset) => (
+                    <Pressable key={asset.id} style={props.styles.webWorkspaceMiniRow} onPress={() => props.onOpenWorkspaceAttachment(asset.id)}>
+                      <Text style={props.styles.webWorkspaceMiniTitle} numberOfLines={1}>{asset.title}</Text>
+                      <Text style={props.styles.webWorkspaceMiniMeta}>{asset.type === 'image' ? '삽입 페이지' : '참고 PDF'}</Text>
+                    </Pressable>
+                  ))}
+                </View>
+              ) : null}
+            </View>
+            <View style={props.styles.webWorkspaceMain}>
+              <View style={props.styles.inkToolbar}>
+                <View style={props.styles.documentPageNavigator}>
+                  <Pressable style={props.styles.documentPageNavButton} onPress={props.onGoToPreviousDocumentPage}>
+                    <MaterialCommunityIcons name="chevron-left" size={18} color="#5B6474" />
+                  </Pressable>
+                  <Text style={props.styles.documentPageLabel}>{currentPageLabel}</Text>
+                  <Pressable style={props.styles.documentPageNavButton} onPress={props.onGoToNextDocumentPage}>
+                    <MaterialCommunityIcons name="chevron-right" size={18} color="#5B6474" />
+                  </Pressable>
+                </View>
+                <View style={props.styles.inkToolbarTools}>
+                  {[
+                    ['view', 'cursor-default-outline'],
+                    ['pen', 'pencil-outline'],
+                    ['select', 'selection-drag'],
+                  ].map(([value, icon]) => (
+                    <Pressable key={value} style={[props.styles.inkToolButton, props.inkTool === value && props.styles.inkToolButtonActive]} onPress={() => props.onChangeInkTool(value as InkTool)}>
+                      <MaterialCommunityIcons name={icon as any} size={18} color={props.inkTool === value ? props.blueColor : '#556070'} />
+                    </Pressable>
+                  ))}
+                  <View style={props.styles.inkToolbarDivider} />
+                  <Pressable style={props.styles.inkActionButton} onPress={props.onUndoInk}><MaterialCommunityIcons name="undo-variant" size={18} color="#556070" /></Pressable>
+                  <Pressable style={props.styles.inkActionButton} onPress={props.onClearInk}><MaterialCommunityIcons name="trash-can-outline" size={18} color="#556070" /></Pressable>
+                </View>
+              </View>
+              {props.workspaceFeedback ? (
+                <View style={props.styles.workspaceToast}>
+                  <MaterialCommunityIcons name="check-circle-outline" size={16} color="#4D67D8" />
+                  <Text style={props.styles.workspaceToastText}>{props.workspaceFeedback}</Text>
+                </View>
+              ) : null}
+              <View style={props.styles.webWorkspaceDocument}>
+                {props.activeGeneratedPage?.status === 'generating' ? (
+                  <View style={props.styles.generatedPageCard}>
+                    <View style={props.styles.generatedPageContent}>
+                      <View style={props.styles.generatedPageLoading}>
+                        <ActivityIndicator size="large" color={props.blueColor} />
+                        <Text style={props.styles.generatedPageLoadingTitle}>판서+LLM 정리본을 만드는 중입니다.</Text>
+                        <Text style={props.styles.generatedPageLoadingBody}>완료되면 현재 PDF 다음 위치에 새 페이지로 추가됩니다.</Text>
+                      </View>
+                    </View>
+                  </View>
+                ) : props.activeGeneratedPage ? (
+                  <View style={props.styles.generatedPageCard}>
+                    <View style={props.styles.generatedPageSheet}>
+                      <View style={props.styles.generatedPageContent}>
+                        <View style={props.styles.generatedPageLayout}>
+                          <View style={props.styles.generatedPageImageColumn}>
+                            {activeGeneratedPreviewImage ? (
+                              <Image source={activeGeneratedPreviewImage} style={props.styles.generatedPageImage} resizeMode="cover" />
+                            ) : (
+                              <View style={props.styles.generatedPageImageFallback}>
+                                <MaterialCommunityIcons name="image-outline" size={32} color="#6D7BD9" />
+                              </View>
+                            )}
+                          </View>
+                          <View style={props.styles.generatedPagePaper}>
+                            <ScrollView contentContainerStyle={props.styles.generatedPagePaperContent} showsVerticalScrollIndicator={false}>
+                              <Text style={props.styles.generatedSummaryTitle}>{props.activeGeneratedPage.summaryTitle}</Text>
+                              {props.activeGeneratedPage.summarySections.slice(0, 2).map((section, index) => (
+                                <View key={`${section.title}-${index}`} style={[props.styles.generatedSummaryCard, index === 1 && props.styles.generatedSummaryCardSoft]}>
+                                  <Text style={props.styles.generatedSummaryLabel}>{section.title}</Text>
+                                  <Text style={props.styles.generatedSummaryBody}>{section.body}</Text>
+                                </View>
+                              ))}
+                              {props.activeGeneratedPage.formulaText ? (
+                                <View style={props.styles.generatedFormulaCallout}>
+                                  <Text style={props.styles.generatedSummaryLabel}>필기 핵심</Text>
+                                  <Text style={props.styles.generatedSummaryBody}>{props.activeGeneratedPage.formulaText}</Text>
+                                </View>
+                              ) : null}
+                            </ScrollView>
+                          </View>
+                        </View>
+                      </View>
+                    </View>
+                  </View>
+                ) : props.studyDocument.type === 'pdf' && props.studyDocument.file ? (
+                  <PdfPreview
+                    file={props.studyDocument.file}
+                    page={props.currentPdfPage}
+                    inkTool={props.inkTool}
+                    inkStrokes={props.inkStrokes}
+                    selectionRect={props.selectionRect}
+                    onCommitInkStroke={props.onCommitInkStroke}
+                    onSelectionChange={props.onSelectionChange}
+                    onPageChanged={props.onSetCurrentPdfPage}
+                    styles={props.styles}
+                  />
+                ) : (
+                  <BlankNoteCanvas
+                    inkTool={props.inkTool}
+                    inkStrokes={props.inkStrokes}
+                    onCommitInkStroke={props.onCommitInkStroke}
+                    styles={props.styles}
+                  />
+                )}
+              </View>
+            </View>
+            <View style={props.styles.webWorkspaceAside}>
+              <View style={props.styles.webWorkspaceAsideCard}>
+                <View style={props.styles.webWorkspaceAsideHeader}>
+                  <Text style={props.styles.webWorkspaceAsideTitle}>AI 요약</Text>
+                  <Pressable style={props.styles.aiPanelClose} onPress={props.onToggleAiPanel}>
+                    <MaterialCommunityIcons name={props.aiPanelOpen ? 'close' : 'star-four-points'} size={18} color="#5F79FF" />
+                  </Pressable>
+                </View>
+                <Text style={props.styles.aiStateBody}>{props.selectionRect ? `${Math.round(props.selectionRect.width)} × ${Math.round(props.selectionRect.height)} 영역 선택됨` : '선택된 영역이 없습니다.'}</Text>
+                <View style={props.styles.aiInputShell}>
+                  <TextInput value={props.aiQuestion} onChangeText={props.onChangeAiQuestion} placeholder="선택한 영역에 대해 물어보세요" placeholderTextColor="#A2AAB8" multiline style={props.styles.aiInput} />
+                </View>
+                <View style={props.styles.aiResponseCard}>
+                  <Text style={props.styles.aiResponseTitle}>답변</Text>
+                  {props.selectionRect && normalizedQuestion ? <View style={props.styles.aiQuestionPill}><Text style={props.styles.aiQuestionPillText}>{normalizedQuestion}</Text></View> : null}
+                  {aiResponseSections ? aiResponseSections.map((section, index) => (
+                    <View key={`${section.title}-${index}`} style={[props.styles.aiResponseSection, index === aiResponseSections.length - 1 && props.styles.aiResponseSectionLast]}>
+                      <Text style={props.styles.aiResponseSectionTitle}>{section.title}</Text>
+                      <Text style={props.styles.aiResponseBody}>{section.body}</Text>
+                    </View>
+                  )) : <Text style={props.styles.aiResponseBody}>{aiResponse}</Text>}
+                </View>
+              </View>
+              {props.incomingAssetSuggestion ? (
+                <View style={props.styles.webWorkspaceAsideCard}>
+                  <Text style={props.styles.webWorkspaceAsideTitle}>새 자료 도착</Text>
+                  <Text style={props.styles.webWorkspaceMiniTitle}>{props.incomingAssetSuggestion.title}</Text>
+                  <Text style={props.styles.webWorkspaceMiniMeta}>{props.incomingAssetSuggestion.sourceDeviceLabel}</Text>
+                  <View style={props.styles.workspaceDockActions}>
+                    <Pressable style={props.styles.workspacePrimaryAction} onPress={props.onAcceptIncomingAsset}>
+                      <Text style={props.styles.workspacePrimaryActionText}>삽입</Text>
+                    </Pressable>
+                    <Pressable style={props.styles.workspaceGhostAction} onPress={props.onDismissIncomingAsset}>
+                      <Text style={props.styles.workspaceGhostActionText}>무시</Text>
+                    </Pressable>
+                  </View>
+                </View>
+              ) : null}
+              {props.captureInbox.length ? (
+                <View style={props.styles.webWorkspaceAsideCard}>
+                  <Text style={props.styles.webWorkspaceAsideTitle}>Inbox</Text>
+                  {props.captureInbox.slice(0, 5).map((asset) => (
+                    <View key={asset.id} style={props.styles.webWorkspaceMiniRow}>
+                      <View style={props.styles.fill}>
+                        <Text style={props.styles.webWorkspaceMiniTitle} numberOfLines={1}>{asset.title}</Text>
+                        <Text style={props.styles.webWorkspaceMiniMeta}>{asset.sourceDeviceLabel}</Text>
+                      </View>
+                      {asset.status !== 'accepted' ? (
+                        <Pressable style={props.styles.workspaceDockInlineAction} onPress={() => props.onInsertInboxAsset(asset.id)}>
+                          <Text style={props.styles.workspaceDockInlineActionText}>삽입</Text>
+                        </Pressable>
+                      ) : null}
+                    </View>
+                  ))}
+                </View>
+              ) : null}
+            </View>
+          </View>
+        </ScrollView>
+      );
+    }
 
     return (
       <View style={props.styles.fill}>
@@ -444,9 +654,12 @@ export function DesktopNotesView(props: {
               styles={props.styles}
             />
           ) : (
-            <View style={props.styles.blankNotebookStage}>
-              <Text style={props.styles.blankNotebookTitle}>빈 노트</Text>
-            </View>
+            <BlankNoteCanvas
+              inkTool={props.inkTool}
+              inkStrokes={props.inkStrokes}
+              onCommitInkStroke={props.onCommitInkStroke}
+              styles={props.styles}
+            />
           )}
         </View>
       </View>
@@ -454,6 +667,105 @@ export function DesktopNotesView(props: {
   }
 
   const selectedSubject = props.subject;
+  if (webMode) {
+    return (
+      <ScrollView style={props.styles.main} contentContainerStyle={[props.styles.desktopPage, props.styles.webDesktopPage]}>
+        <View style={props.styles.webPageHeader}>
+          <View style={props.styles.webPageHeaderMeta}>
+            <Text style={props.styles.webPageEyebrow}>{props.noteMode === 'photo' ? 'PHOTO ARCHIVE' : 'DOCUMENT LIBRARY'}</Text>
+            <Text style={props.styles.webPageTitle}>{props.noteMode === 'photo' ? '노트 아카이브' : '문서 작업공간'}</Text>
+            <Text style={props.styles.webPageBody}>과목 탐색, 문서 검색, 생성 액션을 웹 앱에 맞는 정보 구조로 재배치했습니다.</Text>
+          </View>
+          <View style={props.styles.webHeaderBadgeRow}>
+            <View style={props.styles.webHeaderBadge}>
+              <Text style={props.styles.webHeaderBadgeText}>{props.subjects.length}개 과목</Text>
+            </View>
+          </View>
+        </View>
+        <View style={props.styles.webLibraryShell}>
+          <View style={props.styles.webLibrarySidebar}>
+            <View style={props.styles.desktopModeSegment}>
+              <Pressable style={[props.styles.desktopModeButton, props.noteMode === 'photo' && props.styles.desktopModeButtonActive]} onPress={() => props.onChangeMode('photo')}><Text style={[props.styles.desktopModeButtonText, props.noteMode === 'photo' && props.styles.desktopModeButtonTextActive]}>Photo</Text></Pressable>
+              <Pressable style={[props.styles.desktopModeButton, props.noteMode === 'note' && props.styles.desktopModeButtonActive]} onPress={() => props.onChangeMode('note')}><Text style={[props.styles.desktopModeButtonText, props.noteMode === 'note' && props.styles.desktopModeButtonTextActive]}>Note</Text></Pressable>
+            </View>
+            <View style={props.styles.webLibrarySearchCard}>
+              <View style={props.styles.desktopSearch}>
+                <Text style={props.styles.searchIcon}>⌕</Text>
+                <TextInput value={props.query} onChangeText={props.onQuery} placeholder={props.noteMode === 'photo' ? 'Photo 검색' : 'Note 검색'} placeholderTextColor="#C3C8D5" style={props.styles.searchInput} />
+              </View>
+              <View style={props.styles.webLibraryActionRow}>
+                <Pressable style={props.styles.desktopFilterButton} onPress={props.onSort}><Text style={props.styles.desktopFilterButtonText}>{props.sort === 'latest' ? '최신순' : '오래된순'}</Text></Pressable>
+                <Pressable style={props.styles.desktopFilterButton} onPress={props.onReset}><Text style={props.styles.desktopFilterButtonText}>초기화</Text></Pressable>
+              </View>
+              {props.noteMode === 'note' ? (
+                <View style={props.styles.webLibraryActionStack}>
+                  <Pressable style={[props.styles.desktopFilterButton, props.styles.desktopPrimaryAction]} onPress={props.onCreateBlankNote}><Text style={[props.styles.desktopFilterButtonText, props.styles.desktopPrimaryActionText]}>새 노트</Text></Pressable>
+                  <Pressable style={props.styles.desktopFilterButton} onPress={props.onUploadPdf}><Text style={props.styles.desktopFilterButtonText}>PDF 업로드</Text></Pressable>
+                </View>
+              ) : null}
+            </View>
+            <View style={props.styles.webSubjectList}>
+              {props.subjects.map((item) => (
+                <Pressable key={item.id} style={[props.styles.subjectRow, props.styles.webSubjectRow, selectedSubject?.id === item.id && { borderColor: item.color, shadowColor: item.color }, selectedSubject?.id === item.id && props.styles.subjectRowActive]} onPress={() => props.onOpenSubject(item.id)}>
+                  <View style={[props.styles.subjectIconBox, { backgroundColor: item.bgColor }, selectedSubject?.id === item.id && { backgroundColor: item.color }]}>
+                    <View style={[props.styles.subjectDot, { backgroundColor: darkenHex(item.bgColor, 0.28) }]} />
+                  </View>
+                  <View style={props.styles.fill}>
+                    <Text style={[props.styles.subjectTitle, selectedSubject?.id === item.id && props.styles.subjectTitleActive]}>{item.name}</Text>
+                    <Text style={[props.styles.subjectMeta, selectedSubject?.id === item.id && props.styles.subjectMetaActive]}>
+                      {props.noteMode === 'photo' ? `${item.noteCount}개 노트` : `${allStudyDocuments.filter((document) => document.subjectId === item.id).length}개 문서`}
+                    </Text>
+                  </View>
+                </Pressable>
+              ))}
+            </View>
+          </View>
+          <View style={props.styles.webLibraryContent}>
+            {props.noteMode === 'photo' ? (
+              props.notes.length ? props.notes.map((item) => {
+                const subject = allSubjects.find((v) => v.id === item.subjectId)!;
+                return (
+                  <Pressable key={item.id} style={[props.styles.noteListCard, props.styles.webLibraryCard]} onPress={() => props.onOpenNote(item.id)}>
+                    <View style={[props.styles.noteListRail, { backgroundColor: subject.color }]} />
+                    <Image source={item.image} style={props.styles.noteListThumb} resizeMode="cover" />
+                    <View style={props.styles.fill}>
+                      <Text style={props.styles.noteListDate}>{item.date}</Text>
+                      <Text style={props.styles.noteListTitle} numberOfLines={2}>{item.title}</Text>
+                    </View>
+                  </Pressable>
+                );
+              }) : <View style={props.styles.emptyCard}><Text style={props.styles.emptyTitle}>표시할 노트가 없습니다</Text><Text style={props.styles.emptyBody}>현재는 시간표와 과목 정보만 실제 데이터로 교체한 상태입니다.</Text></View>
+            ) : (
+              <View style={props.styles.desktopDocumentsPanel}>
+                {props.studyDocuments.length ? props.studyDocuments.map((item) => {
+                  const subject = allSubjects.find((v) => v.id === item.subjectId)!;
+                  const isPdf = item.type === 'pdf';
+                  return (
+                    <Pressable key={item.id} style={[props.styles.documentListCard, props.styles.webDocumentCard]} onPress={() => props.onOpenStudyDocument(item.id)}>
+                      <View style={[props.styles.documentListRail, { backgroundColor: subject.color }]} />
+                      <View style={[props.styles.documentThumb, { backgroundColor: isPdf ? '#F6F8FE' : '#EEF1F6' }]}>
+                        <Text style={[props.styles.documentThumbText, { color: isPdf ? props.blueColor : '#6B7280' }]}>{isPdf ? 'PDF' : 'NOTE'}</Text>
+                      </View>
+                      <View style={props.styles.fill}>
+                        <View style={props.styles.documentTitleRow}>
+                          <Text style={props.styles.documentTitle} numberOfLines={1}>{item.title}</Text>
+                          <View style={[props.styles.documentTypePill, { backgroundColor: isPdf ? '#EEF1FF' : '#F1F3F6' }]}>
+                            <Text style={[props.styles.documentTypeText, { color: isPdf ? props.blueColor : '#6B7280' }]}>{isPdf ? 'PDF' : '빈 노트'}</Text>
+                          </View>
+                        </View>
+                        <Text style={props.styles.documentMeta}>{item.updatedAt} · {item.pageCount}페이지</Text>
+                      </View>
+                    </Pressable>
+                  );
+                }) : <View style={props.styles.emptyCard}><Text style={props.styles.emptyTitle}>문서가 없습니다</Text></View>}
+              </View>
+            )}
+          </View>
+        </View>
+      </ScrollView>
+    );
+  }
+
   return (
     <ScrollView style={props.styles.main} contentContainerStyle={[props.styles.desktopPage, props.compact && props.styles.desktopPageCompact]}>
       <View style={props.styles.desktopNotesTopRow}>
@@ -471,8 +783,8 @@ export function DesktopNotesView(props: {
         <Pressable style={props.styles.desktopFilterButton} onPress={props.onSort}><Text style={props.styles.desktopFilterButtonText}>{props.sort === 'latest' ? '최신순' : '오래된순'}</Text></Pressable>
         {props.noteMode === 'note' ? (
           <>
-            <Pressable style={[props.styles.desktopFilterButton, props.styles.desktopPrimaryAction]}><Text style={[props.styles.desktopFilterButtonText, props.styles.desktopPrimaryActionText]}>+ 새 노트</Text></Pressable>
-            <Pressable style={props.styles.desktopFilterButton}><Text style={props.styles.desktopFilterButtonText}>PDF 업로드</Text></Pressable>
+            <Pressable style={[props.styles.desktopFilterButton, props.styles.desktopPrimaryAction]} onPress={props.onCreateBlankNote}><Text style={[props.styles.desktopFilterButtonText, props.styles.desktopPrimaryActionText]}>+ 새 노트</Text></Pressable>
+            <Pressable style={props.styles.desktopFilterButton} onPress={props.onUploadPdf}><Text style={props.styles.desktopFilterButtonText}>PDF 업로드</Text></Pressable>
           </>
         ) : null}
         <Pressable style={props.styles.desktopFilterButton} onPress={props.onReset}><Text style={props.styles.desktopFilterButtonText}>초기화</Text></Pressable>
