@@ -4,6 +4,19 @@ import * as DocumentPicker from 'expo-document-picker';
 import { notes } from '../data';
 import { requestMockAiAnswer, type MockAiAnswer } from '../services/mock-ai-service';
 import {
+  createBackendChatSession,
+  createBackendNote,
+  createBackendNotePage,
+  deleteBackendNote,
+  ensureFolderForSubject,
+  isBackendApiEnabled,
+  listBackendFolders,
+  listBackendNotePages,
+  listBackendNotes,
+  sendBackendAiMessage,
+  updateBackendNote,
+} from '../services/backend-api';
+import {
   buildEmptyStudyWorkspaceState,
   clearStudyWorkspaceState,
   type PersistedStudyWorkspaceState,
@@ -105,6 +118,7 @@ export function useStudyWorkspace(props: {
   const [aiAnswer, setAiAnswer] = useState<MockAiAnswer | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
+  const [chatSessionByDocument, setChatSessionByDocument] = useState<Record<number, number>>({});
 
   const {
     availableSubjects,
@@ -227,6 +241,59 @@ export function useStudyWorkspace(props: {
     setIncomingAssetSuggestion,
   });
 
+  useEffect(() => {
+    if (!workspaceHydrated || !isBackendApiEnabled()) return;
+
+    let mounted = true;
+
+    const loadBackendDocuments = async () => {
+      try {
+        const [folders, backendNotes] = await Promise.all([
+          listBackendFolders(),
+          listBackendNotes(),
+        ]);
+        const documents = await Promise.all(
+          backendNotes.map(async (backendNote) => {
+            const folder = folders.find((item) => item.id === backendNote.folder_id);
+            const subject = availableSubjects.find((item) => item.name === folder?.name) ?? availableSubjects[0] ?? null;
+            const pages = await listBackendNotePages(backendNote.id);
+            const firstPage = pages[0] ?? null;
+
+            return {
+              id: backendNote.id,
+              subjectId: subject?.id ?? props.initialSubjectId ?? 101,
+              title: backendNote.title,
+              type: firstPage?.image_url ? 'pdf' as const : 'blank' as const,
+              updatedAt: 'DB 저장됨',
+              pageCount: Math.max(1, pages.length),
+              preview: backendNote.summary ?? firstPage?.content ?? '백엔드에 저장된 노트입니다.',
+              file: firstPage?.image_url ? { uri: firstPage.image_url } : undefined,
+            } satisfies StudyDocumentEntry;
+          }),
+        );
+
+        if (!mounted) return;
+        setUserStudyDocuments((current) => {
+          const nextById = new Map<number, StudyDocumentEntry>();
+          [...current, ...documents].forEach((document) => {
+            nextById.set(document.id, document);
+          });
+          return Array.from(nextById.values()).sort((left, right) => right.id - left.id);
+        });
+      } catch {
+        if (mounted) {
+          setWorkspaceFeedback('백엔드 노트 목록을 불러오지 못했습니다.');
+        }
+      }
+    };
+
+    void loadBackendDocuments();
+
+    return () => {
+      mounted = false;
+    };
+  }, [availableSubjects, props.initialSubjectId, workspaceHydrated]);
+
   const openSubject = (id: number) => {
     props.onOpenNotesTab();
     setSubjectId(id);
@@ -287,11 +354,42 @@ export function useStudyWorkspace(props: {
     }));
   };
 
-  const createBlankNote = () => {
+  const createBlankNote = async () => {
     const targetSubjectId = subjectId ?? availableSubjects[0]?.id ?? null;
     if (!targetSubjectId) return;
 
     const targetSubject = availableSubjects.find((value) => value.id === targetSubjectId);
+    if (!targetSubject) return;
+
+    if (isBackendApiEnabled()) {
+      try {
+        const folder = await ensureFolderForSubject({ name: targetSubject.name, color: targetSubject.color });
+        const backendNote = await createBackendNote({
+          folderId: folder.id,
+          title: `${targetSubject.name} 새 노트`,
+          summary: '빈 노트',
+        });
+        await createBackendNotePage({
+          noteId: backendNote.id,
+          pageNumber: 1,
+          content: '',
+        });
+        const document: StudyDocumentEntry = {
+          id: backendNote.id,
+          subjectId: targetSubjectId,
+          title: backendNote.title,
+          type: 'blank',
+          updatedAt: '방금 전',
+          pageCount: 1,
+          preview: backendNote.summary ?? '새 빈 노트입니다.',
+        };
+        openCreatedStudyDocument(document, '새 빈 노트를 백엔드에 저장했습니다.');
+        return;
+      } catch {
+        setWorkspaceFeedback('백엔드 저장에 실패해 이 기기에만 빈 노트를 만들었습니다.');
+      }
+    }
+
     const document: StudyDocumentEntry = {
       id: Date.now(),
       subjectId: targetSubjectId,
@@ -333,6 +431,11 @@ export function useStudyWorkspace(props: {
       message: `"${target.title}" Note 문서와 이 문서에 남긴 필기를 삭제할까요?`,
       confirmText: '삭제',
       onConfirm: () => {
+        if (isBackendApiEnabled()) {
+          void deleteBackendNote(id).catch(() => {
+            setWorkspaceFeedback('백엔드 노트 삭제에 실패했습니다.');
+          });
+        }
         setDeletedStudyDocumentIds((current) => addUniqueId(current, id));
 
         if (studyDocumentId === id) {
@@ -406,6 +509,39 @@ export function useStudyWorkspace(props: {
 
       const picked = result.assets[0];
       const targetSubject = availableSubjects.find((value) => value.id === targetSubjectId);
+      if (!targetSubject) return;
+
+      if (isBackendApiEnabled()) {
+        try {
+          const folder = await ensureFolderForSubject({ name: targetSubject.name, color: targetSubject.color });
+          const backendNote = await createBackendNote({
+            folderId: folder.id,
+            title: picked.name || `${targetSubject.name} PDF`,
+            summary: '업로드한 PDF 문서',
+          });
+          await createBackendNotePage({
+            noteId: backendNote.id,
+            pageNumber: 1,
+            content: picked.name || 'PDF 문서',
+            imageUrl: picked.uri,
+          });
+          const document: StudyDocumentEntry = {
+            id: backendNote.id,
+            subjectId: targetSubjectId,
+            title: backendNote.title,
+            type: 'pdf',
+            updatedAt: '방금 전',
+            pageCount: 1,
+            preview: backendNote.summary ?? '업로드한 PDF 문서입니다.',
+            file: { uri: picked.uri },
+          };
+          openCreatedStudyDocument(document, 'PDF 파일을 백엔드에 저장했습니다.');
+          return;
+        } catch {
+          setWorkspaceFeedback('백엔드 저장에 실패해 이 기기에만 PDF를 추가했습니다.');
+        }
+      }
+
       const document: StudyDocumentEntry = {
         id: Date.now(),
         subjectId: targetSubjectId,
@@ -737,6 +873,40 @@ export function useStudyWorkspace(props: {
     setAiError(null);
 
     try {
+      if (isBackendApiEnabled()) {
+        let sessionId = chatSessionByDocument[studyDocumentId];
+        if (!sessionId) {
+          const session = await createBackendChatSession({
+            noteId: studyDocumentId,
+            title: studyDocument?.title ? `${studyDocument.title} AI 채팅` : 'AI 채팅',
+          });
+          sessionId = session.id;
+          setChatSessionByDocument((current) => ({
+            ...current,
+            [studyDocumentId]: session.id,
+          }));
+        }
+
+        const response = await sendBackendAiMessage({
+          sessionId,
+          content: aiQuestion.trim() || '현재 페이지를 요약해줘',
+        });
+        const content = response.assistant_message.content;
+        setAiAnswer({
+          question: aiQuestion.trim() || '현재 페이지를 요약해줘',
+          response: content,
+          sections: [
+            {
+              title: 'AI 답변',
+              body: content,
+              tone: 'highlight',
+            },
+          ],
+          createdAt: response.assistant_message.created_at,
+        });
+        return;
+      }
+
       const answer = await requestMockAiAnswer({
         question: aiQuestion,
         selectionRect,

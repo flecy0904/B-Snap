@@ -113,7 +113,7 @@ function ensureRequirements() {
 
 function startBackend() {
   const enableReload = process.argv.includes("--reload");
-  const uvicornArgs = ["-m", "uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8000"];
+  const uvicornArgs = ["-m", "uvicorn", "backend.app.main:app", "--host", "localhost", "--port", "8000"];
   if (enableReload) {
     uvicornArgs.splice(3, 0, "--reload");
   }
@@ -141,17 +141,19 @@ function startBackend() {
   });
 }
 
-const systemPython = findSystemPython();
+const systemPython = existsSync(venvPython) ? null : findSystemPython();
 
-if (!systemPython) {
-  if (process.platform === "win32") {
-    fail("No usable Python interpreter was found. Install Python 3 and make sure `py` or `python` is available.");
-  } else {
-    fail("No usable Python interpreter was found. Install Python 3 and make sure `python3` or `python` is available.");
+if (!existsSync(venvPython)) {
+  if (!systemPython) {
+    if (process.platform === "win32") {
+      fail("No usable Python interpreter was found. Install Python 3 and make sure `py` or `python` is available.");
+    } else {
+      fail("No usable Python interpreter was found. Install Python 3 and make sure `python3` or `python` is available.");
+    }
   }
-}
 
-ensureVenv(systemPython);
+  ensureVenv(systemPython);
+}
 ensurePip();
 ensureRequirements();
 startBackend();
