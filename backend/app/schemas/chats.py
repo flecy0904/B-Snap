@@ -30,6 +30,11 @@ class ChatMessageCreate(BaseModel):
     model: str | None = None
 
 
+class ChatAiMessageCreate(BaseModel):
+    content: str
+    model: str | None = None
+
+
 class ChatMessageRead(BaseModel):
     id: int
     session_id: int
@@ -43,3 +48,9 @@ class ChatMessageRead(BaseModel):
 
 class ChatSessionDetail(ChatSessionRead):
     messages: list[ChatMessageRead]
+
+
+class ChatAiMessageRead(BaseModel):
+    model: str
+    user_message: ChatMessageRead
+    assistant_message: ChatMessageRead

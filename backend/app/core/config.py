@@ -11,6 +11,8 @@ class Settings(BaseSettings):
         default="postgresql+psycopg://postgres:postgres@localhost:5432/bsnap",
         validation_alias="DATABASE_URL",
     )
+    openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
+    openai_default_model: str = Field(default="gpt-4.1-mini", validation_alias="OPENAI_DEFAULT_MODEL")
 
     model_config = SettingsConfigDict(
         env_file="backend/.env",
