@@ -94,5 +94,13 @@ backend/.ruff_cache/
 !.env.*.example
 .idea/
 .vscode/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+outputs/
+sample_images/
+WhiteBoard Detection.v1i.coco/
+*.pt
 *.swp
 *.bak
