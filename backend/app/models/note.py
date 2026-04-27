@@ -10,10 +10,12 @@ class Note(Base):
     __tablename__ = "notes"
 
     id: Mapped[int] = mapped_column(primary_key=True, index=True)
-    subject_id: Mapped[int] = mapped_column(ForeignKey("subjects.id", ondelete="CASCADE"), index=True)
+    folder_id: Mapped[int] = mapped_column(ForeignKey("folders.id", ondelete="CASCADE"), index=True)
     title: Mapped[str] = mapped_column(String(200))
-    body: Mapped[str | None] = mapped_column(Text)
+    summary: Mapped[str] = mapped_column(Text, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
-    subject: Mapped["Subject"] = relationship(back_populates="notes")
+    folder = relationship("Folder", back_populates="notes")
+    pages = relationship("NotePage", back_populates="note", cascade="all, delete-orphan")
+    chat_sessions = relationship("ChatSession", back_populates="note", cascade="all, delete-orphan")
