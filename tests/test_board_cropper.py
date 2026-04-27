@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import pytest
 
-from img_preprocessing.board_cropper import crop_and_warp_board, detect_board_corners, order_points
+from img_preprocessing.board_cropper import crop_and_warp_board, crop_writing_region, detect_board_corners, order_points
 
 
 def _synthetic_board_image() -> tuple[np.ndarray, np.ndarray]:
@@ -63,7 +63,7 @@ def test_synthetic_rectangle_detection() -> None:
 def test_crop_and_warp_output_shape() -> None:
     image, _ = _synthetic_board_image()
 
-    result = crop_and_warp_board(image)
+    result = crop_and_warp_board(image, mode="board")
 
     assert result.success is True
     assert result.warped_image is not None
@@ -71,3 +71,20 @@ def test_crop_and_warp_output_shape() -> None:
     assert result.warped_image.shape[1] == result.warped_size["width"]
     assert result.warped_image.shape[0] == result.warped_size["height"]
     assert result.warped_size["width"] > result.warped_size["height"]
+
+
+def test_writing_mode_crops_text_region() -> None:
+    image = np.full((480, 640, 3), (35, 70, 60), dtype=np.uint8)
+    cv2.putText(image, "sigma < 6.2", (80, 150), cv2.FONT_HERSHEY_SIMPLEX, 1.2, (235, 235, 235), 2)
+    cv2.putText(image, "chi square", (80, 230), cv2.FONT_HERSHEY_SIMPLEX, 1.1, (235, 235, 235), 2)
+    cv2.line(image, (360, 260), (560, 260), (235, 235, 235), 2)
+    cv2.rectangle(image, (0, 360), (640, 480), (20, 20, 20), -1)
+
+    result = crop_writing_region(image)
+
+    assert result.success is True
+    assert result.mode_used == "writing"
+    assert result.crop_box is not None
+    assert result.warped_image is not None
+    assert result.warped_size is not None
+    assert result.warped_size["height"] < 480

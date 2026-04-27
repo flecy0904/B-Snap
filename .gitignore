@@ -100,5 +100,7 @@ __pycache__/
 .venv/
 outputs/
 sample_images/
+WhiteBoard Detection.v1i.coco/
+*.pt
 *.swp
 *.bak

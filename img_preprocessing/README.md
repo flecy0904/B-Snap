@@ -1,285 +1,397 @@
 # B-SNAP 이미지 전처리 모듈
 
-## 개요
+## 결론
 
-`board_cropper.py`는 강의실 화이트보드/칠판 사진에서 **주요 보드 영역을 검출하고**, 가능한 경우 **4개 꼭짓점 좌표를 추출한 뒤**, **원근 보정된 보드 이미지**를 생성하는 OpenCV 기반 전처리 모듈입니다.
+현재 전처리의 **최종 진입점**은 `hybrid_preprocessor.py`입니다.
 
-이 모듈은 FastAPI, React Native, Expo와 독립적으로 동작하도록 작성되어 있습니다. 따라서 서버 백엔드, 로컬 CLI, 향후 모바일/온디바이스 파이프라인에서 재사용할 수 있습니다.
+하이브리드 방식은 다음 두 후보를 함께 만들고, 점수 기반으로 가장 좋은 crop 결과를 선택합니다.
+
+```text
+OpenCV 후보
+= 종이/문서/필기 영역 crop, 4점 검출, perspective correction
+
+YOLO-World 후보
+= 칠판, 화이트보드, 프로젝터 화면 같은 강의 표면 탐지
+
+Hybrid selector
+= 후보들을 비교해서 최종 이미지 선택
+```
+
+일반 사용자는 `hybrid_preprocessor.py`를 실행하면 됩니다.  
+`board_cropper.py`와 `yolo_world_detector.py`는 하이브리드 내부에서 사용하는 핵심 모듈이고, `yolo_world_probe.py`는 YOLO 결과만 따로 확인하는 실험/디버깅용 CLI입니다.
 
 ## 파일 구성
 
 ```text
 img_preprocessing/
 ├─ __init__.py
-├─ board_cropper.py
+├─ board_cropper.py          # OpenCV-only 전처리 후보 생성
+├─ hybrid_preprocessor.py    # 최종 하이브리드 전처리 진입점
+├─ yolo_world_detector.py    # YOLO-World detector 재사용 모듈
+├─ yolo_world_probe.py       # YOLO-World 실험/디버깅 CLI
 └─ README.md
 ```
 
-## 주요 공개 함수
+## 모듈 역할
 
-### `detect_board_corners(image_bgr, debug=False)`
+### `hybrid_preprocessor.py`
 
-BGR 형식의 OpenCV 이미지를 입력받아 보드 영역의 4개 꼭짓점을 검출합니다.
+최종으로 사용할 전처리 스크립트입니다.
 
-반환 결과에는 다음 정보가 포함됩니다.
+담당 역할:
 
-```text
-success
-message
-corners
-confidence
-original_size
-debug_paths
-fallback
-```
+1. 입력 이미지 로드
+2. OpenCV 후보 생성
+3. YOLO-World 후보 생성
+4. 후보별 점수 계산
+5. 최고 점수 후보 선택
+6. 최종 crop 이미지와 debug 결과 저장
 
-`corners`는 항상 아래 순서로 반환됩니다.
-
-```text
-top-left -> top-right -> bottom-right -> bottom-left
-```
-
-### `crop_and_warp_board(image_bgr, debug=False)`
-
-`detect_board_corners()`로 꼭짓점을 찾은 뒤, 원본 해상도 이미지에 perspective transform을 적용합니다.
-
-성공 시 `warped_image`와 `warped_size`가 함께 반환됩니다.
-
-### `preprocess_board_image(input_path, output_path=None, debug_dir=None)`
-
-이미지 파일 경로를 입력받아 전체 파이프라인을 실행합니다.
-
-선택적으로 다음 작업도 수행합니다.
-
-1. 보정 결과 이미지 저장
-2. 디버그 이미지 저장
-3. JSON으로 직렬화 가능한 결과 메타데이터 생성
-
-### `order_points(points)`
-
-4개 좌표를 다음 순서로 정렬하는 헬퍼 함수입니다.
-
-```text
-top-left -> top-right -> bottom-right -> bottom-left
-```
-
-원근 보정은 꼭짓점 순서에 민감하기 때문에 별도 테스트 대상입니다.
-
-## 처리 파이프라인
-
-전체 OpenCV 처리 흐름은 아래 순서입니다.
-
-```text
-cvtColor -> GaussianBlur -> Canny -> morphologyEx -> findContours -> approxPolyDP -> getPerspectiveTransform -> warpPerspective
-```
-
-## 단계별 동작 설명
-
-### 1. 입력 검증
-
-입력 이미지가 다음 조건을 만족하는지 확인합니다.
-
-- `None`이 아닌지
-- `numpy.ndarray`인지
-- 비어 있지 않은지
-- BGR 3채널 이미지인지
-
-잘못된 입력이어도 예외를 터뜨리지 않고 `success=False` 결과를 반환합니다.
-
-### 2. 검출용 리사이즈
-
-큰 이미지는 빠른 처리를 위해 기본 최대 폭 `1280px`로 줄여서 검출합니다.
-
-검출된 좌표는 다시 원본 이미지 좌표로 환산합니다.
-
-최종 원근 보정은 리사이즈 이미지가 아니라 **원본 해상도 이미지**에 적용합니다.
-
-### 3. Grayscale 변환
+주요 API:
 
 ```python
-cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+run_hybrid_preprocess(...)
+HybridBoardPreprocessor
+HybridPreprocessorConfig
 ```
 
-BGR 이미지를 흑백 이미지로 변환합니다.
+`HybridBoardPreprocessor`는 서버나 배치 작업처럼 여러 이미지를 처리할 때 YOLO detector를 재사용하기 위한 클래스입니다.
 
-### 4. 노이즈 감소
+### `board_cropper.py`
+
+OpenCV 기반 후보를 만드는 모듈입니다.
+
+담당 역할:
+
+1. 보드/문서 외곽선 검출
+2. 4개 꼭짓점 검출
+3. perspective correction
+4. 필기 stroke 밀집 영역 crop
+5. OpenCV-only CLI 제공
+
+주요 API:
 
 ```python
-cv2.GaussianBlur(gray, (5, 5), 0)
+detect_board_corners(image_bgr, debug=False)
+crop_and_warp_board(image_bgr, debug=False, mode="auto")
+preprocess_board_image(input_path, output_path=None, debug_dir=None, mode="auto")
+order_points(points)
 ```
 
-작은 노이즈를 줄여 Canny edge 검출이 안정적으로 동작하도록 합니다.
+### `yolo_world_detector.py`
 
-### 5. Edge 검출
+YOLO-World 탐지 로직을 재사용 가능한 형태로 분리한 모듈입니다.
+
+담당 역할:
+
+1. YOLO-World 모델 로드
+2. 모델 캐싱
+3. class prompt 설정
+4. detection box 추출
+5. box score 계산
+6. annotation 이미지 생성
+
+주요 API:
 
 ```python
-cv2.Canny(blur, lower, upper)
+YoloWorldDetector
+DetectionBox
+draw_detections(...)
+parse_classes(...)
 ```
 
-기본값은 이미지 median intensity 기반 자동 threshold입니다.
+### `yolo_world_probe.py`
 
-필요하면 `canny_thresholds=(low, high)` 형태로 수동 threshold를 넘길 수 있습니다.
+YOLO-World가 특정 이미지에서 어떤 영역을 잡는지 확인하는 실험용 CLI입니다.
 
-### 6. Morphological cleanup
+최종 전처리 진입점은 아니지만, 다음 상황에서 유용합니다.
 
-```python
-cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel)
-```
+1. prompt별 탐지 결과 확인
+2. YOLO box 시각화
+3. 하이브리드 실패 원인 분석
+4. 발표용 탐지 예시 이미지 생성
 
-끊어진 선분을 연결하기 위해 `MORPH_CLOSE`를 사용합니다.
-
-기본 kernel은 직사각형 `7x7`입니다.
-
-### 7. Contour 검출
-
-```python
-cv2.findContours(morph, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-```
-
-외곽 contour를 찾고, 면적이 큰 순서대로 후보를 검사합니다.
-
-후보 필터 기준은 다음과 같습니다.
-
-- 최소 면적 비율
-- convex 여부
-- aspect ratio 범위
-- polygon point count
-- contour area
-
-### 8. Polygon 근사
-
-```python
-cv2.approxPolyDP(contour, epsilon, True)
-```
-
-contour를 다각형으로 근사합니다.
-
-우선 4개 점으로 근사되는 contour를 찾습니다. 실패하면 convex hull을 시도하고, 마지막 fallback으로 `minAreaRect`를 사용합니다.
-
-fallback이 사용되면 `confidence`가 낮아집니다.
-
-### 9. 꼭짓점 정렬
-
-검출된 4개 점은 `order_points()`를 통해 아래 순서로 정렬됩니다.
-
-```text
-top-left
-top-right
-bottom-right
-bottom-left
-```
-
-### 10. 원근 보정
-
-```python
-cv2.getPerspectiveTransform(src, dst)
-cv2.warpPerspective(image, matrix, (width, height))
-```
-
-정렬된 꼭짓점으로 perspective transform matrix를 만들고, 원본 이미지에서 보드 영역을 반듯하게 펼칩니다.
-
-너무 큰 결과 이미지가 생기지 않도록 긴 변은 기본 `2400px`로 제한합니다.
-
-## CLI 사용법
+## 하이브리드 실행 방법
 
 프로젝트 루트에서 실행합니다.
 
 ```bash
-.venv/bin/python -m img_preprocessing.board_cropper \
-  --input "sample_images/frontend_assets/notes/mock-presentation/IMG_4837.JPG" \
-  --output "outputs/board_cropper/IMG_4837_cropped.jpg" \
-  --debug-dir "outputs/board_cropper/IMG_4837_debug"
+.venv/bin/python -m img_preprocessing.hybrid_preprocessor \
+  --input "sample_images/IMG_7052.jpeg" \
+  --output "outputs/hybrid/IMG_7052_result.jpg" \
+  --debug-dir "outputs/hybrid/IMG_7052_debug"
 ```
 
-가상환경을 활성화했다면 아래처럼 실행할 수도 있습니다.
+YOLO 없이 OpenCV 후보만 보고 싶으면 `--no-yolo`를 사용합니다.
 
 ```bash
-python -m img_preprocessing.board_cropper \
-  --input "sample_images/frontend_assets/notes/mock-presentation/IMG_4837.JPG" \
-  --output "outputs/board_cropper/IMG_4837_cropped.jpg" \
-  --debug-dir "outputs/board_cropper/IMG_4837_debug"
+.venv/bin/python -m img_preprocessing.hybrid_preprocessor \
+  --input "sample_images/IMG_7052.jpeg" \
+  --output "outputs/hybrid/IMG_7052_opencv_only.jpg" \
+  --debug-dir "outputs/hybrid/IMG_7052_opencv_only_debug" \
+  --no-yolo
 ```
 
-## CLI 출력 예시
+YOLO class prompt를 직접 지정할 수도 있습니다.
 
-```json
-{
-  "success": true,
-  "message": "Board cropped and perspective-corrected.",
-  "corners": [[94.0, 88.0], [547.0, 64.0], [576.0, 367.0], [68.0, 391.0]],
-  "confidence": 0.95,
-  "original_size": {"width": 640, "height": 480},
-  "warped_size": {"width": 509, "height": 304},
-  "output_path": "outputs/board_cropper/IMG_4837_cropped.jpg",
-  "debug_paths": {
-    "01_resized_input.jpg": "outputs/board_cropper/IMG_4837_debug/01_resized_input.jpg"
-  },
-  "fallback": null
-}
+```bash
+.venv/bin/python -m img_preprocessing.hybrid_preprocessor \
+  --input "sample_images/IMG_7052.jpeg" \
+  --output "outputs/hybrid/IMG_7052_screen.jpg" \
+  --classes "projector screen,projection screen,screen,projected slide"
 ```
 
-## 디버그 이미지
+## Python API 사용 예시
 
-`debug_dir`를 지정하면 다음 중간 결과 이미지가 저장됩니다.
+한 장만 처리할 때는 `run_hybrid_preprocess()`를 바로 호출할 수 있습니다.
+
+```python
+from img_preprocessing.hybrid_preprocessor import run_hybrid_preprocess
+
+result = run_hybrid_preprocess(
+    "sample_images/IMG_7052.jpeg",
+    output_path="outputs/hybrid/IMG_7052_result.jpg",
+    debug_dir="outputs/hybrid/IMG_7052_debug",
+)
+```
+
+서버나 배치처럼 여러 장을 처리할 때는 `HybridBoardPreprocessor` 사용을 권장합니다.
+
+```python
+from img_preprocessing.hybrid_preprocessor import HybridBoardPreprocessor
+
+preprocessor = HybridBoardPreprocessor()
+
+result = preprocessor.preprocess(
+    "sample_images/IMG_7052.jpeg",
+    output_path="outputs/hybrid/IMG_7052_result.jpg",
+)
+```
+
+이 방식은 내부 YOLO detector를 재사용하므로 매 요청마다 detector를 새로 만드는 구조보다 안정적입니다.
+
+## 판단 기준
+
+하이브리드는 이미지 자체를 먼저 분류하지 않습니다.  
+대신 여러 후보를 만든 뒤 점수를 비교합니다.
 
 ```text
-01_resized_input.jpg
-02_gray.jpg
-03_blur.jpg
-04_edges.jpg
-05_morph.jpg
-06_contours.jpg
-07_selected_corners.jpg
-08_warped.jpg
+opencv:board
+= OpenCV가 명확한 4점 외곽선을 찾은 경우
+
+opencv:writing
+= 외곽선은 애매하지만 필기 stroke 밀집 영역이 안정적인 경우
+
+yolo_world:chalkboard / whiteboard / screen
+= YOLO가 칠판, 화이트보드, 프로젝터 화면을 의미적으로 잘 찾은 경우
 ```
 
-각 파일의 의미는 다음과 같습니다.
+점수에는 다음 요소가 반영됩니다.
 
-| 파일 | 설명 |
+1. 각 후보의 confidence
+2. OpenCV fallback 사용 여부
+3. 후보 crop 면적
+4. 후보가 이미지 안에서 차지하는 위치
+5. YOLO class 종류
+6. 상단/천장 영역 오검출 가능성
+
+## OpenCV 처리 파이프라인
+
+OpenCV 후보 생성은 아래 순서로 진행됩니다.
+
+```text
+cvtColor
+-> GaussianBlur
+-> Canny
+-> morphologyEx
+-> findContours
+-> approxPolyDP
+-> getPerspectiveTransform
+-> warpPerspective
+```
+
+각 단계의 목적은 다음과 같습니다.
+
+| 단계 | 목적 |
 |---|---|
-| `01_resized_input.jpg` | 검출용으로 리사이즈된 입력 이미지 |
-| `02_gray.jpg` | 흑백 변환 결과 |
-| `03_blur.jpg` | Gaussian blur 결과 |
-| `04_edges.jpg` | Canny edge 결과 |
-| `05_morph.jpg` | morphology close 결과 |
-| `06_contours.jpg` | 검출된 contour 시각화 |
-| `07_selected_corners.jpg` | 선택된 4개 꼭짓점 표시 |
-| `08_warped.jpg` | 최종 원근 보정 결과 |
+| `cvtColor` | BGR 이미지를 grayscale로 변환 |
+| `GaussianBlur` | 작은 노이즈 제거 |
+| `Canny` | 보드/문서 외곽 edge 검출 |
+| `morphologyEx` | 끊어진 edge 연결 |
+| `findContours` | 큰 외곽선 후보 탐색 |
+| `approxPolyDP` | contour를 4점 polygon으로 근사 |
+| `getPerspectiveTransform` | 원근 보정 행렬 생성 |
+| `warpPerspective` | 원본 이미지에서 반듯한 crop 생성 |
 
-## 테스트 실행
+외곽선이 불안정한 경우에는 별도의 writing crop 후보도 만듭니다.
+
+```text
+필기 stroke mask
+-> 연결 요소 분석
+-> 필기 밀집 영역 bounding box
+-> 직사각형 crop
+```
+
+## YOLO-World 실험 CLI
+
+YOLO 후보만 따로 보고 싶을 때 사용합니다.
 
 ```bash
-.venv/bin/python -m pytest tests/test_board_cropper.py -q
+.venv/bin/python -m img_preprocessing.yolo_world_probe \
+  --input "sample_images/IMG_7052.jpeg" \
+  --output-dir "outputs/yolo_world_probe/IMG_7052" \
+  --conf 0.05 \
+  --max-det 20
 ```
 
-테스트는 다음을 확인합니다.
+생성 결과:
 
-1. 꼭짓점 정렬 순서
-2. 잘못된 입력 처리
-3. 합성 사각형 보드 검출
-4. 원근 보정 결과 이미지 크기
+```text
+*_yolo_world_annotated.jpg
+*_yolo_world_best_crop.jpg
+*_yolo_world_summary.json
+```
 
-## 주의사항
+## OpenCV-only CLI
 
-- OpenCV가 바로 읽기 어려운 `HEIC` 이미지는 실패할 수 있습니다.
-- 보드 경계가 거의 보이지 않거나 사진이 심하게 흔들린 경우 검출 실패가 발생할 수 있습니다.
-- `fallback`이 `convex_hull` 또는 `min_area_rect`인 경우 신뢰도가 낮게 설정됩니다.
-- 이 버전은 머신러닝 없이 classical OpenCV만 사용하는 1차 구현입니다.
+OpenCV 모듈만 따로 확인하고 싶을 때 사용합니다.
+
+```bash
+.venv/bin/python -m img_preprocessing.board_cropper \
+  --mode auto \
+  --input "sample_images/IMG_7052.jpeg" \
+  --output "outputs/board_cropper/IMG_7052_cropped.jpg" \
+  --debug-dir "outputs/board_cropper/IMG_7052_debug"
+```
+
+지원 모드:
+
+| mode | 설명 |
+|---|---|
+| `auto` | board/document 후보와 writing 후보 중 자동 선택 |
+| `board` | 보드/문서 외곽 4점 검출 우선 |
+| `document` | 종이/문서 외곽 4점 검출 우선 |
+| `writing` | 필기 stroke 밀집 영역 crop |
+
+## Debug 출력
+
+하이브리드에서 `debug_dir`를 지정하면 다음 파일들이 저장됩니다.
+
+```text
+00_original.jpg
+01_yolo_annotated.jpg
+02_opencv_result.jpg
+99_selected.jpg
+candidate_*.jpg
+opencv_*.jpg
+hybrid_summary.json
+```
+
+OpenCV debug 파일 예시:
+
+```text
+opencv_01_resized_input.jpg
+opencv_02_gray.jpg
+opencv_03_blur.jpg
+opencv_04_edges.jpg
+opencv_05_morph.jpg
+opencv_06_contours.jpg
+opencv_07_selected_corners.jpg
+opencv_08_warped.jpg
+opencv_09_writing_mask.jpg
+opencv_10_writing_components.jpg
+opencv_11_writing_crop_box.jpg
+```
+
+`hybrid_summary.json`에는 다음 정보가 포함됩니다.
+
+```text
+success
+message
+original_size
+selected_size
+selected_candidate
+candidates
+yolo_detections
+opencv_result
+output_path
+debug_paths
+```
 
 ## 의존성
 
-Python 의존성은 프로젝트 루트의 `requirements.txt`에서 관리합니다.
+전처리 의존성은 프로젝트 루트의 `requirements.txt`에서 한 번에 관리합니다.
 
 ```text
 numpy
 opencv-python-headless
 pytest
+ultralytics
 ```
 
-가상환경 설치 예시는 다음과 같습니다.
-
 ```bash
-python3 -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 ```
+
+첫 YOLO 실행 시 모델 weight가 자동 다운로드될 수 있습니다. 다운로드된 `*.pt` 파일은 `.gitignore` 대상입니다.
+
+## 컴퓨팅 자원
+
+현재 구조에서 OpenCV 처리는 CPU를 사용합니다.
+
+YOLO-World는 Ultralytics/PyTorch backend를 사용하며, `--device`로 장치를 지정할 수 있습니다.
+
+```bash
+--device cpu
+--device mps
+--device cuda:0
+```
+
+모바일 중심 운영에서는 다음 구조를 권장합니다.
+
+```text
+모바일 CPU
+-> OpenCV 전처리 우선
+
+서버 CPU/GPU
+-> 실패하거나 어려운 이미지에 하이브리드 전처리 적용
+```
+
+## 테스트 실행
+
+```bash
+.venv/bin/python -m pytest \
+  tests/test_board_cropper.py \
+  tests/test_hybrid_preprocessor.py \
+  tests/test_yolo_world_detector.py \
+  -q
+```
+
+현재 테스트는 다음을 확인합니다.
+
+1. 꼭짓점 정렬 순서
+2. 잘못된 입력 처리
+3. 합성 사각형 보드 검출
+4. 원근 보정 결과 이미지 크기
+5. 필기 영역 crop 결과
+6. 하이브리드 OpenCV-only fallback
+7. YOLO detector 유틸리티
+
+## 주의사항
+
+1. `hybrid_preprocessor.py`가 최종 전처리 진입점입니다.
+2. `board_cropper.py`는 하이브리드 내부에서도 계속 필요한 OpenCV 후보 생성 모듈입니다.
+3. `yolo_world_detector.py`는 하이브리드 내부에서도 계속 필요한 YOLO 후보 생성 모듈입니다.
+4. `yolo_world_probe.py`는 선택 사항이지만, YOLO 디버깅과 발표 자료 생성에 유용합니다.
+5. `HEIC`처럼 OpenCV가 바로 읽지 못하는 포맷은 실패할 수 있습니다.
+6. 보드 경계가 거의 보이지 않거나 조명이 심하게 반사된 이미지는 오검출될 수 있습니다.
+7. YOLO-World는 사전학습 open-vocabulary 모델이므로 모든 강의실 상황에서 항상 정답을 보장하지 않습니다.
+
+## 요약
+
+최종 사용은 `hybrid_preprocessor.py`입니다.
+
+`board_cropper.py`는 OpenCV 후보를 만들고, `yolo_world_detector.py`는 YOLO 후보를 만들며, `hybrid_preprocessor.py`가 두 후보를 비교해서 최종 crop을 선택합니다.
+
+`yolo_world_probe.py`는 최종 경로가 아니라 YOLO 단독 결과를 확인하는 실험/디버깅 도구입니다.
