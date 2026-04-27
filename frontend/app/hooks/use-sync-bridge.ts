@@ -10,9 +10,7 @@ let assetSequence = 1;
 const mockPresentationImage = resolvePreviewImage(MOCK_PREVIEW_IMAGE_KEY);
 
 function nextAssetId() {
-  const id = assetSequence;
-  assetSequence += 1;
-  return `asset-${id}`;
+  return `asset-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
 }
 
 function findPreviewImage(subjectId: number) {

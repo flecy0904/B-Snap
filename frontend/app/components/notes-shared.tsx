@@ -1,7 +1,47 @@
-import React from 'react';
+import React, { memo } from 'react';
 import { Text, View } from 'react-native';
+import { Path } from 'react-native-svg';
 import { NoteEntry, NoteSummarySection, Subject } from '../types';
-import { SelectionRect } from '../ui-types';
+import { InkPoint, InkStroke, SelectionRect } from '../ui-types';
+
+/**
+ * Converts a set of points into a smooth SVG path string using Quadratic Bezier curves.
+ */
+export function getStrokePath(points: InkPoint[]): string {
+  if (points.length === 0) return '';
+  if (points.length === 1) return `M ${points[0].x} ${points[0].y} L ${points[0].x} ${points[0].y}`;
+
+  let path = `M ${points[0].x} ${points[0].y}`;
+
+  for (let i = 1; i < points.length - 1; i++) {
+    const midX = (points[i].x + points[i + 1].x) / 2;
+    const midY = (points[i].y + points[i + 1].y) / 2;
+    path += ` Q ${points[i].x} ${points[i].y}, ${midX} ${midY}`;
+  }
+
+  const lastPoint = points[points.length - 1];
+  path += ` L ${lastPoint.x} ${lastPoint.y}`;
+
+  return path;
+}
+
+export const StaticStrokes = memo(({ strokes }: { strokes: InkStroke[] }) => {
+  return (
+    <>
+      {strokes.map((stroke) => (
+        <Path
+          key={stroke.id}
+          d={getStrokePath(stroke.points)}
+          stroke={stroke.color}
+          strokeWidth={stroke.width}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          fill="none"
+        />
+      ))}
+    </>
+  );
+});
 
 export function buildAiResponse(question: string, selectionRect: SelectionRect | null, desktop: boolean) {
   const normalizedQuestion = question.trim();
