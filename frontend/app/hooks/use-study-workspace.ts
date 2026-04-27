@@ -1,76 +1,79 @@
-import { useEffect, useMemo, useState } from 'react';
-import { notes, studyDocuments, subjects } from '../data';
-import { useSyncBridge } from './use-sync-bridge';
-import type { InkStroke, InkTool, SelectionRect } from '../ui-types';
-import type { CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NoteSummarySection, NoteWorkspaceMode, WorkspaceAttachment } from '../types';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Alert, Platform, Share } from 'react-native';
+import * as DocumentPicker from 'expo-document-picker';
+import { notes } from '../data';
+import { requestMockAiAnswer, type MockAiAnswer } from '../services/mock-ai-service';
+import {
+  buildEmptyStudyWorkspaceState,
+  clearStudyWorkspaceState,
+  type PersistedStudyWorkspaceState,
+} from '../storage/local-workspace-store';
+import { findInkStrokesInRect, getDocumentPageLabel, isSameDocumentPage, scaleInkStrokeToPageSize } from '../ui-helpers';
+import {
+  DEFAULT_HIGHLIGHT_COLOR,
+  DEFAULT_PEN_COLOR,
+  HIGHLIGHT_BRUSH_COLORS,
+  PEN_BRUSH_COLORS,
+  buildGeneratedSummary,
+  buildWorkspaceAttachment,
+} from './study-workspace/helpers';
+import { useIncomingAssetSubscription } from './study-workspace/use-incoming-asset-subscription';
+import { useStudyWorkspaceDerivedState } from './study-workspace/use-study-workspace-derived-state';
+import { useStudyWorkspacePersistence } from './study-workspace/use-study-workspace-persistence';
+import type { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../ui-types';
+import type { BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NoteWorkspaceMode, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../types';
 
-function buildGeneratedSummary(asset: CaptureAsset): {
-  summaryTitle: string;
-  summaryIntro: string;
-  summarySections: NoteSummarySection[];
-  formulaText?: string;
-} {
-  const subjectName = subjects.find((value) => value.id === asset.subjectId)?.name ?? '해당 수업';
-  const subjectTemplateNote =
-    notes
-      .filter((value) => value.subjectId === asset.subjectId && value.summarySections?.length)
-      .sort((left, right) => new Date(right.date.replace(/\./g, '-')).getTime() - new Date(left.date.replace(/\./g, '-')).getTime())[0] ?? null;
-
-  if (subjectTemplateNote?.summarySections?.length) {
-    const formulaSection = subjectTemplateNote.summarySections.find((section) => section.tone === 'formula') ?? null;
-
-    return {
-      summaryTitle: subjectTemplateNote.title,
-      summaryIntro: subjectTemplateNote.preview,
-      summarySections: subjectTemplateNote.summarySections.filter((section) => section.tone !== 'formula'),
-      formulaText: formulaSection?.body,
-    };
-  }
-
-  return {
-    summaryTitle: `${subjectName} 판서+LLM 정리본`,
-    summaryIntro: '판서 흐름을 한 장 복습용으로 압축했습니다.',
-    summarySections: [
-      {
-        title: '핵심 개념',
-        body: '판서에서 나온 핵심 개념은 정의 하나만 외우는 구조가 아니라, 식과 그림이 같이 연결되는 흐름으로 보는 것이 중요합니다. 먼저 중심 개념이 무엇인지 잡고, 그다음 각 기호와 항이 어떤 의미를 갖는지 붙여서 보면 전체 맥락이 더 빠르게 정리됩니다.',
-      },
-      {
-        title: '시험 포인트',
-        body: '시험에서는 식을 그대로 쓰는 것보다 각 변수의 의미, 관계식이 왜 저 형태가 되는지, 판서에서 강조된 연결 포인트를 설명할 수 있어야 합니다. 정의, 식의 역할, 그래프 또는 예시 해석을 한 묶음으로 복기하는 쪽이 효율적입니다.',
-        tone: 'highlight',
-      },
-    ],
-    formulaText: 'a cos t + b sin t = R cos(t - Φ)',
-  };
+function addUniqueId(ids: number[], id: number) {
+  return ids.includes(id) ? ids : [...ids, id];
 }
 
-function buildDocumentPageSequence(pageCount: number, generatedPages: GeneratedWorkspacePage[]): DocumentPageView[] {
-  const sortedGenerated = [...generatedPages].sort((left, right) => {
-    if (left.insertAfterPage !== right.insertAfterPage) {
-      return left.insertAfterPage - right.insertAfterPage;
-    }
-    return new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime();
-  });
+function removeId(ids: number[], id: number) {
+  return ids.filter((value) => value !== id);
+}
 
-  const pages: DocumentPageView[] = [];
+function upsertStudyDocument(documents: StudyDocumentEntry[], nextDocument: StudyDocumentEntry) {
+  const exists = documents.some((document) => document.id === nextDocument.id);
+  if (!exists) return [nextDocument, ...documents];
 
-  for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
-    pages.push({ kind: 'pdf', pageNumber });
-    sortedGenerated
-      .filter((value) => value.insertAfterPage === pageNumber)
-      .forEach((value) => pages.push({ kind: 'generated', pageId: value.id }));
+  return documents.map((document) => (
+    document.id === nextDocument.id ? nextDocument : document
+  ));
+}
+
+function confirmDestructiveAction(params: {
+  title: string;
+  message: string;
+  confirmText: string;
+  onConfirm: () => void;
+}) {
+  if (Platform.OS === 'web') {
+    const confirmed = typeof globalThis.confirm === 'function'
+      ? globalThis.confirm(`${params.title}\n\n${params.message}`)
+      : false;
+    if (confirmed) params.onConfirm();
+    return;
   }
 
-  return pages;
+  Alert.alert(
+    params.title,
+    params.message,
+    [
+      { text: '취소', style: 'cancel' },
+      {
+        text: params.confirmText,
+        style: 'destructive',
+        onPress: params.onConfirm,
+      },
+    ],
+  );
 }
 
 export function useStudyWorkspace(props: {
   wide: boolean;
+  subjects: Subject[];
   initialSubjectId: number | null;
   onOpenNotesTab: () => void;
 }) {
-  const syncBridge = useSyncBridge();
   const [subjectId, setSubjectId] = useState<number | null>(props.initialSubjectId);
   const [noteId, setNoteId] = useState<number | null>(null);
   const [query, setQuery] = useState('');
@@ -79,7 +82,11 @@ export function useStudyWorkspace(props: {
   const [noteWorkspaceMode, setNoteWorkspaceMode] = useState<NoteWorkspaceMode>('photo');
   const [studyDocumentId, setStudyDocumentId] = useState<number | null>(null);
   const [inkTool, setInkTool] = useState<InkTool>('view');
+  const [penColor, setPenColor] = useState<string>(DEFAULT_PEN_COLOR);
+  const [penWidth, setPenWidth] = useState(3);
   const [inkByDocument, setInkByDocument] = useState<Record<number, InkStroke[]>>({});
+  const [redoInkByDocument, setRedoInkByDocument] = useState<Record<number, InkStroke[]>>({});
+  const [textAnnotationsByDocument, setTextAnnotationsByDocument] = useState<Record<number, InkTextAnnotation[]>>({});
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
   const [selectionByDocument, setSelectionByDocument] = useState<Record<number, SelectionRect | null>>({});
   const [aiQuestion, setAiQuestion] = useState('');
@@ -87,61 +94,113 @@ export function useStudyWorkspace(props: {
   const [captureAssetsBySubject, setCaptureAssetsBySubject] = useState<Record<number, CaptureAsset[]>>({});
   const [attachmentsByDocument, setAttachmentsByDocument] = useState<Record<number, WorkspaceAttachment[]>>({});
   const [generatedPagesByDocument, setGeneratedPagesByDocument] = useState<Record<number, GeneratedWorkspacePage[]>>({});
+  const [userStudyDocuments, setUserStudyDocuments] = useState<StudyDocumentEntry[]>([]);
+  const [deletedNoteIds, setDeletedNoteIds] = useState<number[]>([]);
+  const [deletedStudyDocumentIds, setDeletedStudyDocumentIds] = useState<number[]>([]);
   const [currentPdfPageByDocument, setCurrentPdfPageByDocument] = useState<Record<number, number>>({});
   const [activePageByDocument, setActivePageByDocument] = useState<Record<number, DocumentPageView>>({});
+  const [bookmarksByDocument, setBookmarksByDocument] = useState<Record<number, BookmarkedPage[]>>({});
   const [workspaceFeedback, setWorkspaceFeedback] = useState<string | null>(null);
   const [incomingBannerQueue, setIncomingBannerQueue] = useState<CaptureAsset[]>([]);
+  const [aiAnswer, setAiAnswer] = useState<MockAiAnswer | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
 
-  const subject = useMemo(() => subjects.find((value) => value.id === subjectId) ?? null, [subjectId]);
-  const note = useMemo(() => notes.find((value) => value.id === noteId) ?? null, [noteId]);
-  const studyDocument = useMemo(() => studyDocuments.find((value) => value.id === studyDocumentId) ?? null, [studyDocumentId]);
-  const inkStrokes = studyDocumentId ? inkByDocument[studyDocumentId] ?? [] : [];
-  const selectionRect = studyDocumentId ? selectionByDocument[studyDocumentId] ?? null : null;
-  const captureInbox = useMemo(() => {
-    if (!subjectId) return [];
-    return (captureAssetsBySubject[subjectId] ?? []).filter((asset) => asset.status !== 'dismissed');
-  }, [captureAssetsBySubject, subjectId]);
-  const workspaceAttachments = useMemo(() => {
-    if (!studyDocumentId) return [];
-    return attachmentsByDocument[studyDocumentId] ?? [];
-  }, [attachmentsByDocument, studyDocumentId]);
-  const generatedWorkspacePages = useMemo(() => {
-    if (!studyDocumentId) return [];
-    return generatedPagesByDocument[studyDocumentId] ?? [];
-  }, [generatedPagesByDocument, studyDocumentId]);
-  const currentPdfPage = studyDocumentId ? currentPdfPageByDocument[studyDocumentId] ?? 1 : 1;
-  const currentDocumentPages = useMemo(() => {
-    if (!studyDocument) return [];
-    return buildDocumentPageSequence(studyDocument.pageCount, generatedWorkspacePages);
-  }, [generatedWorkspacePages, studyDocument]);
-  const currentDocumentPage = useMemo(() => {
-    if (!studyDocumentId) return null;
-    return activePageByDocument[studyDocumentId] ?? { kind: 'pdf' as const, pageNumber: currentPdfPage };
-  }, [activePageByDocument, currentPdfPage, studyDocumentId]);
-  const currentDocumentPageIndex = useMemo(() => {
-    if (!currentDocumentPage) return 0;
-    return currentDocumentPages.findIndex((value) =>
-      value.kind === 'generated' && currentDocumentPage.kind === 'generated'
-        ? value.pageId === currentDocumentPage.pageId
-        : value.kind === 'pdf' && currentDocumentPage.kind === 'pdf'
-          ? value.pageNumber === currentDocumentPage.pageNumber
-          : false,
-    );
-  }, [currentDocumentPage, currentDocumentPages]);
-  const totalDocumentPageCount = currentDocumentPages.length;
-  const activeGeneratedPage = useMemo(() => {
-    if (!studyDocumentId || currentDocumentPage?.kind !== 'generated') return null;
-    return (generatedPagesByDocument[studyDocumentId] ?? []).find((value) => value.id === currentDocumentPage.pageId) ?? null;
-  }, [currentDocumentPage, generatedPagesByDocument, studyDocumentId]);
+  const {
+    availableSubjects,
+    allStudyDocuments,
+    subject,
+    note,
+    studyDocument,
+    selectionRect,
+    captureInbox,
+    workspaceAttachments,
+    generatedWorkspacePages,
+    currentPdfPage,
+    currentDocumentPages,
+    currentDocumentPage,
+    currentDocumentPageIndex,
+    totalDocumentPageCount,
+    activeGeneratedPage,
+    memoPages,
+    currentDocumentBookmarks,
+    currentPageBookmarked,
+    inkStrokes,
+    textAnnotations,
+    inboxPendingCount,
+    inboxHint,
+    filteredNotes,
+    filteredStudyDocuments,
+    currentAiPageLabel,
+    visibleNotes,
+    deletedNotes,
+    deletedStudyDocuments,
+  } = useStudyWorkspaceDerivedState({
+    subjects: props.subjects,
+    subjectId,
+    noteId,
+    query,
+    sort,
+    studyDocumentId,
+    userStudyDocuments,
+    deletedNoteIds,
+    deletedStudyDocumentIds,
+    captureAssetsBySubject,
+    attachmentsByDocument,
+    generatedPagesByDocument,
+    currentPdfPageByDocument,
+    activePageByDocument,
+    bookmarksByDocument,
+    inkByDocument,
+    textAnnotationsByDocument,
+    selectionByDocument,
+    incomingAssetSuggestion,
+  });
   const activeIncomingBanner = incomingBannerQueue[0] ?? null;
-  const inboxPendingCount = useMemo(
-    () => captureInbox.filter((asset) => asset.status === 'uploaded' || asset.status === 'archived').length,
-    [captureInbox],
-  );
-  const inboxHint = useMemo(() => {
-    if (incomingAssetSuggestion || !studyDocumentId || inboxPendingCount === 0) return null;
-    return `현재 문서와 다른 흐름의 자료 ${inboxPendingCount}건이 inbox에 쌓였습니다.`;
-  }, [incomingAssetSuggestion, inboxPendingCount, studyDocumentId]);
+  const hydrateWorkspaceState = useCallback((snapshot: PersistedStudyWorkspaceState | null) => {
+    if (!snapshot) return;
+    setUserStudyDocuments(snapshot.userStudyDocuments);
+    setDeletedNoteIds(snapshot.deletedNoteIds ?? []);
+    setDeletedStudyDocumentIds(snapshot.deletedStudyDocumentIds ?? []);
+    setCaptureAssetsBySubject(snapshot.captureAssetsBySubject);
+    setAttachmentsByDocument(snapshot.attachmentsByDocument);
+    setGeneratedPagesByDocument(snapshot.generatedPagesByDocument);
+    setInkByDocument(snapshot.inkByDocument);
+    setTextAnnotationsByDocument(snapshot.textAnnotationsByDocument);
+    setCurrentPdfPageByDocument(snapshot.currentPdfPageByDocument);
+    setActivePageByDocument(snapshot.activePageByDocument);
+    setBookmarksByDocument(snapshot.bookmarksByDocument ?? {});
+  }, []);
+  const persistedWorkspaceState = useMemo<PersistedStudyWorkspaceState>(() => ({
+    version: 1,
+    userStudyDocuments,
+    deletedNoteIds,
+    deletedStudyDocumentIds,
+    captureAssetsBySubject,
+    attachmentsByDocument,
+    generatedPagesByDocument,
+    inkByDocument,
+    textAnnotationsByDocument,
+    currentPdfPageByDocument,
+    activePageByDocument,
+    bookmarksByDocument,
+  }), [
+    activePageByDocument,
+    attachmentsByDocument,
+    bookmarksByDocument,
+    captureAssetsBySubject,
+    currentPdfPageByDocument,
+    deletedNoteIds,
+    deletedStudyDocumentIds,
+    generatedPagesByDocument,
+    inkByDocument,
+    textAnnotationsByDocument,
+    userStudyDocuments,
+  ]);
+  const { workspaceHydrated, localPersistenceError } = useStudyWorkspacePersistence({
+    state: persistedWorkspaceState,
+    onHydrate: hydrateWorkspaceState,
+  });
 
   useEffect(() => {
     if (!workspaceFeedback) return;
@@ -159,64 +218,14 @@ export function useStudyWorkspace(props: {
     return () => clearTimeout(timer);
   }, [activeIncomingBanner]);
 
-  useEffect(() => {
-    return syncBridge.subscribeToAssets(({ asset }) => {
-      const shouldSuggest = noteWorkspaceMode === 'note' && !!studyDocumentId && subjectId === asset.subjectId;
-      const nextAsset = shouldSuggest ? { ...asset, status: 'suggested' as const } : asset;
-
-      setCaptureAssetsBySubject((current) => ({
-        ...current,
-        [asset.subjectId]: [nextAsset, ...(current[asset.subjectId] ?? [])],
-      }));
-      setIncomingBannerQueue((current) => [...current, asset]);
-
-      if (shouldSuggest) {
-        setIncomingAssetSuggestion(nextAsset);
-      }
-    });
-  }, [noteWorkspaceMode, studyDocumentId, subjectId, syncBridge]);
-
-  const filteredNotes = useMemo(() => {
-    let list = subjectId ? notes.filter((value) => value.subjectId === subjectId) : notes;
-    const normalizedQuery = query.trim().toLowerCase();
-
-    if (normalizedQuery) {
-      list = list.filter((value) => {
-        const subjectName = subjects.find((item) => item.id === value.subjectId)?.name ?? '';
-        return (
-          value.title.toLowerCase().includes(normalizedQuery) ||
-          value.preview.toLowerCase().includes(normalizedQuery) ||
-          value.keywords.some((keyword) => keyword.toLowerCase().includes(normalizedQuery)) ||
-          subjectName.toLowerCase().includes(normalizedQuery)
-        );
-      });
-    }
-
-    return [...list].sort((left, right) => {
-      const leftTime = new Date(left.date.replace(/\./g, '-')).getTime();
-      const rightTime = new Date(right.date.replace(/\./g, '-')).getTime();
-      return sort === 'latest' ? rightTime - leftTime : leftTime - rightTime;
-    });
-  }, [query, sort, subjectId]);
-
-  const filteredStudyDocuments = useMemo(() => {
-    let list = subjectId ? studyDocuments.filter((value) => value.subjectId === subjectId) : studyDocuments;
-    const normalizedQuery = query.trim().toLowerCase();
-
-    if (normalizedQuery) {
-      list = list.filter((value) => {
-        const subjectName = subjects.find((item) => item.id === value.subjectId)?.name ?? '';
-        return (
-          value.title.toLowerCase().includes(normalizedQuery) ||
-          value.preview.toLowerCase().includes(normalizedQuery) ||
-          value.type.toLowerCase().includes(normalizedQuery) ||
-          subjectName.toLowerCase().includes(normalizedQuery)
-        );
-      });
-    }
-
-    return sort === 'latest' ? list : [...list].reverse();
-  }, [query, sort, subjectId]);
+  useIncomingAssetSubscription({
+    noteWorkspaceMode,
+    studyDocumentId,
+    subjectId,
+    setCaptureAssetsBySubject,
+    setIncomingBannerQueue,
+    setIncomingAssetSuggestion,
+  });
 
   const openSubject = (id: number) => {
     props.onOpenNotesTab();
@@ -227,7 +236,7 @@ export function useStudyWorkspace(props: {
   };
 
   const openNote = (id: number) => {
-    const selected = notes.find((value) => value.id === id);
+    const selected = visibleNotes.find((value) => value.id === id);
     if (!selected) return;
 
     props.onOpenNotesTab();
@@ -244,7 +253,7 @@ export function useStudyWorkspace(props: {
       return;
     }
 
-    const selected = studyDocuments.find((value) => value.id === id);
+    const selected = allStudyDocuments.find((value) => value.id === id);
     if (!selected) return;
 
     props.onOpenNotesTab();
@@ -258,6 +267,162 @@ export function useStudyWorkspace(props: {
     }));
   };
 
+  const openCreatedStudyDocument = (document: StudyDocumentEntry, feedback: string) => {
+    setUserStudyDocuments((current) => [document, ...current]);
+    props.onOpenNotesTab();
+    setSubjectId(document.subjectId);
+    setNoteId(null);
+    setStudyDocumentId(document.id);
+    setNoteWorkspaceMode('note');
+    setInkTool('view');
+    setAiPanelOpen(false);
+    setWorkspaceFeedback(feedback);
+    setCurrentPdfPageByDocument((current) => ({
+      ...current,
+      [document.id]: 1,
+    }));
+    setActivePageByDocument((current) => ({
+      ...current,
+      [document.id]: { kind: 'pdf', pageNumber: 1 },
+    }));
+  };
+
+  const createBlankNote = () => {
+    const targetSubjectId = subjectId ?? availableSubjects[0]?.id ?? null;
+    if (!targetSubjectId) return;
+
+    const targetSubject = availableSubjects.find((value) => value.id === targetSubjectId);
+    const document: StudyDocumentEntry = {
+      id: Date.now(),
+      subjectId: targetSubjectId,
+      title: `${targetSubject?.name ?? '수업'} 새 노트`,
+      type: 'blank',
+      updatedAt: '방금 전',
+      pageCount: 1,
+      preview: '새로 만든 빈 필기 노트입니다.',
+    };
+
+    openCreatedStudyDocument(document, '새 빈 노트를 만들었습니다.');
+  };
+
+  const requestDeleteNote = (id: number) => {
+    const target = visibleNotes.find((value) => value.id === id) ?? notes.find((value) => value.id === id);
+    if (!target) return;
+
+    confirmDestructiveAction({
+      title: 'Photo 삭제',
+      message: `"${target.title}" Photo를 삭제할까요? 삭제 후에는 현재 기기 목록에서 보이지 않습니다.`,
+      confirmText: '삭제',
+      onConfirm: () => {
+        setDeletedNoteIds((current) => addUniqueId(current, id));
+        if (noteId === id) {
+          setNoteId(null);
+          setNoteDetailTab('original');
+        }
+        setWorkspaceFeedback('Photo를 삭제했습니다.');
+      },
+    });
+  };
+
+  const requestDeleteStudyDocument = (id: number) => {
+    const target = allStudyDocuments.find((value) => value.id === id);
+    if (!target) return;
+
+    confirmDestructiveAction({
+      title: 'Note 삭제',
+      message: `"${target.title}" Note 문서와 이 문서에 남긴 필기를 삭제할까요?`,
+      confirmText: '삭제',
+      onConfirm: () => {
+        setDeletedStudyDocumentIds((current) => addUniqueId(current, id));
+
+        if (studyDocumentId === id) {
+          setStudyDocumentId(null);
+          setInkTool('view');
+          setAiPanelOpen(false);
+          setIncomingAssetSuggestion(null);
+          setAiAnswer(null);
+          setAiError(null);
+          setAiLoading(false);
+        }
+        setWorkspaceFeedback('Note 문서를 삭제했습니다.');
+      },
+    });
+  };
+
+  const restoreNote = (id: number) => {
+    const target = deletedNotes.find((value) => value.id === id);
+    if (!target) return;
+
+    setDeletedNoteIds((current) => removeId(current, id));
+    setNoteWorkspaceMode('photo');
+    setSubjectId(target.subjectId);
+    setWorkspaceFeedback('Photo를 복구했습니다.');
+  };
+
+  const restoreStudyDocument = (id: number) => {
+    const target = deletedStudyDocuments.find((value) => value.id === id);
+    if (!target) return;
+
+    setDeletedStudyDocumentIds((current) => removeId(current, id));
+    setNoteWorkspaceMode('note');
+    setSubjectId(target.subjectId);
+    setWorkspaceFeedback('Note 문서를 복구했습니다.');
+  };
+
+  const renameStudyDocument = (id: number, title: string) => {
+    const nextTitle = title.trim();
+    if (!nextTitle) {
+      setWorkspaceFeedback('문서 제목을 입력해주세요.');
+      return false;
+    }
+
+    const target = allStudyDocuments.find((value) => value.id === id) ?? deletedStudyDocuments.find((value) => value.id === id);
+    if (!target) return false;
+
+    setUserStudyDocuments((current) => upsertStudyDocument(current, {
+      ...target,
+      title: nextTitle,
+      updatedAt: '방금 전',
+    }));
+    setWorkspaceFeedback('문서 제목을 수정했습니다.');
+    return true;
+  };
+
+  const uploadPdfDocument = async () => {
+    const targetSubjectId = subjectId ?? availableSubjects[0]?.id ?? null;
+    if (!targetSubjectId) return;
+
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: 'application/pdf',
+        multiple: false,
+        copyToCacheDirectory: true,
+      });
+
+      if (result.canceled || !result.assets.length) {
+        setWorkspaceFeedback('PDF 업로드를 취소했습니다.');
+        return;
+      }
+
+      const picked = result.assets[0];
+      const targetSubject = availableSubjects.find((value) => value.id === targetSubjectId);
+      const document: StudyDocumentEntry = {
+        id: Date.now(),
+        subjectId: targetSubjectId,
+        title: picked.name || `${targetSubject?.name ?? '수업'} PDF`,
+        type: 'pdf',
+        updatedAt: '방금 전',
+        pageCount: 1,
+        preview: '파일 선택기에서 업로드한 수업 PDF입니다.',
+        file: { uri: picked.uri },
+      };
+
+      openCreatedStudyDocument(document, 'PDF 파일을 업로드했습니다.');
+    } catch {
+      setWorkspaceFeedback('PDF 파일을 가져오지 못했습니다.');
+    }
+  };
+
   const resetNotes = () => {
     setNoteId(null);
     setStudyDocumentId(null);
@@ -266,6 +431,30 @@ export function useStudyWorkspace(props: {
     setInkTool('view');
     setAiPanelOpen(false);
     if (!props.wide) setSubjectId(null);
+  };
+
+  const resetLocalWorkspaceData = async () => {
+    const emptyState = buildEmptyStudyWorkspaceState();
+    setUserStudyDocuments(emptyState.userStudyDocuments);
+    setDeletedNoteIds(emptyState.deletedNoteIds);
+    setDeletedStudyDocumentIds(emptyState.deletedStudyDocumentIds);
+    setCaptureAssetsBySubject(emptyState.captureAssetsBySubject);
+    setAttachmentsByDocument(emptyState.attachmentsByDocument);
+    setGeneratedPagesByDocument(emptyState.generatedPagesByDocument);
+    setInkByDocument(emptyState.inkByDocument);
+    setRedoInkByDocument({});
+    setTextAnnotationsByDocument(emptyState.textAnnotationsByDocument);
+    setCurrentPdfPageByDocument(emptyState.currentPdfPageByDocument);
+    setActivePageByDocument(emptyState.activePageByDocument);
+    setBookmarksByDocument(emptyState.bookmarksByDocument);
+    setIncomingAssetSuggestion(null);
+    setIncomingBannerQueue([]);
+    setStudyDocumentId(null);
+    setAiAnswer(null);
+    setAiError(null);
+    setAiLoading(false);
+    await clearStudyWorkspaceState();
+    setWorkspaceFeedback('로컬 작업 데이터를 초기화했습니다.');
   };
 
   const changeNoteWorkspaceMode = (next: NoteWorkspaceMode) => {
@@ -300,10 +489,38 @@ export function useStudyWorkspace(props: {
       return;
     }
 
+    if (tool === 'highlight') {
+      if (!HIGHLIGHT_BRUSH_COLORS.includes(penColor as (typeof HIGHLIGHT_BRUSH_COLORS)[number])) {
+        setPenColor(DEFAULT_HIGHLIGHT_COLOR);
+      }
+      if (penWidth < 8) {
+        setPenWidth(12);
+      }
+    }
+
+    if (tool === 'pen') {
+      if (!PEN_BRUSH_COLORS.includes(penColor as (typeof PEN_BRUSH_COLORS)[number])) {
+        setPenColor(DEFAULT_PEN_COLOR);
+      }
+      if (penWidth > 6) {
+        setPenWidth(4);
+      }
+    }
+
     setInkTool(tool);
-    if (tool !== 'select' && studyDocumentId) {
+    if (tool !== 'select' && tool !== 'text' && studyDocumentId) {
       setSelectionByDocument((current) => ({ ...current, [studyDocumentId]: null }));
     }
+  };
+
+  const changePenColor = (color: string) => {
+    setPenColor(color);
+    setInkTool((current) => (current !== 'pen' && current !== 'highlight' ? 'pen' : current));
+  };
+
+  const changePenWidth = (width: number) => {
+    setPenWidth(width);
+    setInkTool((current) => (current !== 'pen' && current !== 'highlight' ? 'pen' : current));
   };
 
   const changeSelection = (rect: SelectionRect | null) => {
@@ -311,27 +528,150 @@ export function useStudyWorkspace(props: {
     setSelectionByDocument((current) => ({ ...current, [studyDocumentId]: rect }));
   };
 
+  const isStrokeOnCurrentPage = (stroke: InkStroke) => (
+    currentDocumentPage?.kind === 'generated'
+      ? stroke.generatedPageId === currentDocumentPage.pageId
+      : (
+          !stroke.generatedPageId &&
+          (studyDocument?.type === 'blank' ? (stroke.pageNumber ?? 1) === currentPdfPage : (!stroke.pageNumber || stroke.pageNumber === currentPdfPage))
+        )
+  );
+
+  const findLastIndex = <T,>(items: T[], predicate: (item: T) => boolean) => {
+    for (let index = items.length - 1; index >= 0; index -= 1) {
+      if (predicate(items[index])) return index;
+    }
+    return -1;
+  };
+
   const clearInk = () => {
     if (!studyDocumentId) return;
-    setInkByDocument((current) => ({ ...current, [studyDocumentId]: [] }));
+    setInkByDocument((current) => ({
+      ...current,
+      [studyDocumentId]: (current[studyDocumentId] ?? []).filter((stroke) => !isStrokeOnCurrentPage(stroke)),
+    }));
+    setRedoInkByDocument((current) => ({
+      ...current,
+      [studyDocumentId]: (current[studyDocumentId] ?? []).filter((stroke) => !isStrokeOnCurrentPage(stroke)),
+    }));
   };
 
   const undoInk = () => {
     if (!studyDocumentId) return;
-    setInkByDocument((current) => ({
-      ...current,
-      [studyDocumentId]: (current[studyDocumentId] ?? []).slice(0, -1),
-    }));
+    setInkByDocument((current) => {
+      const currentStrokes = current[studyDocumentId] ?? [];
+      const lastStrokeIndex = findLastIndex(currentStrokes, isStrokeOnCurrentPage);
+      if (lastStrokeIndex < 0) return current;
+
+      const lastStroke = currentStrokes[lastStrokeIndex];
+      
+      setRedoInkByDocument((redoCurrent) => ({
+        ...redoCurrent,
+        [studyDocumentId]: [...(redoCurrent[studyDocumentId] ?? []), lastStroke],
+      }));
+      
+      return {
+        ...current,
+        [studyDocumentId]: currentStrokes.filter((_, index) => index !== lastStrokeIndex),
+      };
+    });
+  };
+
+  const redoInk = () => {
+    if (!studyDocumentId) return;
+    setRedoInkByDocument((current) => {
+      const currentRedoStrokes = current[studyDocumentId] ?? [];
+      const lastRedoStrokeIndex = findLastIndex(currentRedoStrokes, isStrokeOnCurrentPage);
+      if (lastRedoStrokeIndex < 0) return current;
+
+      const lastRedoStroke = currentRedoStrokes[lastRedoStrokeIndex];
+
+      setInkByDocument((inkCurrent) => ({
+        ...inkCurrent,
+        [studyDocumentId]: [...(inkCurrent[studyDocumentId] ?? []), lastRedoStroke],
+      }));
+
+      return {
+        ...current,
+        [studyDocumentId]: currentRedoStrokes.filter((_, index) => index !== lastRedoStrokeIndex),
+      };
+    });
   };
 
   const commitInkStroke = (stroke: InkStroke) => {
     if (!studyDocumentId) return;
+    const scopedStroke =
+      currentDocumentPage?.kind === 'generated'
+        ? { ...stroke, generatedPageId: currentDocumentPage.pageId, pageNumber: undefined }
+        : { ...stroke, generatedPageId: undefined, pageNumber: currentDocumentPage?.kind === 'pdf' ? currentDocumentPage.pageNumber : currentPdfPage };
     setInkByDocument((current) => ({
       ...current,
-      [studyDocumentId]: [...(current[studyDocumentId] ?? []), stroke],
+      [studyDocumentId]: [...(current[studyDocumentId] ?? []), scopedStroke],
+    }));
+    setRedoInkByDocument((current) => ({
+      ...current,
+      [studyDocumentId]: [],
     }));
   };
 
+  const removeInkStroke = (strokeId: string) => {
+    if (!studyDocumentId) return;
+    setInkByDocument((current) => {
+      const nextStrokes = (current[studyDocumentId] ?? []).filter((stroke) => stroke.id !== strokeId);
+      return {
+        ...current,
+        [studyDocumentId]: nextStrokes,
+      };
+    });
+  };
+
+  const addTextAnnotation = (point: InkPoint) => {
+    if (!studyDocumentId) return;
+    const generatedPageId = currentDocumentPage?.kind === 'generated' ? currentDocumentPage.pageId : undefined;
+    const pageNumber = generatedPageId ? 1 : currentDocumentPage?.kind === 'pdf' ? currentDocumentPage.pageNumber : currentPdfPage;
+    const anchoredSelection = !generatedPageId && studyDocument?.type === 'pdf' ? selectionByDocument[studyDocumentId] ?? null : null;
+    const anchorX = anchoredSelection ? Math.max(18, anchoredSelection.x) : Math.max(18, point.x);
+    const anchorY = anchoredSelection ? Math.max(18, anchoredSelection.y) : Math.max(18, point.y);
+    const nextAnnotation: InkTextAnnotation = {
+      id: `text-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      pageNumber,
+      generatedPageId,
+      x: anchorX,
+      y: anchorY,
+      width: 180,
+      text: '',
+      anchorRect: anchoredSelection,
+      pageWidth: anchoredSelection?.pageWidth ?? point.pageWidth,
+      pageHeight: anchoredSelection?.pageHeight ?? point.pageHeight,
+    };
+    setTextAnnotationsByDocument((current) => ({
+      ...current,
+      [studyDocumentId]: [...(current[studyDocumentId] ?? []), nextAnnotation],
+    }));
+    if (anchoredSelection) {
+      clearCurrentSelection();
+    }
+    setInkTool('view');
+    setWorkspaceFeedback(anchoredSelection ? '선택 영역 메모를 추가했습니다.' : '텍스트 메모를 추가했습니다.');
+  };
+
+  const updateTextAnnotation = (annotationId: string, text: string) => {
+    if (!studyDocumentId) return;
+    setTextAnnotationsByDocument((current) => ({
+      ...current,
+      [studyDocumentId]: (current[studyDocumentId] ?? []).map((annotation) =>
+        annotation.id === annotationId ? { ...annotation, text } : annotation,
+      ),
+    }));
+  };
+
+  const removeTextAnnotation = (annotationId: string) => {
+    if (!studyDocumentId) return;
+    setTextAnnotationsByDocument((current) => ({
+      ...current,
+      [studyDocumentId]: (current[studyDocumentId] ?? []).filter((annotation) => annotation.id !== annotationId),
+    }));
+  };
   const updateAssetStatus = (assetId: string, nextStatus: CaptureAsset['status']) => {
     setCaptureAssetsBySubject((current) => {
       const next = { ...current };
@@ -345,20 +685,6 @@ export function useStudyWorkspace(props: {
     });
   };
 
-  const buildAttachment = (asset: CaptureAsset, generatedPageId: string): WorkspaceAttachment => ({
-    id: `attachment-${generatedPageId}`,
-    assetId: asset.id,
-    generatedPageId,
-    type: asset.type,
-    title: asset.title,
-    summary: asset.summary,
-    createdAt: asset.createdAt,
-    pageCount: asset.pageCount,
-    previewImageKey: asset.previewImageKey,
-    previewImage: asset.previewImage,
-    placementType: asset.type === 'image' ? 'next_page_insert' : 'side_reference',
-  });
-
   const insertAssetIntoWorkspace = (asset: CaptureAsset) => {
     if (!studyDocumentId) return;
 
@@ -368,18 +694,19 @@ export function useStudyWorkspace(props: {
       id: generatedPageId,
       documentId: studyDocumentId,
       sourceAssetId: asset.id,
+      pageKind: 'summary',
       title: asset.title,
       createdAt: new Date().toISOString(),
       insertAfterPage,
       status: 'generating',
       previewImageKey: asset.previewImageKey,
       previewImage: asset.previewImage,
-      ...buildGeneratedSummary(asset),
+      ...buildGeneratedSummary(asset, availableSubjects),
     };
 
     setAttachmentsByDocument((current) => ({
       ...current,
-      [studyDocumentId]: [buildAttachment(asset, generatedPageId), ...(current[studyDocumentId] ?? [])],
+      [studyDocumentId]: [buildWorkspaceAttachment(asset, generatedPageId), ...(current[studyDocumentId] ?? [])],
     }));
     setGeneratedPagesByDocument((current) => ({
       ...current,
@@ -401,6 +728,118 @@ export function useStudyWorkspace(props: {
       }));
       setWorkspaceFeedback('다음 페이지 정리본이 준비됐습니다.');
     }, 1600);
+  };
+
+  const requestAiAnswer = async () => {
+    if (!studyDocumentId) return;
+
+    setAiLoading(true);
+    setAiError(null);
+
+    try {
+      const answer = await requestMockAiAnswer({
+        question: aiQuestion,
+        selectionRect,
+        currentPageLabel: currentAiPageLabel,
+      });
+      setAiAnswer(answer);
+    } catch {
+      setAiError('AI 응답을 만들지 못했습니다. 다시 시도해주세요.');
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const insertAiAnswerPage = () => {
+    if (!studyDocumentId || !aiAnswer) return;
+
+    const insertAfterPage =
+      currentDocumentPage?.kind === 'generated'
+        ? ((generatedPagesByDocument[studyDocumentId] ?? []).find((value) => value.id === currentDocumentPage.pageId)?.insertAfterPage ?? currentPdfPage)
+        : currentPdfPage;
+    const generatedPageId = `ai-answer-page-${studyDocumentId}-${Date.now()}`;
+    const generatedPage: GeneratedWorkspacePage = {
+      id: generatedPageId,
+      documentId: studyDocumentId,
+      sourceAssetId: `ai-answer-${generatedPageId}`,
+      pageKind: 'summary',
+      title: 'AI 질문 정리',
+      createdAt: aiAnswer.createdAt,
+      insertAfterPage,
+      status: 'ready',
+      summaryTitle: aiAnswer.question,
+      summaryIntro: '선택 영역 질문을 바탕으로 만든 로컬 mock AI 정리입니다.',
+      summarySections: aiAnswer.sections,
+    };
+
+    setGeneratedPagesByDocument((current) => ({
+      ...current,
+      [studyDocumentId]: [generatedPage, ...(current[studyDocumentId] ?? [])],
+    }));
+    setActivePageByDocument((current) => ({
+      ...current,
+      [studyDocumentId]: { kind: 'generated', pageId: generatedPageId },
+    }));
+    setWorkspaceFeedback('AI 답변을 정리 페이지로 추가했습니다.');
+  };
+
+  const createMemoPage = () => {
+    if (!studyDocumentId || !studyDocument) return;
+
+    if (studyDocument.type === 'blank') {
+      const nextPage = studyDocument.pageCount + 1;
+      const nextDocument = {
+        ...studyDocument,
+        pageCount: nextPage,
+        updatedAt: '방금 전',
+      };
+
+      setUserStudyDocuments((current) => upsertStudyDocument(current, nextDocument));
+      setCurrentPdfPageByDocument((current) => ({
+        ...current,
+        [studyDocumentId]: nextPage,
+      }));
+      setActivePageByDocument((current) => ({
+        ...current,
+        [studyDocumentId]: { kind: 'pdf', pageNumber: nextPage },
+      }));
+      setInkTool('pen');
+      setWorkspaceFeedback(`${nextPage}페이지를 추가했습니다.`);
+      return;
+    }
+
+    const insertAfterPage =
+      currentDocumentPage?.kind === 'generated'
+        ? ((generatedPagesByDocument[studyDocumentId] ?? []).find((value) => value.id === currentDocumentPage.pageId)?.insertAfterPage ?? currentPdfPage)
+        : currentPdfPage;
+    const generatedPageId = `memo-page-${studyDocumentId}-${Date.now()}`;
+    const nextMemoCount =
+      (generatedPagesByDocument[studyDocumentId] ?? []).filter((value) => value.pageKind === 'memo' && value.insertAfterPage === insertAfterPage).length + 1;
+
+    const memoPage: GeneratedWorkspacePage = {
+      id: generatedPageId,
+      documentId: studyDocumentId,
+      sourceAssetId: generatedPageId,
+      pageKind: 'memo',
+      title: `${insertAfterPage}-${nextMemoCount} 메모`,
+      createdAt: new Date().toISOString(),
+      insertAfterPage,
+      status: 'ready',
+      summaryTitle: '',
+      summaryIntro: '',
+      summarySections: [],
+    };
+
+    setGeneratedPagesByDocument((current) => ({
+      ...current,
+      [studyDocumentId]: [...(current[studyDocumentId] ?? []), memoPage],
+    }));
+    setActivePageByDocument((current) => ({
+      ...current,
+      [studyDocumentId]: { kind: 'generated', pageId: generatedPageId },
+    }));
+    setInkTool('pen');
+    setWorkspaceFeedback(`${insertAfterPage}페이지 뒤에 메모 페이지를 추가했습니다.`);
   };
 
   const acceptIncomingAsset = () => {
@@ -458,6 +897,10 @@ export function useStudyWorkspace(props: {
         ...current,
         [studyDocumentId]: (current[studyDocumentId] ?? []).filter((page) => page.id !== target.generatedPageId),
       }));
+      setBookmarksByDocument((current) => ({
+        ...current,
+        [studyDocumentId]: (current[studyDocumentId] ?? []).filter((bookmark) => bookmark.page.kind !== 'generated' || bookmark.page.pageId !== target.generatedPageId),
+      }));
     }
     if (linkedGeneratedPage && activePageByDocument[studyDocumentId]?.kind === 'generated' && activePageByDocument[studyDocumentId]?.pageId === linkedGeneratedPage.id) {
       setActivePageByDocument((current) => ({
@@ -473,10 +916,133 @@ export function useStudyWorkspace(props: {
     setWorkspaceFeedback('추가한 정리 페이지를 삭제했습니다.');
   };
 
+  const openGeneratedPage = (pageId: string) => {
+    if (!studyDocumentId) return;
+    setActivePageByDocument((current) => ({
+      ...current,
+      [studyDocumentId]: { kind: 'generated', pageId },
+    }));
+  };
+
+  const removeGeneratedPage = (pageId: string) => {
+    if (!studyDocumentId) return;
+    const target = (generatedPagesByDocument[studyDocumentId] ?? []).find((page) => page.id === pageId);
+    if (!target || (target.pageKind !== 'memo' && !target.sourceAssetId.startsWith('ai-answer-'))) return;
+
+    setGeneratedPagesByDocument((current) => ({
+      ...current,
+      [studyDocumentId]: (current[studyDocumentId] ?? []).filter((page) => page.id !== pageId),
+    }));
+    setInkByDocument((current) => ({
+      ...current,
+      [studyDocumentId]: (current[studyDocumentId] ?? []).filter((stroke) => stroke.generatedPageId !== pageId),
+    }));
+    setTextAnnotationsByDocument((current) => ({
+      ...current,
+      [studyDocumentId]: (current[studyDocumentId] ?? []).filter((annotation) => annotation.generatedPageId !== pageId),
+    }));
+    setBookmarksByDocument((current) => ({
+      ...current,
+      [studyDocumentId]: (current[studyDocumentId] ?? []).filter((bookmark) => bookmark.page.kind !== 'generated' || bookmark.page.pageId !== pageId),
+    }));
+    if (activePageByDocument[studyDocumentId]?.kind === 'generated' && activePageByDocument[studyDocumentId]?.pageId === pageId) {
+      setActivePageByDocument((current) => ({
+        ...current,
+        [studyDocumentId]: { kind: 'pdf', pageNumber: target.insertAfterPage },
+      }));
+      setCurrentPdfPageByDocument((current) => ({
+        ...current,
+        [studyDocumentId]: target.insertAfterPage,
+      }));
+    }
+    setWorkspaceFeedback('메모 페이지를 삭제했습니다.');
+  };
+
+  const updateStudyDocumentPageCount = (pageCount: number) => {
+    if (!studyDocumentId || !studyDocument || !Number.isFinite(pageCount) || pageCount < 1) return;
+    setUserStudyDocuments((current) => upsertStudyDocument(current, {
+      ...studyDocument,
+      pageCount,
+    }));
+  };
+
+  const clearCurrentSelection = () => {
+    if (!studyDocumentId) return;
+    setSelectionByDocument((current) => ({ ...current, [studyDocumentId]: null }));
+  };
+
+  const deleteSelectedStrokes = () => {
+    if (!studyDocumentId || !selectionRect) return;
+    const currentStrokes = inkByDocument[studyDocumentId] ?? [];
+
+    const pageStrokes = currentStrokes.filter((stroke) => (
+      currentDocumentPage?.kind === 'generated'
+        ? stroke.generatedPageId === currentDocumentPage.pageId
+        : (
+            !stroke.generatedPageId &&
+            (studyDocument?.type === 'blank' ? (stroke.pageNumber ?? 1) === currentPdfPage : (!stroke.pageNumber || stroke.pageNumber === currentPdfPage))
+          )
+    ));
+    const hitTestStrokes =
+      selectionRect.pageWidth && selectionRect.pageHeight
+        ? pageStrokes.map((stroke) => scaleInkStrokeToPageSize(stroke, selectionRect.pageWidth!, selectionRect.pageHeight!))
+        : pageStrokes;
+    const selectedStrokeIds = new Set(findInkStrokesInRect(hitTestStrokes, selectionRect));
+
+    if (selectedStrokeIds.size > 0) {
+      setInkByDocument((current) => ({
+        ...current,
+        [studyDocumentId]: (current[studyDocumentId] ?? []).filter((stroke) => !selectedStrokeIds.has(stroke.id)),
+      }));
+      setWorkspaceFeedback(`선택된 ${selectedStrokeIds.size}개의 필기를 지웠습니다.`);
+    }
+    clearCurrentSelection();
+    setInkTool('view');
+  };
+
+  const changeSelectedStrokesColor = (color: string) => {
+    if (!studyDocumentId || !selectionRect) return;
+    const currentStrokes = inkByDocument[studyDocumentId] ?? [];
+
+    const pageStrokes = currentStrokes.filter((stroke) => (
+      currentDocumentPage?.kind === 'generated'
+        ? stroke.generatedPageId === currentDocumentPage.pageId
+        : (
+            !stroke.generatedPageId &&
+            (studyDocument?.type === 'blank' ? (stroke.pageNumber ?? 1) === currentPdfPage : (!stroke.pageNumber || stroke.pageNumber === currentPdfPage))
+          )
+    ));
+    const hitTestStrokes =
+      selectionRect.pageWidth && selectionRect.pageHeight
+        ? pageStrokes.map((stroke) => scaleInkStrokeToPageSize(stroke, selectionRect.pageWidth!, selectionRect.pageHeight!))
+        : pageStrokes;
+    const selectedStrokeIds = new Set(findInkStrokesInRect(hitTestStrokes, selectionRect));
+
+    const nextStrokes = currentStrokes.map((stroke) => {
+      if (selectedStrokeIds.has(stroke.id)) {
+        const isHighlight = stroke.style === 'highlight';
+        const finalColor = isHighlight ? (color.startsWith('#') ? color + '55' : color) : color;
+        return { ...stroke, color: finalColor };
+      }
+      return stroke;
+    });
+
+    if (selectedStrokeIds.size > 0) {
+      setInkByDocument((current) => ({
+        ...current,
+        [studyDocumentId]: nextStrokes,
+      }));
+      setWorkspaceFeedback(`선택된 ${selectedStrokeIds.size}개의 필기 색상을 변경했습니다.`);
+    }
+    clearCurrentSelection();
+    setInkTool('view');
+  };
+
   const setCurrentPdfPage = (pageNumber: number) => {
     if (!studyDocumentId || !studyDocument) return;
 
     const nextPage = Math.max(1, Math.min(pageNumber, studyDocument.pageCount));
+    clearCurrentSelection();
     setCurrentPdfPageByDocument((current) => ({
       ...current,
       [studyDocumentId]: nextPage,
@@ -493,6 +1059,7 @@ export function useStudyWorkspace(props: {
     const nextPage = currentDocumentPages[currentIndex + delta];
     if (!nextPage) return;
 
+    clearCurrentSelection();
     setActivePageByDocument((current) => ({
       ...current,
       [studyDocumentId]: nextPage,
@@ -513,6 +1080,107 @@ export function useStudyWorkspace(props: {
       ...current,
       [studyDocumentId]: { kind: 'generated', pageId: target.generatedPageId! },
     }));
+  };
+
+  const getCurrentPageBookmarkLabel = () => {
+    if (!currentDocumentPage) return '현재 페이지';
+    return getDocumentPageLabel({
+      page: currentDocumentPage,
+      pages: currentDocumentPages,
+      memoPages,
+      pdfSuffix: '페이지',
+    });
+  };
+
+  const toggleBookmarkCurrentPage = () => {
+    if (!studyDocumentId || !currentDocumentPage) return;
+    const label = getCurrentPageBookmarkLabel();
+
+    setBookmarksByDocument((current) => {
+      const bookmarks = current[studyDocumentId] ?? [];
+      const alreadyBookmarked = bookmarks.some((bookmark) => isSameDocumentPage(bookmark.page, currentDocumentPage));
+      const nextBookmarks = alreadyBookmarked
+        ? bookmarks.filter((bookmark) => !isSameDocumentPage(bookmark.page, currentDocumentPage))
+        : [
+            {
+              id: `bookmark-${studyDocumentId}-${Date.now()}`,
+              documentId: studyDocumentId,
+              page: currentDocumentPage,
+              label,
+              createdAt: new Date().toISOString(),
+            },
+            ...bookmarks,
+          ];
+
+      return {
+        ...current,
+        [studyDocumentId]: nextBookmarks,
+      };
+    });
+
+    setWorkspaceFeedback(currentPageBookmarked ? '중요 페이지에서 해제했습니다.' : '중요 페이지로 저장했습니다.');
+  };
+
+  const openBookmarkedPage = (bookmarkId: string) => {
+    if (!studyDocumentId) return;
+    const bookmark = (bookmarksByDocument[studyDocumentId] ?? []).find((value) => value.id === bookmarkId);
+    if (!bookmark) return;
+    const targetPage = bookmark.page;
+
+    clearCurrentSelection();
+    setActivePageByDocument((current) => ({
+      ...current,
+      [studyDocumentId]: targetPage,
+    }));
+    if (targetPage.kind === 'pdf') {
+      setCurrentPdfPageByDocument((current) => ({
+        ...current,
+        [studyDocumentId]: targetPage.pageNumber,
+      }));
+    }
+  };
+
+  const removeBookmark = (bookmarkId: string) => {
+    if (!studyDocumentId) return;
+    setBookmarksByDocument((current) => ({
+      ...current,
+      [studyDocumentId]: (current[studyDocumentId] ?? []).filter((bookmark) => bookmark.id !== bookmarkId),
+    }));
+    setWorkspaceFeedback('중요 페이지를 삭제했습니다.');
+  };
+
+  const exportCurrentDocumentSummary = async () => {
+    if (!studyDocumentId || !studyDocument) return;
+
+    const bookmarkLines = currentDocumentBookmarks.length
+      ? currentDocumentBookmarks.map((bookmark) => `- ${bookmark.label}`).join('\n')
+      : '- 저장된 중요 페이지 없음';
+    const generatedPageLines = generatedWorkspacePages.length
+      ? generatedWorkspacePages.map((page) => `- ${page.title} (${page.insertAfterPage}페이지 뒤)`).join('\n')
+      : '- 추가 정리/메모 페이지 없음';
+    const annotationCount = (inkByDocument[studyDocumentId] ?? []).length + (textAnnotationsByDocument[studyDocumentId] ?? []).length;
+
+    try {
+      await Share.share({
+        title: `${studyDocument.title} 내보내기`,
+        message: [
+          `B-SNAP 문서 내보내기`,
+          `문서: ${studyDocument.title}`,
+          `현재 위치: ${getCurrentPageBookmarkLabel()}`,
+          `전체 페이지: ${currentDocumentPages.length || studyDocument.pageCount}`,
+          `필기/메모 수: ${annotationCount}`,
+          '',
+          '중요 페이지',
+          bookmarkLines,
+          '',
+          '추가 페이지',
+          generatedPageLines,
+        ].join('\n'),
+      });
+      setWorkspaceFeedback('문서 요약을 공유 시트로 내보냈습니다.');
+    } catch {
+      setWorkspaceFeedback('이 기기에서는 내보내기를 열지 못했습니다.');
+    }
   };
 
   const dismissIncomingBanner = () => {
@@ -539,41 +1207,77 @@ export function useStudyWorkspace(props: {
     noteWorkspaceMode,
     studyDocument,
     inkTool,
+    penColor,
+    penWidth,
     inkStrokes,
+    textAnnotations,
     aiPanelOpen,
     selectionRect,
     aiQuestion,
+    aiAnswer,
+    aiLoading,
+    aiError,
     query,
     sort,
     incomingAssetSuggestion,
     inboxHint,
     inboxPendingCount,
     workspaceFeedback,
+    workspaceHydrated,
+    localPersistenceError,
     activeIncomingBanner,
     captureInbox,
     workspaceAttachments,
     generatedWorkspacePages,
+    memoPages,
+    currentDocumentBookmarks,
+    currentPageBookmarked,
     activeGeneratedPage,
     currentPdfPage,
+    currentDocumentPages,
     currentDocumentPage,
     currentDocumentPageIndex,
     totalDocumentPageCount,
     filteredNotes,
+    allNotes: visibleNotes,
+    deletedNotes,
+    allStudyDocuments,
+    deletedStudyDocuments,
     filteredStudyDocuments,
     openSubject,
     openNote,
     openStudyDocument,
+    createBlankNote,
+    requestDeleteNote,
+    requestDeleteStudyDocument,
+    restoreNote,
+    restoreStudyDocument,
+    renameStudyDocument,
+    uploadPdfDocument,
     resetNotes,
+    resetLocalWorkspaceData,
+    setNoteDetailTab,
     changeNoteWorkspaceMode,
-    resetToSubjectList,
-    backToNoteList,
     changeInkTool,
+    changePenColor,
+    changePenWidth,
     toggleAiPanel: () => setAiPanelOpen((current) => !current),
     setAiQuestion,
+    requestAiAnswer,
+    insertAiAnswerPage,
     changeSelection,
-    clearInk,
     undoInk,
+    redoInk,
+    clearInk,
     commitInkStroke,
+    resetToSubjectList,
+    backToNoteList,
+    addTextAnnotation,
+    updateTextAnnotation,
+    removeTextAnnotation,
+    removeInkStroke,
+    deleteSelectedStrokes,
+    changeSelectedStrokesColor,
     acceptIncomingAsset,
     archiveIncomingAsset,
     dismissIncomingAsset,
@@ -582,12 +1286,19 @@ export function useStudyWorkspace(props: {
     removeInboxAsset,
     openIncomingBanner,
     removeWorkspaceAttachment,
+    createMemoPage,
     openWorkspaceAttachment,
+    toggleBookmarkCurrentPage,
+    openBookmarkedPage,
+    removeBookmark,
+    exportCurrentDocumentSummary,
+    openGeneratedPage,
+    removeGeneratedPage,
+    updateStudyDocumentPageCount,
     setCurrentPdfPage,
     goToPreviousDocumentPage: () => moveDocumentPage(-1),
     goToNextDocumentPage: () => moveDocumentPage(1),
     setQuery,
     toggleSort: () => setSort((current) => (current === 'latest' ? 'oldest' : 'latest')),
-    setNoteDetailTab,
   };
 }

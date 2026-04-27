@@ -113,16 +113,32 @@ export function DesktopCapture(props: {
   onPickFromLibrary: () => Promise<void>;
   onPickPdf: () => Promise<void>;
   styles: any;
+  isWeb?: boolean;
 }) {
   const current = props.subjects.find((item) => item.id === props.captureId) ?? props.subjects[0] ?? fallbackSubjects[0];
   const [pickerOpen, setPickerOpen] = useState(false);
 
   return (
-    <ScrollView style={props.styles.main} contentContainerStyle={[props.styles.desktopPage, props.compact && props.styles.desktopPageCompact]}>
-      <View style={[props.styles.desktopHeader, props.compact && props.styles.desktopHeaderCompact]}>
-        <Text style={[props.styles.desktopTitle, props.compact && props.styles.desktopTitleCompact]}>촬영</Text>
+    <ScrollView style={props.styles.main} contentContainerStyle={[props.styles.desktopPage, props.compact && props.styles.desktopPageCompact, props.isWeb && props.styles.webDesktopPage]}>
+      <View style={props.isWeb ? props.styles.webPageHeader : [props.styles.desktopHeader, props.compact && props.styles.desktopHeaderCompact]}>
+        {props.isWeb ? (
+          <>
+            <View style={props.styles.webPageHeaderMeta}>
+              <Text style={props.styles.webPageEyebrow}>CAPTURE HUB</Text>
+              <Text style={props.styles.webPageTitle}>자료 캡처</Text>
+              <Text style={props.styles.webPageBody}>사진, PDF, 외부 자료를 과목별로 정리해 노트 작업공간에 바로 연결합니다.</Text>
+            </View>
+            <View style={props.styles.webHeaderBadgeRow}>
+              <View style={props.styles.webHeaderBadge}>
+                <Text style={props.styles.webHeaderBadgeText}>최근 업로드 {props.recentUploads.length}건</Text>
+              </View>
+            </View>
+          </>
+        ) : (
+          <Text style={[props.styles.desktopTitle, props.compact && props.styles.desktopTitleCompact]}>촬영</Text>
+        )}
       </View>
-      <View style={[props.styles.desktopCaptureForm, props.compact && props.styles.desktopCaptureFormCompact]}>
+      <View style={[props.styles.desktopCaptureForm, props.compact && props.styles.desktopCaptureFormCompact, props.isWeb && props.styles.webCaptureGrid]}>
         <View style={[props.styles.currentClassCard, props.compact && props.styles.currentClassCardCompact]}>
           <View style={props.styles.currentClassBadge}>
             <Text style={props.styles.currentClassBadgeIcon}>◔</Text>

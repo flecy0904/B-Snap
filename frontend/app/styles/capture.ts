@@ -82,4 +82,5 @@ export const captureStyles = {
   desktopCaptureFormCompact: { maxWidth: '100%' },
   desktopDropdown: { marginBottom: 12 },
   desktopCaptureActions: { marginTop: 10 },
+  webCaptureGrid: { maxWidth: '100%', backgroundColor: '#FFFFFF', borderRadius: 24, borderWidth: 1, borderColor: '#DDE5EF', padding: 22 },
 };
