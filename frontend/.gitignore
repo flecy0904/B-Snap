@@ -5,6 +5,7 @@ dist/
 build/
 .metro-cache/
 .cache/
+android/
 android/.gradle/
 android/build/
 android/key.properties
