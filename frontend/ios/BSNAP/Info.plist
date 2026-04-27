@@ -54,11 +54,7 @@
     <true/>
     <key>UILaunchStoryboardName</key>
     <string>SplashScreen</string>
-    <key>UIRequiredDeviceCapabilities</key>
-    <array>
-      <string>arm64</string>
-    </array>
-    <key>UIRequiresFullScreen</key>
+	<key>UIRequiresFullScreen</key>
     <false/>
     <key>UIStatusBarStyle</key>
     <string>UIStatusBarStyleDefault</string>

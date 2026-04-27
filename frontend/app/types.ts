@@ -35,9 +35,18 @@ export type CaptureSource = 'camera' | 'library' | 'document' | 'mock';
 export type WorkspaceAttachmentPlacement = 'next_page_insert' | 'side_reference' | 'library_only';
 export type SyncBridgeMode = 'mock' | 'websocket';
 export type GeneratedPageStatus = 'generating' | 'ready';
+export type GeneratedPageKind = 'summary' | 'memo';
 export type DocumentPageView =
   | { kind: 'pdf'; pageNumber: number }
   | { kind: 'generated'; pageId: string };
+
+export interface BookmarkedPage {
+  id: string;
+  documentId: number;
+  page: DocumentPageView;
+  label: string;
+  createdAt: string;
+}
 
 export interface StudyDocumentEntry {
   id: number;
@@ -47,7 +56,7 @@ export interface StudyDocumentEntry {
   updatedAt: string;
   pageCount: number;
   preview: string;
-  file?: number | { uri: string };
+  file?: number | string | { uri: string };
 }
 
 export interface CaptureAsset {
@@ -98,6 +107,7 @@ export interface GeneratedWorkspacePage {
   id: string;
   documentId: number;
   sourceAssetId: string;
+  pageKind: GeneratedPageKind;
   title: string;
   createdAt: string;
   insertAfterPage: number;
@@ -110,10 +120,19 @@ export interface GeneratedWorkspacePage {
   previewImage?: number;
 }
 
+export type TimetableDay = 'MON' | 'TUE' | 'WED' | 'THU' | 'FRI';
+
+export interface TimetableSlotInput {
+  day: TimetableDay;
+  start: string;
+  end: string;
+  location: string;
+}
+
 export interface TimetableEntry {
   id: number;
   subjectId: number;
-  day: 'MON' | 'TUE' | 'WED' | 'THU' | 'FRI';
+  day: TimetableDay;
   subject: string;
   startHour: number;
   duration: number;

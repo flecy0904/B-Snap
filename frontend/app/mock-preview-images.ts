@@ -6,5 +6,6 @@ const mockPreviewImages = {
 
 export function resolvePreviewImage(key?: string | null) {
   if (!key) return undefined;
+  if (key.startsWith('file://')) return { uri: key };
   return mockPreviewImages[key as keyof typeof mockPreviewImages];
 }
