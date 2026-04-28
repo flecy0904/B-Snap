@@ -1,4 +1,4 @@
-"""Image preprocessing utilities for B-SNAP."""
+"""Crop-focused preprocessing modules for B-SNAP."""
 
 __all__ = [
     "BoardCropResult",
@@ -8,6 +8,7 @@ __all__ = [
     "detect_writing_region",
     "HybridBoardPreprocessor",
     "HybridPreprocessorConfig",
+    "HybridScoringConfig",
     "order_points",
     "preprocess_board_image",
     "run_hybrid_preprocess",
@@ -16,16 +17,21 @@ __all__ = [
 
 
 def __getattr__(name: str):
-    if name in {"HybridBoardPreprocessor", "HybridPreprocessorConfig", "run_hybrid_preprocess"}:
-        from .crop import hybrid_preprocessor
+    if name in {
+        "HybridBoardPreprocessor",
+        "HybridPreprocessorConfig",
+        "HybridScoringConfig",
+        "run_hybrid_preprocess",
+    }:
+        from . import hybrid_preprocessor
 
         return getattr(hybrid_preprocessor, name)
     if name == "YoloWorldDetector":
-        from .crop.yolo_world_detector import YoloWorldDetector
+        from .yolo_world_detector import YoloWorldDetector
 
         return YoloWorldDetector
     if name in __all__:
-        from .crop import board_cropper
+        from . import board_cropper
 
         return getattr(board_cropper, name)
-    raise AttributeError(f"module 'img_preprocessing' has no attribute '{name}'")
+    raise AttributeError(f"module 'img_preprocessing.crop' has no attribute '{name}'")

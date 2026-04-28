@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import pytest
 
-from img_preprocessing.board_cropper import crop_and_warp_board, crop_writing_region, detect_board_corners, order_points
+from img_preprocessing.crop.board_cropper import crop_and_warp_board, crop_writing_region, detect_board_corners, order_points
 
 
 def _synthetic_board_image() -> tuple[np.ndarray, np.ndarray]:

@@ -17,7 +17,8 @@ import numpy as np
 from numpy.typing import NDArray
 
 
-DEFAULT_MODEL = "yolov8s-world.pt"
+LOCAL_DEFAULT_MODEL = Path(__file__).with_name("yolov8s-world.pt")
+DEFAULT_MODEL = str(LOCAL_DEFAULT_MODEL) if LOCAL_DEFAULT_MODEL.exists() else "yolov8s-world.pt"
 DEFAULT_CLASSES = [
     "whiteboard",
     "blackboard",
@@ -101,6 +102,7 @@ class YoloWorldDetector:
         conf: float = 0.05,
         iou: float = 0.5,
         max_det: int = 20,
+        imgsz: int | None = None,
         device: str | None = None,
     ) -> list[DetectionBox]:
         selected_classes = classes or DEFAULT_CLASSES
@@ -114,6 +116,8 @@ class YoloWorldDetector:
             "max_det": max_det,
             "verbose": False,
         }
+        if imgsz is not None:
+            predict_kwargs["imgsz"] = imgsz
         if device:
             predict_kwargs["device"] = device
 
@@ -138,7 +142,7 @@ def load_yolo_world_model(model_name: str) -> Any:
     except ImportError as exc:
         raise RuntimeError(
             "ultralytics is not installed. Install ML dependencies with: "
-            "pip install -r requirements-ml.txt"
+            "pip install -r requirements.txt"
         ) from exc
 
     try:
