@@ -25,8 +25,26 @@ export type BackendChatSession = {
   model: string | null;
 };
 
+export type BackendChatMessage = {
+  id: number;
+  session_id: number;
+  role: 'user' | 'assistant' | string;
+  content: string;
+  model: string | null;
+  created_at: string;
+};
+
+export type BackendNotePage = {
+  id: number;
+  note_id: number;
+  page_number: number;
+  content: string | null;
+  image_url: string | null;
+};
+
 export type BackendAiMessageResponse = {
   model: string;
+  user_message: BackendChatMessage;
   assistant_message: {
     id: number;
     session_id: number;
@@ -91,13 +109,7 @@ export function listBackendNotes() {
 }
 
 export function listBackendNotePages(noteId: number) {
-  return request<Array<{
-    id: number;
-    note_id: number;
-    page_number: number;
-    content: string | null;
-    image_url: string | null;
-  }>>(`/notes/${noteId}/pages`);
+  return request<BackendNotePage[]>(`/notes/${noteId}/pages`);
 }
 
 export async function createBackendNote(payload: {
@@ -141,12 +153,28 @@ export async function createBackendNotePage(payload: {
   content?: string | null;
   imageUrl?: string | null;
 }) {
-  return request(`/notes/${payload.noteId}/pages`, {
+  return request<BackendNotePage>(`/notes/${payload.noteId}/pages`, {
     method: 'POST',
     body: {
       page_number: payload.pageNumber,
       content: payload.content ?? null,
       image_url: payload.imageUrl ?? null,
+    },
+  });
+}
+
+export async function updateBackendNotePage(payload: {
+  pageId: number;
+  pageNumber?: number;
+  content?: string | null;
+  imageUrl?: string | null;
+}) {
+  return request<BackendNotePage>(`/note-pages/${payload.pageId}`, {
+    method: 'PATCH',
+    body: {
+      page_number: payload.pageNumber,
+      content: payload.content,
+      image_url: payload.imageUrl,
     },
   });
 }
@@ -163,6 +191,18 @@ export async function createBackendChatSession(payload: {
       model: payload.model ?? null,
     },
   });
+}
+
+export function listBackendChatSessions(noteId: number) {
+  return request<BackendChatSession[]>(`/notes/${noteId}/chat-sessions`);
+}
+
+export function listAllBackendChatSessions() {
+  return request<BackendChatSession[]>('/chat-sessions');
+}
+
+export function listBackendChatMessages(sessionId: number) {
+  return request<BackendChatMessage[]>(`/chat-sessions/${sessionId}/messages`);
 }
 
 export async function sendBackendAiMessage(payload: {

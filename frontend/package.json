@@ -9,7 +9,7 @@
     "start": "expo start --dev-client",
     "start:reset": "expo start --dev-client -c",
     "web": "expo start --web",
-    "android": "react-native run-android --no-packager",
+    "android": "node scripts/run-android.js",
     "ios": "react-native run-ios --no-packager",
     "ios:ipad": "react-native run-ios --simulator \"iPad (A16)\" --no-packager",
     "typecheck": "tsc --noEmit",

@@ -5,6 +5,7 @@ import { BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage,
 import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../ui-types';
 import { AppStyles } from '../styles';
 import type { MockAiAnswer } from '../services/mock-ai-service';
+import type { BackendChatMessage, BackendChatSession } from '../services/backend-api';
 
 export function MobileNotes(props: {
   subject: Subject | null;
@@ -34,6 +35,12 @@ export function MobileNotes(props: {
   selectionRect: SelectionRect | null;
   aiQuestion: string;
   aiAnswer: MockAiAnswer | null;
+  aiMessages: BackendChatMessage[];
+  aiChatSessions: BackendChatSession[];
+  noteAiChatSessions: BackendChatSession[];
+  allAiChatSessions: BackendChatSession[];
+  aiChatScope: 'note' | 'all';
+  activeAiChatSessionId: number | null;
   aiLoading: boolean;
   aiError: string | null;
   incomingAssetSuggestion: CaptureAsset | null;
@@ -51,6 +58,9 @@ export function MobileNotes(props: {
   onChangePenWidth: (width: number) => void;
   onToggleAiPanel: () => void;
   onChangeAiQuestion: (value: string) => void;
+  onChangeAiChatScope: (scope: 'note' | 'all') => void;
+  onSelectAiChatSession: (sessionId: number) => void;
+  onCreateAiChatSession: () => void;
   onRequestAiAnswer: () => void;
   onInsertAiAnswerPage: () => void;
   onSelectionChange: (rect: SelectionRect | null) => void;
@@ -117,6 +127,12 @@ export function DesktopNotes(props: {
   selectionRect: SelectionRect | null;
   aiQuestion: string;
   aiAnswer: MockAiAnswer | null;
+  aiMessages: BackendChatMessage[];
+  aiChatSessions: BackendChatSession[];
+  noteAiChatSessions: BackendChatSession[];
+  allAiChatSessions: BackendChatSession[];
+  aiChatScope: 'note' | 'all';
+  activeAiChatSessionId: number | null;
   aiLoading: boolean;
   aiError: string | null;
   incomingAssetSuggestion: CaptureAsset | null;
@@ -144,6 +160,9 @@ export function DesktopNotes(props: {
   onChangePenWidth: (width: number) => void;
   onToggleAiPanel: () => void;
   onChangeAiQuestion: (value: string) => void;
+  onChangeAiChatScope: (scope: 'note' | 'all') => void;
+  onSelectAiChatSession: (sessionId: number) => void;
+  onCreateAiChatSession: () => void;
   onRequestAiAnswer: () => void;
   onInsertAiAnswerPage: () => void;
   onSelectionChange: (rect: SelectionRect | null) => void;

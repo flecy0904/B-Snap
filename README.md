@@ -2,18 +2,20 @@
 
 B-Snap은 수업 시간표, 캡처 자료, PDF 필기, AI 정리 흐름을 하나로 묶는 학습 워크스페이스 앱입니다.
 
-현재 프론트엔드는 **Expo + React Native** 기반입니다.
+현재 프로젝트는 **Expo + React Native frontend**, **FastAPI + PostgreSQL backend** 구조입니다.
 
 ## 폴더 구조
 
 ```text
 B-Snap-team/
   frontend/          # Expo React Native 앱
-  backend/           # 백엔드 자리, 현재는 구현 파일 없음
-  img_preprocessing/ # 이미지 전처리 자리
+  backend/           # FastAPI backend
+  img_preprocessing/ # 이미지 전처리 모듈
 ```
 
-## 1. 처음 설치
+## 처음 세팅
+
+### 1. Frontend 패키지 설치
 
 ```bash
 cd frontend
@@ -22,14 +24,86 @@ npm clean-install
 
 `npm install` 대신 `npm clean-install`을 권장합니다. 팀원 간 `package-lock.json` 기준으로 같은 의존성을 설치하기 위함입니다.
 
-## 2. 웹 실행
+
+### 2. Backend 환경변수 생성
+
+`backend/.env.example`을 참고해서 `backend/.env` 파일을 만듭니다.
+
+예시:
+
+```env
+APP_ENV=local
+APP_NAME=B-Snap API
+DATABASE_URL=postgresql+psycopg://postgres:<password>@localhost:5432/bsnap
+OPENAI_API_KEY=<your_openai_api_key>
+OPENAI_DEFAULT_MODEL=gpt-4.1-mini
+ALLOWED_ORIGINS=http://localhost:8081,http://localhost:19006
+```
+
+주의:
+
+- 실제 `.env` 파일은 git에 올리지 않습니다.
+- 실제 API key나 DB 비밀번호를 README, 이슈, PR, 채팅에 적지 않습니다.
+
+### 3. PostgreSQL DB 생성
+
+로컬 PostgreSQL에서 DB를 하나 만듭니다.
+
+```sql
+CREATE DATABASE bsnap;
+```
+
+### 4. Backend 가상환경/패키지 설치
+
+```powershell
+cd B-Snap
+python -m venv backend\.venv
+.\backend\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
+```
+
+참고: `cd frontend && npm run backend` 명령도 backend 가상환경과 패키지가 없으면 자동으로 준비를 시도합니다.
+
+### 5. DB 테이블 생성
+
+DB를 만든 뒤 한 번 실행합니다.
+
+```powershell
+cd C:\Users\User\Desktop\WorkSpace\B-Snap
+.\backend\.venv\Scripts\python.exe -m backend.scripts.init_db
+```
+
+## 실행 방법
+
+개발 중에는 보통 터미널을 2개 사용합니다.
+
+### Terminal 1. Backend 실행
+
+```powershell
+cd frontend
+npm run backend
+```
+
+기본 주소:
+
+```text
+http://localhost:8000
+```
+
+확인 URL:
+
+```text
+http://localhost:8000/health
+http://localhost:8000/health/db
+```
+
+### Terminal 2. Web 실행
 
 ```bash
 cd frontend
 npm run web
 ```
 
-## 3. iOS 실행
+### iOS 실행
 
 iOS는 **macOS + Xcode + CocoaPods** 환경에서만 실행됩니다.
 
@@ -61,8 +135,7 @@ iPad A16 시뮬레이터로 실행:
 cd frontend
 npm run ios:ipad
 ```
-
-## 4. Android 실행
+### Android 실행
 
 필수:
 
@@ -98,7 +171,7 @@ cd frontend
 npm run android
 ```
 
-## 5. 자주 쓰는 명령어
+## 자주 쓰는 명령어
 
 ```bash
 npm run start       # Expo dev client Metro 실행
@@ -110,14 +183,41 @@ npm run android     # Android 실행
 npm run check       # 타입 체크
 ```
 
-## 6. Push 전 확인
+## Push 전 확인
 
 ```bash
 cd frontend
 npm run check
 ```
 
-## 7. 자주 나는 오류
+## 현재 구현 상태
+
+Frontend:
+
+- mock 로그인
+- 시간표 화면
+- 캡처 업로드 프로토타입
+- PDF/빈 노트 워크스페이스
+- 펜/형광펜/지우개/선택 도구
+- 백엔드 API를 통한 노트 목록 불러오기
+- 노트 제목 수정 UI와 백엔드 저장 연결
+- 손글씨 필기 저장/불러오기 연결
+- AI 채팅 패널
+- AI 채팅방 목록/전체 채팅 목록 표시
+- AI 채팅 내역 표시
+
+Backend:
+
+- FastAPI 앱 구조
+- PostgreSQL 연결
+- folders/notes/note_pages CRUD
+- chat_sessions/chat_messages CRUD
+- 전체 chat session 조회
+- 노트 제목 및 노트 페이지 내용 저장 API
+- OpenAI `gpt-4.1-mini` 연결
+- AI 질문/응답 DB 저장
+
+## 자주 나는 오류
 
 ### `Unable to resolve module expo-asset`
 
@@ -176,17 +276,3 @@ sdk.dir=C:\\Users\\<username>\\AppData\\Local\\Android\\Sdk
 cd frontend
 npm run start:reset
 ```
-
-## 8. 현재 구현 상태
-
-- mock 로그인
-- 시간표 화면
-- 캡처 업로드 프로토타입
-- PDF/빈 노트 워크스페이스
-- 펜, 형광펜, 지우개, 선택, 텍스트 메모
-- 페이지별 필기 저장
-- PDF 렌더 크기 변화에 맞춘 필기 좌표 보정
-- 로컬 SQLite 저장
-- mock AI 정리 패널
-
-백엔드는 아직 실제 구현 파일이 없습니다.

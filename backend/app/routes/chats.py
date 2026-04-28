@@ -57,6 +57,20 @@ def list_chat_sessions(
     )
 
 
+@router.get("/chat-sessions", response_model=list[ChatSessionRead])
+def list_all_chat_sessions(
+    connection: Connection = Depends(get_db_connection),
+):
+    return fetch_all(
+        connection,
+        """
+        SELECT id, note_id, title, model, created_at, updated_at
+        FROM chat_sessions
+        ORDER BY updated_at DESC, id DESC
+        """,
+    )
+
+
 @router.get("/chat-sessions/{session_id}", response_model=ChatSessionDetail)
 def get_chat_session(
     session_id: int,

@@ -204,6 +204,12 @@ export function AppShell(props: {
                   selectionRect={notesState.selectionRect}
                   aiQuestion={notesState.aiQuestion}
                   aiAnswer={notesState.aiAnswer}
+                  aiMessages={notesState.aiMessages}
+                  aiChatSessions={notesState.aiChatSessions}
+                  noteAiChatSessions={notesState.noteAiChatSessions}
+                  allAiChatSessions={notesState.allAiChatSessions}
+                  aiChatScope={notesState.aiChatScope}
+                  activeAiChatSessionId={notesState.activeAiChatSessionId}
                   aiLoading={notesState.aiLoading}
                   aiError={notesState.aiError}
                   incomingAssetSuggestion={notesState.incomingAssetSuggestion}
@@ -230,6 +236,9 @@ export function AppShell(props: {
                   onChangePenWidth={notesState.changePenWidth}
                   onToggleAiPanel={notesState.toggleAiPanel}
                   onChangeAiQuestion={notesState.setAiQuestion}
+                  onChangeAiChatScope={notesState.setAiChatScope}
+                  onSelectAiChatSession={notesState.selectAiChatSession}
+                  onCreateAiChatSession={notesState.createAiChatSession}
                   onRequestAiAnswer={notesState.requestAiAnswer}
                   onInsertAiAnswerPage={notesState.insertAiAnswerPage}
                   onSelectionChange={notesState.changeSelection}
@@ -376,6 +385,12 @@ export function AppShell(props: {
                   selectionRect={notesState.selectionRect}
                   aiQuestion={notesState.aiQuestion}
                   aiAnswer={notesState.aiAnswer}
+                  aiMessages={notesState.aiMessages}
+                  aiChatSessions={notesState.aiChatSessions}
+                  noteAiChatSessions={notesState.noteAiChatSessions}
+                  allAiChatSessions={notesState.allAiChatSessions}
+                  aiChatScope={notesState.aiChatScope}
+                  activeAiChatSessionId={notesState.activeAiChatSessionId}
                   aiLoading={notesState.aiLoading}
                   aiError={notesState.aiError}
                   incomingAssetSuggestion={notesState.incomingAssetSuggestion}
@@ -393,6 +408,9 @@ export function AppShell(props: {
                   onChangePenWidth={notesState.changePenWidth}
                   onToggleAiPanel={notesState.toggleAiPanel}
                   onChangeAiQuestion={notesState.setAiQuestion}
+                  onChangeAiChatScope={notesState.setAiChatScope}
+                  onSelectAiChatSession={notesState.selectAiChatSession}
+                  onCreateAiChatSession={notesState.createAiChatSession}
                   onRequestAiAnswer={notesState.requestAiAnswer}
                   onInsertAiAnswerPage={notesState.insertAiAnswerPage}
                   onSelectionChange={notesState.changeSelection}

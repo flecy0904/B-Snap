@@ -7,6 +7,7 @@ export function NotesAiAssistantPanel() {
   const workspace = useDesktopNotesWorkspaceContext();
   const responseSections = workspace.aiAnswer?.sections ?? workspace.aiResponseSections;
   const responseBody = workspace.aiAnswer?.response ?? workspace.aiResponse;
+  const hasChatHistory = workspace.aiMessages.length > 0;
 
   if (!workspace.aiPanelOpen) return null;
 
@@ -18,6 +19,52 @@ export function NotesAiAssistantPanel() {
       </View>
       <ScrollView style={workspace.styles.aiPanelScroll} contentContainerStyle={workspace.styles.aiPanelScrollContent} showsVerticalScrollIndicator={false}>
         <Text style={workspace.styles.aiPanelSubtitle}>선택 영역을 기준으로 질문할 수 있습니다.</Text>
+        <View style={workspace.styles.aiChatHeaderRow}>
+          <Text style={workspace.styles.aiSectionLabel}>최근 채팅</Text>
+          <Pressable style={workspace.styles.aiNewChatButton} onPress={workspace.onCreateAiChatSession} disabled={workspace.aiLoading}>
+            <MaterialCommunityIcons name="plus" size={15} color="#5169D8" />
+            <Text style={workspace.styles.aiNewChatButtonText}>새 채팅</Text>
+          </Pressable>
+        </View>
+        <View style={workspace.styles.aiChatScopeTabs}>
+          {[
+            { value: 'note' as const, label: `현재 노트 (${workspace.noteAiChatSessions.length})` },
+            { value: 'all' as const, label: `전체 채팅 (${workspace.allAiChatSessions.length})` },
+          ].map((tab) => {
+            const active = workspace.aiChatScope === tab.value;
+            return (
+              <Pressable
+                key={tab.value}
+                style={[workspace.styles.aiChatScopeTab, active && workspace.styles.aiChatScopeTabActive]}
+                onPress={() => workspace.onChangeAiChatScope(tab.value)}
+              >
+                <Text style={[workspace.styles.aiChatScopeTabText, active && workspace.styles.aiChatScopeTabTextActive]}>{tab.label}</Text>
+              </Pressable>
+            );
+          })}
+        </View>
+        {workspace.aiChatSessions.length ? (
+          <View style={workspace.styles.aiChatList}>
+            {workspace.aiChatSessions.map((session) => {
+              const active = session.id === workspace.activeAiChatSessionId;
+              return (
+                <Pressable
+                  key={session.id}
+                  style={[workspace.styles.aiChatListItem, active && workspace.styles.aiChatListItemActive]}
+                  onPress={() => workspace.onSelectAiChatSession(session.id)}
+                  disabled={workspace.aiLoading || active}
+                >
+                  <Text style={[workspace.styles.aiChatListItemTitle, active && workspace.styles.aiChatListItemTitleActive]} numberOfLines={1}>{session.title}</Text>
+                  <Text style={workspace.styles.aiChatListItemMeta} numberOfLines={1}>{session.model ?? '모델 미선택'}</Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        ) : (
+          <Pressable style={workspace.styles.aiEmptyChatButton} onPress={workspace.onCreateAiChatSession} disabled={workspace.aiLoading}>
+            <Text style={workspace.styles.aiEmptyChatButtonText}>새 채팅 시작</Text>
+          </Pressable>
+        )}
         <View style={workspace.styles.aiStateCard}>
           <Text style={workspace.styles.aiStateTitle}>선택 영역</Text>
           <Text style={workspace.styles.aiStateBody}>{workspace.selectionRect ? `${Math.round(workspace.selectionRect.width)} × ${Math.round(workspace.selectionRect.height)} 영역 선택됨` : '아직 선택된 영역이 없습니다'}</Text>
@@ -39,6 +86,19 @@ export function NotesAiAssistantPanel() {
           </Pressable>
         </View>
         {workspace.aiError ? <Text style={workspace.styles.aiErrorText}>{workspace.aiError}</Text> : null}
+        {hasChatHistory ? (
+          <>
+            <Text style={workspace.styles.aiSectionLabel}>채팅 내역</Text>
+            <View style={workspace.styles.aiResponseCard}>
+              {workspace.aiMessages.map((message) => (
+                <View key={message.id} style={workspace.styles.aiResponseSection}>
+                  <Text style={workspace.styles.aiResponseSectionTitle}>{message.role === 'user' ? '나' : 'AI'}</Text>
+                  <Text style={workspace.styles.aiResponseBody}>{message.content}</Text>
+                </View>
+              ))}
+            </View>
+          </>
+        ) : null}
         <View style={workspace.styles.aiResponseCard}>
           <Text style={workspace.styles.aiResponseTitle}>답변</Text>
           {workspace.selectionRect && workspace.normalizedQuestion ? <View style={workspace.styles.aiQuestionPill}><Text style={workspace.styles.aiQuestionPillText}>{workspace.normalizedQuestion}</Text></View> : null}
