@@ -8,6 +8,7 @@ __all__ = [
     "detect_writing_region",
     "HybridBoardPreprocessor",
     "HybridPreprocessorConfig",
+    "HybridScoringConfig",
     "order_points",
     "preprocess_board_image",
     "run_hybrid_preprocess",
@@ -16,7 +17,12 @@ __all__ = [
 
 
 def __getattr__(name: str):
-    if name in {"HybridBoardPreprocessor", "HybridPreprocessorConfig", "run_hybrid_preprocess"}:
+    if name in {
+        "HybridBoardPreprocessor",
+        "HybridPreprocessorConfig",
+        "HybridScoringConfig",
+        "run_hybrid_preprocess",
+    }:
         from . import hybrid_preprocessor
 
         return getattr(hybrid_preprocessor, name)
