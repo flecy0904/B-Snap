@@ -1,4 +1,4 @@
-from img_preprocessing.yolo_world_detector import clip_xyxy, parse_classes, score_detection
+from img_preprocessing.crop.yolo_world_detector import clip_xyxy, parse_classes, score_detection
 
 
 def test_parse_classes_accepts_comma_and_space_groups() -> None:

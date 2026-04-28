@@ -3,7 +3,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from img_preprocessing.hybrid_preprocessor import (
+from img_preprocessing.crop.hybrid_preprocessor import (
     HybridBoardPreprocessor,
     HybridPreprocessorConfig,
     run_hybrid_preprocess,

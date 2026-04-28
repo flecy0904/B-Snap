@@ -138,7 +138,7 @@ def load_yolo_world_model(model_name: str) -> Any:
     except ImportError as exc:
         raise RuntimeError(
             "ultralytics is not installed. Install ML dependencies with: "
-            "pip install -r requirements-ml.txt"
+            "pip install -r requirements.txt"
         ) from exc
 
     try:
