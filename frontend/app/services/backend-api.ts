@@ -201,6 +201,26 @@ export function listAllBackendChatSessions() {
   return request<BackendChatSession[]>('/chat-sessions');
 }
 
+export async function updateBackendChatSession(payload: {
+  sessionId: number;
+  title?: string;
+  model?: string | null;
+}) {
+  return request<BackendChatSession>(`/chat-sessions/${payload.sessionId}`, {
+    method: 'PATCH',
+    body: {
+      title: payload.title,
+      model: payload.model,
+    },
+  });
+}
+
+export function deleteBackendChatSession(sessionId: number) {
+  return request<void>(`/chat-sessions/${sessionId}`, {
+    method: 'DELETE',
+  });
+}
+
 export function listBackendChatMessages(sessionId: number) {
   return request<BackendChatMessage[]>(`/chat-sessions/${sessionId}/messages`);
 }

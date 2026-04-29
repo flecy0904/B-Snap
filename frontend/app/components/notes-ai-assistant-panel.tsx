@@ -1,115 +1,294 @@
 import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Alert, Image, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { useDesktopNotesWorkspaceContext } from './notes-workspace-context';
 
 export function NotesAiAssistantPanel() {
   const workspace = useDesktopNotesWorkspaceContext();
-  const responseSections = workspace.aiAnswer?.sections ?? workspace.aiResponseSections;
-  const responseBody = workspace.aiAnswer?.response ?? workspace.aiResponse;
+  const [sidebarOpen, setSidebarOpen] = React.useState(false);
+  const [menuSessionId, setMenuSessionId] = React.useState<number | null>(null);
+  const [headerMenuOpen, setHeaderMenuOpen] = React.useState(false);
+  const [headerEditing, setHeaderEditing] = React.useState(false);
+  const [headerEditingTitle, setHeaderEditingTitle] = React.useState('');
+  const [editingSessionId, setEditingSessionId] = React.useState<number | null>(null);
+  const [editingTitle, setEditingTitle] = React.useState('');
   const hasChatHistory = workspace.aiMessages.length > 0;
+  const activeSession = workspace.activeAiChatSessionId
+    ? workspace.allAiChatSessions.find((session) => session.id === workspace.activeAiChatSessionId)
+      ?? workspace.noteAiChatSessions.find((session) => session.id === workspace.activeAiChatSessionId)
+      ?? null
+    : null;
+  const chatSearchTerm = workspace.aiChatSearchQuery.trim().toLowerCase();
+  const sidebarSessions = workspace.allAiChatSessions.filter((session) => {
+    if (!chatSearchTerm) return true;
+    return `${session.title} ${session.model ?? ''}`.toLowerCase().includes(chatSearchTerm);
+  });
 
   if (!workspace.aiPanelOpen) return null;
 
+  const startEditingSession = (sessionId: number, title: string) => {
+    setMenuSessionId(null);
+    setHeaderMenuOpen(false);
+    setEditingSessionId(sessionId);
+    setEditingTitle(title);
+  };
+
+  const saveEditingSession = async () => {
+    if (!editingSessionId) return;
+    const saved = await workspace.onRenameAiChatSession(editingSessionId, editingTitle);
+    if (saved) {
+      setEditingSessionId(null);
+      setEditingTitle('');
+    }
+  };
+
+  const confirmRemoveSession = (sessionId: number, title: string) => {
+    setMenuSessionId(null);
+    setHeaderMenuOpen(false);
+    Alert.alert('채팅방 삭제', `"${title}" 채팅방을 삭제할까요?`, [
+      { text: '취소', style: 'cancel' },
+      { text: '삭제', style: 'destructive', onPress: () => workspace.onRemoveAiChatSession(sessionId) },
+    ]);
+  };
+
+  const selectSession = (sessionId: number) => {
+    setMenuSessionId(null);
+    void workspace.onSelectAiChatSession(sessionId);
+    setSidebarOpen(false);
+  };
+
+  const startNewChat = () => {
+    setHeaderMenuOpen(false);
+    setHeaderEditing(false);
+    workspace.onStartNewAiChatSession();
+    setSidebarOpen(false);
+  };
+
+  const startHeaderEditing = () => {
+    if (!activeSession) return;
+    setHeaderMenuOpen(false);
+    setHeaderEditing(true);
+    setHeaderEditingTitle(activeSession.title);
+  };
+
+  const saveHeaderEditing = async () => {
+    if (!activeSession) return;
+    const saved = await workspace.onRenameAiChatSession(activeSession.id, headerEditingTitle);
+    if (saved) {
+      setHeaderEditing(false);
+      setHeaderEditingTitle('');
+    }
+  };
+
+  const closeOpenMenus = () => {
+    setHeaderMenuOpen(false);
+    setMenuSessionId(null);
+  };
+
   return (
     <View style={workspace.styles.aiPanel}>
-      <View style={workspace.styles.aiPanelHeader}>
-        <MaterialCommunityIcons name="star-four-points" size={24} color="#5F79FF" />
-        <Pressable style={workspace.styles.aiPanelClose} onPress={workspace.onToggleAiPanel}><MaterialCommunityIcons name="close" size={18} color="#7A8394" /></Pressable>
-      </View>
-      <ScrollView style={workspace.styles.aiPanelScroll} contentContainerStyle={workspace.styles.aiPanelScrollContent} showsVerticalScrollIndicator={false}>
-        <Text style={workspace.styles.aiPanelSubtitle}>선택 영역을 기준으로 질문할 수 있습니다.</Text>
-        <View style={workspace.styles.aiChatHeaderRow}>
-          <Text style={workspace.styles.aiSectionLabel}>최근 채팅</Text>
-          <Pressable style={workspace.styles.aiNewChatButton} onPress={workspace.onCreateAiChatSession} disabled={workspace.aiLoading}>
-            <MaterialCommunityIcons name="plus" size={15} color="#5169D8" />
-            <Text style={workspace.styles.aiNewChatButtonText}>새 채팅</Text>
-          </Pressable>
-        </View>
-        <View style={workspace.styles.aiChatScopeTabs}>
-          {[
-            { value: 'note' as const, label: `현재 노트 (${workspace.noteAiChatSessions.length})` },
-            { value: 'all' as const, label: `전체 채팅 (${workspace.allAiChatSessions.length})` },
-          ].map((tab) => {
-            const active = workspace.aiChatScope === tab.value;
-            return (
-              <Pressable
-                key={tab.value}
-                style={[workspace.styles.aiChatScopeTab, active && workspace.styles.aiChatScopeTabActive]}
-                onPress={() => workspace.onChangeAiChatScope(tab.value)}
-              >
-                <Text style={[workspace.styles.aiChatScopeTabText, active && workspace.styles.aiChatScopeTabTextActive]}>{tab.label}</Text>
-              </Pressable>
-            );
-          })}
-        </View>
-        {workspace.aiChatSessions.length ? (
-          <View style={workspace.styles.aiChatList}>
-            {workspace.aiChatSessions.map((session) => {
-              const active = session.id === workspace.activeAiChatSessionId;
-              return (
-                <Pressable
-                  key={session.id}
-                  style={[workspace.styles.aiChatListItem, active && workspace.styles.aiChatListItemActive]}
-                  onPress={() => workspace.onSelectAiChatSession(session.id)}
-                  disabled={workspace.aiLoading || active}
-                >
-                  <Text style={[workspace.styles.aiChatListItemTitle, active && workspace.styles.aiChatListItemTitleActive]} numberOfLines={1}>{session.title}</Text>
-                  <Text style={workspace.styles.aiChatListItemMeta} numberOfLines={1}>{session.model ?? '모델 미선택'}</Text>
-                </Pressable>
-              );
-            })}
+      {headerMenuOpen || menuSessionId ? (
+        <Pressable style={workspace.styles.aiMenuDismissLayer} onPress={closeOpenMenus} />
+      ) : null}
+      {sidebarOpen ? (
+        <View style={workspace.styles.aiChatSidebar}>
+          <View style={workspace.styles.aiChatSidebarHeader}>
+            <MaterialCommunityIcons name="star-four-points" size={24} color="#5F79FF" />
+            <Pressable style={workspace.styles.aiPanelClose} onPress={() => setSidebarOpen(false)}>
+              <MaterialCommunityIcons name="close" size={17} color="#7A8394" />
+            </Pressable>
           </View>
-        ) : (
-          <Pressable style={workspace.styles.aiEmptyChatButton} onPress={workspace.onCreateAiChatSession} disabled={workspace.aiLoading}>
-            <Text style={workspace.styles.aiEmptyChatButtonText}>새 채팅 시작</Text>
+
+          <Pressable style={workspace.styles.aiSidebarCommand} onPress={startNewChat} disabled={workspace.aiLoading}>
+            <MaterialCommunityIcons name="square-edit-outline" size={18} color="#111827" />
+            <Text style={workspace.styles.aiSidebarCommandText}>새 채팅</Text>
           </Pressable>
-        )}
-        <View style={workspace.styles.aiStateCard}>
-          <Text style={workspace.styles.aiStateTitle}>선택 영역</Text>
-          <Text style={workspace.styles.aiStateBody}>{workspace.selectionRect ? `${Math.round(workspace.selectionRect.width)} × ${Math.round(workspace.selectionRect.height)} 영역 선택됨` : '아직 선택된 영역이 없습니다'}</Text>
-        </View>
-        <Text style={workspace.styles.aiSectionLabel}>추천 질문</Text>
-        {['이 영역 핵심만 요약해줘', '여기서 중요한 개념 3개만 알려줘', '시험 대비 관점으로 설명해줘'].map((prompt) => (
-          <Pressable key={prompt} style={workspace.styles.aiSuggestionChip} onPress={() => workspace.onChangeAiQuestion(prompt)}><Text style={workspace.styles.aiSuggestionText}>{prompt}</Text></Pressable>
-        ))}
-        <Text style={workspace.styles.aiSectionLabel}>질문</Text>
-        <View style={workspace.styles.aiInputShell}>
-          <TextInput value={workspace.aiQuestion} onChangeText={workspace.onChangeAiQuestion} placeholder="선택한 영역에 대해 물어보세요" placeholderTextColor="#A2AAB8" multiline style={workspace.styles.aiInput} />
-        </View>
-        <View style={workspace.styles.aiActionRow}>
-          <Pressable style={workspace.styles.aiPrimaryButton} onPress={workspace.onRequestAiAnswer} disabled={workspace.aiLoading}>
-            {workspace.aiLoading ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={workspace.styles.aiPrimaryButtonText}>응답 생성</Text>}
-          </Pressable>
-          <Pressable style={[workspace.styles.aiSecondaryButton, !workspace.aiAnswer && workspace.styles.aiSecondaryButtonDisabled]} onPress={workspace.onInsertAiAnswerPage} disabled={!workspace.aiAnswer}>
-            <Text style={[workspace.styles.aiSecondaryButtonText, !workspace.aiAnswer && workspace.styles.aiSecondaryButtonTextDisabled]}>정리 페이지로 추가</Text>
-          </Pressable>
-        </View>
-        {workspace.aiError ? <Text style={workspace.styles.aiErrorText}>{workspace.aiError}</Text> : null}
-        {hasChatHistory ? (
-          <>
-            <Text style={workspace.styles.aiSectionLabel}>채팅 내역</Text>
-            <View style={workspace.styles.aiResponseCard}>
-              {workspace.aiMessages.map((message) => (
-                <View key={message.id} style={workspace.styles.aiResponseSection}>
-                  <Text style={workspace.styles.aiResponseSectionTitle}>{message.role === 'user' ? '나' : 'AI'}</Text>
-                  <Text style={workspace.styles.aiResponseBody}>{message.content}</Text>
+
+          <View style={workspace.styles.aiSidebarSearchRow}>
+            <MaterialCommunityIcons name="magnify" size={18} color="#111827" />
+            <TextInput
+              value={workspace.aiChatSearchQuery}
+              onChangeText={workspace.onChangeAiChatSearchQuery}
+              placeholder="채팅 검색"
+              placeholderTextColor="#6B7280"
+              style={workspace.styles.aiSidebarSearchInput}
+            />
+          </View>
+
+          <ScrollView style={workspace.styles.aiSidebarList} contentContainerStyle={workspace.styles.aiSidebarListContent} showsVerticalScrollIndicator={false}>
+            {sidebarSessions.length ? sidebarSessions.map((session) => {
+              const active = session.id === workspace.activeAiChatSessionId;
+              const editing = session.id === editingSessionId;
+              const contextMenuProps = {
+                onContextMenu: (event: { preventDefault?: () => void }) => {
+                  event.preventDefault?.();
+                  setMenuSessionId((current) => (current === session.id ? null : session.id));
+                },
+              } as any;
+
+              return (
+                <View key={session.id} style={workspace.styles.aiSidebarChatRowWrap}>
+                  {editing ? (
+                    <View style={workspace.styles.aiSidebarEditRow}>
+                      <TextInput
+                        value={editingTitle}
+                        onChangeText={setEditingTitle}
+                        style={workspace.styles.aiSidebarEditInput}
+                        returnKeyType="done"
+                        onSubmitEditing={saveEditingSession}
+                        autoFocus
+                      />
+                      <Pressable style={workspace.styles.aiSidebarMiniButton} onPress={saveEditingSession} disabled={workspace.aiLoading}>
+                        <MaterialCommunityIcons name="check" size={15} color="#111827" />
+                      </Pressable>
+                      <Pressable style={workspace.styles.aiSidebarMiniButton} onPress={() => setEditingSessionId(null)} disabled={workspace.aiLoading}>
+                        <MaterialCommunityIcons name="close" size={15} color="#111827" />
+                      </Pressable>
+                    </View>
+                  ) : (
+                    <Pressable
+                      {...contextMenuProps}
+                      style={[workspace.styles.aiSidebarChatRow, active && workspace.styles.aiSidebarChatRowActive]}
+                      onPress={() => selectSession(session.id)}
+                      onLongPress={() => setMenuSessionId((current) => (current === session.id ? null : session.id))}
+                      delayLongPress={450}
+                    >
+                      <Text style={workspace.styles.aiSidebarChatText} numberOfLines={1}>{session.title}</Text>
+                    </Pressable>
+                  )}
+
+                  {menuSessionId === session.id ? (
+                    <View style={workspace.styles.aiSidebarContextMenu}>
+                      <Pressable style={workspace.styles.aiSidebarContextMenuItem} onPress={() => startEditingSession(session.id, session.title)}>
+                        <MaterialCommunityIcons name="pencil-outline" size={15} color="#111827" />
+                        <Text style={workspace.styles.aiSidebarContextMenuText}>이름 바꾸기</Text>
+                      </Pressable>
+                      <Pressable style={workspace.styles.aiSidebarContextMenuItem} onPress={() => confirmRemoveSession(session.id, session.title)}>
+                        <MaterialCommunityIcons name="trash-can-outline" size={15} color="#C04B4B" />
+                        <Text style={[workspace.styles.aiSidebarContextMenuText, workspace.styles.aiSidebarContextMenuDanger]}>삭제하기</Text>
+                      </Pressable>
+                    </View>
+                  ) : null}
                 </View>
-              ))}
-            </View>
-          </>
-        ) : null}
-        <View style={workspace.styles.aiResponseCard}>
-          <Text style={workspace.styles.aiResponseTitle}>답변</Text>
-          {workspace.selectionRect && workspace.normalizedQuestion ? <View style={workspace.styles.aiQuestionPill}><Text style={workspace.styles.aiQuestionPillText}>{workspace.normalizedQuestion}</Text></View> : null}
-          {responseSections ? responseSections.map((section, index) => (
-            <View key={`${section.title}-${index}`} style={[workspace.styles.aiResponseSection, index === responseSections.length - 1 && workspace.styles.aiResponseSectionLast]}>
-              <Text style={workspace.styles.aiResponseSectionTitle}>{section.title}</Text>
-              <Text style={workspace.styles.aiResponseBody}>{section.body}</Text>
-            </View>
-          )) : <Text style={workspace.styles.aiResponseBody}>{responseBody}</Text>}
+              );
+            }) : (
+              <Text style={workspace.styles.aiSidebarEmptyText}>{workspace.aiChatSearchQuery ? '검색 결과가 없습니다' : '채팅방이 없습니다'}</Text>
+            )}
+          </ScrollView>
         </View>
-      </ScrollView>
+      ) : null}
+
+      <View style={[workspace.styles.aiHomePane, sidebarOpen && workspace.styles.aiHomePaneShifted]} pointerEvents={sidebarOpen ? 'none' : 'auto'}>
+        <View style={workspace.styles.aiPanelHeader}>
+          <Pressable style={workspace.styles.aiHeaderIconButton} onPress={() => setSidebarOpen((current) => !current)}>
+            <MaterialCommunityIcons name="menu" size={20} color="#303744" />
+          </Pressable>
+
+          <View style={workspace.styles.aiHeaderTitleWrap}>
+            {headerEditing && activeSession ? (
+              <View style={workspace.styles.aiHeaderEditRow}>
+                <TextInput
+                  value={headerEditingTitle}
+                  onChangeText={setHeaderEditingTitle}
+                  style={workspace.styles.aiHeaderEditInput}
+                  returnKeyType="done"
+                  onSubmitEditing={saveHeaderEditing}
+                  autoFocus
+                />
+                <Pressable style={workspace.styles.aiHeaderEditButton} onPress={saveHeaderEditing} disabled={workspace.aiLoading}>
+                  <MaterialCommunityIcons name="check" size={14} color="#111827" />
+                </Pressable>
+                <Pressable style={workspace.styles.aiHeaderEditButton} onPress={() => setHeaderEditing(false)} disabled={workspace.aiLoading}>
+                  <MaterialCommunityIcons name="close" size={14} color="#111827" />
+                </Pressable>
+              </View>
+            ) : (
+              <>
+                <Text style={workspace.styles.aiHeaderTitle} numberOfLines={1}>
+                  {activeSession ? activeSession.title : '새 채팅'}
+                </Text>
+              </>
+            )}
+          </View>
+
+          <View style={workspace.styles.aiHeaderActions}>
+            <Pressable style={workspace.styles.aiHeaderNewChatButton} onPress={startNewChat} disabled={workspace.aiLoading}>
+              <MaterialCommunityIcons name="square-edit-outline" size={16} color="#303744" />
+              <Text style={workspace.styles.aiHeaderNewChatButtonText}>새 채팅</Text>
+            </Pressable>
+            <View style={workspace.styles.aiHeaderMenuWrap}>
+              <Pressable
+                style={[workspace.styles.aiHeaderIconButton, !activeSession && workspace.styles.aiHeaderIconButtonDisabled]}
+                onPress={() => activeSession && setHeaderMenuOpen((current) => !current)}
+                disabled={!activeSession || workspace.aiLoading}
+              >
+                <MaterialCommunityIcons name="dots-vertical" size={20} color={activeSession ? '#303744' : '#A0A7B3'} />
+              </Pressable>
+              {headerMenuOpen && activeSession ? (
+                <View style={workspace.styles.aiHeaderContextMenu}>
+                  <Pressable style={workspace.styles.aiSidebarContextMenuItem} onPress={startHeaderEditing}>
+                    <MaterialCommunityIcons name="pencil-outline" size={15} color="#111827" />
+                    <Text style={workspace.styles.aiSidebarContextMenuText}>이름 바꾸기</Text>
+                  </Pressable>
+                  <Pressable style={workspace.styles.aiSidebarContextMenuItem} onPress={() => confirmRemoveSession(activeSession.id, activeSession.title)}>
+                    <MaterialCommunityIcons name="trash-can-outline" size={15} color="#C04B4B" />
+                    <Text style={[workspace.styles.aiSidebarContextMenuText, workspace.styles.aiSidebarContextMenuDanger]}>삭제하기</Text>
+                  </Pressable>
+                </View>
+              ) : null}
+            </View>
+          </View>
+        </View>
+
+        <View style={workspace.styles.aiConversationShell}>
+        <ScrollView style={workspace.styles.aiMessagesScroll} contentContainerStyle={workspace.styles.aiMessagesContent} showsVerticalScrollIndicator={false}>
+          {hasChatHistory ? workspace.aiMessages.map((message) => {
+            const isUser = message.role === 'user';
+            return (
+              <View key={message.id} style={[workspace.styles.aiMessageBubble, isUser ? workspace.styles.aiMessageBubbleUser : workspace.styles.aiMessageBubbleAssistant]}>
+                <Text style={[workspace.styles.aiMessageText, isUser ? workspace.styles.aiMessageTextUser : workspace.styles.aiMessageTextAssistant]}>{message.content}</Text>
+              </View>
+            );
+          }) : (
+            <View style={workspace.styles.aiEmptyConversation}>
+              <Text style={workspace.styles.aiEmptyConversationTitle}>무엇을 도와드릴까요?</Text>
+              <Text style={workspace.styles.aiEmptyConversationBody}>노트 내용이나 선택한 영역에 대해 질문해보세요.</Text>
+            </View>
+          )}
+        </ScrollView>
+
+        <View style={workspace.styles.aiComposer}>
+          {workspace.selectionRect ? (
+            <View style={workspace.styles.aiSelectionAttachment}>
+              {workspace.selectionPreviewUri ? (
+                <Image source={{ uri: workspace.selectionPreviewUri }} style={workspace.styles.aiSelectionAttachmentImage} resizeMode="contain" />
+              ) : (
+                <View style={workspace.styles.aiSelectionAttachmentFallback}>
+                  <MaterialCommunityIcons name="image-outline" size={18} color="#5169D8" />
+                </View>
+              )}
+            </View>
+          ) : null}
+          {workspace.aiError ? <Text style={workspace.styles.aiErrorText}>{workspace.aiError}</Text> : null}
+          <View style={workspace.styles.aiComposerInputShell}>
+            <TextInput
+              value={workspace.aiQuestion}
+              onChangeText={workspace.onChangeAiQuestion}
+              placeholder="메시지 입력"
+              placeholderTextColor="#8F96A3"
+              multiline
+              style={workspace.styles.aiComposerInput}
+            />
+            <Pressable style={workspace.styles.aiSendButton} onPress={workspace.onRequestAiAnswer} disabled={workspace.aiLoading}>
+              {workspace.aiLoading ? <ActivityIndicator size="small" color="#FFFFFF" /> : <MaterialCommunityIcons name="arrow-up" size={18} color="#FFFFFF" />}
+            </Pressable>
+          </View>
+        </View>
+      </View>
+      </View>
+      {sidebarOpen ? (
+        <Pressable style={workspace.styles.aiSidebarHomeDismissLayer} onPress={() => setSidebarOpen(false)} />
+      ) : null}
     </View>
   );
 }

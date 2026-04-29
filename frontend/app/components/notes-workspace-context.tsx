@@ -9,6 +9,7 @@ export type DesktopNotesWorkspaceContextValue = {
   blueColor: string;
   aiPanelOpen: boolean;
   selectionRect: SelectionRect | null;
+  selectionPreviewUri: string | null;
   aiQuestion: string;
   normalizedQuestion: string;
   aiResponse: string;
@@ -19,6 +20,7 @@ export type DesktopNotesWorkspaceContextValue = {
   noteAiChatSessions: BackendChatSession[];
   allAiChatSessions: BackendChatSession[];
   aiChatScope: 'note' | 'all';
+  aiChatSearchQuery: string;
   activeAiChatSessionId: number | null;
   aiLoading: boolean;
   aiError: string | null;
@@ -54,7 +56,11 @@ export type DesktopNotesWorkspaceContextValue = {
   onToggleAiPanel: () => void;
   onChangeAiQuestion: (value: string) => void;
   onChangeAiChatScope: (scope: 'note' | 'all') => void;
+  onChangeAiChatSearchQuery: (value: string) => void;
   onSelectAiChatSession: (sessionId: number) => void;
+  onRenameAiChatSession: (sessionId: number, title: string) => Promise<boolean>;
+  onRemoveAiChatSession: (sessionId: number) => void;
+  onStartNewAiChatSession: () => void;
   onCreateAiChatSession: () => void;
   onRequestAiAnswer: () => void;
   onInsertAiAnswerPage: () => void;
@@ -90,6 +96,7 @@ export type DesktopNotesWorkspaceContextValue = {
   onUpdateTextAnnotation: (id: string, text: string) => void;
   onRemoveTextAnnotation: (id: string) => void;
   onSelectionChange: (rect: SelectionRect | null) => void;
+  onSelectionPreviewChange: (uri: string | null) => void;
   deleteSelectedStrokes: () => void;
   changeSelectedStrokesColor: (color: string) => void;
   onSetCurrentPdfPage: (pageNumber: number) => void;

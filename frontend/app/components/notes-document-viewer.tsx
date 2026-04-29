@@ -115,6 +115,7 @@ export const NotesDocumentViewer = React.memo(function NotesDocumentViewer() {
         onUpdateTextAnnotation={workspace.onUpdateTextAnnotation}
         onRemoveTextAnnotation={workspace.onRemoveTextAnnotation}
         onSelectionChange={workspace.onSelectionChange}
+        onSelectionPreviewChange={workspace.onSelectionPreviewChange}
         onPageChanged={workspace.onSetCurrentPdfPage}
         onDocumentLoaded={workspace.onUpdateStudyDocumentPageCount}
         styles={workspace.styles}

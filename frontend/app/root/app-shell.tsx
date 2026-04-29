@@ -202,6 +202,7 @@ export function AppShell(props: {
                   textAnnotations={notesState.textAnnotations}
                   aiPanelOpen={notesState.aiPanelOpen}
                   selectionRect={notesState.selectionRect}
+                  selectionPreviewUri={notesState.selectionPreviewUri}
                   aiQuestion={notesState.aiQuestion}
                   aiAnswer={notesState.aiAnswer}
                   aiMessages={notesState.aiMessages}
@@ -209,6 +210,7 @@ export function AppShell(props: {
                   noteAiChatSessions={notesState.noteAiChatSessions}
                   allAiChatSessions={notesState.allAiChatSessions}
                   aiChatScope={notesState.aiChatScope}
+                  aiChatSearchQuery={notesState.aiChatSearchQuery}
                   activeAiChatSessionId={notesState.activeAiChatSessionId}
                   aiLoading={notesState.aiLoading}
                   aiError={notesState.aiError}
@@ -237,11 +239,16 @@ export function AppShell(props: {
                   onToggleAiPanel={notesState.toggleAiPanel}
                   onChangeAiQuestion={notesState.setAiQuestion}
                   onChangeAiChatScope={notesState.setAiChatScope}
+                  onChangeAiChatSearchQuery={notesState.setAiChatSearchQuery}
                   onSelectAiChatSession={notesState.selectAiChatSession}
+                  onRenameAiChatSession={notesState.renameAiChatSession}
+                  onRemoveAiChatSession={notesState.removeAiChatSession}
+                  onStartNewAiChatSession={notesState.startNewAiChatSession}
                   onCreateAiChatSession={notesState.createAiChatSession}
                   onRequestAiAnswer={notesState.requestAiAnswer}
                   onInsertAiAnswerPage={notesState.insertAiAnswerPage}
                   onSelectionChange={notesState.changeSelection}
+                  onSelectionPreviewChange={notesState.changeSelectionPreview}
                   onUndoInk={notesState.undoInk}
                   onRedoInk={notesState.redoInk}
                   onClearInk={notesState.clearInk}
@@ -383,6 +390,7 @@ export function AppShell(props: {
                   activeGeneratedPage={notesState.activeGeneratedPage}
                   aiPanelOpen={notesState.aiPanelOpen}
                   selectionRect={notesState.selectionRect}
+                  selectionPreviewUri={notesState.selectionPreviewUri}
                   aiQuestion={notesState.aiQuestion}
                   aiAnswer={notesState.aiAnswer}
                   aiMessages={notesState.aiMessages}
@@ -390,6 +398,7 @@ export function AppShell(props: {
                   noteAiChatSessions={notesState.noteAiChatSessions}
                   allAiChatSessions={notesState.allAiChatSessions}
                   aiChatScope={notesState.aiChatScope}
+                  aiChatSearchQuery={notesState.aiChatSearchQuery}
                   activeAiChatSessionId={notesState.activeAiChatSessionId}
                   aiLoading={notesState.aiLoading}
                   aiError={notesState.aiError}
@@ -409,11 +418,16 @@ export function AppShell(props: {
                   onToggleAiPanel={notesState.toggleAiPanel}
                   onChangeAiQuestion={notesState.setAiQuestion}
                   onChangeAiChatScope={notesState.setAiChatScope}
+                  onChangeAiChatSearchQuery={notesState.setAiChatSearchQuery}
                   onSelectAiChatSession={notesState.selectAiChatSession}
+                  onRenameAiChatSession={notesState.renameAiChatSession}
+                  onRemoveAiChatSession={notesState.removeAiChatSession}
+                  onStartNewAiChatSession={notesState.startNewAiChatSession}
                   onCreateAiChatSession={notesState.createAiChatSession}
                   onRequestAiAnswer={notesState.requestAiAnswer}
                   onInsertAiAnswerPage={notesState.insertAiAnswerPage}
                   onSelectionChange={notesState.changeSelection}
+                  onSelectionPreviewChange={notesState.changeSelectionPreview}
                   onUndoInk={notesState.undoInk}
                   onRedoInk={notesState.redoInk}
                   onClearInk={notesState.clearInk}

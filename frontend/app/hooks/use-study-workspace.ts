@@ -7,6 +7,7 @@ import {
   createBackendChatSession,
   createBackendNote,
   createBackendNotePage,
+  deleteBackendChatSession,
   deleteBackendNote,
   ensureFolderForSubject,
   isBackendApiEnabled,
@@ -17,6 +18,7 @@ import {
   listBackendNotePages,
   listBackendNotes,
   sendBackendAiMessage,
+  updateBackendChatSession,
   updateBackendNote,
   updateBackendNotePage,
   type BackendChatSession,
@@ -160,10 +162,12 @@ export function useStudyWorkspace(props: {
   const [aiAnswer, setAiAnswer] = useState<MockAiAnswer | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
+  const [selectionPreviewByDocument, setSelectionPreviewByDocument] = useState<Record<number, string | null>>({});
   const [chatSessionByDocument, setChatSessionByDocument] = useState<Record<number, number>>({});
   const [chatSessionsByDocument, setChatSessionsByDocument] = useState<Record<number, BackendChatSession[]>>({});
   const [allChatSessions, setAllChatSessions] = useState<BackendChatSession[]>([]);
   const [aiChatScope, setAiChatScope] = useState<'note' | 'all'>('note');
+  const [aiChatSearchQuery, setAiChatSearchQuery] = useState('');
   const [aiMessagesBySession, setAiMessagesBySession] = useState<Record<number, BackendChatMessage[]>>({});
   const [backendPageIdsByDocument, setBackendPageIdsByDocument] = useState<Record<number, Record<number, number>>>({});
 
@@ -264,8 +268,13 @@ export function useStudyWorkspace(props: {
   });
   const activeAiChatSessionId = studyDocumentId ? chatSessionByDocument[studyDocumentId] ?? null : null;
   const aiMessages = activeAiChatSessionId ? aiMessagesBySession[activeAiChatSessionId] ?? [] : [];
+  const selectionPreviewUri = studyDocumentId ? selectionPreviewByDocument[studyDocumentId] ?? null : null;
   const aiChatSessions = studyDocumentId ? chatSessionsByDocument[studyDocumentId] ?? [] : [];
-  const visibleAiChatSessions = aiChatScope === 'all' ? allChatSessions : aiChatSessions;
+  const aiChatSearchTerm = aiChatSearchQuery.trim().toLowerCase();
+  const visibleAiChatSessions = (aiChatScope === 'all' ? allChatSessions : aiChatSessions).filter((session) => {
+    if (!aiChatSearchTerm) return true;
+    return `${session.title} ${session.model ?? ''}`.toLowerCase().includes(aiChatSearchTerm);
+  });
   const currentDocumentHasBackendPages = studyDocumentId ? Boolean(backendPageIdsByDocument[studyDocumentId]) : false;
 
   useEffect(() => {
@@ -733,6 +742,7 @@ export function useStudyWorkspace(props: {
       const picked = result.assets[0];
       const targetSubject = availableSubjects.find((value) => value.id === targetSubjectId);
       if (!targetSubject) return;
+      const pdfFileUri = Platform.OS === 'web' && picked.base64 ? picked.base64 : picked.uri;
 
       if (isBackendApiEnabled()) {
         try {
@@ -746,7 +756,7 @@ export function useStudyWorkspace(props: {
             noteId: backendNote.id,
             pageNumber: 1,
             content: serializeNotePageContent({ inkStrokes: [], textAnnotations: [] }),
-            imageUrl: picked.uri,
+            imageUrl: pdfFileUri,
           });
           setBackendPageIdsByDocument((current) => ({
             ...current,
@@ -763,7 +773,7 @@ export function useStudyWorkspace(props: {
             updatedAt: '방금 전',
             pageCount: 1,
             preview: backendNote.summary ?? '업로드한 PDF 문서입니다.',
-            file: { uri: picked.uri },
+            file: { uri: pdfFileUri },
           };
           openCreatedStudyDocument(document, 'PDF 파일을 백엔드에 저장했습니다.');
           return;
@@ -780,7 +790,7 @@ export function useStudyWorkspace(props: {
         updatedAt: '방금 전',
         pageCount: 1,
         preview: '파일 선택기에서 업로드한 수업 PDF입니다.',
-        file: { uri: picked.uri },
+        file: { uri: pdfFileUri },
       };
 
       openCreatedStudyDocument(document, 'PDF 파일을 업로드했습니다.');
@@ -892,6 +902,14 @@ export function useStudyWorkspace(props: {
   const changeSelection = (rect: SelectionRect | null) => {
     if (!studyDocumentId) return;
     setSelectionByDocument((current) => ({ ...current, [studyDocumentId]: rect }));
+    if (!rect) {
+      setSelectionPreviewByDocument((current) => ({ ...current, [studyDocumentId]: null }));
+    }
+  };
+
+  const changeSelectionPreview = (uri: string | null) => {
+    if (!studyDocumentId) return;
+    setSelectionPreviewByDocument((current) => ({ ...current, [studyDocumentId]: uri }));
   };
 
   const isStrokeOnCurrentPage = (stroke: InkStroke) => (
@@ -1133,6 +1151,90 @@ export function useStudyWorkspace(props: {
     }
   };
 
+  const renameAiChatSession = async (sessionId: number, title: string) => {
+    const nextTitle = title.trim();
+    if (!nextTitle) {
+      setAiError('채팅방 이름을 입력해주세요.');
+      return false;
+    }
+    if (!isBackendApiEnabled()) {
+      setAiError('backend 연결을 확인해주세요.');
+      return false;
+    }
+
+    setAiLoading(true);
+    setAiError(null);
+    try {
+      const updated = await updateBackendChatSession({ sessionId, title: nextTitle });
+      setAllChatSessions((current) => current.map((session) => (session.id === sessionId ? updated : session)));
+      setChatSessionsByDocument((current) => {
+        const next = { ...current };
+        Object.entries(next).forEach(([documentId, sessions]) => {
+          next[Number(documentId)] = sessions.map((session) => (session.id === sessionId ? updated : session));
+        });
+        return next;
+      });
+      return true;
+    } catch {
+      setAiError('채팅방 이름을 변경하지 못했습니다.');
+      return false;
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const removeAiChatSession = async (sessionId: number) => {
+    if (!isBackendApiEnabled()) {
+      setAiError('backend 연결을 확인해주세요.');
+      return;
+    }
+
+    setAiLoading(true);
+    setAiError(null);
+    try {
+      await deleteBackendChatSession(sessionId);
+      const currentDocumentSessions = studyDocumentId ? chatSessionsByDocument[studyDocumentId] ?? [] : [];
+      const nextCurrentDocumentSession = currentDocumentSessions.find((session) => session.id !== sessionId) ?? null;
+
+      setAllChatSessions((current) => current.filter((session) => session.id !== sessionId));
+      setChatSessionsByDocument((current) => {
+        const next = { ...current };
+        Object.entries(next).forEach(([documentId, sessions]) => {
+          next[Number(documentId)] = sessions.filter((session) => session.id !== sessionId);
+        });
+        return next;
+      });
+      setAiMessagesBySession((current) => {
+        const next = { ...current };
+        delete next[sessionId];
+        return next;
+      });
+      setChatSessionByDocument((current) => {
+        const next = { ...current };
+        Object.entries(next).forEach(([documentId, activeSessionId]) => {
+          if (activeSessionId !== sessionId) return;
+          if (studyDocumentId && Number(documentId) === studyDocumentId && nextCurrentDocumentSession) {
+            next[Number(documentId)] = nextCurrentDocumentSession.id;
+            return;
+          }
+          delete next[Number(documentId)];
+        });
+        return next;
+      });
+      if (activeAiChatSessionId === sessionId) {
+        setAiAnswer(null);
+        setAiQuestion('');
+        if (nextCurrentDocumentSession) {
+          void selectAiChatSession(nextCurrentDocumentSession.id);
+        }
+      }
+    } catch {
+      setAiError('채팅방을 삭제하지 못했습니다.');
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
   const createAiChatSession = async () => {
     if (!studyDocumentId || !isBackendApiEnabled() || !currentDocumentHasBackendPages) {
       setAiAnswer(null);
@@ -1162,6 +1264,19 @@ export function useStudyWorkspace(props: {
     } finally {
       setAiLoading(false);
     }
+  };
+
+  const startNewAiChatSession = () => {
+    if (studyDocumentId) {
+      setChatSessionByDocument((current) => {
+        const next = { ...current };
+        delete next[studyDocumentId];
+        return next;
+      });
+    }
+    setAiAnswer(null);
+    setAiQuestion('');
+    setAiError(null);
   };
 
   const requestAiAnswer = async () => {
@@ -1742,6 +1857,7 @@ export function useStudyWorkspace(props: {
     textAnnotations,
     aiPanelOpen,
     selectionRect,
+    selectionPreviewUri,
     aiQuestion,
     aiAnswer,
     aiMessages,
@@ -1749,6 +1865,7 @@ export function useStudyWorkspace(props: {
     noteAiChatSessions: aiChatSessions,
     allAiChatSessions: allChatSessions,
     aiChatScope,
+    aiChatSearchQuery,
     activeAiChatSessionId,
     aiLoading,
     aiError,
@@ -1799,11 +1916,16 @@ export function useStudyWorkspace(props: {
     toggleAiPanel: () => setAiPanelOpen((current) => !current),
     setAiQuestion,
     setAiChatScope,
+    setAiChatSearchQuery,
     selectAiChatSession,
+    renameAiChatSession,
+    removeAiChatSession,
+    startNewAiChatSession,
     createAiChatSession,
     requestAiAnswer,
     insertAiAnswerPage,
     changeSelection,
+    changeSelectionPreview,
     undoInk,
     redoInk,
     clearInk,

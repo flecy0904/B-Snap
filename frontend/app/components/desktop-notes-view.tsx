@@ -45,6 +45,7 @@ export type DesktopNotesViewProps = {
   textAnnotations: InkTextAnnotation[];
   aiPanelOpen: boolean;
   selectionRect: SelectionRect | null;
+  selectionPreviewUri: string | null;
   aiQuestion: string;
   aiAnswer: MockAiAnswer | null;
   aiMessages: BackendChatMessage[];
@@ -52,6 +53,7 @@ export type DesktopNotesViewProps = {
   noteAiChatSessions: BackendChatSession[];
   allAiChatSessions: BackendChatSession[];
   aiChatScope: 'note' | 'all';
+  aiChatSearchQuery: string;
   activeAiChatSessionId: number | null;
   aiLoading: boolean;
   aiError: string | null;
@@ -81,11 +83,16 @@ export type DesktopNotesViewProps = {
   onToggleAiPanel: () => void;
   onChangeAiQuestion: (value: string) => void;
   onChangeAiChatScope: (scope: 'note' | 'all') => void;
+  onChangeAiChatSearchQuery: (value: string) => void;
   onSelectAiChatSession: (sessionId: number) => void;
+  onRenameAiChatSession: (sessionId: number, title: string) => Promise<boolean>;
+  onRemoveAiChatSession: (sessionId: number) => void;
+  onStartNewAiChatSession: () => void;
   onCreateAiChatSession: () => void;
   onRequestAiAnswer: () => void;
   onInsertAiAnswerPage: () => void;
   onSelectionChange: (rect: SelectionRect | null) => void;
+  onSelectionPreviewChange: (uri: string | null) => void;
   onUndoInk: () => void;
   onRedoInk: () => void;
   onClearInk: () => void;
@@ -207,6 +214,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           blueColor: props.blueColor,
           aiPanelOpen: props.aiPanelOpen,
           selectionRect: props.selectionRect,
+          selectionPreviewUri: props.selectionPreviewUri,
           aiQuestion: props.aiQuestion,
           normalizedQuestion,
           aiResponse,
@@ -217,6 +225,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           noteAiChatSessions: props.noteAiChatSessions,
           allAiChatSessions: props.allAiChatSessions,
           aiChatScope: props.aiChatScope,
+          aiChatSearchQuery: props.aiChatSearchQuery,
           activeAiChatSessionId: props.activeAiChatSessionId,
           aiLoading: props.aiLoading,
           aiError: props.aiError,
@@ -252,7 +261,11 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           onToggleAiPanel: props.onToggleAiPanel,
           onChangeAiQuestion: props.onChangeAiQuestion,
           onChangeAiChatScope: props.onChangeAiChatScope,
+          onChangeAiChatSearchQuery: props.onChangeAiChatSearchQuery,
           onSelectAiChatSession: props.onSelectAiChatSession,
+          onRenameAiChatSession: props.onRenameAiChatSession,
+          onRemoveAiChatSession: props.onRemoveAiChatSession,
+          onStartNewAiChatSession: props.onStartNewAiChatSession,
           onCreateAiChatSession: props.onCreateAiChatSession,
           onRequestAiAnswer: props.onRequestAiAnswer,
           onInsertAiAnswerPage: props.onInsertAiAnswerPage,
@@ -291,6 +304,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           onUpdateTextAnnotation: props.onUpdateTextAnnotation,
           onRemoveTextAnnotation: props.onRemoveTextAnnotation,
           onSelectionChange: props.onSelectionChange,
+          onSelectionPreviewChange: props.onSelectionPreviewChange,
           deleteSelectedStrokes: props.deleteSelectedStrokes,
           changeSelectedStrokesColor: props.changeSelectedStrokesColor,
           onSetCurrentPdfPage: props.onSetCurrentPdfPage,

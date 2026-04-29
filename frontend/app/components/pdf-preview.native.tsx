@@ -1,7 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { PanResponder, useWindowDimensions, View } from 'react-native';
 import Pdf from 'react-native-pdf';
 import Svg, { Path } from 'react-native-svg';
+import { captureRef } from 'react-native-view-shot';
 import { TextAnnotationLayer } from './text-annotation-layer';
 import { findHitInkStrokeId, getInkStrokeSvgPath, resolveInkStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize } from '../ui-helpers';
 import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../ui-types';
@@ -22,6 +24,7 @@ export function PdfPreview(props: {
   onUpdateTextAnnotation: (id: string, text: string) => void;
   onRemoveTextAnnotation: (id: string) => void;
   onSelectionChange: (rect: SelectionRect | null) => void;
+  onSelectionPreviewChange?: (uri: string | null) => void;
   onPageChanged?: (page: number) => void;
   onDocumentLoaded?: (pageCount: number) => void;
   styles: any;
@@ -33,6 +36,7 @@ export function PdfPreview(props: {
   const viewerHeight = phoneViewer ? Math.max(560, height - 190) : compactViewer ? Math.max(460, height - 235) : Math.max(700, height - 130);
   const [currentStroke, setCurrentStroke] = useState<InkStroke | null>(null);
   const [draftSelection, setDraftSelection] = useState<SelectionRect | null>(null);
+  const [capturingSelection, setCapturingSelection] = useState(false);
   const [overlayFrame, setOverlayFrame] = useState({ x: 0, y: 0, width: 0, height: 0 });
   const [pdfScale, setPdfScale] = useState(1);
   const currentStrokeRef = useRef<InkStroke | null>(null);
@@ -40,6 +44,7 @@ export function PdfPreview(props: {
   const draftSelectionRef = useRef<SelectionRect | null>(null);
   const textTapRef = useRef<InkPoint | null>(null);
   const overlayRef = useRef<View | null>(null);
+  const captureTargetRef = useRef<View | null>(null);
   const pageInkStrokes = useMemo(
     () => props.inkStrokes.filter((stroke) => !stroke.pageNumber || stroke.pageNumber === props.page),
     [props.inkStrokes, props.page],
@@ -81,6 +86,37 @@ export function PdfPreview(props: {
     setPdfScale(Math.max(1, Math.min(3, Number.isFinite(nextScale) ? nextScale : 1)));
   }, []);
 
+  const waitForNextPaint = () => new Promise((resolve) => setTimeout(resolve, 60));
+
+  const buildSelectionPreview = useCallback(async (rect: SelectionRect) => {
+    if (!captureTargetRef.current) return null;
+    setCapturingSelection(true);
+    await waitForNextPaint();
+
+    try {
+      const fullImageUri = await captureRef(captureTargetRef, {
+        format: 'png',
+        result: 'tmpfile',
+        quality: 1,
+        width: Math.round(viewerWidth),
+        height: Math.round(viewerHeight),
+        handleGLSurfaceViewOnAndroid: true,
+      });
+      const crop = {
+        originX: Math.max(0, Math.floor(rect.x)),
+        originY: Math.max(0, Math.floor(rect.y)),
+        width: Math.max(1, Math.min(Math.floor(rect.width), Math.floor(viewerWidth - rect.x))),
+        height: Math.max(1, Math.min(Math.floor(rect.height), Math.floor(viewerHeight - rect.y))),
+      };
+      const cropped = await manipulateAsync(fullImageUri, [{ crop }], { compress: 1, format: SaveFormat.PNG });
+      return cropped.uri;
+    } catch {
+      return null;
+    } finally {
+      setCapturingSelection(false);
+    }
+  }, [viewerHeight, viewerWidth]);
+
   const panResponder = useMemo(
     () =>
       PanResponder.create({
@@ -118,6 +154,7 @@ export function PdfPreview(props: {
 
           if (props.inkTool === 'select') {
             props.onSelectionChange(null);
+            props.onSelectionPreviewChange?.(null);
             selectionOriginRef.current = absolutePoint;
             const rect = { x: absolutePoint.x, y: absolutePoint.y, width: 0, height: 0, pageWidth: absolutePoint.pageWidth, pageHeight: absolutePoint.pageHeight };
             draftSelectionRef.current = rect;
@@ -173,10 +210,15 @@ export function PdfPreview(props: {
           if (stroke && stroke.points.length > 1) props.onCommitInkStroke(stroke);
           if (props.inkTool === 'select') {
             const rect = draftSelectionRef.current;
-            if (rect && rect.width > 24 && rect.height > 24) props.onSelectionChange(rect);
             draftSelectionRef.current = null;
             selectionOriginRef.current = null;
             setDraftSelection(null);
+            if (rect && rect.width > 24 && rect.height > 24) {
+              void buildSelectionPreview(rect).then((uri) => {
+                props.onSelectionChange(rect);
+                props.onSelectionPreviewChange?.(uri);
+              });
+            }
           }
           if (props.inkTool === 'text' && textTapRef.current) {
             props.onAddTextAnnotation(textTapRef.current);
@@ -196,7 +238,7 @@ export function PdfPreview(props: {
           setCurrentStroke(null);
         },
       }),
-    [overlayFrame.x, overlayFrame.y, pageInkStrokesForView, props, viewerWidth, viewerHeight],
+    [buildSelectionPreview, overlayFrame.x, overlayFrame.y, pageInkStrokesForView, props, viewerWidth, viewerHeight],
   );
 
   const pdfSource = typeof props.file === 'string' ? { uri: props.file } : props.file;
@@ -206,7 +248,7 @@ export function PdfPreview(props: {
 
   return (
     <View style={props.styles.pdfViewerCard}>
-      <View style={[props.styles.pdfStage, { width: viewerWidth, height: viewerHeight }]}>
+      <View ref={captureTargetRef} collapsable={false} style={[props.styles.pdfStage, { width: viewerWidth, height: viewerHeight }]}>
         <Pdf
           source={pdfSource}
           page={props.page}
@@ -262,8 +304,8 @@ export function PdfPreview(props: {
               })}
             {currentPenPath ? <Path d={currentPenPath} fill={currentStroke?.color} /> : null}
           </Svg>
-          {!draftSelection && selectionForView ? <View pointerEvents="none" style={[props.styles.selectionOverlayRect, { left: selectionForView.x, top: selectionForView.y, width: selectionForView.width, height: selectionForView.height }]} /> : null}
-          {draftSelection ? <View pointerEvents="none" style={[props.styles.selectionOverlayRect, props.styles.selectionOverlayDraft, { left: draftSelection.x, top: draftSelection.y, width: draftSelection.width, height: draftSelection.height }]} /> : null}
+          {!capturingSelection && !draftSelection && selectionForView ? <View pointerEvents="none" style={[props.styles.selectionOverlayRect, { left: selectionForView.x, top: selectionForView.y, width: selectionForView.width, height: selectionForView.height }]} /> : null}
+          {!capturingSelection && draftSelection ? <View pointerEvents="none" style={[props.styles.selectionOverlayRect, props.styles.selectionOverlayDraft, { left: draftSelection.x, top: draftSelection.y, width: draftSelection.width, height: draftSelection.height }]} /> : null}
         </View>
       </View>
     </View>

@@ -33,6 +33,7 @@ export function MobileNotes(props: {
   activeGeneratedPage: GeneratedWorkspacePage | null;
   aiPanelOpen: boolean;
   selectionRect: SelectionRect | null;
+  selectionPreviewUri: string | null;
   aiQuestion: string;
   aiAnswer: MockAiAnswer | null;
   aiMessages: BackendChatMessage[];
@@ -40,6 +41,7 @@ export function MobileNotes(props: {
   noteAiChatSessions: BackendChatSession[];
   allAiChatSessions: BackendChatSession[];
   aiChatScope: 'note' | 'all';
+  aiChatSearchQuery: string;
   activeAiChatSessionId: number | null;
   aiLoading: boolean;
   aiError: string | null;
@@ -59,11 +61,16 @@ export function MobileNotes(props: {
   onToggleAiPanel: () => void;
   onChangeAiQuestion: (value: string) => void;
   onChangeAiChatScope: (scope: 'note' | 'all') => void;
+  onChangeAiChatSearchQuery: (value: string) => void;
   onSelectAiChatSession: (sessionId: number) => void;
+  onRenameAiChatSession: (sessionId: number, title: string) => Promise<boolean>;
+  onRemoveAiChatSession: (sessionId: number) => void;
+  onStartNewAiChatSession: () => void;
   onCreateAiChatSession: () => void;
   onRequestAiAnswer: () => void;
   onInsertAiAnswerPage: () => void;
   onSelectionChange: (rect: SelectionRect | null) => void;
+  onSelectionPreviewChange: (uri: string | null) => void;
   onUndoInk: () => void;
   onRedoInk: () => void;
   onClearInk: () => void;
@@ -125,6 +132,7 @@ export function DesktopNotes(props: {
   textAnnotations: InkTextAnnotation[];
   aiPanelOpen: boolean;
   selectionRect: SelectionRect | null;
+  selectionPreviewUri: string | null;
   aiQuestion: string;
   aiAnswer: MockAiAnswer | null;
   aiMessages: BackendChatMessage[];
@@ -132,6 +140,7 @@ export function DesktopNotes(props: {
   noteAiChatSessions: BackendChatSession[];
   allAiChatSessions: BackendChatSession[];
   aiChatScope: 'note' | 'all';
+  aiChatSearchQuery: string;
   activeAiChatSessionId: number | null;
   aiLoading: boolean;
   aiError: string | null;
@@ -161,11 +170,16 @@ export function DesktopNotes(props: {
   onToggleAiPanel: () => void;
   onChangeAiQuestion: (value: string) => void;
   onChangeAiChatScope: (scope: 'note' | 'all') => void;
+  onChangeAiChatSearchQuery: (value: string) => void;
   onSelectAiChatSession: (sessionId: number) => void;
+  onRenameAiChatSession: (sessionId: number, title: string) => Promise<boolean>;
+  onRemoveAiChatSession: (sessionId: number) => void;
+  onStartNewAiChatSession: () => void;
   onCreateAiChatSession: () => void;
   onRequestAiAnswer: () => void;
   onInsertAiAnswerPage: () => void;
   onSelectionChange: (rect: SelectionRect | null) => void;
+  onSelectionPreviewChange: (uri: string | null) => void;
   onUndoInk: () => void;
   onRedoInk: () => void;
   onClearInk: () => void;
