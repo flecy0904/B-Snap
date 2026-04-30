@@ -97,6 +97,7 @@ export type DesktopNotesWorkspaceContextValue = {
   onRemoveTextAnnotation: (id: string) => void;
   onSelectionChange: (rect: SelectionRect | null) => void;
   onSelectionPreviewChange: (uri: string | null) => void;
+  onClearSelection: () => void;
   deleteSelectedStrokes: () => void;
   changeSelectedStrokesColor: (color: string) => void;
   onSetCurrentPdfPage: (pageNumber: number) => void;

@@ -249,6 +249,7 @@ export function AppShell(props: {
                   onInsertAiAnswerPage={notesState.insertAiAnswerPage}
                   onSelectionChange={notesState.changeSelection}
                   onSelectionPreviewChange={notesState.changeSelectionPreview}
+                  onClearSelection={notesState.clearCurrentSelection}
                   onUndoInk={notesState.undoInk}
                   onRedoInk={notesState.redoInk}
                   onClearInk={notesState.clearInk}
@@ -428,6 +429,7 @@ export function AppShell(props: {
                   onInsertAiAnswerPage={notesState.insertAiAnswerPage}
                   onSelectionChange={notesState.changeSelection}
                   onSelectionPreviewChange={notesState.changeSelectionPreview}
+                  onClearSelection={notesState.clearCurrentSelection}
                   onUndoInk={notesState.undoInk}
                   onRedoInk={notesState.redoInk}
                   onClearInk={notesState.clearInk}

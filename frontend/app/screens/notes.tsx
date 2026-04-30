@@ -71,6 +71,7 @@ export function MobileNotes(props: {
   onInsertAiAnswerPage: () => void;
   onSelectionChange: (rect: SelectionRect | null) => void;
   onSelectionPreviewChange: (uri: string | null) => void;
+  onClearSelection: () => void;
   onUndoInk: () => void;
   onRedoInk: () => void;
   onClearInk: () => void;
@@ -180,6 +181,7 @@ export function DesktopNotes(props: {
   onInsertAiAnswerPage: () => void;
   onSelectionChange: (rect: SelectionRect | null) => void;
   onSelectionPreviewChange: (uri: string | null) => void;
+  onClearSelection: () => void;
   onUndoInk: () => void;
   onRedoInk: () => void;
   onClearInk: () => void;

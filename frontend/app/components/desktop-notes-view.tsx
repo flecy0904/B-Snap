@@ -93,6 +93,7 @@ export type DesktopNotesViewProps = {
   onInsertAiAnswerPage: () => void;
   onSelectionChange: (rect: SelectionRect | null) => void;
   onSelectionPreviewChange: (uri: string | null) => void;
+  onClearSelection: () => void;
   onUndoInk: () => void;
   onRedoInk: () => void;
   onClearInk: () => void;
@@ -305,6 +306,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           onRemoveTextAnnotation: props.onRemoveTextAnnotation,
           onSelectionChange: props.onSelectionChange,
           onSelectionPreviewChange: props.onSelectionPreviewChange,
+          onClearSelection: props.onClearSelection,
           deleteSelectedStrokes: props.deleteSelectedStrokes,
           changeSelectedStrokesColor: props.changeSelectedStrokesColor,
           onSetCurrentPdfPage: props.onSetCurrentPdfPage,

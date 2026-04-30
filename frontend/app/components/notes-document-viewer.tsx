@@ -46,6 +46,7 @@ export const NotesDocumentViewer = React.memo(function NotesDocumentViewer() {
           onUpdateTextAnnotation={workspace.onUpdateTextAnnotation}
           onRemoveTextAnnotation={workspace.onRemoveTextAnnotation}
           onSelectionChange={workspace.onSelectionChange}
+          onSelectionPreviewChange={workspace.onSelectionPreviewChange}
           styles={workspace.styles}
         />
       );
@@ -123,5 +124,5 @@ export const NotesDocumentViewer = React.memo(function NotesDocumentViewer() {
     );
   }
 
-  return <BlankNoteCanvas inkTool={workspace.inkTool} penColor={workspace.penColor} penWidth={workspace.penWidth} inkStrokes={workspace.inkStrokes} textAnnotations={workspace.textAnnotations} onCommitInkStroke={workspace.onCommitInkStroke} onRemoveInkStroke={workspace.onRemoveInkStroke} onAddTextAnnotation={workspace.onAddTextAnnotation} onUpdateTextAnnotation={workspace.onUpdateTextAnnotation} onRemoveTextAnnotation={workspace.onRemoveTextAnnotation} styles={workspace.styles} />;
+  return <BlankNoteCanvas inkTool={workspace.inkTool} penColor={workspace.penColor} penWidth={workspace.penWidth} inkStrokes={workspace.inkStrokes} textAnnotations={workspace.textAnnotations} selectionRect={workspace.selectionRect} onCommitInkStroke={workspace.onCommitInkStroke} onRemoveInkStroke={workspace.onRemoveInkStroke} onAddTextAnnotation={workspace.onAddTextAnnotation} onUpdateTextAnnotation={workspace.onUpdateTextAnnotation} onRemoveTextAnnotation={workspace.onRemoveTextAnnotation} onSelectionChange={workspace.onSelectionChange} onSelectionPreviewChange={workspace.onSelectionPreviewChange} styles={workspace.styles} />;
 });

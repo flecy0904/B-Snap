@@ -52,6 +52,16 @@ function removeId(ids: number[], id: number) {
   return ids.filter((value) => value !== id);
 }
 
+function buildAiChatTitle(question: string, fallbackTitle?: string) {
+  const normalized = question.replace(/\s+/g, ' ').trim();
+  const fallback = fallbackTitle ? `${fallbackTitle} AI 채팅` : 'AI 채팅';
+  if (!normalized) return fallback;
+
+  const cleaned = normalized.replace(/[?!.,]+$/g, '').trim();
+  const title = cleaned || normalized;
+  return title.length > 28 ? `${title.slice(0, 28).trim()}...` : title;
+}
+
 function upsertStudyDocument(documents: StudyDocumentEntry[], nextDocument: StudyDocumentEntry) {
   const exists = documents.some((document) => document.id === nextDocument.id);
   if (!exists) return [nextDocument, ...documents];
@@ -164,6 +174,7 @@ export function useStudyWorkspace(props: {
   const [aiError, setAiError] = useState<string | null>(null);
   const [selectionPreviewByDocument, setSelectionPreviewByDocument] = useState<Record<number, string | null>>({});
   const [chatSessionByDocument, setChatSessionByDocument] = useState<Record<number, number>>({});
+  const [lastChatSessionByDocument, setLastChatSessionByDocument] = useState<Record<number, number>>({});
   const [chatSessionsByDocument, setChatSessionsByDocument] = useState<Record<number, BackendChatSession[]>>({});
   const [allChatSessions, setAllChatSessions] = useState<BackendChatSession[]>([]);
   const [aiChatScope, setAiChatScope] = useState<'note' | 'all'>('note');
@@ -235,6 +246,7 @@ export function useStudyWorkspace(props: {
     setCurrentPdfPageByDocument(snapshot.currentPdfPageByDocument);
     setActivePageByDocument(snapshot.activePageByDocument);
     setBookmarksByDocument(snapshot.bookmarksByDocument ?? {});
+    setLastChatSessionByDocument(snapshot.lastChatSessionByDocument ?? {});
   }, []);
   const persistedWorkspaceState = useMemo<PersistedStudyWorkspaceState>(() => ({
     version: 1,
@@ -249,6 +261,7 @@ export function useStudyWorkspace(props: {
     currentPdfPageByDocument,
     activePageByDocument,
     bookmarksByDocument,
+    lastChatSessionByDocument,
   }), [
     activePageByDocument,
     attachmentsByDocument,
@@ -259,6 +272,7 @@ export function useStudyWorkspace(props: {
     deletedStudyDocumentIds,
     generatedPagesByDocument,
     inkByDocument,
+    lastChatSessionByDocument,
     textAnnotationsByDocument,
     userStudyDocuments,
   ]);
@@ -271,7 +285,8 @@ export function useStudyWorkspace(props: {
   const selectionPreviewUri = studyDocumentId ? selectionPreviewByDocument[studyDocumentId] ?? null : null;
   const aiChatSessions = studyDocumentId ? chatSessionsByDocument[studyDocumentId] ?? [] : [];
   const aiChatSearchTerm = aiChatSearchQuery.trim().toLowerCase();
-  const visibleAiChatSessions = (aiChatScope === 'all' ? allChatSessions : aiChatSessions).filter((session) => {
+  const shouldShowAllAiChatSessions = aiChatScope === 'all' || (aiChatScope === 'note' && aiChatSessions.length === 0);
+  const visibleAiChatSessions = (shouldShowAllAiChatSessions ? allChatSessions : aiChatSessions).filter((session) => {
     if (!aiChatSearchTerm) return true;
     return `${session.title} ${session.model ?? ''}`.toLowerCase().includes(aiChatSearchTerm);
   });
@@ -446,7 +461,7 @@ export function useStudyWorkspace(props: {
           listBackendChatSessions(studyDocumentId),
           listAllBackendChatSessions(),
         ]);
-        const preferredSessionId = chatSessionByDocument[studyDocumentId];
+        const preferredSessionId = chatSessionByDocument[studyDocumentId] ?? lastChatSessionByDocument[studyDocumentId];
         const session = sessions.find((item) => item.id === preferredSessionId) ?? sessions[0] ?? null;
 
         if (!session) {
@@ -467,6 +482,7 @@ export function useStudyWorkspace(props: {
         setAllChatSessions(allSessions);
         setChatSessionsByDocument((current) => ({ ...current, [studyDocumentId]: sessions }));
         setChatSessionByDocument((current) => ({ ...current, [studyDocumentId]: session.id }));
+        setLastChatSessionByDocument((current) => ({ ...current, [studyDocumentId]: session.id }));
         setAiMessagesBySession((current) => ({ ...current, [session.id]: messages }));
 
         const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant');
@@ -547,6 +563,11 @@ export function useStudyWorkspace(props: {
     setSubjectId(selected.subjectId);
     setNoteId(null);
     setStudyDocumentId(id);
+    setChatSessionByDocument((current) => {
+      const lastSessionId = lastChatSessionByDocument[id];
+      if (!lastSessionId) return current;
+      return { ...current, [id]: lastSessionId };
+    });
     setInkTool('view');
     setActivePageByDocument((current) => ({
       ...current,
@@ -1126,9 +1147,19 @@ export function useStudyWorkspace(props: {
     setAiError(null);
     try {
       const messages = await listBackendChatMessages(sessionId);
+      const selectedSession = allChatSessions.find((session) => session.id === sessionId)
+        ?? Object.values(chatSessionsByDocument).flat().find((session) => session.id === sessionId)
+        ?? null;
+      const targetDocumentId = selectedSession?.note_id ?? studyDocumentId ?? null;
       setChatSessionByDocument((current) => {
         const next = { ...current };
         if (studyDocumentId) next[studyDocumentId] = sessionId;
+        if (targetDocumentId) next[targetDocumentId] = sessionId;
+        return next;
+      });
+      setLastChatSessionByDocument((current) => {
+        const next = { ...current };
+        if (targetDocumentId) next[targetDocumentId] = sessionId;
         return next;
       });
       setAiMessagesBySession((current) => ({ ...current, [sessionId]: messages }));
@@ -1221,6 +1252,18 @@ export function useStudyWorkspace(props: {
         });
         return next;
       });
+      setLastChatSessionByDocument((current) => {
+        const next = { ...current };
+        Object.entries(next).forEach(([documentId, lastSessionId]) => {
+          if (lastSessionId !== sessionId) return;
+          if (studyDocumentId && Number(documentId) === studyDocumentId && nextCurrentDocumentSession) {
+            next[Number(documentId)] = nextCurrentDocumentSession.id;
+            return;
+          }
+          delete next[Number(documentId)];
+        });
+        return next;
+      });
       if (activeAiChatSessionId === sessionId) {
         setAiAnswer(null);
         setAiQuestion('');
@@ -1282,8 +1325,10 @@ export function useStudyWorkspace(props: {
   const requestAiAnswer = async () => {
     if (!studyDocumentId) return;
 
+    const question = aiQuestion.trim() || '현재 페이지를 요약해줘';
     setAiLoading(true);
     setAiError(null);
+    setAiQuestion('');
 
     try {
       if (isBackendApiEnabled() && currentDocumentHasBackendPages) {
@@ -1291,10 +1336,14 @@ export function useStudyWorkspace(props: {
         if (!sessionId) {
           const session = await createBackendChatSession({
             noteId: studyDocumentId,
-            title: studyDocument?.title ? `${studyDocument.title} AI 채팅` : 'AI 채팅',
+            title: buildAiChatTitle(question, studyDocument?.title),
           });
           sessionId = session.id;
           setChatSessionByDocument((current) => ({
+            ...current,
+            [studyDocumentId]: session.id,
+          }));
+          setLastChatSessionByDocument((current) => ({
             ...current,
             [studyDocumentId]: session.id,
           }));
@@ -1305,18 +1354,41 @@ export function useStudyWorkspace(props: {
           setAllChatSessions((current) => [session, ...current.filter((item) => item.id !== session.id)]);
         }
 
+        const pendingUserMessage: BackendChatMessage = {
+          id: -Date.now(),
+          session_id: sessionId,
+          role: 'user',
+          content: question,
+          model: null,
+          created_at: new Date().toISOString(),
+        };
+        setAiMessagesBySession((current) => ({
+          ...current,
+          [sessionId]: [...(current[sessionId] ?? []), pendingUserMessage],
+        }));
+
         const response = await sendBackendAiMessage({
           sessionId,
-          content: aiQuestion.trim() || '현재 페이지를 요약해줘',
+          content: question,
         });
+        setLastChatSessionByDocument((current) => ({
+          ...current,
+          [studyDocumentId]: sessionId,
+        }));
         const content = response.assistant_message.content;
         setAiMessagesBySession((current) => ({
           ...current,
-          [sessionId]: [
-            ...(current[sessionId] ?? []),
-            response.user_message,
-            response.assistant_message,
-          ],
+          [sessionId]: (current[sessionId] ?? []).some((message) => message.id === pendingUserMessage.id)
+            ? (current[sessionId] ?? []).flatMap((message) => (
+              message.id === pendingUserMessage.id
+                ? [response.user_message, response.assistant_message]
+                : [message]
+            ))
+            : [
+              ...(current[sessionId] ?? []),
+              response.user_message,
+              response.assistant_message,
+            ],
         }));
         setAllChatSessions((current) => {
           const target = current.find((session) => session.id === sessionId);
@@ -1324,7 +1396,7 @@ export function useStudyWorkspace(props: {
           return [target, ...current.filter((session) => session.id !== sessionId)];
         });
         setAiAnswer({
-          question: aiQuestion.trim() || '현재 페이지를 요약해줘',
+          question,
           response: content,
           sections: [
             {
@@ -1339,7 +1411,7 @@ export function useStudyWorkspace(props: {
       }
 
       const answer = await requestMockAiAnswer({
-        question: aiQuestion,
+        question,
         selectionRect,
         currentPageLabel: currentAiPageLabel,
       });
@@ -1926,6 +1998,7 @@ export function useStudyWorkspace(props: {
     insertAiAnswerPage,
     changeSelection,
     changeSelectionPreview,
+    clearCurrentSelection,
     undoInk,
     redoInk,
     clearInk,
