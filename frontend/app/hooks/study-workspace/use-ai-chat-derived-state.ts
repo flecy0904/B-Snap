@@ -1,0 +1,46 @@
+import { useMemo } from 'react';
+import type { BackendChatMessage, BackendChatSession } from '../../services/backend-api';
+
+export function useAiChatDerivedState(params: {
+  studyDocumentId: number | null;
+  chatSessionByDocument: Record<number, number>;
+  aiMessagesBySession: Record<number, BackendChatMessage[]>;
+  selectionPreviewByDocument: Record<number, string | null>;
+  chatSessionsByDocument: Record<number, BackendChatSession[]>;
+  allChatSessions: BackendChatSession[];
+  aiChatScope: 'note' | 'all';
+  aiChatSearchQuery: string;
+  backendPageIdsByDocument: Record<number, Record<number, number>>;
+}) {
+  const activeAiChatSessionId = params.studyDocumentId
+    ? params.chatSessionByDocument[params.studyDocumentId] ?? null
+    : null;
+  const aiMessages = activeAiChatSessionId ? params.aiMessagesBySession[activeAiChatSessionId] ?? [] : [];
+  const selectionPreviewUri = params.studyDocumentId
+    ? params.selectionPreviewByDocument[params.studyDocumentId] ?? null
+    : null;
+  const noteAiChatSessions = params.studyDocumentId
+    ? params.chatSessionsByDocument[params.studyDocumentId] ?? []
+    : [];
+  const aiChatSearchTerm = params.aiChatSearchQuery.trim().toLowerCase();
+  const shouldShowAllAiChatSessions = params.aiChatScope === 'all' || (params.aiChatScope === 'note' && noteAiChatSessions.length === 0);
+  const visibleAiChatSessions = useMemo(
+    () => (shouldShowAllAiChatSessions ? params.allChatSessions : noteAiChatSessions).filter((session) => {
+      if (!aiChatSearchTerm) return true;
+      return `${session.title} ${session.model ?? ''}`.toLowerCase().includes(aiChatSearchTerm);
+    }),
+    [aiChatSearchTerm, noteAiChatSessions, params.allChatSessions, shouldShowAllAiChatSessions],
+  );
+  const currentDocumentHasBackendPages = params.studyDocumentId
+    ? Boolean(params.backendPageIdsByDocument[params.studyDocumentId])
+    : false;
+
+  return {
+    activeAiChatSessionId,
+    aiMessages,
+    selectionPreviewUri,
+    noteAiChatSessions,
+    visibleAiChatSessions,
+    currentDocumentHasBackendPages,
+  };
+}

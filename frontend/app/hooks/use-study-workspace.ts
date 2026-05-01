@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Alert, Platform, Share } from 'react-native';
+import { Platform, Share } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import { notes } from '../data';
 import { requestMockAiAnswer, type MockAiAnswer } from '../services/mock-ai-service';
@@ -21,7 +21,6 @@ import {
   updateBackendChatSession,
   updateBackendNote,
   updateBackendNotePage,
-  BackendApiError,
   type BackendChatSession,
   type BackendChatMessage,
 } from '../services/backend-api';
@@ -39,126 +38,18 @@ import {
   buildGeneratedSummary,
   buildWorkspaceAttachment,
 } from './study-workspace/helpers';
+import { buildAiChatTitle } from './study-workspace/ai-chat-title';
+import { getAiBackendErrorMessage } from './study-workspace/ai-errors';
+import { addUniqueId, removeId, upsertStudyDocument } from './study-workspace/collection-helpers';
+import { confirmDeleteAction } from './study-workspace/confirm-delete-action';
+import { findLastIndex, isInkStrokeOnPage, scopeInkStrokeToPage } from './study-workspace/ink-helpers';
+import { parseNotePageContent, serializeNotePageContent } from './study-workspace/note-page-content';
+import { useAiChatDerivedState } from './study-workspace/use-ai-chat-derived-state';
 import { useIncomingAssetSubscription } from './study-workspace/use-incoming-asset-subscription';
 import { useStudyWorkspaceDerivedState } from './study-workspace/use-study-workspace-derived-state';
 import { useStudyWorkspacePersistence } from './study-workspace/use-study-workspace-persistence';
 import type { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../ui-types';
 import type { BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NoteWorkspaceMode, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../types';
-
-function addUniqueId(ids: number[], id: number) {
-  return ids.includes(id) ? ids : [...ids, id];
-}
-
-function removeId(ids: number[], id: number) {
-  return ids.filter((value) => value !== id);
-}
-
-function buildAiChatTitle(question: string, fallbackTitle?: string) {
-  const normalized = question.replace(/\s+/g, ' ').trim();
-  const fallback = fallbackTitle ? `${fallbackTitle} AI 채팅` : 'AI 채팅';
-  if (!normalized) return fallback;
-
-  const cleaned = normalized.replace(/[?!.,]+$/g, '').trim();
-  const title = cleaned || normalized;
-  return title.length > 28 ? `${title.slice(0, 28).trim()}...` : title;
-}
-
-function getAiBackendErrorMessage(error: unknown, fallbackMessage: string) {
-  if (error instanceof BackendApiError) {
-    const detail = error.detail?.toLowerCase() ?? '';
-
-    if (error.status === null) {
-      return '백엔드 서버에 연결할 수 없습니다. 백엔드가 실행 중인지 확인해 주세요.';
-    }
-
-    if (detail.includes('openai_api_key') || detail.includes('api key')) {
-      return 'API Key를 확인해 주세요.';
-    }
-
-    if (error.status === 502 || detail.includes('openai')) {
-      return 'AI 응답을 받아오지 못했습니다.';
-    }
-
-    if (error.status >= 500) {
-      return 'DB 연결 상태를 확인해 주세요.';
-    }
-  }
-
-  return fallbackMessage;
-}
-
-function upsertStudyDocument(documents: StudyDocumentEntry[], nextDocument: StudyDocumentEntry) {
-  const exists = documents.some((document) => document.id === nextDocument.id);
-  if (!exists) return [nextDocument, ...documents];
-
-  return documents.map((document) => (
-    document.id === nextDocument.id ? nextDocument : document
-  ));
-}
-
-type StoredNotePageContent = {
-  kind: 'bsnap-page-state';
-  version: 1;
-  inkStrokes: InkStroke[];
-  textAnnotations: InkTextAnnotation[];
-};
-
-function serializeNotePageContent(params: {
-  inkStrokes: InkStroke[];
-  textAnnotations: InkTextAnnotation[];
-}) {
-  return JSON.stringify({
-    kind: 'bsnap-page-state',
-    version: 1,
-    inkStrokes: params.inkStrokes,
-    textAnnotations: params.textAnnotations,
-  } satisfies StoredNotePageContent);
-}
-
-function parseNotePageContent(content: string | null): StoredNotePageContent | null {
-  if (!content) return null;
-
-  try {
-    const parsed = JSON.parse(content) as Partial<StoredNotePageContent>;
-    if (parsed.kind !== 'bsnap-page-state' || parsed.version !== 1) return null;
-    return {
-      kind: 'bsnap-page-state',
-      version: 1,
-      inkStrokes: Array.isArray(parsed.inkStrokes) ? parsed.inkStrokes : [],
-      textAnnotations: Array.isArray(parsed.textAnnotations) ? parsed.textAnnotations : [],
-    };
-  } catch {
-    return null;
-  }
-}
-
-function confirmDestructiveAction(params: {
-  title: string;
-  message: string;
-  confirmText: string;
-  onConfirm: () => void;
-}) {
-  if (Platform.OS === 'web') {
-    const confirmed = typeof globalThis.confirm === 'function'
-      ? globalThis.confirm(`${params.title}\n\n${params.message}`)
-      : false;
-    if (confirmed) params.onConfirm();
-    return;
-  }
-
-  Alert.alert(
-    params.title,
-    params.message,
-    [
-      { text: '취소', style: 'cancel' },
-      {
-        text: params.confirmText,
-        style: 'destructive',
-        onPress: params.onConfirm,
-      },
-    ],
-  );
-}
 
 export function useStudyWorkspace(props: {
   wide: boolean;
@@ -305,17 +196,24 @@ export function useStudyWorkspace(props: {
     state: persistedWorkspaceState,
     onHydrate: hydrateWorkspaceState,
   });
-  const activeAiChatSessionId = studyDocumentId ? chatSessionByDocument[studyDocumentId] ?? null : null;
-  const aiMessages = activeAiChatSessionId ? aiMessagesBySession[activeAiChatSessionId] ?? [] : [];
-  const selectionPreviewUri = studyDocumentId ? selectionPreviewByDocument[studyDocumentId] ?? null : null;
-  const aiChatSessions = studyDocumentId ? chatSessionsByDocument[studyDocumentId] ?? [] : [];
-  const aiChatSearchTerm = aiChatSearchQuery.trim().toLowerCase();
-  const shouldShowAllAiChatSessions = aiChatScope === 'all' || (aiChatScope === 'note' && aiChatSessions.length === 0);
-  const visibleAiChatSessions = (shouldShowAllAiChatSessions ? allChatSessions : aiChatSessions).filter((session) => {
-    if (!aiChatSearchTerm) return true;
-    return `${session.title} ${session.model ?? ''}`.toLowerCase().includes(aiChatSearchTerm);
+  const {
+    activeAiChatSessionId,
+    aiMessages,
+    selectionPreviewUri,
+    noteAiChatSessions: aiChatSessions,
+    visibleAiChatSessions,
+    currentDocumentHasBackendPages,
+  } = useAiChatDerivedState({
+    studyDocumentId,
+    chatSessionByDocument,
+    aiMessagesBySession,
+    selectionPreviewByDocument,
+    chatSessionsByDocument,
+    allChatSessions,
+    aiChatScope,
+    aiChatSearchQuery,
+    backendPageIdsByDocument,
   });
-  const currentDocumentHasBackendPages = studyDocumentId ? Boolean(backendPageIdsByDocument[studyDocumentId]) : false;
 
   useEffect(() => {
     if (!workspaceFeedback) return;
@@ -680,7 +578,7 @@ export function useStudyWorkspace(props: {
     const target = visibleNotes.find((value) => value.id === id) ?? notes.find((value) => value.id === id);
     if (!target) return;
 
-    confirmDestructiveAction({
+    confirmDeleteAction({
       title: 'Photo 삭제',
       message: `"${target.title}" Photo를 삭제할까요? 삭제 후에는 현재 기기 목록에서 보이지 않습니다.`,
       confirmText: '삭제',
@@ -699,7 +597,7 @@ export function useStudyWorkspace(props: {
     const target = allStudyDocuments.find((value) => value.id === id);
     if (!target) return;
 
-    confirmDestructiveAction({
+    confirmDeleteAction({
       title: 'Note 삭제',
       message: `"${target.title}" Note 문서와 이 문서에 남긴 필기를 삭제할까요?`,
       confirmText: '삭제',
@@ -959,20 +857,13 @@ export function useStudyWorkspace(props: {
   };
 
   const isStrokeOnCurrentPage = (stroke: InkStroke) => (
-    currentDocumentPage?.kind === 'generated'
-      ? stroke.generatedPageId === currentDocumentPage.pageId
-      : (
-          !stroke.generatedPageId &&
-          (studyDocument?.type === 'blank' ? (stroke.pageNumber ?? 1) === currentPdfPage : (!stroke.pageNumber || stroke.pageNumber === currentPdfPage))
-        )
+    isInkStrokeOnPage({
+      stroke,
+      currentDocumentPage,
+      currentPdfPage,
+      studyDocumentType: studyDocument?.type,
+    })
   );
-
-  const findLastIndex = <T,>(items: T[], predicate: (item: T) => boolean) => {
-    for (let index = items.length - 1; index >= 0; index -= 1) {
-      if (predicate(items[index])) return index;
-    }
-    return -1;
-  };
 
   const clearInk = () => {
     if (!studyDocumentId) return;
@@ -1030,10 +921,7 @@ export function useStudyWorkspace(props: {
 
   const commitInkStroke = (stroke: InkStroke) => {
     if (!studyDocumentId) return;
-    const scopedStroke =
-      currentDocumentPage?.kind === 'generated'
-        ? { ...stroke, generatedPageId: currentDocumentPage.pageId, pageNumber: undefined }
-        : { ...stroke, generatedPageId: undefined, pageNumber: currentDocumentPage?.kind === 'pdf' ? currentDocumentPage.pageNumber : currentPdfPage };
+    const scopedStroke = scopeInkStrokeToPage({ stroke, currentDocumentPage, currentPdfPage });
     setInkByDocument((current) => ({
       ...current,
       [studyDocumentId]: [...(current[studyDocumentId] ?? []), scopedStroke],
