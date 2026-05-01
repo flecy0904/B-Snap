@@ -1,4 +1,4 @@
-import { BackendApiError } from '../../services/backend-api';
+import { BackendApiError } from '../../../services/backend-api';
 
 export function getAiBackendErrorMessage(error: unknown, fallbackMessage: string) {
   if (error instanceof BackendApiError) {

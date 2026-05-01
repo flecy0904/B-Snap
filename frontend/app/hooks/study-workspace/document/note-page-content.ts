@@ -1,4 +1,4 @@
-import type { InkStroke, InkTextAnnotation } from '../../ui-types';
+import type { InkStroke, InkTextAnnotation } from '../../../ui-types';
 
 export type StoredNotePageContent = {
   kind: 'bsnap-page-state';

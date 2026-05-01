@@ -38,13 +38,13 @@ import {
   buildGeneratedSummary,
   buildWorkspaceAttachment,
 } from './study-workspace/helpers';
-import { buildAiChatTitle } from './study-workspace/ai-chat-title';
-import { getAiBackendErrorMessage } from './study-workspace/ai-errors';
-import { addUniqueId, removeId, upsertStudyDocument } from './study-workspace/collection-helpers';
-import { confirmDeleteAction } from './study-workspace/confirm-delete-action';
-import { findLastIndex, isInkStrokeOnPage, scopeInkStrokeToPage } from './study-workspace/ink-helpers';
-import { parseNotePageContent, serializeNotePageContent } from './study-workspace/note-page-content';
-import { useAiChatDerivedState } from './study-workspace/use-ai-chat-derived-state';
+import { buildAiChatTitle } from './study-workspace/ai/ai-chat-title';
+import { getAiBackendErrorMessage } from './study-workspace/ai/ai-errors';
+import { useAiChatDerivedState } from './study-workspace/ai/use-ai-chat-derived-state';
+import { addUniqueId, removeId, upsertStudyDocument } from './study-workspace/document/collection-helpers';
+import { confirmDeleteAction } from './study-workspace/ui/confirm-delete-action';
+import { findLastIndex, isInkStrokeOnPage, scopeInkStrokeToPage } from './study-workspace/ink/ink-helpers';
+import { parseNotePageContent, serializeNotePageContent } from './study-workspace/document/note-page-content';
 import { useIncomingAssetSubscription } from './study-workspace/use-incoming-asset-subscription';
 import { useStudyWorkspaceDerivedState } from './study-workspace/use-study-workspace-derived-state';
 import { useStudyWorkspacePersistence } from './study-workspace/use-study-workspace-persistence';

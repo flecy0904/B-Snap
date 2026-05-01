@@ -1,5 +1,5 @@
-import type { DocumentPageView, StudyDocumentEntry } from '../../types';
-import type { InkStroke } from '../../ui-types';
+import type { DocumentPageView, StudyDocumentEntry } from '../../../types';
+import type { InkStroke } from '../../../ui-types';
 
 export function findLastIndex<T>(items: T[], predicate: (item: T) => boolean) {
   for (let index = items.length - 1; index >= 0; index -= 1) {

@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import type { BackendChatMessage, BackendChatSession } from '../../services/backend-api';
+import type { BackendChatMessage, BackendChatSession } from '../../../services/backend-api';
 
 export function useAiChatDerivedState(params: {
   studyDocumentId: number | null;

@@ -1,4 +1,4 @@
-import type { StudyDocumentEntry } from '../../types';
+import type { StudyDocumentEntry } from '../../../types';
 
 export function addUniqueId(ids: number[], id: number) {
   return ids.includes(id) ? ids : [...ids, id];
