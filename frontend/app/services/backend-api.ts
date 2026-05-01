@@ -5,6 +5,18 @@ type RequestOptions = {
   body?: unknown;
 };
 
+export class BackendApiError extends Error {
+  status: number | null;
+  detail: string | null;
+
+  constructor(message: string, status: number | null = null, detail: string | null = null) {
+    super(message);
+    this.name = 'BackendApiError';
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
 export type BackendFolder = {
   id: number;
   name: string;
@@ -62,17 +74,29 @@ function getBackendUrl() {
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   const baseUrl = getBackendUrl();
   if (!baseUrl) {
-    throw new Error('Backend URL is not configured.');
+    throw new BackendApiError('Backend URL is not configured.');
   }
 
-  const response = await fetch(`${baseUrl}${path}`, {
-    method: options.method ?? 'GET',
-    headers: options.body ? { 'Content-Type': 'application/json' } : undefined,
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}${path}`, {
+      method: options.method ?? 'GET',
+      headers: options.body ? { 'Content-Type': 'application/json' } : undefined,
+      body: options.body ? JSON.stringify(options.body) : undefined,
+    });
+  } catch {
+    throw new BackendApiError('Backend server is unreachable.');
+  }
 
   if (!response.ok) {
-    throw new Error(`Backend request failed: ${response.status}`);
+    let detail: string | null = null;
+    try {
+      const body = await response.json();
+      detail = typeof body?.detail === 'string' ? body.detail : null;
+    } catch {
+      detail = null;
+    }
+    throw new BackendApiError(`Backend request failed: ${response.status}`, response.status, detail);
   }
 
   if (response.status === 204) {

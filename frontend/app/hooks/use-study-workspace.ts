@@ -21,6 +21,7 @@ import {
   updateBackendChatSession,
   updateBackendNote,
   updateBackendNotePage,
+  BackendApiError,
   type BackendChatSession,
   type BackendChatMessage,
 } from '../services/backend-api';
@@ -60,6 +61,30 @@ function buildAiChatTitle(question: string, fallbackTitle?: string) {
   const cleaned = normalized.replace(/[?!.,]+$/g, '').trim();
   const title = cleaned || normalized;
   return title.length > 28 ? `${title.slice(0, 28).trim()}...` : title;
+}
+
+function getAiBackendErrorMessage(error: unknown, fallbackMessage: string) {
+  if (error instanceof BackendApiError) {
+    const detail = error.detail?.toLowerCase() ?? '';
+
+    if (error.status === null) {
+      return '백엔드 서버에 연결할 수 없습니다. 백엔드가 실행 중인지 확인해 주세요.';
+    }
+
+    if (detail.includes('openai_api_key') || detail.includes('api key')) {
+      return 'API Key를 확인해 주세요.';
+    }
+
+    if (error.status === 502 || detail.includes('openai')) {
+      return 'AI 응답을 받아오지 못했습니다.';
+    }
+
+    if (error.status >= 500) {
+      return 'DB 연결 상태를 확인해 주세요.';
+    }
+  }
+
+  return fallbackMessage;
 }
 
 function upsertStudyDocument(documents: StudyDocumentEntry[], nextDocument: StudyDocumentEntry) {
@@ -498,9 +523,9 @@ export function useStudyWorkspace(props: {
             createdAt: lastAssistant.created_at,
           });
         }
-      } catch {
+      } catch (error) {
         if (mounted) {
-          setAiError('AI 채팅 내역을 불러오지 못했습니다.');
+          setAiError(getAiBackendErrorMessage(error, 'AI 채팅 내역을 불러오지 못했습니다.'));
         }
       }
     };
@@ -521,8 +546,8 @@ export function useStudyWorkspace(props: {
       .then((sessions) => {
         if (mounted) setAllChatSessions(sessions);
       })
-      .catch(() => {
-        if (mounted) setAiError('전체 AI 채팅 목록을 불러오지 못했습니다.');
+      .catch((error) => {
+        if (mounted) setAiError(getAiBackendErrorMessage(error, 'AI 채팅 내역을 불러오지 못했습니다.'));
       });
 
     return () => {
@@ -1175,8 +1200,8 @@ export function useStudyWorkspace(props: {
         }],
         createdAt: lastAssistant.created_at,
       } : null);
-    } catch {
-      setAiError('AI 채팅 내역을 불러오지 못했습니다.');
+    } catch (error) {
+      setAiError(getAiBackendErrorMessage(error, 'AI 채팅 내역을 불러오지 못했습니다.'));
     } finally {
       setAiLoading(false);
     }
@@ -1282,7 +1307,7 @@ export function useStudyWorkspace(props: {
     if (!studyDocumentId || !isBackendApiEnabled() || !currentDocumentHasBackendPages) {
       setAiAnswer(null);
       setAiQuestion('');
-      setAiError(null);
+      setAiError(isBackendApiEnabled() ? null : '백엔드 서버에 연결할 수 없습니다. 백엔드가 실행 중인지 확인해 주세요.');
       return;
     }
 
@@ -1302,8 +1327,8 @@ export function useStudyWorkspace(props: {
       setAiMessagesBySession((current) => ({ ...current, [session.id]: [] }));
       setAiAnswer(null);
       setAiQuestion('');
-    } catch {
-      setAiError('새 AI 채팅을 만들지 못했습니다.');
+    } catch (error) {
+      setAiError(getAiBackendErrorMessage(error, 'AI 채팅을 만들지 못했습니다.'));
     } finally {
       setAiLoading(false);
     }
@@ -1329,11 +1354,13 @@ export function useStudyWorkspace(props: {
     setAiLoading(true);
     setAiError(null);
     setAiQuestion('');
+    let aiRequestStage: 'chat-session' | 'ai-answer' = 'ai-answer';
 
     try {
       if (isBackendApiEnabled() && currentDocumentHasBackendPages) {
         let sessionId = chatSessionByDocument[studyDocumentId];
         if (!sessionId) {
+          aiRequestStage = 'chat-session';
           const session = await createBackendChatSession({
             noteId: studyDocumentId,
             title: buildAiChatTitle(question, studyDocument?.title),
@@ -1354,6 +1381,7 @@ export function useStudyWorkspace(props: {
           setAllChatSessions((current) => [session, ...current.filter((item) => item.id !== session.id)]);
         }
 
+        aiRequestStage = 'ai-answer';
         const pendingUserMessage: BackendChatMessage = {
           id: -Date.now(),
           session_id: sessionId,
@@ -1416,8 +1444,13 @@ export function useStudyWorkspace(props: {
         currentPageLabel: currentAiPageLabel,
       });
       setAiAnswer(answer);
-    } catch {
-      setAiError('AI 응답을 만들지 못했습니다. 다시 시도해주세요.');
+    } catch (error) {
+      setAiError(getAiBackendErrorMessage(
+        error,
+        aiRequestStage === 'chat-session'
+          ? 'AI 채팅을 만들지 못했습니다.'
+          : 'AI 응답을 받아오지 못했습니다.',
+      ));
     } finally {
       setAiLoading(false);
     }
