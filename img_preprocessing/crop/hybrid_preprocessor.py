@@ -304,13 +304,23 @@ def run_hybrid_preprocess(
             debug_paths["01_yolo_annotated.jpg"] = yolo_annotated_path
 
     saved_output_path: str | None = None
-    if selected is not None and output_path and selected.image is not None:
+    write_error: str | None = None
+    if selected is not None and output_path is not None and selected.image is not None:
         output = Path(output_path)
-        output.parent.mkdir(parents=True, exist_ok=True)
-        if cv2.imwrite(str(output), selected.image):
-            saved_output_path = str(output)
+        try:
+            output.parent.mkdir(parents=True, exist_ok=True)
+            if cv2.imwrite(str(output), selected.image):
+                saved_output_path = str(output)
+            else:
+                write_error = f"Failed to save output image: cv2.imwrite returned False for {output}"
+        except Exception as exc:
+            write_error = f"Failed to save output image: {output} ({exc})"
 
-    success = selected is not None and selected.image is not None
+    success = (
+        selected is not None
+        and selected.image is not None
+        and (output_path is None or saved_output_path is not None)
+    )
     summary = {
         "success": success,
         "message": _summary_message(selected, yolo_error),
@@ -334,6 +344,7 @@ def run_hybrid_preprocess(
             "enable_quality_check": enable_quality_check,
         },
         "output_path": saved_output_path,
+        "write_error": write_error,
         "debug_paths": debug_paths,
     }
 
@@ -685,6 +696,7 @@ def _failure(message: str) -> dict[str, Any]:
         "opencv_candidates": [],
         "settings": {},
         "output_path": None,
+        "write_error": None,
         "debug_paths": {},
     }
 

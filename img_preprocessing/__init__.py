@@ -9,6 +9,8 @@ __all__ = [
     "HybridBoardPreprocessor",
     "HybridPreprocessorConfig",
     "order_points",
+    "preprocess_for_service",
+    "preprocess_directory_for_service",
     "preprocess_board_image",
     "run_hybrid_preprocess",
     "YoloWorldDetector",
@@ -24,6 +26,10 @@ def __getattr__(name: str):
         from .crop.yolo_world_detector import YoloWorldDetector
 
         return YoloWorldDetector
+    if name in {"preprocess_for_service", "preprocess_directory_for_service"}:
+        from .pipeline import preprocessing_pipeline
+
+        return getattr(preprocessing_pipeline, name)
     if name in __all__:
         from .crop import board_cropper
 

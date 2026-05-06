@@ -60,6 +60,8 @@ def test_hybrid_no_yolo_uses_opencv_candidate(tmp_path: Path) -> None:
 
     assert result["success"] is True
     assert result["selected_candidate"]["source"] == "opencv"
+    assert result["output_path"] == str(output_path)
+    assert result["write_error"] is None
     opencv_modes = {
         candidate["mode"]
         for candidate in result["candidates"]
@@ -68,6 +70,43 @@ def test_hybrid_no_yolo_uses_opencv_candidate(tmp_path: Path) -> None:
     assert {"board", "writing"}.issubset(opencv_modes)
     assert len(result["opencv_candidates"]) == 2
     assert output_path.exists()
+
+
+def test_hybrid_output_write_false_returns_failure(tmp_path: Path, monkeypatch) -> None:
+    image = _synthetic_board_with_text()
+
+    input_path = tmp_path / "synthetic_board.jpg"
+    output_path = tmp_path / "synthetic_board_crop.jpg"
+    assert cv2.imwrite(str(input_path), image)
+
+    monkeypatch.setattr(hybrid_module.cv2, "imwrite", lambda *args, **kwargs: False)
+
+    result = run_hybrid_preprocess(
+        input_path,
+        output_path=output_path,
+        no_yolo=True,
+    )
+
+    assert result["success"] is False
+    assert result["output_path"] is None
+    assert result["write_error"] is not None
+    assert "cv2.imwrite returned False" in result["write_error"]
+
+
+def test_hybrid_without_output_path_succeeds_when_candidate_selected(tmp_path: Path) -> None:
+    image = _synthetic_board_with_text()
+
+    input_path = tmp_path / "synthetic_board.jpg"
+    assert cv2.imwrite(str(input_path), image)
+
+    result = run_hybrid_preprocess(
+        input_path,
+        no_yolo=True,
+    )
+
+    assert result["success"] is True
+    assert result["output_path"] is None
+    assert result["write_error"] is None
 
 
 def test_reusable_hybrid_preprocessor_no_yolo(tmp_path: Path) -> None:
