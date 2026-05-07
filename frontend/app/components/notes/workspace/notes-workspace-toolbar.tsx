@@ -1,10 +1,10 @@
 import React from 'react';
 import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { InkTool } from '../ui-types';
+import { InkTool } from '../../../ui-types';
 import { useDesktopNotesWorkspaceContext } from './notes-workspace-context';
-import { DocumentPageView } from '../types';
-import { getDocumentPageLabel, isSameDocumentPage } from '../ui-helpers';
+import { DocumentPageView } from '../../../types';
+import { getDocumentPageLabel, isSameDocumentPage } from '../../../ui-helpers';
 
 const PRIMARY_TOOLS: Array<{
   value: InkTool;

@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { Image, Platform, Pressable, Share, StatusBar as NativeStatusBar, Text, useWindowDimensions, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import { Sidebar, TabIcon } from '../components/navigation';
+import { Sidebar, TabIcon } from '../components/navigation/navigation';
 import { useCaptureWorkspace } from '../hooks/use-capture-workspace';
 import { useStudyWorkspace } from '../hooks/use-study-workspace';
 import { useScheduleState } from '../hooks/use-schedule-state';

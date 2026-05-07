@@ -4,9 +4,9 @@ import { PanResponder, useWindowDimensions, View } from 'react-native';
 import Pdf from 'react-native-pdf';
 import Svg, { Path } from 'react-native-svg';
 import { captureRef } from 'react-native-view-shot';
-import { TextAnnotationLayer } from './text-annotation-layer';
-import { findHitInkStrokeId, getInkStrokeSvgPath, resolveInkStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize } from '../ui-helpers';
-import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../ui-types';
+import { TextAnnotationLayer } from '../canvas/text-annotation-layer';
+import { findHitInkStrokeId, getInkStrokeSvgPath, resolveInkStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize } from '../../../ui-helpers';
+import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 
 export function PdfPreview(props: {
   file: number | string | { uri: string };

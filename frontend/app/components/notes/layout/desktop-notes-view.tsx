@@ -1,18 +1,18 @@
 import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Image, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
-import { subjects as allSubjects } from '../data';
-import { useDesktopNotesWorkspaceViewModel } from '../hooks/use-desktop-notes-workspace-view-model';
-import { buildAiResponse, NoteSummaryContent } from './notes-shared';
-import { NotesAiAssistantPanel } from './notes-ai-assistant-panel';
-import { NotesDocumentViewer } from './notes-document-viewer';
-import { NotesWorkspaceToolbar, NotesPageListOverlay } from './notes-workspace-toolbar';
-import { NotesWorkspaceDock } from './notes-workspace-dock';
+import { subjects as allSubjects } from '../../../data';
+import { useDesktopNotesWorkspaceViewModel } from '../../../hooks/use-desktop-notes-workspace-view-model';
+import { buildAiResponse, NoteSummaryContent } from '../shared/notes-shared';
+import { NotesAiAssistantPanel } from '../ai/notes-ai-assistant-panel';
+import { NotesDocumentViewer } from '../workspace/notes-document-viewer';
+import { NotesWorkspaceToolbar, NotesPageListOverlay } from '../workspace/notes-workspace-toolbar';
+import { NotesWorkspaceDock } from '../workspace/notes-workspace-dock';
 import { NotesDetailHeader } from './notes-detail-header';
 import { NotesBrowser } from './notes-browser';
-import { DesktopNotesWorkspaceProvider } from './notes-workspace-context';
-import type { MockAiAnswer } from '../services/mock-ai-service';
-import type { BackendChatMessage, BackendChatSession } from '../services/backend-api';
+import { DesktopNotesWorkspaceProvider } from '../workspace/notes-workspace-context';
+import type { MockAiAnswer } from '../../../services/mock-ai-service';
+import type { BackendChatMessage, BackendChatSession } from '../../../services/backend-api';
 import {
   CaptureAsset,
   BookmarkedPage,
@@ -23,8 +23,8 @@ import {
   StudyDocumentEntry,
   Subject,
   WorkspaceAttachment,
-} from '../types';
-import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../ui-types';
+} from '../../../types';
+import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 
 export type DesktopNotesViewProps = {
   compact: boolean;

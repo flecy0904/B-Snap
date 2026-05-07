@@ -1,7 +1,7 @@
 import React from 'react';
 import { Pressable, Text, View } from 'react-native';
-import { DAY_LABEL, DAYS } from '../ui-helpers';
-import type { SemesterSchedule, Subject, TimetableEntry } from '../types';
+import { DAY_LABEL, DAYS } from '../../ui-helpers';
+import type { SemesterSchedule, Subject, TimetableEntry } from '../../types';
 
 const FALLBACK_SUBJECT_STYLE = {
   bgColor: '#E8ECF4',

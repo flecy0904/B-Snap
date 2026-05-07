@@ -1,8 +1,8 @@
 import React, { memo } from 'react';
 import { Text, View } from 'react-native';
 import { Path } from 'react-native-svg';
-import { NoteEntry, NoteSummarySection, Subject } from '../types';
-import { InkPoint, InkStroke, SelectionRect } from '../ui-types';
+import { NoteEntry, NoteSummarySection, Subject } from '../../../types';
+import { InkPoint, InkStroke, SelectionRect } from '../../../ui-types';
 
 /**
  * Converts a set of points into a smooth SVG path string using Quadratic Bezier curves.

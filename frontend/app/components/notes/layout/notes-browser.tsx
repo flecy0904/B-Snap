@@ -1,9 +1,9 @@
 import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Image, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
-import { subjects as allSubjects } from '../data';
-import { NoteEntry, NoteWorkspaceMode, StudyDocumentEntry, Subject } from '../types';
-import { darkenHex } from '../ui-helpers';
+import { subjects as allSubjects } from '../../../data';
+import { NoteEntry, NoteWorkspaceMode, StudyDocumentEntry, Subject } from '../../../types';
+import { darkenHex } from '../../../ui-helpers';
 
 export type NotesBrowserProps = {
   styles: any;

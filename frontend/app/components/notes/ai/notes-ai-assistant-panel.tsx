@@ -1,7 +1,7 @@
 import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { ActivityIndicator, Animated, Image, LayoutChangeEvent, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
-import { useDesktopNotesWorkspaceContext } from './notes-workspace-context';
+import { useDesktopNotesWorkspaceContext } from '../workspace/notes-workspace-context';
 
 export function NotesAiAssistantPanel() {
   const workspace = useDesktopNotesWorkspaceContext();

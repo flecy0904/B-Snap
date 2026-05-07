@@ -1,6 +1,6 @@
 import React from 'react';
 import { Pressable, Text, View } from 'react-native';
-import { TabKey } from '../types';
+import { TabKey } from '../../types';
 
 const TABS: TabKey[] = ['schedule', 'notes', 'capture', 'profile'];
 const TAB_META: Record<TabKey, { label: string; hint: string }> = {

@@ -1,7 +1,7 @@
 import React from 'react';
 import { Pressable, Text, TextInput, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { InkTextAnnotation } from '../ui-types';
+import { InkTextAnnotation } from '../../../ui-types';
 
 export function TextAnnotationLayer(props: {
   annotations: InkTextAnnotation[];

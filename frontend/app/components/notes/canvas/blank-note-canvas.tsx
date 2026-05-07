@@ -4,8 +4,8 @@ import { GestureResponderEvent, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { captureRef } from 'react-native-view-shot';
 import { TextAnnotationLayer } from './text-annotation-layer';
-import { findHitInkStrokeId, getInkStrokeSvgPath, resolveInkStrokeAppearance } from '../ui-helpers';
-import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../ui-types';
+import { findHitInkStrokeId, getInkStrokeSvgPath, resolveInkStrokeAppearance } from '../../../ui-helpers';
+import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 
 type ResponderNativeEvent = GestureResponderEvent['nativeEvent'] & {
   buttons?: number;

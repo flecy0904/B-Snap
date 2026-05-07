@@ -1,8 +1,8 @@
 import React from 'react';
-import type { MockAiAnswer } from '../services/mock-ai-service';
-import type { BackendChatMessage, BackendChatSession } from '../services/backend-api';
-import { NoteSummarySection, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, StudyDocumentEntry, WorkspaceAttachment } from '../types';
-import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../ui-types';
+import type { MockAiAnswer } from '../../../services/mock-ai-service';
+import type { BackendChatMessage, BackendChatSession } from '../../../services/backend-api';
+import { NoteSummarySection, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, StudyDocumentEntry, WorkspaceAttachment } from '../../../types';
+import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 
 export type DesktopNotesWorkspaceContextValue = {
   styles: any;

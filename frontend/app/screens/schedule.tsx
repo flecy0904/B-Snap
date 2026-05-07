@@ -1,6 +1,6 @@
 import React from 'react';
-import { DesktopScheduleView } from '../components/desktop-schedule-view';
-import { MobileScheduleView } from '../components/mobile-schedule-view';
+import { DesktopScheduleView } from '../components/schedule/desktop-schedule-view';
+import { MobileScheduleView } from '../components/schedule/mobile-schedule-view';
 import type { SemesterSchedule, Subject, TimetableSlotInput } from '../types';
 
 export interface MobileScheduleProps {

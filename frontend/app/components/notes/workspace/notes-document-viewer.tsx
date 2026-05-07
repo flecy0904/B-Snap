@@ -1,8 +1,8 @@
 import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { ActivityIndicator, Image, Pressable, ScrollView, Text, View } from 'react-native';
-import { BlankNoteCanvas } from './blank-note-canvas';
-import { PdfPreview } from './pdf-preview';
+import { BlankNoteCanvas } from '../canvas/blank-note-canvas';
+import { PdfPreview } from '../pdf/pdf-preview';
 import { useDesktopNotesWorkspaceContext } from './notes-workspace-context';
 
 export const NotesDocumentViewer = React.memo(function NotesDocumentViewer() {

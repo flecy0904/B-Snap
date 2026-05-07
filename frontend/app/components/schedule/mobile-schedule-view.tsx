@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 import { Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
-import { GearIcon } from './navigation';
-import type { MobileScheduleProps } from '../screens/schedule';
-import { visibleHours } from '../ui-helpers';
+import { GearIcon } from '../navigation/navigation';
+import type { MobileScheduleProps } from '../../screens/schedule';
+import { visibleHours } from '../../ui-helpers';
 import { MobileTimetableCard } from './schedule-shared';
-import type { TimetableSlotInput } from '../types';
+import type { TimetableSlotInput } from '../../types';
 
 const DAYS_OPTIONS = [
   { id: 'MON', label: '월' },
