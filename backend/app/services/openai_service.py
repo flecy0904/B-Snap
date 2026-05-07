@@ -61,8 +61,25 @@ def generate_note_chat_answer(
     messages: list[dict],
     user_content: str,
 ) -> str:
+    return generate_text_response(
+        model=model,
+        instructions=NOTE_CHAT_INSTRUCTIONS,
+        input_items=build_response_input(note, pages, messages, user_content),
+    )
+
+
+def generate_text_response(
+    *,
+    model: str,
+    instructions: str,
+    input_items: list[dict[str, str]],
+    allow_mock: bool = False,
+    mock_response: str | None = None,
+) -> str:
     settings = get_settings()
     if not settings.openai_api_key or settings.openai_api_key == "your_openai_api_key_here":
+        if allow_mock and mock_response is not None:
+            return mock_response
         raise HTTPException(status_code=503, detail="OPENAI_API_KEY is not configured")
 
     client = OpenAI(api_key=settings.openai_api_key)
@@ -70,8 +87,8 @@ def generate_note_chat_answer(
     try:
         response = client.responses.create(
             model=model,
-            instructions=NOTE_CHAT_INSTRUCTIONS,
-            input=build_response_input(note, pages, messages, user_content),
+            instructions=instructions,
+            input=input_items,
         )
     except OpenAIError as exc:
         raise HTTPException(status_code=502, detail="OpenAI request failed") from exc
