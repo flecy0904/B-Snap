@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class ChatSessionCreate(BaseModel):
@@ -33,6 +33,8 @@ class ChatMessageCreate(BaseModel):
 class ChatAiMessageCreate(BaseModel):
     content: str
     model: str | None = None
+    use_rag: bool = False
+    top_k: int = Field(default=5, ge=1, le=20)
 
 
 class ChatMessageRead(BaseModel):

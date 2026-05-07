@@ -16,6 +16,7 @@ from backend.app.schemas.chats import (
     ChatSessionUpdate,
 )
 from backend.app.services.openai_service import generate_note_chat_answer
+from backend.app.services.rag_service import ask_with_rag, load_note_documents
 
 
 router = APIRouter(tags=["chats"])
@@ -183,13 +184,22 @@ def create_ai_chat_message(
     )
     model = payload.model or session.get("model") or get_settings().openai_default_model
 
-    answer = generate_note_chat_answer(
-        model=model,
-        note=note,
-        pages=pages,
-        messages=previous_messages,
-        user_content=payload.content,
-    )
+    if payload.use_rag:
+        documents = load_note_documents(connection, note_ids=[session["note_id"]])
+        answer = ask_with_rag(
+            question=payload.content,
+            documents=documents,
+            top_k=payload.top_k,
+            model=model,
+        ).answer
+    else:
+        answer = generate_note_chat_answer(
+            model=model,
+            note=note,
+            pages=pages,
+            messages=previous_messages,
+            user_content=payload.content,
+        )
     user_message = execute_returning(
         connection,
         """
