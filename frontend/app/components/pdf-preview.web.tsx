@@ -23,10 +23,12 @@ type PdfJsDocument = {
   destroy?: () => void;
 };
 
+type PdfJsDocumentSource = string | { url: string; withCredentials?: boolean; disableWorker?: boolean } | { data: Uint8Array; disableWorker?: boolean };
+
 type PdfJsLib = {
   version: string;
   GlobalWorkerOptions: { workerSrc: string };
-  getDocument: (source: string | { url: string; withCredentials?: boolean }) => { promise: Promise<PdfJsDocument>; destroy?: () => void };
+  getDocument: (source: PdfJsDocumentSource) => { promise: Promise<PdfJsDocument>; destroy?: () => void };
 };
 
 type PageFrame = { x: number; y: number; width: number; height: number };
@@ -84,6 +86,39 @@ function loadPdfJs(): Promise<PdfJsLib> {
   return pdfJsLoaderPromise;
 }
 
+function dataUriToBytes(uri: string) {
+  const base64 = uri.includes(',') ? uri.slice(uri.indexOf(',') + 1) : uri;
+  const binary = window.atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let index = 0; index < binary.length; index += 1) {
+    bytes[index] = binary.charCodeAt(index);
+  }
+  return bytes;
+}
+
+function createPdfDocumentSource(uri: string): PdfJsDocumentSource {
+  if (uri.startsWith('data:application/pdf')) {
+    return { data: dataUriToBytes(uri), disableWorker: true };
+  }
+  return { url: uri, withCredentials: false, disableWorker: true };
+}
+
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string) {
+  return new Promise<T>((resolve, reject) => {
+    const timer = window.setTimeout(() => reject(new Error(message)), timeoutMs);
+    promise.then(
+      (value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      (error) => {
+        window.clearTimeout(timer);
+        reject(error);
+      },
+    );
+  });
+}
+
 export function PdfPreview(props: {
   file: number | string | { uri: string };
   page: number;
@@ -100,6 +135,7 @@ export function PdfPreview(props: {
   onUpdateTextAnnotation: (id: string, text: string) => void;
   onRemoveTextAnnotation: (id: string) => void;
   onSelectionChange: (rect: SelectionRect | null) => void;
+  onSelectionPreviewChange?: (uri: string | null) => void;
   onPageChanged?: (page: number) => void;
   onDocumentLoaded?: (pageCount: number) => void;
   styles: any;
@@ -171,6 +207,96 @@ export function PdfPreview(props: {
     };
   };
 
+  const drawPath = (context: CanvasRenderingContext2D, stroke: InkStroke, opacity = 1) => {
+    const path = getInkStrokeSvgPath(stroke);
+    if (!path || typeof Path2D === 'undefined') return;
+    context.save();
+    context.globalAlpha = opacity;
+    context.fillStyle = stroke.color;
+    context.fill(new Path2D(path));
+    context.restore();
+  };
+
+  const drawTextAnnotation = (context: CanvasRenderingContext2D, annotation: InkTextAnnotation) => {
+    context.save();
+    context.font = '700 12px sans-serif';
+    context.textBaseline = 'top';
+
+    if (props.textAnnotationVariant === 'marker' && annotation.anchorRect) {
+      context.strokeStyle = 'rgba(95, 121, 255, 0.58)';
+      context.lineWidth = 1;
+      context.setLineDash([5, 4]);
+      context.strokeRect(annotation.anchorRect.x, annotation.anchorRect.y, annotation.anchorRect.width, annotation.anchorRect.height);
+
+      const markerX = annotation.anchorRect.x + annotation.anchorRect.width - 12;
+      const markerY = Math.max(12, annotation.anchorRect.y - 12);
+      context.setLineDash([]);
+      context.fillStyle = '#5F79FF';
+      context.beginPath();
+      context.roundRect(markerX, markerY, 48, 22, 11);
+      context.fill();
+      context.fillStyle = '#FFFFFF';
+      context.fillText(annotation.text.trim() ? '메모' : '새 메모', markerX + 9, markerY + 5);
+      context.restore();
+      return;
+    }
+
+    const width = annotation.width || 180;
+    const height = Math.max(48, 30 + Math.ceil((annotation.text.length || 1) / 18) * 18);
+    context.fillStyle = '#FFFFFF';
+    context.strokeStyle = '#DDE3EC';
+    context.lineWidth = 1;
+    context.beginPath();
+    context.roundRect(annotation.x, annotation.y, width, height, 12);
+    context.fill();
+    context.stroke();
+    context.fillStyle = '#303744';
+    const lines = (annotation.text || '텍스트 메모 입력').split(/\s+/).reduce<string[]>((rows, word) => {
+      const current = rows[rows.length - 1] ?? '';
+      const next = current ? `${current} ${word}` : word;
+      if (context.measureText(next).width > width - 24 && current) {
+        rows.push(word);
+      } else if (rows.length) {
+        rows[rows.length - 1] = next;
+      } else {
+        rows.push(next);
+      }
+      return rows;
+    }, []);
+    lines.slice(0, 4).forEach((line, index) => context.fillText(line, annotation.x + 12, annotation.y + 12 + index * 17));
+    context.restore();
+  };
+
+  const buildSelectionPreview = (rect: SelectionRect | null) => {
+    const sourceCanvas = canvasRef.current;
+    if (!rect || !sourceCanvas || !pageFrame) return null;
+    const deviceScale = sourceCanvas.width / pageFrame.width;
+    const cropCanvas = document.createElement('canvas');
+    cropCanvas.width = Math.max(1, Math.floor(rect.width * deviceScale));
+    cropCanvas.height = Math.max(1, Math.floor(rect.height * deviceScale));
+    const context = cropCanvas.getContext('2d');
+    if (!context) return null;
+    context.drawImage(
+      sourceCanvas,
+      Math.floor(rect.x * deviceScale),
+      Math.floor(rect.y * deviceScale),
+      cropCanvas.width,
+      cropCanvas.height,
+      0,
+      0,
+      cropCanvas.width,
+      cropCanvas.height,
+    );
+    context.save();
+    context.scale(deviceScale, deviceScale);
+    context.translate(-rect.x, -rect.y);
+    pageInkStrokesForView.filter((stroke) => stroke.style === 'highlight').forEach((stroke) => drawPath(context, stroke, 0.72));
+    pageTextAnnotationsForView.forEach((annotation) => drawTextAnnotation(context, annotation));
+    pageInkStrokesForView.filter((stroke) => stroke.style !== 'highlight').forEach((stroke) => drawPath(context, stroke));
+    context.restore();
+    return cropCanvas.toDataURL('image/png');
+  };
+
   useEffect(() => {
     let cancelled = false;
     let task: { promise: Promise<PdfJsDocument>; destroy?: () => void } | null = null;
@@ -189,8 +315,8 @@ export function PdfPreview(props: {
       .then((pdfjsLib) => {
         if (cancelled) return null;
         pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
-        task = pdfjsLib.getDocument({ url: pdfUri, withCredentials: false });
-        return task.promise;
+        task = pdfjsLib.getDocument(createPdfDocumentSource(pdfUri));
+        return withTimeout(task.promise, 12000, 'PDF document load timed out.');
       })
       .then((document) => {
         if (!document || cancelled) return;
@@ -213,7 +339,7 @@ export function PdfPreview(props: {
       cancelled = true;
       task?.destroy?.();
     };
-  }, [pdfUri, props.onPageChanged, props.page]);
+  }, [pdfUri, props.page]);
 
   useEffect(() => {
     let cancelled = false;
@@ -221,6 +347,8 @@ export function PdfPreview(props: {
 
     if (!pdfDocument || !canvasRef.current) {
       setPageFrame(null);
+      props.onSelectionPreviewChange?.(null);
+      setIsLoading(false);
       return;
     }
 
@@ -257,7 +385,7 @@ export function PdfPreview(props: {
         });
 
         renderTask = page.render({ canvasContext: context, viewport });
-        return renderTask.promise;
+        return withTimeout(renderTask.promise, 12000, 'PDF page render timed out.');
       })
       .then(() => {
         if (cancelled) return;
@@ -346,6 +474,7 @@ export function PdfPreview(props: {
 
     if (props.inkTool === 'select') {
       props.onSelectionChange(null);
+      props.onSelectionPreviewChange?.(null);
       selectionOriginRef.current = point;
       const rect = { x: point.x, y: point.y, width: 0, height: 0, pageWidth: point.pageWidth, pageHeight: point.pageHeight };
       draftSelectionRef.current = rect;
@@ -387,7 +516,10 @@ export function PdfPreview(props: {
   const finishSelection = () => {
     if (props.inkTool === 'select') {
       const rect = draftSelectionRef.current;
-      if (rect && rect.width > 24 && rect.height > 24) props.onSelectionChange(rect);
+      if (rect && rect.width > 24 && rect.height > 24) {
+        props.onSelectionChange(rect);
+        props.onSelectionPreviewChange?.(buildSelectionPreview(rect));
+      }
       draftSelectionRef.current = null;
       selectionOriginRef.current = null;
       setDraftSelection(null);

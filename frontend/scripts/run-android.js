@@ -27,11 +27,12 @@ env.Path = pathParts.join(path.delimiter);
 env.PATH = env.Path;
 
 function run(command, args, options = {}) {
+  const useShell = process.platform === "win32" && command.endsWith(".cmd");
   return spawnSync(command, args, {
     cwd: frontendDir,
     env,
     stdio: "inherit",
-    shell: false,
+    shell: useShell,
     ...options,
   });
 }

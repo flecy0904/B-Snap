@@ -20,6 +20,7 @@ export type PersistedStudyWorkspaceState = {
   currentPdfPageByDocument: Record<number, number>;
   activePageByDocument: Record<number, DocumentPageView>;
   bookmarksByDocument: Record<number, BookmarkedPage[]>;
+  lastChatSessionByDocument?: Record<number, number>;
 };
 
 export type PersistedScheduleWorkspaceState = {
@@ -64,6 +65,7 @@ export function buildEmptyStudyWorkspaceState(): PersistedStudyWorkspaceState {
     currentPdfPageByDocument: {},
     activePageByDocument: {},
     bookmarksByDocument: {},
+    lastChatSessionByDocument: {},
   };
 }
 
