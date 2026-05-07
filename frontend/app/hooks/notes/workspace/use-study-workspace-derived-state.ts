@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
-import { notes, studyDocuments, subjects as fallbackSubjects } from '../../data';
-import { isSameDocumentPage } from '../../ui-helpers';
-import type { InkStroke, InkTextAnnotation, SelectionRect } from '../../ui-types';
+import { notes, studyDocuments, subjects as fallbackSubjects } from '../../../data';
+import { isSameDocumentPage } from '../../../ui-helpers';
+import type { InkStroke, InkTextAnnotation, SelectionRect } from '../../../ui-types';
 import type {
   BookmarkedPage,
   CaptureAsset,
@@ -11,7 +11,7 @@ import type {
   StudyDocumentEntry,
   Subject,
   WorkspaceAttachment,
-} from '../../types';
+} from '../../../types';
 import { buildDocumentPageSequence, filterNotesByQuery, filterStudyDocumentsByQuery } from './helpers';
 
 export function useStudyWorkspaceDerivedState(params: {

@@ -1,7 +1,7 @@
 import React from 'react';
-import { resolvePreviewImage } from '../mock-preview-images';
-import { CaptureAsset, DocumentPageView, GeneratedWorkspacePage, StudyDocumentEntry, WorkspaceAttachment } from '../types';
-import { InkTextAnnotation } from '../ui-types';
+import { resolvePreviewImage } from '../../mock-preview-images';
+import { CaptureAsset, DocumentPageView, GeneratedWorkspacePage, StudyDocumentEntry, WorkspaceAttachment } from '../../types';
+import { InkTextAnnotation } from '../../ui-types';
 
 type SelectedPreview = { source: 'incoming' | 'attachment' | 'inbox'; assetId: string } | null;
 

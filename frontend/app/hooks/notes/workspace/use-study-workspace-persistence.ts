@@ -3,7 +3,7 @@ import {
   loadStudyWorkspaceState,
   saveStudyWorkspaceState,
   type PersistedStudyWorkspaceState,
-} from '../../storage/local-workspace-store';
+} from '../../../storage/local-workspace-store';
 
 export function useStudyWorkspacePersistence({
   state,

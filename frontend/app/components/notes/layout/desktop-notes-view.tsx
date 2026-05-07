@@ -2,7 +2,7 @@ import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Image, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { subjects as allSubjects } from '../../../data';
-import { useDesktopNotesWorkspaceViewModel } from '../../../hooks/use-desktop-notes-workspace-view-model';
+import { useDesktopNotesWorkspaceViewModel } from '../../../hooks/notes/use-desktop-notes-workspace-view-model';
 import { buildAiResponse, NoteSummaryContent } from '../shared/notes-shared';
 import { NotesAiAssistantPanel } from '../ai/notes-ai-assistant-panel';
 import { NotesDocumentViewer } from '../workspace/notes-document-viewer';

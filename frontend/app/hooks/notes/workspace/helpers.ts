@@ -1,5 +1,5 @@
-import { notes } from '../../data';
-import type { CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NoteEntry, NoteSummarySection, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../types';
+import { notes } from '../../../data';
+import type { CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NoteEntry, NoteSummarySection, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../../types';
 
 export const PEN_BRUSH_COLORS = ['#1F2937', '#2563EB', '#7C3AED', '#D9485F', '#F59E0B', '#16A34A'] as const;
 export const HIGHLIGHT_BRUSH_COLORS = ['#FDE047', '#FB7185', '#86EFAC', '#67E8F9', '#FDBA74'] as const;

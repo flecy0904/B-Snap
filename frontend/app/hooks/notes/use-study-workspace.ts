@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Platform } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
-import { notes } from '../data';
-import type { MockAiAnswer } from '../services/mock-ai-service';
+import { notes } from '../../data';
+import type { MockAiAnswer } from '../../services/mock-ai-service';
 import {
   createBackendNote,
   createBackendNotePage,
@@ -19,12 +19,12 @@ import {
   updateBackendNotePage,
   type BackendChatSession,
   type BackendChatMessage,
-} from '../services/backend-api';
+} from '../../services/backend-api';
 import {
   buildEmptyStudyWorkspaceState,
   clearStudyWorkspaceState,
   type PersistedStudyWorkspaceState,
-} from '../storage/local-workspace-store';
+} from '../../storage/local-workspace-store';
 import {
   DEFAULT_HIGHLIGHT_COLOR,
   DEFAULT_PEN_COLOR,
@@ -32,20 +32,20 @@ import {
   PEN_BRUSH_COLORS,
   buildGeneratedSummary,
   buildWorkspaceAttachment,
-} from './study-workspace/helpers';
-import { getAiBackendErrorMessage } from './study-workspace/ai/ai-errors';
-import { useAiChatActions } from './study-workspace/ai/use-ai-chat-actions';
-import { useAiChatDerivedState } from './study-workspace/ai/use-ai-chat-derived-state';
-import { addUniqueId, removeId, upsertStudyDocument } from './study-workspace/document/collection-helpers';
-import { useDocumentPageActions } from './study-workspace/document/use-document-page-actions';
-import { confirmDeleteAction } from './study-workspace/ui/confirm-delete-action';
-import { useInkActions } from './study-workspace/ink/use-ink-actions';
-import { parseNotePageContent, serializeNotePageContent } from './study-workspace/document/note-page-content';
-import { useIncomingAssetSubscription } from './study-workspace/use-incoming-asset-subscription';
-import { useStudyWorkspaceDerivedState } from './study-workspace/use-study-workspace-derived-state';
-import { useStudyWorkspacePersistence } from './study-workspace/use-study-workspace-persistence';
-import type { InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../ui-types';
-import type { BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NoteWorkspaceMode, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../types';
+} from './workspace/helpers';
+import { getAiBackendErrorMessage } from './ai/ai-errors';
+import { useAiChatActions } from './ai/use-ai-chat-actions';
+import { useAiChatDerivedState } from './ai/use-ai-chat-derived-state';
+import { addUniqueId, removeId, upsertStudyDocument } from './document/collection-helpers';
+import { useDocumentPageActions } from './document/use-document-page-actions';
+import { confirmDeleteAction } from './ui/confirm-delete-action';
+import { useInkActions } from './ink/use-ink-actions';
+import { parseNotePageContent, serializeNotePageContent } from './document/note-page-content';
+import { useIncomingAssetSubscription } from './workspace/use-incoming-asset-subscription';
+import { useStudyWorkspaceDerivedState } from './workspace/use-study-workspace-derived-state';
+import { useStudyWorkspacePersistence } from './workspace/use-study-workspace-persistence';
+import type { InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../ui-types';
+import type { BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NoteWorkspaceMode, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../types';
 
 export function useStudyWorkspace(props: {
   wide: boolean;

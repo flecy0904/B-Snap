@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
-import { subjects as fallbackSubjects } from '../data';
-import { createCaptureAsset, createMockCaptureAsset, useSyncBridge } from './use-sync-bridge';
-import type { CaptureAsset, CaptureAssetType, Subject } from '../types';
-import { buildEmptyStudyWorkspaceState, loadStudyWorkspaceState, saveStudyWorkspaceState } from '../storage/local-workspace-store';
+import { subjects as fallbackSubjects } from '../../data';
+import { createCaptureAsset, createMockCaptureAsset, useSyncBridge } from '../use-sync-bridge';
+import type { CaptureAsset, CaptureAssetType, Subject } from '../../types';
+import { buildEmptyStudyWorkspaceState, loadStudyWorkspaceState, saveStudyWorkspaceState } from '../../storage/local-workspace-store';
 
 export function useCaptureWorkspace(props: {
   subjectId: number;

@@ -1,6 +1,6 @@
 import { useEffect, type Dispatch, type SetStateAction } from 'react';
-import type { CaptureAsset, NoteWorkspaceMode } from '../../types';
-import { useSyncBridge } from '../use-sync-bridge';
+import type { CaptureAsset, NoteWorkspaceMode } from '../../../types';
+import { useSyncBridge } from '../../use-sync-bridge';
 
 export function useIncomingAssetSubscription(params: {
   noteWorkspaceMode: NoteWorkspaceMode;

@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from 'react';
-import { semesterSchedules as fallbackSchedules, subjects as fallbackSubjects } from '../data';
-import { currentSubjectId } from '../ui-helpers';
-import { loadScheduleWorkspaceState, saveScheduleWorkspaceState } from '../storage/local-workspace-store';
-import { Subject, SemesterSchedule, TimetableDay, TimetableEntry, TimetableSlotInput } from '../types';
+import { semesterSchedules as fallbackSchedules, subjects as fallbackSubjects } from '../../data';
+import { currentSubjectId } from '../../ui-helpers';
+import { loadScheduleWorkspaceState, saveScheduleWorkspaceState } from '../../storage/local-workspace-store';
+import { Subject, SemesterSchedule, TimetableDay, TimetableEntry, TimetableSlotInput } from '../../types';
 
 const SUBJECT_PALETTE = [
   { color: '#C98F84', bgColor: '#F2CFC8', textColor: '#8F5B52' },
