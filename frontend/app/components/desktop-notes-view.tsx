@@ -12,6 +12,7 @@ import { NotesDetailHeader } from './notes-detail-header';
 import { NotesBrowser } from './notes-browser';
 import { DesktopNotesWorkspaceProvider } from './notes-workspace-context';
 import type { MockAiAnswer } from '../services/mock-ai-service';
+import type { BackendChatMessage, BackendChatSession } from '../services/backend-api';
 import {
   CaptureAsset,
   BookmarkedPage,
@@ -46,6 +47,12 @@ export type DesktopNotesViewProps = {
   selectionRect: SelectionRect | null;
   aiQuestion: string;
   aiAnswer: MockAiAnswer | null;
+  aiMessages: BackendChatMessage[];
+  aiChatSessions: BackendChatSession[];
+  noteAiChatSessions: BackendChatSession[];
+  allAiChatSessions: BackendChatSession[];
+  aiChatScope: 'note' | 'all';
+  activeAiChatSessionId: number | null;
   aiLoading: boolean;
   aiError: string | null;
   incomingAssetSuggestion: CaptureAsset | null;
@@ -73,6 +80,9 @@ export type DesktopNotesViewProps = {
   onChangePenWidth: (width: number) => void;
   onToggleAiPanel: () => void;
   onChangeAiQuestion: (value: string) => void;
+  onChangeAiChatScope: (scope: 'note' | 'all') => void;
+  onSelectAiChatSession: (sessionId: number) => void;
+  onCreateAiChatSession: () => void;
   onRequestAiAnswer: () => void;
   onInsertAiAnswerPage: () => void;
   onSelectionChange: (rect: SelectionRect | null) => void;
@@ -202,6 +212,12 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           aiResponse,
           aiResponseSections,
           aiAnswer: props.aiAnswer,
+          aiMessages: props.aiMessages,
+          aiChatSessions: props.aiChatSessions,
+          noteAiChatSessions: props.noteAiChatSessions,
+          allAiChatSessions: props.allAiChatSessions,
+          aiChatScope: props.aiChatScope,
+          activeAiChatSessionId: props.activeAiChatSessionId,
           aiLoading: props.aiLoading,
           aiError: props.aiError,
           inkTool: props.inkTool,
@@ -235,6 +251,9 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           activeGeneratedPreviewImage: workspace.activeGeneratedPreviewImage,
           onToggleAiPanel: props.onToggleAiPanel,
           onChangeAiQuestion: props.onChangeAiQuestion,
+          onChangeAiChatScope: props.onChangeAiChatScope,
+          onSelectAiChatSession: props.onSelectAiChatSession,
+          onCreateAiChatSession: props.onCreateAiChatSession,
           onRequestAiAnswer: props.onRequestAiAnswer,
           onInsertAiAnswerPage: props.onInsertAiAnswerPage,
           onGoToPreviousDocumentPage: props.onGoToPreviousDocumentPage,

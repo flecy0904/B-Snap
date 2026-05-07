@@ -12,6 +12,8 @@ function normalizeBackendHttpUrl(value?: string) {
   }
 }
 
+const DEFAULT_BACKEND_HTTP_URL = 'http://localhost:8000';
+
 export function resolveBackendHttpUrl() {
-  return normalizeBackendHttpUrl(process.env.EXPO_PUBLIC_BACKEND_URL);
+  return normalizeBackendHttpUrl(process.env.EXPO_PUBLIC_BACKEND_URL) ?? DEFAULT_BACKEND_HTTP_URL;
 }

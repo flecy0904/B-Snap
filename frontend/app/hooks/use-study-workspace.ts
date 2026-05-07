@@ -4,6 +4,25 @@ import * as DocumentPicker from 'expo-document-picker';
 import { notes } from '../data';
 import { requestMockAiAnswer, type MockAiAnswer } from '../services/mock-ai-service';
 import {
+  createBackendChatSession,
+  createBackendNote,
+  createBackendNotePage,
+  deleteBackendNote,
+  ensureFolderForSubject,
+  isBackendApiEnabled,
+  listAllBackendChatSessions,
+  listBackendChatMessages,
+  listBackendChatSessions,
+  listBackendFolders,
+  listBackendNotePages,
+  listBackendNotes,
+  sendBackendAiMessage,
+  updateBackendNote,
+  updateBackendNotePage,
+  type BackendChatSession,
+  type BackendChatMessage,
+} from '../services/backend-api';
+import {
   buildEmptyStudyWorkspaceState,
   clearStudyWorkspaceState,
   type PersistedStudyWorkspaceState,
@@ -38,6 +57,42 @@ function upsertStudyDocument(documents: StudyDocumentEntry[], nextDocument: Stud
   return documents.map((document) => (
     document.id === nextDocument.id ? nextDocument : document
   ));
+}
+
+type StoredNotePageContent = {
+  kind: 'bsnap-page-state';
+  version: 1;
+  inkStrokes: InkStroke[];
+  textAnnotations: InkTextAnnotation[];
+};
+
+function serializeNotePageContent(params: {
+  inkStrokes: InkStroke[];
+  textAnnotations: InkTextAnnotation[];
+}) {
+  return JSON.stringify({
+    kind: 'bsnap-page-state',
+    version: 1,
+    inkStrokes: params.inkStrokes,
+    textAnnotations: params.textAnnotations,
+  } satisfies StoredNotePageContent);
+}
+
+function parseNotePageContent(content: string | null): StoredNotePageContent | null {
+  if (!content) return null;
+
+  try {
+    const parsed = JSON.parse(content) as Partial<StoredNotePageContent>;
+    if (parsed.kind !== 'bsnap-page-state' || parsed.version !== 1) return null;
+    return {
+      kind: 'bsnap-page-state',
+      version: 1,
+      inkStrokes: Array.isArray(parsed.inkStrokes) ? parsed.inkStrokes : [],
+      textAnnotations: Array.isArray(parsed.textAnnotations) ? parsed.textAnnotations : [],
+    };
+  } catch {
+    return null;
+  }
 }
 
 function confirmDestructiveAction(params: {
@@ -105,6 +160,12 @@ export function useStudyWorkspace(props: {
   const [aiAnswer, setAiAnswer] = useState<MockAiAnswer | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
+  const [chatSessionByDocument, setChatSessionByDocument] = useState<Record<number, number>>({});
+  const [chatSessionsByDocument, setChatSessionsByDocument] = useState<Record<number, BackendChatSession[]>>({});
+  const [allChatSessions, setAllChatSessions] = useState<BackendChatSession[]>([]);
+  const [aiChatScope, setAiChatScope] = useState<'note' | 'all'>('note');
+  const [aiMessagesBySession, setAiMessagesBySession] = useState<Record<number, BackendChatMessage[]>>({});
+  const [backendPageIdsByDocument, setBackendPageIdsByDocument] = useState<Record<number, Record<number, number>>>({});
 
   const {
     availableSubjects,
@@ -201,6 +262,11 @@ export function useStudyWorkspace(props: {
     state: persistedWorkspaceState,
     onHydrate: hydrateWorkspaceState,
   });
+  const activeAiChatSessionId = studyDocumentId ? chatSessionByDocument[studyDocumentId] ?? null : null;
+  const aiMessages = activeAiChatSessionId ? aiMessagesBySession[activeAiChatSessionId] ?? [] : [];
+  const aiChatSessions = studyDocumentId ? chatSessionsByDocument[studyDocumentId] ?? [] : [];
+  const visibleAiChatSessions = aiChatScope === 'all' ? allChatSessions : aiChatSessions;
+  const currentDocumentHasBackendPages = studyDocumentId ? Boolean(backendPageIdsByDocument[studyDocumentId]) : false;
 
   useEffect(() => {
     if (!workspaceFeedback) return;
@@ -226,6 +292,218 @@ export function useStudyWorkspace(props: {
     setIncomingBannerQueue,
     setIncomingAssetSuggestion,
   });
+
+  useEffect(() => {
+    if (!workspaceHydrated || !isBackendApiEnabled()) return;
+
+    let mounted = true;
+
+    const loadBackendDocuments = async () => {
+      try {
+        const [folders, backendNotes] = await Promise.all([
+          listBackendFolders(),
+          listBackendNotes(),
+        ]);
+        const pageIdsByDocument: Record<number, Record<number, number>> = {};
+        const inkByBackendDocument: Record<number, InkStroke[]> = {};
+        const textAnnotationsByBackendDocument: Record<number, InkTextAnnotation[]> = {};
+        const hasStoredPageContentByDocument: Record<number, boolean> = {};
+        const documents = await Promise.all(
+          backendNotes.map(async (backendNote) => {
+            const folder = folders.find((item) => item.id === backendNote.folder_id);
+            const subject = availableSubjects.find((item) => item.name === folder?.name) ?? availableSubjects[0] ?? null;
+            const pages = await listBackendNotePages(backendNote.id);
+            const firstPage = pages[0] ?? null;
+            pageIdsByDocument[backendNote.id] = {};
+            inkByBackendDocument[backendNote.id] = [];
+            textAnnotationsByBackendDocument[backendNote.id] = [];
+            hasStoredPageContentByDocument[backendNote.id] = false;
+
+            pages.forEach((page) => {
+              pageIdsByDocument[backendNote.id][page.page_number] = page.id;
+              const storedPage = parseNotePageContent(page.content);
+              if (!storedPage) return;
+              hasStoredPageContentByDocument[backendNote.id] = true;
+
+              inkByBackendDocument[backendNote.id].push(
+                ...storedPage.inkStrokes.map((stroke) => ({
+                  ...stroke,
+                  generatedPageId: undefined,
+                  pageNumber: page.page_number,
+                })),
+              );
+              textAnnotationsByBackendDocument[backendNote.id].push(
+                ...storedPage.textAnnotations.map((annotation) => ({
+                  ...annotation,
+                  generatedPageId: undefined,
+                  pageNumber: page.page_number,
+                })),
+              );
+            });
+
+            return {
+              id: backendNote.id,
+              subjectId: subject?.id ?? props.initialSubjectId ?? 101,
+              title: backendNote.title,
+              type: firstPage?.image_url ? 'pdf' as const : 'blank' as const,
+              updatedAt: 'DB 저장됨',
+              pageCount: Math.max(1, pages.length),
+              preview: backendNote.summary ?? firstPage?.content ?? '백엔드에 저장된 노트입니다.',
+              file: firstPage?.image_url ? { uri: firstPage.image_url } : undefined,
+            } satisfies StudyDocumentEntry;
+          }),
+        );
+
+        if (!mounted) return;
+        setUserStudyDocuments((current) => {
+          const nextById = new Map<number, StudyDocumentEntry>();
+          [...current, ...documents].forEach((document) => {
+            nextById.set(document.id, document);
+          });
+          return Array.from(nextById.values()).sort((left, right) => right.id - left.id);
+        });
+        setBackendPageIdsByDocument((current) => ({
+          ...current,
+          ...pageIdsByDocument,
+        }));
+        setInkByDocument((current) => {
+          const next = { ...current };
+          Object.entries(inkByBackendDocument).forEach(([documentId, strokes]) => {
+            if (hasStoredPageContentByDocument[Number(documentId)]) next[Number(documentId)] = strokes;
+          });
+          return next;
+        });
+        setTextAnnotationsByDocument((current) => {
+          const next = { ...current };
+          Object.entries(textAnnotationsByBackendDocument).forEach(([documentId, annotations]) => {
+            if (hasStoredPageContentByDocument[Number(documentId)]) next[Number(documentId)] = annotations;
+          });
+          return next;
+        });
+      } catch {
+        if (mounted) {
+          setWorkspaceFeedback('백엔드 노트 목록을 불러오지 못했습니다.');
+        }
+      }
+    };
+
+    void loadBackendDocuments();
+
+    return () => {
+      mounted = false;
+    };
+  }, [availableSubjects, props.initialSubjectId, workspaceHydrated]);
+
+  useEffect(() => {
+    if (!workspaceHydrated || !isBackendApiEnabled()) return;
+
+    const timer = setTimeout(() => {
+      Object.entries(backendPageIdsByDocument).forEach(([documentIdText, pagesByNumber]) => {
+        const documentId = Number(documentIdText);
+        const documentInk = inkByDocument[documentId] ?? [];
+        const documentTextAnnotations = textAnnotationsByDocument[documentId] ?? [];
+
+        Object.entries(pagesByNumber).forEach(([pageNumberText, pageId]) => {
+          const pageNumber = Number(pageNumberText);
+          const pageInkStrokes = documentInk.filter((stroke) => !stroke.generatedPageId && (stroke.pageNumber ?? 1) === pageNumber);
+          const pageTextAnnotations = documentTextAnnotations.filter((annotation) => !annotation.generatedPageId && annotation.pageNumber === pageNumber);
+
+          void updateBackendNotePage({
+            pageId,
+            content: serializeNotePageContent({
+              inkStrokes: pageInkStrokes,
+              textAnnotations: pageTextAnnotations,
+            }),
+          }).catch(() => {
+            setWorkspaceFeedback('필기 저장에 실패했습니다. backend 연결을 확인해주세요.');
+          });
+        });
+      });
+    }, 700);
+
+    return () => clearTimeout(timer);
+  }, [backendPageIdsByDocument, inkByDocument, textAnnotationsByDocument, workspaceHydrated]);
+
+  useEffect(() => {
+    if (!workspaceHydrated || !isBackendApiEnabled() || !studyDocumentId || !currentDocumentHasBackendPages) {
+      return;
+    }
+
+    let mounted = true;
+
+    const loadAiMessages = async () => {
+      try {
+        const [sessions, allSessions] = await Promise.all([
+          listBackendChatSessions(studyDocumentId),
+          listAllBackendChatSessions(),
+        ]);
+        const preferredSessionId = chatSessionByDocument[studyDocumentId];
+        const session = sessions.find((item) => item.id === preferredSessionId) ?? sessions[0] ?? null;
+
+        if (!session) {
+          if (!mounted) return;
+          setAllChatSessions(allSessions);
+          setChatSessionsByDocument((current) => ({ ...current, [studyDocumentId]: [] }));
+          setChatSessionByDocument((current) => {
+            const next = { ...current };
+            delete next[studyDocumentId];
+            return next;
+          });
+          return;
+        }
+
+        const messages = await listBackendChatMessages(session.id);
+        if (!mounted) return;
+
+        setAllChatSessions(allSessions);
+        setChatSessionsByDocument((current) => ({ ...current, [studyDocumentId]: sessions }));
+        setChatSessionByDocument((current) => ({ ...current, [studyDocumentId]: session.id }));
+        setAiMessagesBySession((current) => ({ ...current, [session.id]: messages }));
+
+        const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant');
+        const lastUser = [...messages].reverse().find((message) => message.role === 'user');
+        if (lastAssistant) {
+          setAiAnswer({
+            question: lastUser?.content ?? '이전 질문',
+            response: lastAssistant.content,
+            sections: [{
+              title: 'AI 답변',
+              body: lastAssistant.content,
+            }],
+            createdAt: lastAssistant.created_at,
+          });
+        }
+      } catch {
+        if (mounted) {
+          setAiError('AI 채팅 내역을 불러오지 못했습니다.');
+        }
+      }
+    };
+
+    void loadAiMessages();
+
+    return () => {
+      mounted = false;
+    };
+  }, [currentDocumentHasBackendPages, studyDocumentId, workspaceHydrated]);
+
+  useEffect(() => {
+    if (!workspaceHydrated || !aiPanelOpen || !isBackendApiEnabled()) return;
+
+    let mounted = true;
+
+    listAllBackendChatSessions()
+      .then((sessions) => {
+        if (mounted) setAllChatSessions(sessions);
+      })
+      .catch(() => {
+        if (mounted) setAiError('전체 AI 채팅 목록을 불러오지 못했습니다.');
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [aiPanelOpen, workspaceHydrated]);
 
   const openSubject = (id: number) => {
     props.onOpenNotesTab();
@@ -287,11 +565,49 @@ export function useStudyWorkspace(props: {
     }));
   };
 
-  const createBlankNote = () => {
+  const createBlankNote = async () => {
     const targetSubjectId = subjectId ?? availableSubjects[0]?.id ?? null;
     if (!targetSubjectId) return;
 
     const targetSubject = availableSubjects.find((value) => value.id === targetSubjectId);
+    if (!targetSubject) return;
+
+    if (isBackendApiEnabled()) {
+      try {
+        const folder = await ensureFolderForSubject({ name: targetSubject.name, color: targetSubject.color });
+        const backendNote = await createBackendNote({
+          folderId: folder.id,
+          title: `${targetSubject.name} 새 노트`,
+          summary: '빈 노트',
+        });
+        const backendPage = await createBackendNotePage({
+          noteId: backendNote.id,
+          pageNumber: 1,
+          content: serializeNotePageContent({ inkStrokes: [], textAnnotations: [] }),
+        });
+        setBackendPageIdsByDocument((current) => ({
+          ...current,
+          [backendNote.id]: {
+            ...(current[backendNote.id] ?? {}),
+            1: backendPage.id,
+          },
+        }));
+        const document: StudyDocumentEntry = {
+          id: backendNote.id,
+          subjectId: targetSubjectId,
+          title: backendNote.title,
+          type: 'blank',
+          updatedAt: '방금 전',
+          pageCount: 1,
+          preview: backendNote.summary ?? '새 빈 노트입니다.',
+        };
+        openCreatedStudyDocument(document, '새 빈 노트를 백엔드에 저장했습니다.');
+        return;
+      } catch {
+        setWorkspaceFeedback('백엔드 저장에 실패해 이 기기에만 빈 노트를 만들었습니다.');
+      }
+    }
+
     const document: StudyDocumentEntry = {
       id: Date.now(),
       subjectId: targetSubjectId,
@@ -333,6 +649,11 @@ export function useStudyWorkspace(props: {
       message: `"${target.title}" Note 문서와 이 문서에 남긴 필기를 삭제할까요?`,
       confirmText: '삭제',
       onConfirm: () => {
+    if (isBackendApiEnabled() && backendPageIdsByDocument[id]) {
+      void deleteBackendNote(id).catch(() => {
+        setWorkspaceFeedback('백엔드 노트 삭제에 실패했습니다.');
+      });
+        }
         setDeletedStudyDocumentIds((current) => addUniqueId(current, id));
 
         if (studyDocumentId === id) {
@@ -385,6 +706,11 @@ export function useStudyWorkspace(props: {
       updatedAt: '방금 전',
     }));
     setWorkspaceFeedback('문서 제목을 수정했습니다.');
+    if (isBackendApiEnabled() && backendPageIdsByDocument[id]) {
+      void updateBackendNote({ noteId: id, title: nextTitle }).catch(() => {
+        setWorkspaceFeedback('노트 제목 저장에 실패했습니다. backend 연결을 확인해주세요.');
+      });
+    }
     return true;
   };
 
@@ -406,6 +732,46 @@ export function useStudyWorkspace(props: {
 
       const picked = result.assets[0];
       const targetSubject = availableSubjects.find((value) => value.id === targetSubjectId);
+      if (!targetSubject) return;
+
+      if (isBackendApiEnabled()) {
+        try {
+          const folder = await ensureFolderForSubject({ name: targetSubject.name, color: targetSubject.color });
+          const backendNote = await createBackendNote({
+            folderId: folder.id,
+            title: picked.name || `${targetSubject.name} PDF`,
+            summary: '업로드한 PDF 문서',
+          });
+          const backendPage = await createBackendNotePage({
+            noteId: backendNote.id,
+            pageNumber: 1,
+            content: serializeNotePageContent({ inkStrokes: [], textAnnotations: [] }),
+            imageUrl: picked.uri,
+          });
+          setBackendPageIdsByDocument((current) => ({
+            ...current,
+            [backendNote.id]: {
+              ...(current[backendNote.id] ?? {}),
+              1: backendPage.id,
+            },
+          }));
+          const document: StudyDocumentEntry = {
+            id: backendNote.id,
+            subjectId: targetSubjectId,
+            title: backendNote.title,
+            type: 'pdf',
+            updatedAt: '방금 전',
+            pageCount: 1,
+            preview: backendNote.summary ?? '업로드한 PDF 문서입니다.',
+            file: { uri: picked.uri },
+          };
+          openCreatedStudyDocument(document, 'PDF 파일을 백엔드에 저장했습니다.');
+          return;
+        } catch {
+          setWorkspaceFeedback('백엔드 저장에 실패해 이 기기에만 PDF를 추가했습니다.');
+        }
+      }
+
       const document: StudyDocumentEntry = {
         id: Date.now(),
         subjectId: targetSubjectId,
@@ -730,6 +1096,74 @@ export function useStudyWorkspace(props: {
     }, 1600);
   };
 
+  const selectAiChatSession = async (sessionId: number) => {
+    if (!isBackendApiEnabled()) {
+      setAiAnswer(null);
+      setAiQuestion('');
+      setAiError(null);
+      return;
+    }
+
+    setAiLoading(true);
+    setAiError(null);
+    try {
+      const messages = await listBackendChatMessages(sessionId);
+      setChatSessionByDocument((current) => {
+        const next = { ...current };
+        if (studyDocumentId) next[studyDocumentId] = sessionId;
+        return next;
+      });
+      setAiMessagesBySession((current) => ({ ...current, [sessionId]: messages }));
+
+      const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant');
+      const lastUser = [...messages].reverse().find((message) => message.role === 'user');
+      setAiAnswer(lastAssistant ? {
+        question: lastUser?.content ?? '이전 질문',
+        response: lastAssistant.content,
+        sections: [{
+          title: 'AI 답변',
+          body: lastAssistant.content,
+        }],
+        createdAt: lastAssistant.created_at,
+      } : null);
+    } catch {
+      setAiError('AI 채팅 내역을 불러오지 못했습니다.');
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
+  const createAiChatSession = async () => {
+    if (!studyDocumentId || !isBackendApiEnabled() || !currentDocumentHasBackendPages) {
+      setAiAnswer(null);
+      setAiQuestion('');
+      setAiError(null);
+      return;
+    }
+
+    setAiLoading(true);
+    setAiError(null);
+    try {
+      const session = await createBackendChatSession({
+        noteId: studyDocumentId,
+        title: studyDocument?.title ? `${studyDocument.title} AI 채팅` : 'AI 채팅',
+      });
+      setChatSessionsByDocument((current) => ({
+        ...current,
+        [studyDocumentId]: [session, ...(current[studyDocumentId] ?? [])],
+      }));
+      setAllChatSessions((current) => [session, ...current.filter((item) => item.id !== session.id)]);
+      setChatSessionByDocument((current) => ({ ...current, [studyDocumentId]: session.id }));
+      setAiMessagesBySession((current) => ({ ...current, [session.id]: [] }));
+      setAiAnswer(null);
+      setAiQuestion('');
+    } catch {
+      setAiError('새 AI 채팅을 만들지 못했습니다.');
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
   const requestAiAnswer = async () => {
     if (!studyDocumentId) return;
 
@@ -737,6 +1171,58 @@ export function useStudyWorkspace(props: {
     setAiError(null);
 
     try {
+      if (isBackendApiEnabled() && currentDocumentHasBackendPages) {
+        let sessionId = chatSessionByDocument[studyDocumentId];
+        if (!sessionId) {
+          const session = await createBackendChatSession({
+            noteId: studyDocumentId,
+            title: studyDocument?.title ? `${studyDocument.title} AI 채팅` : 'AI 채팅',
+          });
+          sessionId = session.id;
+          setChatSessionByDocument((current) => ({
+            ...current,
+            [studyDocumentId]: session.id,
+          }));
+          setChatSessionsByDocument((current) => ({
+            ...current,
+            [studyDocumentId]: [session, ...(current[studyDocumentId] ?? [])],
+          }));
+          setAllChatSessions((current) => [session, ...current.filter((item) => item.id !== session.id)]);
+        }
+
+        const response = await sendBackendAiMessage({
+          sessionId,
+          content: aiQuestion.trim() || '현재 페이지를 요약해줘',
+        });
+        const content = response.assistant_message.content;
+        setAiMessagesBySession((current) => ({
+          ...current,
+          [sessionId]: [
+            ...(current[sessionId] ?? []),
+            response.user_message,
+            response.assistant_message,
+          ],
+        }));
+        setAllChatSessions((current) => {
+          const target = current.find((session) => session.id === sessionId);
+          if (!target) return current;
+          return [target, ...current.filter((session) => session.id !== sessionId)];
+        });
+        setAiAnswer({
+          question: aiQuestion.trim() || '현재 페이지를 요약해줘',
+          response: content,
+          sections: [
+            {
+              title: 'AI 답변',
+              body: content,
+              tone: 'highlight',
+            },
+          ],
+          createdAt: response.assistant_message.created_at,
+        });
+        return;
+      }
+
       const answer = await requestMockAiAnswer({
         question: aiQuestion,
         selectionRect,
@@ -803,6 +1289,25 @@ export function useStudyWorkspace(props: {
         ...current,
         [studyDocumentId]: { kind: 'pdf', pageNumber: nextPage },
       }));
+      if (isBackendApiEnabled() && currentDocumentHasBackendPages) {
+        void createBackendNotePage({
+          noteId: studyDocumentId,
+          pageNumber: nextPage,
+          content: serializeNotePageContent({ inkStrokes: [], textAnnotations: [] }),
+        })
+          .then((backendPage) => {
+            setBackendPageIdsByDocument((current) => ({
+              ...current,
+              [studyDocumentId]: {
+                ...(current[studyDocumentId] ?? {}),
+                [nextPage]: backendPage.id,
+              },
+            }));
+          })
+          .catch(() => {
+            setWorkspaceFeedback('새 페이지 저장에 실패했습니다. backend 연결을 확인해주세요.');
+          });
+      }
       setInkTool('pen');
       setWorkspaceFeedback(`${nextPage}페이지를 추가했습니다.`);
       return;
@@ -964,6 +1469,30 @@ export function useStudyWorkspace(props: {
       ...studyDocument,
       pageCount,
     }));
+    if (isBackendApiEnabled() && currentDocumentHasBackendPages) {
+      const existingPages = backendPageIdsByDocument[studyDocumentId] ?? {};
+      for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
+        if (existingPages[pageNumber]) continue;
+
+        void createBackendNotePage({
+          noteId: studyDocumentId,
+          pageNumber,
+          content: serializeNotePageContent({ inkStrokes: [], textAnnotations: [] }),
+        })
+          .then((backendPage) => {
+            setBackendPageIdsByDocument((current) => ({
+              ...current,
+              [studyDocumentId]: {
+                ...(current[studyDocumentId] ?? {}),
+                [pageNumber]: backendPage.id,
+              },
+            }));
+          })
+          .catch(() => {
+            setWorkspaceFeedback('페이지 저장 준비에 실패했습니다. backend 연결을 확인해주세요.');
+          });
+      }
+    }
   };
 
   const clearCurrentSelection = () => {
@@ -1215,6 +1744,12 @@ export function useStudyWorkspace(props: {
     selectionRect,
     aiQuestion,
     aiAnswer,
+    aiMessages,
+    aiChatSessions: visibleAiChatSessions,
+    noteAiChatSessions: aiChatSessions,
+    allAiChatSessions: allChatSessions,
+    aiChatScope,
+    activeAiChatSessionId,
     aiLoading,
     aiError,
     query,
@@ -1263,6 +1798,9 @@ export function useStudyWorkspace(props: {
     changePenWidth,
     toggleAiPanel: () => setAiPanelOpen((current) => !current),
     setAiQuestion,
+    setAiChatScope,
+    selectAiChatSession,
+    createAiChatSession,
     requestAiAnswer,
     insertAiAnswerPage,
     changeSelection,

@@ -13,6 +13,14 @@ class Settings(BaseSettings):
     )
     openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
     openai_default_model: str = Field(default="gpt-4.1-mini", validation_alias="OPENAI_DEFAULT_MODEL")
+    allowed_origins: str = Field(
+        default="http://localhost:8081,http://localhost:19006",
+        validation_alias="ALLOWED_ORIGINS",
+    )
+
+    @property
+    def allowed_origin_list(self) -> list[str]:
+        return [origin.strip() for origin in self.allowed_origins.split(",") if origin.strip()]
 
     model_config = SettingsConfigDict(
         env_file="backend/.env",

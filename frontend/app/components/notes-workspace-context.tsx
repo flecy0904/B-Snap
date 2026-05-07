@@ -1,5 +1,6 @@
 import React from 'react';
 import type { MockAiAnswer } from '../services/mock-ai-service';
+import type { BackendChatMessage, BackendChatSession } from '../services/backend-api';
 import { NoteSummarySection, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, StudyDocumentEntry, WorkspaceAttachment } from '../types';
 import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../ui-types';
 
@@ -13,6 +14,12 @@ export type DesktopNotesWorkspaceContextValue = {
   aiResponse: string;
   aiResponseSections?: NoteSummarySection[] | null;
   aiAnswer: MockAiAnswer | null;
+  aiMessages: BackendChatMessage[];
+  aiChatSessions: BackendChatSession[];
+  noteAiChatSessions: BackendChatSession[];
+  allAiChatSessions: BackendChatSession[];
+  aiChatScope: 'note' | 'all';
+  activeAiChatSessionId: number | null;
   aiLoading: boolean;
   aiError: string | null;
   inkTool: InkTool;
@@ -46,6 +53,9 @@ export type DesktopNotesWorkspaceContextValue = {
   activeGeneratedPreviewImage?: number;
   onToggleAiPanel: () => void;
   onChangeAiQuestion: (value: string) => void;
+  onChangeAiChatScope: (scope: 'note' | 'all') => void;
+  onSelectAiChatSession: (sessionId: number) => void;
+  onCreateAiChatSession: () => void;
   onRequestAiAnswer: () => void;
   onInsertAiAnswerPage: () => void;
   onGoToPreviousDocumentPage: () => void;

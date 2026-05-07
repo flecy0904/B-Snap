@@ -6,6 +6,7 @@ import { PdfPreview } from './pdf-preview';
 import { BlankNoteCanvas } from './blank-note-canvas';
 import { NoteSummaryContent } from './notes-shared';
 import type { MockAiAnswer } from '../services/mock-ai-service';
+import type { BackendChatMessage, BackendChatSession } from '../services/backend-api';
 import { BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NoteEntry, NoteWorkspaceMode, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../types';
 import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../ui-types';
 import { darkenHex, getDocumentPageLabel, isSameDocumentPage } from '../ui-helpers';
@@ -50,6 +51,12 @@ export function MobileNotesView(props: {
   selectionRect: SelectionRect | null;
   aiQuestion: string;
   aiAnswer: MockAiAnswer | null;
+  aiMessages: BackendChatMessage[];
+  aiChatSessions: BackendChatSession[];
+  noteAiChatSessions: BackendChatSession[];
+  allAiChatSessions: BackendChatSession[];
+  aiChatScope: 'note' | 'all';
+  activeAiChatSessionId: number | null;
   aiLoading: boolean;
   aiError: string | null;
   incomingAssetSuggestion: CaptureAsset | null;
@@ -67,6 +74,9 @@ export function MobileNotesView(props: {
   onChangePenWidth: (width: number) => void;
   onToggleAiPanel: () => void;
   onChangeAiQuestion: (value: string) => void;
+  onChangeAiChatScope: (scope: 'note' | 'all') => void;
+  onSelectAiChatSession: (sessionId: number) => void;
+  onCreateAiChatSession: () => void;
   onRequestAiAnswer: () => void;
   onInsertAiAnswerPage: () => void;
   onSelectionChange: (rect: SelectionRect | null) => void;
@@ -589,6 +599,52 @@ export function MobileNotesView(props: {
               <Pressable style={props.styles.aiPanelClose} onPress={props.onToggleAiPanel}><MaterialCommunityIcons name="close" size={18} color="#7A8394" /></Pressable>
             </View>
             <BottomSheetScrollView contentContainerStyle={props.styles.mobileAiScrollContent} showsVerticalScrollIndicator={false}>
+              <View style={props.styles.aiChatHeaderRow}>
+                <Text style={props.styles.aiSectionLabel}>최근 채팅</Text>
+                <Pressable style={props.styles.aiNewChatButton} onPress={props.onCreateAiChatSession} disabled={props.aiLoading}>
+                  <MaterialCommunityIcons name="plus" size={15} color="#5169D8" />
+                  <Text style={props.styles.aiNewChatButtonText}>새 채팅</Text>
+                </Pressable>
+              </View>
+              <View style={props.styles.aiChatScopeTabs}>
+                {[
+                  { value: 'note' as const, label: `현재 노트 (${props.noteAiChatSessions.length})` },
+                  { value: 'all' as const, label: `전체 채팅 (${props.allAiChatSessions.length})` },
+                ].map((tab) => {
+                  const active = props.aiChatScope === tab.value;
+                  return (
+                    <Pressable
+                      key={tab.value}
+                      style={[props.styles.aiChatScopeTab, active && props.styles.aiChatScopeTabActive]}
+                      onPress={() => props.onChangeAiChatScope(tab.value)}
+                    >
+                      <Text style={[props.styles.aiChatScopeTabText, active && props.styles.aiChatScopeTabTextActive]}>{tab.label}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+              {props.aiChatSessions.length ? (
+                <View style={props.styles.aiChatList}>
+                  {props.aiChatSessions.map((session) => {
+                    const active = session.id === props.activeAiChatSessionId;
+                    return (
+                      <Pressable
+                        key={session.id}
+                        style={[props.styles.aiChatListItem, active && props.styles.aiChatListItemActive]}
+                        onPress={() => props.onSelectAiChatSession(session.id)}
+                        disabled={props.aiLoading || active}
+                      >
+                        <Text style={[props.styles.aiChatListItemTitle, active && props.styles.aiChatListItemTitleActive]} numberOfLines={1}>{session.title}</Text>
+                        <Text style={props.styles.aiChatListItemMeta} numberOfLines={1}>{session.model ?? '모델 미선택'}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+              ) : (
+                <Pressable style={props.styles.aiEmptyChatButton} onPress={props.onCreateAiChatSession} disabled={props.aiLoading}>
+                  <Text style={props.styles.aiEmptyChatButtonText}>새 채팅 시작</Text>
+                </Pressable>
+              )}
               <View style={props.styles.aiStateCard}>
                 <Text style={props.styles.aiStateTitle}>선택 영역</Text>
                 <Text style={props.styles.aiStateBody}>{props.selectionRect ? `${Math.round(props.selectionRect.width)} × ${Math.round(props.selectionRect.height)} 영역 선택됨` : '아직 선택된 영역이 없습니다'}</Text>
@@ -608,6 +664,19 @@ export function MobileNotesView(props: {
                 </Pressable>
               </View>
               {props.aiError ? <Text style={props.styles.aiErrorText}>{props.aiError}</Text> : null}
+              {props.aiMessages.length ? (
+                <>
+                  <Text style={props.styles.aiSectionLabel}>채팅 내역</Text>
+                  <View style={props.styles.aiResponseCard}>
+                    {props.aiMessages.map((message) => (
+                      <View key={message.id} style={props.styles.aiResponseSection}>
+                        <Text style={props.styles.aiResponseSectionTitle}>{message.role === 'user' ? '나' : 'AI'}</Text>
+                        <Text style={props.styles.aiResponseBody}>{message.content}</Text>
+                      </View>
+                    ))}
+                  </View>
+                </>
+              ) : null}
               <View style={props.styles.aiResponseCard}>
                 <Text style={props.styles.aiResponseTitle}>답변</Text>
                 {props.selectionRect && normalizedQuestion ? <View style={props.styles.aiQuestionPill}><Text style={props.styles.aiQuestionPillText}>{normalizedQuestion}</Text></View> : null}
