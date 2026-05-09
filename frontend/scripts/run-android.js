@@ -42,11 +42,17 @@ function tryReverse(port) {
   return !result.error && result.status === 0;
 }
 
-tryReverse(8000);
-tryReverse(8081);
+function ensureAndroidReverse() {
+  tryReverse(8000);
+  tryReverse(8081);
+}
+
+ensureAndroidReverse();
 
 const npxCommand = process.platform === "win32" ? "npx.cmd" : "npx";
 const result = run(npxCommand, ["react-native", "run-android", "--no-packager"]);
+
+ensureAndroidReverse();
 
 if (result.error) {
   process.stderr.write(`Failed to run Android app: ${result.error.message}\n`);
