@@ -2,15 +2,7 @@ from fastapi import HTTPException
 from openai import OpenAI, OpenAIError
 
 from backend.app.core.config import get_settings
-
-
-NOTE_CHAT_INSTRUCTIONS = """
-You are B-Snap's study note assistant.
-Answer in Korean unless the user explicitly asks for another language.
-Use the provided note title, summary, pages, and previous messages as context.
-If the context is insufficient, say what is missing and give a useful next step.
-Keep the response concise and structured for a student reviewing class notes.
-""".strip()
+from backend.app.services.prompts.note_assistant import NOTE_CHAT_INSTRUCTIONS
 
 
 def build_note_context(note: dict, pages: list[dict]) -> str:
