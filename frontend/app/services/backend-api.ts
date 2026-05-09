@@ -253,12 +253,14 @@ export async function sendBackendAiMessage(payload: {
   sessionId: number;
   content: string;
   model?: string | null;
+  pageNumber?: number | null;
 }) {
   return request<BackendAiMessageResponse>(`/chat-sessions/${payload.sessionId}/ai-messages`, {
     method: 'POST',
     body: {
       content: payload.content,
       model: payload.model ?? null,
+      page_number: payload.pageNumber ?? null,
     },
   });
 }

@@ -22,6 +22,7 @@ export function useAiChatActions(params: {
   studyDocument: StudyDocumentEntry | null;
   selectionRect: SelectionRect | null;
   currentAiPageLabel: string;
+  currentAiPageNumber: number | null;
   currentDocumentHasBackendPages: boolean;
   activeAiChatSessionId: number | null;
   aiQuestion: string;
@@ -276,6 +277,7 @@ export function useAiChatActions(params: {
         const response = await sendBackendAiMessage({
           sessionId,
           content: question,
+          pageNumber: params.currentAiPageNumber,
         });
         params.setLastChatSessionByDocument((current) => ({
           ...current,

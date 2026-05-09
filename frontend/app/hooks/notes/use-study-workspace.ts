@@ -922,6 +922,7 @@ export function useStudyWorkspace(props: {
     studyDocument,
     selectionRect,
     currentAiPageLabel,
+    currentAiPageNumber: currentDocumentPage?.kind === 'pdf' ? currentDocumentPage.pageNumber : currentPdfPage,
     currentDocumentHasBackendPages,
     activeAiChatSessionId,
     aiQuestion,
