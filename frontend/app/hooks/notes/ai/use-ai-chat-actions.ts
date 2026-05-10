@@ -1,4 +1,5 @@
 import type { Dispatch, SetStateAction } from 'react';
+import { File } from 'expo-file-system';
 import { requestMockAiAnswer, type MockAiAnswer } from '../../../services/mock-ai-service';
 import {
   createBackendChatSession,
@@ -17,10 +18,21 @@ import { getAiBackendErrorMessage } from './ai-errors';
 
 type SetState<T> = Dispatch<SetStateAction<T>>;
 
+async function buildAiImageInputUri(uri: string | null) {
+  if (!uri) return null;
+  if (uri.startsWith('data:') || uri.startsWith('http://') || uri.startsWith('https://')) {
+    return uri;
+  }
+
+  const base64 = await new File(uri).base64();
+  return `data:image/png;base64,${base64}`;
+}
+
 export function useAiChatActions(params: {
   studyDocumentId: number | null;
   studyDocument: StudyDocumentEntry | null;
   selectionRect: SelectionRect | null;
+  selectionPreviewUri: string | null;
   currentAiPageLabel: string;
   currentAiPageNumber: number | null;
   currentDocumentHasBackendPages: boolean;
@@ -236,8 +248,12 @@ export function useAiChatActions(params: {
     let aiRequestStage: 'chat-session' | 'ai-answer' = 'ai-answer';
 
     try {
-      if (isBackendApiEnabled() && params.currentDocumentHasBackendPages) {
-        let sessionId = params.chatSessionByDocument[params.studyDocumentId];
+      let sessionId = params.chatSessionByDocument[params.studyDocumentId];
+      const canUseBackendChat = isBackendApiEnabled() && (
+        params.currentDocumentHasBackendPages || Boolean(sessionId)
+      );
+
+      if (canUseBackendChat) {
         if (!sessionId) {
           aiRequestStage = 'chat-session';
           const session = await createBackendChatSession({
@@ -274,10 +290,12 @@ export function useAiChatActions(params: {
           [sessionId]: [...(current[sessionId] ?? []), pendingUserMessage],
         }));
 
+        const selectionImageUri = await buildAiImageInputUri(params.selectionPreviewUri);
         const response = await sendBackendAiMessage({
           sessionId,
           content: question,
           pageNumber: params.currentAiPageNumber,
+          selectionImageUri,
         });
         params.setLastChatSessionByDocument((current) => ({
           ...current,

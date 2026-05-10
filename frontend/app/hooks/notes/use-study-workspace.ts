@@ -921,6 +921,7 @@ export function useStudyWorkspace(props: {
     studyDocumentId,
     studyDocument,
     selectionRect,
+    selectionPreviewUri,
     currentAiPageLabel,
     currentAiPageNumber: currentDocumentPage?.kind === 'pdf' ? currentDocumentPage.pageNumber : currentPdfPage,
     currentDocumentHasBackendPages,

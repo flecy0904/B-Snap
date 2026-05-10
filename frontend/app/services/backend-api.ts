@@ -254,6 +254,7 @@ export async function sendBackendAiMessage(payload: {
   content: string;
   model?: string | null;
   pageNumber?: number | null;
+  selectionImageUri?: string | null;
 }) {
   return request<BackendAiMessageResponse>(`/chat-sessions/${payload.sessionId}/ai-messages`, {
     method: 'POST',
@@ -261,6 +262,7 @@ export async function sendBackendAiMessage(payload: {
       content: payload.content,
       model: payload.model ?? null,
       page_number: payload.pageNumber ?? null,
+      selection_image_url: payload.selectionImageUri ?? null,
     },
   });
 }

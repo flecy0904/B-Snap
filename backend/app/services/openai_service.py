@@ -1,3 +1,5 @@
+from typing import Any
+
 from fastapi import HTTPException
 from openai import OpenAI, OpenAIError
 
@@ -29,8 +31,9 @@ def build_response_input(
     pages: list[dict],
     messages: list[dict],
     user_content: str,
-) -> list[dict[str, str]]:
-    input_items: list[dict[str, str]] = [
+    selection_image_url: str | None = None,
+) -> list[dict[str, Any]]:
+    input_items: list[dict[str, Any]] = [
         {
             "role": "user",
             "content": "Use this note context when answering:\n\n" + build_note_context(note, pages),
@@ -41,7 +44,16 @@ def build_response_input(
         role = message["role"] if message["role"] in {"user", "assistant"} else "user"
         input_items.append({"role": role, "content": message["content"]})
 
-    input_items.append({"role": "user", "content": user_content})
+    if selection_image_url:
+        input_items.append({
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": user_content},
+                {"type": "input_image", "image_url": selection_image_url},
+            ],
+        })
+    else:
+        input_items.append({"role": "user", "content": user_content})
     return input_items
 
 
@@ -52,11 +64,18 @@ def generate_note_chat_answer(
     pages: list[dict],
     messages: list[dict],
     user_content: str,
+    selection_image_url: str | None = None,
 ) -> str:
     return generate_text_response(
         model=model,
         instructions=NOTE_CHAT_INSTRUCTIONS,
-        input_items=build_response_input(note, pages, messages, user_content),
+        input_items=build_response_input(
+            note,
+            pages,
+            messages,
+            user_content,
+            selection_image_url=selection_image_url,
+        ),
     )
 
 
@@ -64,7 +83,7 @@ def generate_text_response(
     *,
     model: str,
     instructions: str,
-    input_items: list[dict[str, str]],
+    input_items: list[dict[str, Any]],
     allow_mock: bool = False,
     mock_response: str | None = None,
 ) -> str:

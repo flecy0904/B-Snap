@@ -34,6 +34,7 @@ class ChatAiMessageCreate(BaseModel):
     content: str
     model: str | None = None
     page_number: int | None = Field(default=None, ge=1)
+    selection_image_url: str | None = None
     use_rag: bool = False
     top_k: int = Field(default=5, ge=1, le=20)
 

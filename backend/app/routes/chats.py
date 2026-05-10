@@ -216,6 +216,7 @@ def create_ai_chat_message(
             pages=context_pages,
             messages=previous_messages,
             user_content=payload.content,
+            selection_image_url=payload.selection_image_url,
         )
     user_message = execute_returning(
         connection,
