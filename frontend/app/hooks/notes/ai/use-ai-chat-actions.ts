@@ -37,6 +37,7 @@ export function useAiChatActions(params: {
   currentAiPageNumber: number | null;
   currentDocumentHasBackendPages: boolean;
   activeAiChatSessionId: number | null;
+  aiChatReadOnly: boolean;
   aiQuestion: string;
   chatSessionByDocument: Record<number, number>;
   chatSessionsByDocument: Record<number, BackendChatSession[]>;
@@ -46,6 +47,7 @@ export function useAiChatActions(params: {
   setAiError: SetState<string | null>;
   setAiLoading: SetState<boolean>;
   setChatSessionByDocument: SetState<Record<number, number>>;
+  setViewingAiChatSessionId: SetState<number | null>;
   setLastChatSessionByDocument: SetState<Record<number, number>>;
   setChatSessionsByDocument: SetState<Record<number, BackendChatSession[]>>;
   setAllChatSessions: SetState<BackendChatSession[]>;
@@ -67,17 +69,18 @@ export function useAiChatActions(params: {
         ?? Object.values(params.chatSessionsByDocument).flat().find((session) => session.id === sessionId)
         ?? null;
       const targetDocumentId = selectedSession?.note_id ?? params.studyDocumentId ?? null;
-      params.setChatSessionByDocument((current) => {
-        const next = { ...current };
-        if (params.studyDocumentId) next[params.studyDocumentId] = sessionId;
-        if (targetDocumentId) next[targetDocumentId] = sessionId;
-        return next;
-      });
-      params.setLastChatSessionByDocument((current) => {
-        const next = { ...current };
-        if (targetDocumentId) next[targetDocumentId] = sessionId;
-        return next;
-      });
+      const isCurrentDocumentSession = Boolean(params.studyDocumentId && targetDocumentId === params.studyDocumentId);
+      params.setViewingAiChatSessionId(isCurrentDocumentSession ? null : sessionId);
+      if (isCurrentDocumentSession) {
+        params.setChatSessionByDocument((current) => ({
+          ...current,
+          [params.studyDocumentId!]: sessionId,
+        }));
+        params.setLastChatSessionByDocument((current) => ({
+          ...current,
+          [params.studyDocumentId!]: sessionId,
+        }));
+      }
       params.setAiMessagesBySession((current) => ({ ...current, [sessionId]: messages }));
 
       const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant');
@@ -156,6 +159,7 @@ export function useAiChatActions(params: {
         delete next[sessionId];
         return next;
       });
+      params.setViewingAiChatSessionId((current) => (current === sessionId ? null : current));
       params.setChatSessionByDocument((current) => {
         const next = { ...current };
         Object.entries(next).forEach(([documentId, activeSessionId]) => {
@@ -215,6 +219,7 @@ export function useAiChatActions(params: {
       }));
       params.setAllChatSessions((current) => [session, ...current.filter((item) => item.id !== session.id)]);
       params.setChatSessionByDocument((current) => ({ ...current, [params.studyDocumentId!]: session.id }));
+      params.setViewingAiChatSessionId(null);
       params.setAiMessagesBySession((current) => ({ ...current, [session.id]: [] }));
       params.setAiAnswer(null);
       params.setAiQuestion('');
@@ -227,6 +232,7 @@ export function useAiChatActions(params: {
 
   const startNewAiChatSession = () => {
     if (params.studyDocumentId) {
+      params.setViewingAiChatSessionId(null);
       params.setChatSessionByDocument((current) => {
         const next = { ...current };
         delete next[params.studyDocumentId!];
@@ -240,6 +246,10 @@ export function useAiChatActions(params: {
 
   const requestAiAnswer = async () => {
     if (!params.studyDocumentId) return;
+    if (params.aiChatReadOnly) {
+      params.setAiError('보고 있는 노트와 연결된 대화방이 아니라서 읽기만 가능합니다.');
+      return;
+    }
 
     const question = params.aiQuestion.trim() || '현재 페이지를 요약해줘';
     params.setAiLoading(true);
@@ -265,6 +275,7 @@ export function useAiChatActions(params: {
             ...current,
             [params.studyDocumentId!]: session.id,
           }));
+          params.setViewingAiChatSessionId(null);
           params.setLastChatSessionByDocument((current) => ({
             ...current,
             [params.studyDocumentId!]: session.id,

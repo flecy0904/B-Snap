@@ -57,6 +57,7 @@ export function MobileNotesView(props: {
   allAiChatSessions: BackendChatSession[];
   aiChatScope: 'note' | 'all';
   activeAiChatSessionId: number | null;
+  aiChatReadOnly: boolean;
   aiLoading: boolean;
   aiError: string | null;
   incomingAssetSuggestion: CaptureAsset | null;
@@ -652,6 +653,12 @@ export function MobileNotesView(props: {
               {['이 그래프 의미 뭐야?', '여기서 중요한 개념 3개만 알려줘', '시험 대비 관점으로 설명해줘'].map((prompt) => (
                 <Pressable key={prompt} style={props.styles.aiSuggestionChip} onPress={() => props.onChangeAiQuestion(prompt)}><Text style={props.styles.aiSuggestionText}>{prompt}</Text></Pressable>
               ))}
+              {props.aiChatReadOnly ? (
+                <View style={props.styles.aiReadOnlyNotice}>
+                  <MaterialCommunityIcons name="lock-outline" size={14} color="#5B6472" />
+                  <Text style={props.styles.aiReadOnlyNoticeText}>보고 있는 노트와 연결된 대화방이 아니라서 읽기만 가능합니다.</Text>
+                </View>
+              ) : null}
               <View style={props.styles.aiInputShell}>
                 <TextInput value={props.aiQuestion} onChangeText={props.onChangeAiQuestion} placeholder="선택한 영역에 대해 물어보세요" placeholderTextColor="#A2AAB8" multiline style={props.styles.aiInput} />
               </View>

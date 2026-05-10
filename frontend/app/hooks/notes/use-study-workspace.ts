@@ -86,6 +86,7 @@ export function useStudyWorkspace(props: {
   const [aiError, setAiError] = useState<string | null>(null);
   const [selectionPreviewByDocument, setSelectionPreviewByDocument] = useState<Record<number, string | null>>({});
   const [chatSessionByDocument, setChatSessionByDocument] = useState<Record<number, number>>({});
+  const [viewingAiChatSessionId, setViewingAiChatSessionId] = useState<number | null>(null);
   const [lastChatSessionByDocument, setLastChatSessionByDocument] = useState<Record<number, number>>({});
   const [chatSessionsByDocument, setChatSessionsByDocument] = useState<Record<number, BackendChatSession[]>>({});
   const [allChatSessions, setAllChatSessions] = useState<BackendChatSession[]>([]);
@@ -194,6 +195,7 @@ export function useStudyWorkspace(props: {
   });
   const {
     activeAiChatSessionId,
+    aiChatReadOnly,
     aiMessages,
     selectionPreviewUri,
     noteAiChatSessions: aiChatSessions,
@@ -202,6 +204,7 @@ export function useStudyWorkspace(props: {
   } = useAiChatDerivedState({
     studyDocumentId,
     chatSessionByDocument,
+    viewingAiChatSessionId,
     aiMessagesBySession,
     selectionPreviewByDocument,
     chatSessionsByDocument,
@@ -482,10 +485,13 @@ export function useStudyWorkspace(props: {
     setSubjectId(selected.subjectId);
     setNoteId(null);
     setStudyDocumentId(id);
+    setViewingAiChatSessionId(null);
     setChatSessionByDocument((current) => {
+      const next = { ...current };
       const lastSessionId = lastChatSessionByDocument[id];
-      if (!lastSessionId) return current;
-      return { ...current, [id]: lastSessionId };
+      if (lastSessionId) next[id] = lastSessionId;
+      else delete next[id];
+      return next;
     });
     setInkTool('view');
     setActivePageByDocument((current) => ({
@@ -926,6 +932,7 @@ export function useStudyWorkspace(props: {
     currentAiPageNumber: currentDocumentPage?.kind === 'pdf' ? currentDocumentPage.pageNumber : currentPdfPage,
     currentDocumentHasBackendPages,
     activeAiChatSessionId,
+    aiChatReadOnly,
     aiQuestion,
     chatSessionByDocument,
     chatSessionsByDocument,
@@ -935,6 +942,7 @@ export function useStudyWorkspace(props: {
     setAiError,
     setAiLoading,
     setChatSessionByDocument,
+    setViewingAiChatSessionId,
     setLastChatSessionByDocument,
     setChatSessionsByDocument,
     setAllChatSessions,
@@ -1138,6 +1146,7 @@ export function useStudyWorkspace(props: {
     aiChatScope,
     aiChatSearchQuery,
     activeAiChatSessionId,
+    aiChatReadOnly,
     aiLoading,
     aiError,
     query,
@@ -1184,7 +1193,11 @@ export function useStudyWorkspace(props: {
     changeInkTool,
     changePenColor,
     changePenWidth,
-    toggleAiPanel: () => setAiPanelOpen((current) => !current),
+    toggleAiPanel: () => setAiPanelOpen((current) => {
+      const next = !current;
+      if (next) setViewingAiChatSessionId(null);
+      return next;
+    }),
     setAiQuestion,
     setAiChatScope,
     setAiChatSearchQuery,

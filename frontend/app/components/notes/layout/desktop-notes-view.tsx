@@ -55,6 +55,7 @@ export type DesktopNotesViewProps = {
   aiChatScope: 'note' | 'all';
   aiChatSearchQuery: string;
   activeAiChatSessionId: number | null;
+  aiChatReadOnly: boolean;
   aiLoading: boolean;
   aiError: string | null;
   incomingAssetSuggestion: CaptureAsset | null;
@@ -228,6 +229,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           aiChatScope: props.aiChatScope,
           aiChatSearchQuery: props.aiChatSearchQuery,
           activeAiChatSessionId: props.activeAiChatSessionId,
+          aiChatReadOnly: props.aiChatReadOnly,
           aiLoading: props.aiLoading,
           aiError: props.aiError,
           inkTool: props.inkTool,

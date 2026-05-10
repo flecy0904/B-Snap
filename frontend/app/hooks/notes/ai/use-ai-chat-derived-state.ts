@@ -4,6 +4,7 @@ import type { BackendChatMessage, BackendChatSession } from '../../../services/b
 export function useAiChatDerivedState(params: {
   studyDocumentId: number | null;
   chatSessionByDocument: Record<number, number>;
+  viewingAiChatSessionId: number | null;
   aiMessagesBySession: Record<number, BackendChatMessage[]>;
   selectionPreviewByDocument: Record<number, string | null>;
   chatSessionsByDocument: Record<number, BackendChatSession[]>;
@@ -13,9 +14,19 @@ export function useAiChatDerivedState(params: {
   backendPageIdsByDocument: Record<number, Record<number, number>>;
 }) {
   const activeAiChatSessionId = params.studyDocumentId
-    ? params.chatSessionByDocument[params.studyDocumentId] ?? null
+    ? params.viewingAiChatSessionId ?? params.chatSessionByDocument[params.studyDocumentId] ?? null
     : null;
   const aiMessages = activeAiChatSessionId ? params.aiMessagesBySession[activeAiChatSessionId] ?? [] : [];
+  const activeAiChatSession = activeAiChatSessionId
+    ? params.allChatSessions.find((session) => session.id === activeAiChatSessionId)
+      ?? Object.values(params.chatSessionsByDocument).flat().find((session) => session.id === activeAiChatSessionId)
+      ?? null
+    : null;
+  const aiChatReadOnly = Boolean(
+    params.studyDocumentId
+    && activeAiChatSession
+    && activeAiChatSession.note_id !== params.studyDocumentId,
+  );
   const selectionPreviewUri = params.studyDocumentId
     ? params.selectionPreviewByDocument[params.studyDocumentId] ?? null
     : null;
@@ -37,6 +48,8 @@ export function useAiChatDerivedState(params: {
 
   return {
     activeAiChatSessionId,
+    activeAiChatSession,
+    aiChatReadOnly,
     aiMessages,
     selectionPreviewUri,
     noteAiChatSessions,
