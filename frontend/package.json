@@ -9,7 +9,7 @@
     "start": "expo start --dev-client",
     "start:reset": "expo start --dev-client -c",
     "web": "expo start --web",
-    "android": "react-native run-android --no-packager",
+    "android": "node scripts/run-android.js",
     "ios": "react-native run-ios --no-packager",
     "ios:ipad": "react-native run-ios --simulator \"iPad (A16)\" --no-packager",
     "typecheck": "tsc --noEmit",
@@ -22,6 +22,7 @@
     "expo-asset": "~12.0.12",
     "expo-document-picker": "~14.0.8",
     "expo-file-system": "~19.0.21",
+    "expo-image-manipulator": "~14.0.8",
     "expo-image-picker": "~17.0.10",
     "expo-sqlite": "~16.0.10",
     "expo-status-bar": "~3.0.9",
@@ -34,6 +35,7 @@
     "react-native-reanimated": "~4.1.1",
     "react-native-safe-area-context": "~5.6.0",
     "react-native-svg": "15.12.1",
+    "react-native-view-shot": "4.0.3",
     "react-native-web": "^0.21.0"
   },
   "devDependencies": {
