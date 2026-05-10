@@ -1,6 +1,6 @@
 import React from 'react';
-import { MobileNotesView } from '../components/mobile-notes-view';
-import { DesktopNotesView } from '../components/desktop-notes-view';
+import { MobileNotesView } from '../components/notes/layout/mobile-notes-view';
+import { DesktopNotesView } from '../components/notes/layout/desktop-notes-view';
 import { BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NoteEntry, NoteWorkspaceMode, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../types';
 import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../ui-types';
 import { AppStyles } from '../styles';
