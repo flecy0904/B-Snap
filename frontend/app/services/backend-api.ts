@@ -42,6 +42,7 @@ export type BackendChatMessage = {
   session_id: number;
   role: 'user' | 'assistant' | string;
   content: string;
+  selection_image_url?: string | null;
   model: string | null;
   created_at: string;
 };

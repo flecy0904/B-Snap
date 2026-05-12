@@ -941,6 +941,7 @@ export function useStudyWorkspace(props: {
     setAiQuestion,
     setAiError,
     setAiLoading,
+    setSelectionPreviewByDocument,
     setChatSessionByDocument,
     setViewingAiChatSessionId,
     setLastChatSessionByDocument,

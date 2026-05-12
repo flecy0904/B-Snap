@@ -46,6 +46,7 @@ export function useAiChatActions(params: {
   setAiQuestion: SetState<string>;
   setAiError: SetState<string | null>;
   setAiLoading: SetState<boolean>;
+  setSelectionPreviewByDocument: SetState<Record<number, string | null>>;
   setChatSessionByDocument: SetState<Record<number, number>>;
   setViewingAiChatSessionId: SetState<number | null>;
   setLastChatSessionByDocument: SetState<Record<number, number>>;
@@ -252,9 +253,13 @@ export function useAiChatActions(params: {
     }
 
     const question = params.aiQuestion.trim() || '현재 페이지를 요약해줘';
+    const selectionPreviewUri = params.selectionPreviewUri;
     params.setAiLoading(true);
     params.setAiError(null);
     params.setAiQuestion('');
+    if (selectionPreviewUri && params.studyDocumentId) {
+      params.setSelectionPreviewByDocument((current) => ({ ...current, [params.studyDocumentId!]: null }));
+    }
     let aiRequestStage: 'chat-session' | 'ai-answer' = 'ai-answer';
 
     try {
@@ -293,6 +298,7 @@ export function useAiChatActions(params: {
           session_id: sessionId,
           role: 'user',
           content: question,
+          selection_image_url: selectionPreviewUri,
           model: null,
           created_at: new Date().toISOString(),
         };
@@ -301,13 +307,17 @@ export function useAiChatActions(params: {
           [sessionId]: [...(current[sessionId] ?? []), pendingUserMessage],
         }));
 
-        const selectionImageUri = await buildAiImageInputUri(params.selectionPreviewUri);
+        const selectionImageUri = await buildAiImageInputUri(selectionPreviewUri);
         const response = await sendBackendAiMessage({
           sessionId,
           content: question,
           pageNumber: params.currentAiPageNumber,
           selectionImageUri,
         });
+        const userMessageWithAttachment = {
+          ...response.user_message,
+          selection_image_url: selectionPreviewUri,
+        };
         params.setLastChatSessionByDocument((current) => ({
           ...current,
           [params.studyDocumentId!]: sessionId,
@@ -318,12 +328,12 @@ export function useAiChatActions(params: {
           [sessionId]: (current[sessionId] ?? []).some((message) => message.id === pendingUserMessage.id)
             ? (current[sessionId] ?? []).flatMap((message) => (
               message.id === pendingUserMessage.id
-                ? [response.user_message, response.assistant_message]
+                ? [userMessageWithAttachment, response.assistant_message]
                 : [message]
             ))
             : [
               ...(current[sessionId] ?? []),
-              response.user_message,
+              userMessageWithAttachment,
               response.assistant_message,
             ],
         }));

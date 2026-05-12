@@ -363,6 +363,7 @@ export const notesStyles = {
   aiMessageBubble: { maxWidth: '88%', borderRadius: 16, paddingHorizontal: 12, paddingVertical: 10 },
   aiMessageBubbleUser: { alignSelf: 'flex-end' as const, backgroundColor: '#303744' },
   aiMessageBubbleAssistant: { alignSelf: 'flex-start' as const, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E4E9F2' },
+  aiMessageAttachmentImage: { width: 150, height: 98, borderRadius: 12, marginBottom: 8, backgroundColor: '#EEF2F7' },
   aiMessageText: { fontSize: 13, lineHeight: 19, fontWeight: '600' as const },
   aiMessageTextUser: { color: '#FFFFFF' },
   aiMessageTextAssistant: { color: '#303744' },

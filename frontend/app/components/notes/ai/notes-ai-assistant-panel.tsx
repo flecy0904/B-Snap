@@ -1,6 +1,6 @@
 import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { ActivityIndicator, Animated, Image, LayoutChangeEvent, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Animated, Image, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { useDesktopNotesWorkspaceContext } from '../workspace/notes-workspace-context';
 
 export function NotesAiAssistantPanel() {
@@ -17,10 +17,7 @@ export function NotesAiAssistantPanel() {
   const [editingTitleError, setEditingTitleError] = React.useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = React.useState<{ id: number; title: string } | null>(null);
   const messagesScrollRef = React.useRef<ScrollView | null>(null);
-  const messageLayoutsRef = React.useRef<Record<number, { y: number; height: number }>>({});
   const hasChatHistory = workspace.aiMessages.length > 0;
-  const latestUserMessage = [...workspace.aiMessages].reverse().find((message) => message.role === 'user') ?? null;
-  const latestUserMessageId = latestUserMessage?.id ?? null;
   const activeSession = workspace.activeAiChatSessionId
     ? workspace.allAiChatSessions.find((session) => session.id === workspace.activeAiChatSessionId)
       ?? workspace.noteAiChatSessions.find((session) => session.id === workspace.activeAiChatSessionId)
@@ -118,20 +115,15 @@ export function NotesAiAssistantPanel() {
     setMenuSessionId(null);
   };
 
-  const scrollToLatestUserMessage = React.useCallback(() => {
-    const latestUserLayout = latestUserMessageId ? messageLayoutsRef.current[latestUserMessageId] : null;
-    if (!latestUserLayout) return;
+  const scrollToLatestMessage = React.useCallback(() => {
     window.setTimeout(() => {
-      messagesScrollRef.current?.scrollTo({
-        y: Math.max(0, latestUserLayout.y - 4),
-        animated: true,
-      });
+      messagesScrollRef.current?.scrollToEnd({ animated: true });
     }, 40);
-  }, [latestUserMessageId]);
+  }, []);
 
   React.useEffect(() => {
-    scrollToLatestUserMessage();
-  }, [latestUserMessageId, workspace.aiMessages.length, scrollToLatestUserMessage]);
+    scrollToLatestMessage();
+  }, [workspace.aiMessages.length, workspace.aiLoading, workspace.activeAiChatSessionId, scrollToLatestMessage]);
 
   React.useEffect(() => {
     if (sidebarOpen) {
@@ -152,11 +144,6 @@ export function NotesAiAssistantPanel() {
       if (finished) setSidebarVisible(false);
     });
   }, [sidebarOpen, sidebarProgress]);
-
-  const handleMessageLayout = (id: number, event: LayoutChangeEvent) => {
-    const { y, height } = event.nativeEvent.layout;
-    messageLayoutsRef.current[id] = { y, height };
-  };
 
   const closeSidebar = () => setSidebarOpen(false);
   const openSidebar = () => setSidebarOpen(true);
@@ -363,8 +350,10 @@ export function NotesAiAssistantPanel() {
               <View
                 key={message.id}
                 style={[workspace.styles.aiMessageBubble, isUser ? workspace.styles.aiMessageBubbleUser : workspace.styles.aiMessageBubbleAssistant]}
-                onLayout={(event) => handleMessageLayout(message.id, event)}
               >
+                {isUser && message.selection_image_url ? (
+                  <Image source={{ uri: message.selection_image_url }} style={workspace.styles.aiMessageAttachmentImage} resizeMode="cover" />
+                ) : null}
                 <Text style={[workspace.styles.aiMessageText, isUser ? workspace.styles.aiMessageTextUser : workspace.styles.aiMessageTextAssistant]}>{message.content}</Text>
               </View>
             );
