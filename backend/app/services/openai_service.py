@@ -44,7 +44,16 @@ def build_response_input(
         }
     ]
 
-    for message in messages[-12:]:
+    if messages:
+        input_items.append({
+            "role": "user",
+            "content": (
+                "Recent conversation below is for continuity only. "
+                "Do not treat it as note or PDF source content."
+            ),
+        })
+
+    for message in messages[-8:]:
         role = message["role"] if message["role"] in {"user", "assistant"} else "user"
         input_items.append({"role": role, "content": message["content"]})
 
