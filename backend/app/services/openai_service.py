@@ -7,7 +7,7 @@ from backend.app.core.config import get_settings
 from backend.app.services.prompts.note_assistant import NOTE_CHAT_INSTRUCTIONS
 
 
-def build_note_context(note: dict, pages: list[dict]) -> str:
+def build_note_context(note: dict, pages: list[dict], current_page_number: int | None = None) -> str:
     page_lines = []
     for page in pages:
         content = page.get("content") or ""
@@ -20,6 +20,7 @@ def build_note_context(note: dict, pages: list[dict]) -> str:
         [
             f"Note title: {note['title']}",
             f"Note summary: {note.get('summary') or ''}",
+            f"Current page: {current_page_number if current_page_number is not None else 'unknown'}",
             "Pages:",
             "\n".join(page_lines) if page_lines else "- no pages yet",
         ]
@@ -31,12 +32,14 @@ def build_response_input(
     pages: list[dict],
     messages: list[dict],
     user_content: str,
+    current_page_number: int | None = None,
     selection_image_url: str | None = None,
 ) -> list[dict[str, Any]]:
     input_items: list[dict[str, Any]] = [
         {
             "role": "user",
-            "content": "Use this note context when answering:\n\n" + build_note_context(note, pages),
+            "content": "Use this note context when answering:\n\n"
+            + build_note_context(note, pages, current_page_number=current_page_number),
         }
     ]
 
@@ -64,6 +67,7 @@ def generate_note_chat_answer(
     pages: list[dict],
     messages: list[dict],
     user_content: str,
+    current_page_number: int | None = None,
     selection_image_url: str | None = None,
 ) -> str:
     return generate_text_response(
@@ -74,6 +78,7 @@ def generate_note_chat_answer(
             pages,
             messages,
             user_content,
+            current_page_number=current_page_number,
             selection_image_url=selection_image_url,
         ),
     )
