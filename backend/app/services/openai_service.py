@@ -4,6 +4,7 @@ from fastapi import HTTPException
 from openai import OpenAI, OpenAIError
 
 from backend.app.core.config import get_settings
+from backend.app.services.prompts.chat_title import CHAT_TITLE_INSTRUCTIONS
 from backend.app.services.prompts.note_assistant import NOTE_CHAT_INSTRUCTIONS
 
 
@@ -82,6 +83,37 @@ def generate_note_chat_answer(
             selection_image_url=selection_image_url,
         ),
     )
+
+
+def normalize_chat_title(title: str, fallback: str) -> str:
+    normalized = " ".join(title.replace("\n", " ").split()).strip()
+    normalized = normalized.strip("\"'`“”‘’[](){}")
+    if not normalized:
+        return fallback
+    return normalized[:30]
+
+
+def generate_chat_title(
+    *,
+    model: str,
+    note: dict,
+    user_content: str,
+    assistant_content: str | None = None,
+) -> str:
+    fallback = normalize_chat_title(user_content, "AI 채팅")
+    title = generate_text_response(
+        model=model,
+        instructions=CHAT_TITLE_INSTRUCTIONS,
+        input_items=[{
+            "role": "user",
+            "content": "\n".join([
+                f"Note title: {note['title']}",
+                "Create a chat title from this first user question only:",
+                user_content,
+            ]),
+        }],
+    )
+    return normalize_chat_title(title, fallback)
 
 
 def generate_text_response(

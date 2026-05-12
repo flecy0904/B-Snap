@@ -338,10 +338,18 @@ export function useAiChatActions(params: {
             ],
         }));
         params.setAllChatSessions((current) => {
-          const target = current.find((session) => session.id === sessionId);
+          const target = response.chat_session ?? current.find((session) => session.id === sessionId);
           if (!target) return current;
           return [target, ...current.filter((session) => session.id !== sessionId)];
         });
+        if (response.chat_session) {
+          params.setChatSessionsByDocument((current) => ({
+            ...current,
+            [response.chat_session!.note_id]: (current[response.chat_session!.note_id] ?? []).map((session) => (
+              session.id === response.chat_session!.id ? response.chat_session! : session
+            )),
+          }));
+        }
         params.setAiAnswer({
           question,
           response: content,

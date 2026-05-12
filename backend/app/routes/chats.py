@@ -15,7 +15,7 @@ from backend.app.schemas.chats import (
     ChatSessionRead,
     ChatSessionUpdate,
 )
-from backend.app.services.openai_service import generate_note_chat_answer
+from backend.app.services.openai_service import generate_chat_title, generate_note_chat_answer
 from backend.app.services.rag_service import ask_with_rag, load_note_documents
 
 
@@ -237,11 +237,37 @@ def create_ai_chat_message(
         """,
         (session_id, answer, model),
     )
-    execute_commit(connection, "UPDATE chat_sessions SET model = %s, updated_at = now() WHERE id = %s", (model, session_id))
+    updated_session = None
+    if not previous_messages:
+        generated_title = None
+        try:
+            generated_title = generate_chat_title(
+                model=model,
+                note=note,
+                user_content=payload.content,
+                assistant_content=answer,
+            )
+        except Exception:
+            generated_title = None
+        if generated_title:
+            updated_session = execute_returning(
+                connection,
+                """
+                UPDATE chat_sessions
+                SET title = %s, model = %s, updated_at = now()
+                WHERE id = %s
+                RETURNING id, note_id, title, model, created_at, updated_at
+                """,
+                (generated_title, model, session_id),
+            )
+
+    if updated_session is None:
+        execute_commit(connection, "UPDATE chat_sessions SET model = %s, updated_at = now() WHERE id = %s", (model, session_id))
     return {
         "model": model,
         "user_message": user_message,
         "assistant_message": assistant_message,
+        "chat_session": updated_session,
     }
 
 

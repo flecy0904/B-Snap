@@ -66,6 +66,7 @@ export type BackendAiMessageResponse = {
     model: string | null;
     created_at: string;
   };
+  chat_session?: BackendChatSession | null;
 };
 
 function getBackendUrl() {

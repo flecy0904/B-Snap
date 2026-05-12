@@ -58,3 +58,4 @@ class ChatAiMessageRead(BaseModel):
     model: str
     user_message: ChatMessageRead
     assistant_message: ChatMessageRead
+    chat_session: ChatSessionRead | None = None
