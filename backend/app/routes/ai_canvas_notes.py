@@ -3,9 +3,17 @@ from psycopg import Connection
 
 from backend.app.db.crud import execute_commit, execute_returning, fetch_all, fetch_one, require_row
 from backend.app.db.session import get_db_connection
+from backend.app.core.config import get_settings
 from backend.app.routes.folders import get_folder
 from backend.app.routes.notes import get_note
-from backend.app.schemas.ai_canvas_notes import AiCanvasNoteCreate, AiCanvasNoteRead, AiCanvasNoteUpdate
+from backend.app.schemas.ai_canvas_notes import (
+    AiCanvasNoteAiEditCreate,
+    AiCanvasNoteAiEditRead,
+    AiCanvasNoteCreate,
+    AiCanvasNoteRead,
+    AiCanvasNoteUpdate,
+)
+from backend.app.services.openai_service import generate_ai_canvas_edit
 
 
 router = APIRouter(tags=["ai-canvas-notes"])
@@ -156,3 +164,23 @@ def delete_ai_canvas_note(
 ):
     get_ai_canvas_note(canvas_note_id, connection)
     execute_commit(connection, "DELETE FROM ai_canvas_notes WHERE id = %s", (canvas_note_id,))
+
+
+@router.post("/ai-canvas-notes/{canvas_note_id}/ai-edit", response_model=AiCanvasNoteAiEditRead)
+def create_ai_canvas_edit(
+    canvas_note_id: int,
+    payload: AiCanvasNoteAiEditCreate,
+    connection: Connection = Depends(get_db_connection),
+):
+    canvas_note = get_ai_canvas_note(canvas_note_id, connection)
+    model = payload.model or get_settings().openai_default_model
+    markdown = generate_ai_canvas_edit(
+        model=model,
+        title=canvas_note["title"],
+        markdown=canvas_note["markdown"],
+        instruction=payload.instruction,
+    )
+    return {
+        "markdown": markdown,
+        "model": model,
+    }

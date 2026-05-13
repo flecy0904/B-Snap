@@ -32,7 +32,7 @@ function MarkdownPreview(props: {
         if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
           return (
             <View key={key} style={props.styles.aiCanvasListRow}>
-              <Text style={props.styles.aiCanvasListBullet}>•</Text>
+              <Text style={props.styles.aiCanvasListBullet}>-</Text>
               <Text style={props.styles.aiCanvasParagraph}>{trimmed.slice(2)}</Text>
             </View>
           );
@@ -126,41 +126,73 @@ export function NotesAiCanvasPanel() {
 
           {canvas.activeNote ? (
             <View style={workspace.styles.aiCanvasEditorShell}>
-              <TextInput
-                value={canvas.titleDraft}
-                onChangeText={canvas.setTitleDraft}
-                placeholder="Canvas 제목"
-                placeholderTextColor="#A2AAB8"
-                style={workspace.styles.aiCanvasTitleInput}
-              />
-              {canvas.mode === 'edit' ? (
+              <ScrollView
+                style={workspace.styles.aiCanvasEditorScroll}
+                contentContainerStyle={workspace.styles.aiCanvasEditorContent}
+                keyboardShouldPersistTaps="handled"
+                showsVerticalScrollIndicator
+              >
                 <TextInput
-                  value={canvas.markdownDraft}
-                  onChangeText={canvas.setMarkdownDraft}
-                  placeholder="Markdown으로 정리 내용을 작성하세요."
+                  value={canvas.titleDraft}
+                  onChangeText={canvas.setTitleDraft}
+                  placeholder="Canvas 제목"
                   placeholderTextColor="#A2AAB8"
-                  multiline
-                  textAlignVertical="top"
-                  style={workspace.styles.aiCanvasMarkdownInput}
+                  style={workspace.styles.aiCanvasTitleInput}
                 />
-              ) : (
-                <ScrollView style={workspace.styles.aiCanvasPreviewScroll} contentContainerStyle={workspace.styles.aiCanvasPreviewContent}>
-                  <MarkdownPreview markdown={canvas.markdownDraft} styles={workspace.styles} />
-                </ScrollView>
-              )}
-              <View style={workspace.styles.aiCanvasFooter}>
-                <Pressable style={workspace.styles.aiCanvasDeleteButton} onPress={canvas.deleteActiveNote} disabled={canvas.saving}>
-                  <MaterialCommunityIcons name="trash-can-outline" size={15} color="#C04B4B" />
-                  <Text style={workspace.styles.aiCanvasDeleteButtonText}>삭제</Text>
-                </Pressable>
-                <Pressable
-                  style={[workspace.styles.aiCanvasSaveButton, (!canvas.hasUnsavedChanges || canvas.saving) && workspace.styles.aiCanvasSaveButtonDisabled]}
-                  onPress={canvas.saveNote}
-                  disabled={!canvas.hasUnsavedChanges || canvas.saving}
-                >
-                  {canvas.saving ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={workspace.styles.aiCanvasSaveButtonText}>저장</Text>}
-                </Pressable>
-              </View>
+                {canvas.mode === 'edit' ? (
+                  <TextInput
+                    value={canvas.markdownDraft}
+                    onChangeText={canvas.setMarkdownDraft}
+                    placeholder="Markdown으로 정리 내용을 작성하세요."
+                    placeholderTextColor="#A2AAB8"
+                    multiline
+                    textAlignVertical="top"
+                    style={workspace.styles.aiCanvasMarkdownInput}
+                  />
+                ) : (
+                  <View style={workspace.styles.aiCanvasPreviewBox}>
+                    <MarkdownPreview markdown={canvas.markdownDraft} styles={workspace.styles} />
+                  </View>
+                )}
+
+                {canvas.aiEditing ? (
+                  <View style={workspace.styles.aiCanvasAiDraftCard}>
+                    <ActivityIndicator size="small" color="#5F79FF" />
+                    <Text style={workspace.styles.aiCanvasAiEditTitle}>AI Chat 답변으로 Canvas 수정안을 만드는 중입니다.</Text>
+                  </View>
+                ) : null}
+
+                {canvas.aiDraftMarkdown !== null ? (
+                  <View style={workspace.styles.aiCanvasAiDraftCard}>
+                    <Text style={workspace.styles.aiCanvasAiEditTitle}>AI 수정안 미리보기</Text>
+                    <ScrollView style={workspace.styles.aiCanvasAiDraftPreview} contentContainerStyle={workspace.styles.aiCanvasPreviewContent}>
+                      <MarkdownPreview markdown={canvas.aiDraftMarkdown} styles={workspace.styles} />
+                    </ScrollView>
+                    <View style={workspace.styles.aiCanvasFooter}>
+                      <Pressable style={workspace.styles.aiCanvasDeleteButton} onPress={canvas.discardAiDraft}>
+                        <Text style={workspace.styles.aiCanvasDeleteButtonText}>취소</Text>
+                      </Pressable>
+                      <Pressable style={workspace.styles.aiCanvasSaveButton} onPress={canvas.applyAiDraft}>
+                        <Text style={workspace.styles.aiCanvasSaveButtonText}>적용</Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                ) : null}
+
+                <View style={workspace.styles.aiCanvasFooter}>
+                  <Pressable style={workspace.styles.aiCanvasDeleteButton} onPress={canvas.deleteActiveNote} disabled={canvas.saving}>
+                    <MaterialCommunityIcons name="trash-can-outline" size={15} color="#C04B4B" />
+                    <Text style={workspace.styles.aiCanvasDeleteButtonText}>삭제</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[workspace.styles.aiCanvasSaveButton, (!canvas.hasUnsavedChanges || canvas.saving) && workspace.styles.aiCanvasSaveButtonDisabled]}
+                    onPress={canvas.saveNote}
+                    disabled={!canvas.hasUnsavedChanges || canvas.saving}
+                  >
+                    {canvas.saving ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={workspace.styles.aiCanvasSaveButtonText}>저장</Text>}
+                  </Pressable>
+                </View>
+              </ScrollView>
             </View>
           ) : (
             <View style={workspace.styles.aiCanvasStateCard}>

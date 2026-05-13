@@ -1005,6 +1005,7 @@ export function useStudyWorkspace(props: {
     setChatSessionsByDocument,
     setAllChatSessions,
     setAiMessagesBySession,
+    onRequestCanvasEditFromChat: aiCanvas.requestAiEditFromChat,
   });
 
   const acceptIncomingAsset = () => {

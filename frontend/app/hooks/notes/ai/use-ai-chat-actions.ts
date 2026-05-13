@@ -28,6 +28,25 @@ async function buildAiImageInputUri(uri: string | null) {
   return `data:image/png;base64,${base64}`;
 }
 
+function isCanvasEditIntent(question: string) {
+  const lowerQuestion = question.toLowerCase();
+  const mentionsCanvas = lowerQuestion.includes('canvas') || question.includes('캔버스');
+  if (!mentionsCanvas) return false;
+
+  return [
+    '적어',
+    '써',
+    '정리',
+    '요약',
+    '추가',
+    '수정',
+    '반영',
+    '넣어',
+    '만들',
+    '작성',
+  ].some((keyword) => question.includes(keyword));
+}
+
 export function useAiChatActions(params: {
   studyDocumentId: number | null;
   studyDocument: StudyDocumentEntry | null;
@@ -53,6 +72,7 @@ export function useAiChatActions(params: {
   setChatSessionsByDocument: SetState<Record<number, BackendChatSession[]>>;
   setAllChatSessions: SetState<BackendChatSession[]>;
   setAiMessagesBySession: SetState<Record<number, BackendChatMessage[]>>;
+  onRequestCanvasEditFromChat?: (payload: { question: string; answer: string }) => Promise<void>;
 }) {
   const selectAiChatSession = async (sessionId: number) => {
     if (!isBackendApiEnabled()) {
@@ -362,6 +382,9 @@ export function useAiChatActions(params: {
           ],
           createdAt: response.assistant_message.created_at,
         });
+        if (params.onRequestCanvasEditFromChat && isCanvasEditIntent(question)) {
+          void params.onRequestCanvasEditFromChat({ question, answer: content });
+        }
         return;
       }
 

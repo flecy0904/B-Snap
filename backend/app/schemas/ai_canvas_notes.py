@@ -49,3 +49,13 @@ class AiCanvasNoteRead(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class AiCanvasNoteAiEditCreate(BaseModel):
+    instruction: str = Field(min_length=1, max_length=2000)
+    model: str | None = None
+
+
+class AiCanvasNoteAiEditRead(BaseModel):
+    markdown: str
+    model: str

@@ -6,6 +6,7 @@ from openai import OpenAI, OpenAIError
 from backend.app.core.config import get_settings
 from backend.app.services.note_page_content import extract_ai_page_text
 from backend.app.services.prompts.chat_title import CHAT_TITLE_INSTRUCTIONS
+from backend.app.services.prompts.ai_canvas import AI_CANVAS_EDIT_INSTRUCTIONS
 from backend.app.services.prompts.note_assistant import NOTE_CHAT_INSTRUCTIONS
 
 
@@ -124,6 +125,31 @@ def generate_chat_title(
         }],
     )
     return normalize_chat_title(title, fallback)
+
+
+def generate_ai_canvas_edit(
+    *,
+    model: str,
+    title: str,
+    markdown: str,
+    instruction: str,
+) -> str:
+    return generate_text_response(
+        model=model,
+        instructions=AI_CANVAS_EDIT_INSTRUCTIONS,
+        input_items=[{
+            "role": "user",
+            "content": "\n".join([
+                f"Canvas title: {title}",
+                "",
+                "Current Markdown:",
+                markdown or "(empty)",
+                "",
+                "User edit instruction:",
+                instruction,
+            ]),
+        }],
+    )
 
 
 def generate_text_response(
