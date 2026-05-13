@@ -101,6 +101,8 @@ __pycache__/
 outputs/
 sample_images/
 WhiteBoard Detection.v1i.coco/
+img_preprocessing/target_area_yolo11n/
 *.pt
+!img_preprocessing/crop/best.pt
 *.swp
 *.bak

@@ -1,31 +1,38 @@
 """Image preprocessing utilities for B-SNAP."""
 
 __all__ = [
-    "BoardCropResult",
-    "crop_and_warp_board",
-    "crop_writing_region",
-    "detect_board_corners",
-    "detect_writing_region",
-    "HybridBoardPreprocessor",
-    "HybridPreprocessorConfig",
-    "order_points",
-    "preprocess_board_image",
-    "run_hybrid_preprocess",
-    "YoloWorldDetector",
+    "preprocess_for_service",
+    "preprocess_directory_for_service",
+    "run_yolo_segmentation_preprocess",
+    "SegmentationCropConfig",
+    "YoloSegmentationCropper",
+    "ScanEnhanceOptions",
+    "ScanEnhanceResult",
+    "preprocess_after_yolo_crop",
+    "preprocess_image_file",
 ]
 
 
 def __getattr__(name: str):
-    if name in {"HybridBoardPreprocessor", "HybridPreprocessorConfig", "run_hybrid_preprocess"}:
-        from .crop import hybrid_preprocessor
+    if name in {
+        "run_yolo_segmentation_preprocess",
+        "SegmentationCropConfig",
+        "YoloSegmentationCropper",
+    }:
+        from .crop import yolo_segmentation_cropper
 
-        return getattr(hybrid_preprocessor, name)
-    if name == "YoloWorldDetector":
-        from .crop.yolo_world_detector import YoloWorldDetector
+        return getattr(yolo_segmentation_cropper, name)
+    if name in {"preprocess_for_service", "preprocess_directory_for_service"}:
+        from .pipeline import preprocessing_pipeline
 
-        return YoloWorldDetector
-    if name in __all__:
-        from .crop import board_cropper
+        return getattr(preprocessing_pipeline, name)
+    if name in {
+        "ScanEnhanceOptions",
+        "ScanEnhanceResult",
+        "preprocess_after_yolo_crop",
+        "preprocess_image_file",
+    }:
+        from .enhance import scan_enhancer
 
-        return getattr(board_cropper, name)
+        return getattr(scan_enhancer, name)
     raise AttributeError(f"module 'img_preprocessing' has no attribute '{name}'")
