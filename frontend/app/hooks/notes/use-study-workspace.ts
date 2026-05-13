@@ -176,6 +176,7 @@ export function useStudyWorkspace(props: {
     setActivePageByDocument(snapshot.activePageByDocument);
     setBookmarksByDocument(snapshot.bookmarksByDocument ?? {});
     setLastChatSessionByDocument(snapshot.lastChatSessionByDocument ?? {});
+    setAiPanelMode(snapshot.aiPanelMode === 'sidebar' ? 'sidebar' : 'floating');
   }, []);
   const persistedWorkspaceState = useMemo<PersistedStudyWorkspaceState>(() => ({
     version: 1,
@@ -191,8 +192,10 @@ export function useStudyWorkspace(props: {
     activePageByDocument,
     bookmarksByDocument,
     lastChatSessionByDocument,
+    aiPanelMode,
   }), [
     activePageByDocument,
+    aiPanelMode,
     attachmentsByDocument,
     bookmarksByDocument,
     captureAssetsBySubject,
