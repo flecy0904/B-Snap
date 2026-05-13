@@ -55,6 +55,18 @@ export type BackendNotePage = {
   image_url: string | null;
 };
 
+export type BackendAiCanvasNote = {
+  id: number;
+  folder_id: number;
+  note_id: number;
+  title: string;
+  markdown: string;
+  source_page_start: number | null;
+  source_page_end: number | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type BackendAiMessageResponse = {
   model: string;
   user_message: BackendChatMessage;
@@ -220,6 +232,56 @@ export async function extractBackendPdfText(payload: {
     body: {
       pdf_data: payload.pdfData,
     },
+  });
+}
+
+export function listBackendAiCanvasNotes(noteId: number) {
+  return request<BackendAiCanvasNote[]>(`/notes/${noteId}/ai-canvas-notes`);
+}
+
+export function listBackendAiCanvasNotesByFolder(folderId: number) {
+  return request<BackendAiCanvasNote[]>(`/folders/${folderId}/ai-canvas-notes`);
+}
+
+export async function createBackendAiCanvasNote(payload: {
+  noteId: number;
+  title: string;
+  markdown?: string;
+  sourcePageStart?: number | null;
+  sourcePageEnd?: number | null;
+}) {
+  return request<BackendAiCanvasNote>(`/notes/${payload.noteId}/ai-canvas-notes`, {
+    method: 'POST',
+    body: {
+      title: payload.title,
+      markdown: payload.markdown ?? '',
+      source_page_start: payload.sourcePageStart ?? null,
+      source_page_end: payload.sourcePageEnd ?? null,
+    },
+  });
+}
+
+export async function updateBackendAiCanvasNote(payload: {
+  canvasNoteId: number;
+  title?: string;
+  markdown?: string;
+  sourcePageStart?: number | null;
+  sourcePageEnd?: number | null;
+}) {
+  return request<BackendAiCanvasNote>(`/ai-canvas-notes/${payload.canvasNoteId}`, {
+    method: 'PATCH',
+    body: {
+      title: payload.title,
+      markdown: payload.markdown,
+      source_page_start: payload.sourcePageStart,
+      source_page_end: payload.sourcePageEnd,
+    },
+  });
+}
+
+export function deleteBackendAiCanvasNote(canvasNoteId: number) {
+  return request<void>(`/ai-canvas-notes/${canvasNoteId}`, {
+    method: 'DELETE',
   });
 }
 
