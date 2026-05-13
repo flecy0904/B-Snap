@@ -73,6 +73,7 @@ export type BackendChatMessage = {
   session_id: number;
   role: 'user' | 'assistant' | string;
   content: string;
+  selection_image_url?: string | null;
   model: string | null;
   created_at: string;
 };
@@ -83,6 +84,23 @@ export type BackendNotePage = {
   page_number: number;
   content: string | null;
   image_url: string | null;
+};
+
+export type BackendAiCanvasNote = {
+  id: number;
+  folder_id: number;
+  note_id: number;
+  title: string;
+  markdown: string;
+  source_page_start: number | null;
+  source_page_end: number | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type BackendAiCanvasEditResponse = {
+  markdown: string;
+  model: string;
 };
 
 export type BackendAiMessageResponse = {
@@ -96,6 +114,13 @@ export type BackendAiMessageResponse = {
     model: string | null;
     created_at: string;
   };
+  chat_session?: BackendChatSession | null;
+};
+
+export type BackendPdfTextExtractionResponse = {
+  note_id: number;
+  pages_extracted: number;
+  pages: BackendNotePage[];
 };
 
 export type BackendUpload = {
@@ -444,6 +469,82 @@ export async function updateBackendNotePage(payload: {
   };
 }
 
+export async function extractBackendPdfText(payload: {
+  noteId: number;
+  pdfData: string;
+}) {
+  return request<BackendPdfTextExtractionResponse>(`/notes/${payload.noteId}/extract-pdf-text`, {
+    method: 'POST',
+    body: {
+      pdf_data: payload.pdfData,
+    },
+  });
+}
+
+export function listBackendAiCanvasNotes(noteId: number) {
+  return request<BackendAiCanvasNote[]>(`/notes/${noteId}/ai-canvas-notes`);
+}
+
+export function listBackendAiCanvasNotesByFolder(folderId: number) {
+  return request<BackendAiCanvasNote[]>(`/folders/${folderId}/ai-canvas-notes`);
+}
+
+export async function createBackendAiCanvasNote(payload: {
+  noteId: number;
+  title: string;
+  markdown?: string;
+  sourcePageStart?: number | null;
+  sourcePageEnd?: number | null;
+}) {
+  return request<BackendAiCanvasNote>(`/notes/${payload.noteId}/ai-canvas-notes`, {
+    method: 'POST',
+    body: {
+      title: payload.title,
+      markdown: payload.markdown ?? '',
+      source_page_start: payload.sourcePageStart ?? null,
+      source_page_end: payload.sourcePageEnd ?? null,
+    },
+  });
+}
+
+export async function updateBackendAiCanvasNote(payload: {
+  canvasNoteId: number;
+  title?: string;
+  markdown?: string;
+  sourcePageStart?: number | null;
+  sourcePageEnd?: number | null;
+}) {
+  return request<BackendAiCanvasNote>(`/ai-canvas-notes/${payload.canvasNoteId}`, {
+    method: 'PATCH',
+    body: {
+      title: payload.title,
+      markdown: payload.markdown,
+      source_page_start: payload.sourcePageStart,
+      source_page_end: payload.sourcePageEnd,
+    },
+  });
+}
+
+export function deleteBackendAiCanvasNote(canvasNoteId: number) {
+  return request<void>(`/ai-canvas-notes/${canvasNoteId}`, {
+    method: 'DELETE',
+  });
+}
+
+export async function requestBackendAiCanvasEdit(payload: {
+  canvasNoteId: number;
+  instruction: string;
+  model?: string | null;
+}) {
+  return request<BackendAiCanvasEditResponse>(`/ai-canvas-notes/${payload.canvasNoteId}/ai-edit`, {
+    method: 'POST',
+    body: {
+      instruction: payload.instruction,
+      model: payload.model ?? null,
+    },
+  });
+}
+
 export async function createBackendChatSession(payload: {
   noteId: number;
   title: string;
@@ -504,15 +605,17 @@ export async function sendBackendAiMessage(payload: {
     pageHeight?: number;
   } | null;
   pageNumber?: number | null;
+  selectionImageUri?: string | null;
 }) {
   return request<BackendAiMessageResponse>(`/chat-sessions/${payload.sessionId}/ai-messages`, {
     method: 'POST',
     body: {
       content: payload.content,
       model: payload.model ?? null,
-      selection_image: payload.selectionImage ?? null,
+      selection_image: payload.selectionImage ?? payload.selectionImageUri ?? null,
       selection_rect: payload.selectionRect ?? null,
       page_number: payload.pageNumber ?? null,
+      selection_image_url: payload.selectionImageUri ?? null,
     },
   });
 }

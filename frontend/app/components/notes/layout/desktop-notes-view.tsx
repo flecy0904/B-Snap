@@ -5,6 +5,7 @@ import { subjects as allSubjects } from '../../../app-defaults';
 import { useDesktopNotesWorkspaceViewModel } from '../../../hooks/notes/use-desktop-notes-workspace-view-model';
 import { buildAiResponse, NoteSummaryContent } from '../shared/notes-shared';
 import { NotesAiAssistantPanel } from '../ai/notes-ai-assistant-panel';
+import { NotesAiCanvasPanel } from '../ai-canvas/notes-ai-canvas-panel';
 import { NotesDocumentViewer } from '../workspace/notes-document-viewer';
 import { NotesWorkspaceToolbar, NotesPageListOverlay } from '../workspace/notes-workspace-toolbar';
 import { NotesWorkspaceDock } from '../workspace/notes-workspace-dock';
@@ -12,6 +13,7 @@ import { NotesDetailHeader } from './notes-detail-header';
 import { NotesBrowser } from './notes-browser';
 import { DesktopNotesWorkspaceProvider } from '../workspace/notes-workspace-context';
 import type { BackendChatMessage, BackendChatSession } from '../../../services/backend-api';
+import type { UseAiCanvasNotesResult } from '../../../hooks/notes/ai-canvas/use-ai-canvas-notes';
 import {
   AiAnswer,
   CaptureAsset,
@@ -47,6 +49,7 @@ export type DesktopNotesViewProps = {
   inkByDocument: Record<number, InkStroke[]>;
   textAnnotationsByDocument: Record<number, InkTextAnnotation[]>;
   aiPanelOpen: boolean;
+  aiPanelMode: 'floating' | 'sidebar';
   selectionRect: SelectionRect | null;
   selectionPreviewUri: string | null;
   aiQuestion: string;
@@ -58,8 +61,10 @@ export type DesktopNotesViewProps = {
   aiChatScope: 'note' | 'all';
   aiChatSearchQuery: string;
   activeAiChatSessionId: number | null;
+  aiChatReadOnly: boolean;
   aiLoading: boolean;
   aiError: string | null;
+  aiCanvas: UseAiCanvasNotesResult;
   incomingAssetSuggestion: CaptureAsset | null;
   inboxHint: string | null;
   inboxPendingCount: number;
@@ -85,6 +90,7 @@ export type DesktopNotesViewProps = {
   onChangePenColor: (color: string) => void;
   onChangePenWidth: (width: number) => void;
   onToggleAiPanel: () => void;
+  onChangeAiPanelMode: (mode: 'floating' | 'sidebar') => void;
   onChangeAiQuestion: (value: string) => void;
   onChangeAiChatScope: (scope: 'note' | 'all') => void;
   onChangeAiChatSearchQuery: (value: string) => void;
@@ -218,6 +224,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           styles: props.styles,
           blueColor: props.blueColor,
           aiPanelOpen: props.aiPanelOpen,
+          aiPanelMode: props.aiPanelMode,
           selectionRect: props.selectionRect,
           selectionPreviewUri: props.selectionPreviewUri,
           aiQuestion: props.aiQuestion,
@@ -232,8 +239,10 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           aiChatScope: props.aiChatScope,
           aiChatSearchQuery: props.aiChatSearchQuery,
           activeAiChatSessionId: props.activeAiChatSessionId,
+          aiChatReadOnly: props.aiChatReadOnly,
           aiLoading: props.aiLoading,
           aiError: props.aiError,
+          aiCanvas: props.aiCanvas,
           inkTool: props.inkTool,
           penColor: props.penColor,
           penWidth: props.penWidth,
@@ -265,6 +274,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           activeGeneratedAttachment: workspace.activeGeneratedAttachment,
           activeGeneratedPreviewImage: workspace.activeGeneratedPreviewImage,
           onToggleAiPanel: props.onToggleAiPanel,
+          onChangeAiPanelMode: props.onChangeAiPanelMode,
           onChangeAiQuestion: props.onChangeAiQuestion,
           onChangeAiChatScope: props.onChangeAiChatScope,
           onChangeAiChatSearchQuery: props.onChangeAiChatSearchQuery,
@@ -355,10 +365,22 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
             </View>
           ) : null}
           <View style={props.styles.desktopDocumentDetailBody}>
-            <NotesAiAssistantPanel />
+            {props.aiPanelMode === 'floating' ? <NotesAiAssistantPanel /> : null}
             <NotesWorkspaceToolbar />
-            {workspace.showWorkspaceDock ? <NotesWorkspaceDock /> : null}
-            <NotesDocumentViewer />
+            {props.workspaceFeedback ? (
+              <View style={props.styles.workspaceToast}>
+                <MaterialCommunityIcons name="check-circle-outline" size={16} color="#4D67D8" />
+                <Text style={props.styles.workspaceToastText}>{props.workspaceFeedback}</Text>
+              </View>
+            ) : null}
+            <View style={(props.aiPanelMode === 'sidebar' && props.aiPanelOpen) || props.aiCanvas.isOpen ? props.styles.desktopDocumentSidebarContentRow : props.styles.desktopDocumentWorkspacePane}>
+              {props.aiPanelMode === 'sidebar' ? <NotesAiAssistantPanel /> : null}
+              <View style={props.styles.desktopDocumentViewerPane}>
+                {workspace.showWorkspaceDock ? <NotesWorkspaceDock /> : null}
+                <NotesDocumentViewer />
+              </View>
+              {props.aiCanvas.isOpen ? <NotesAiCanvasPanel /> : null}
+            </View>
           </View>
         </View>
         <NotesPageListOverlay />

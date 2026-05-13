@@ -1,5 +1,6 @@
 import React from 'react';
 import type { BackendChatMessage, BackendChatSession } from '../../../services/backend-api';
+import type { UseAiCanvasNotesResult } from '../../../hooks/notes/ai-canvas/use-ai-canvas-notes';
 import { AiAnswer, NoteSummarySection, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NotebookPage, StudyDocumentEntry, WorkspaceAttachment } from '../../../types';
 import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 
@@ -7,6 +8,7 @@ export type DesktopNotesWorkspaceContextValue = {
   styles: any;
   blueColor: string;
   aiPanelOpen: boolean;
+  aiPanelMode: 'floating' | 'sidebar';
   selectionRect: SelectionRect | null;
   selectionPreviewUri: string | null;
   aiQuestion: string;
@@ -21,8 +23,10 @@ export type DesktopNotesWorkspaceContextValue = {
   aiChatScope: 'note' | 'all';
   aiChatSearchQuery: string;
   activeAiChatSessionId: number | null;
+  aiChatReadOnly: boolean;
   aiLoading: boolean;
   aiError: string | null;
+  aiCanvas: UseAiCanvasNotesResult;
   inkTool: InkTool;
   penColor: string;
   penWidth: number;
@@ -54,6 +58,7 @@ export type DesktopNotesWorkspaceContextValue = {
   activeGeneratedAttachment: WorkspaceAttachment | null;
   activeGeneratedPreviewImage?: number;
   onToggleAiPanel: () => void;
+  onChangeAiPanelMode: (mode: 'floating' | 'sidebar') => void;
   onChangeAiQuestion: (value: string) => void;
   onChangeAiChatScope: (scope: 'note' | 'all') => void;
   onChangeAiChatSearchQuery: (value: string) => void;

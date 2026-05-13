@@ -54,8 +54,10 @@ export function AiChatProvider({ children }: { children: React.ReactNode }) {
   const [chatSessionsByDocument, setChatSessionsByDocument] = useState<Record<number, BackendChatSession[]>>({});
   const [allChatSessions, setAllChatSessions] = useState<BackendChatSession[]>([]);
   const [aiMessagesBySession, setAiMessagesBySession] = useState<Record<number, BackendChatMessage[]>>({});
+  const [, setSelectionPreviewByDocument] = useState<Record<number, string | null>>({});
+  const [viewingAiChatSessionId, setViewingAiChatSessionId] = useState<number | null>(null);
 
-  const activeAiChatSessionId = studyDocumentId ? chatSessionByDocument[studyDocumentId] ?? null : null;
+  const activeAiChatSessionId = viewingAiChatSessionId ?? (studyDocumentId ? chatSessionByDocument[studyDocumentId] ?? null : null);
   const aiMessages = activeAiChatSessionId ? aiMessagesBySession[activeAiChatSessionId] ?? [] : [];
 
   const noteAiChatSessions = useMemo(() => {
@@ -78,6 +80,7 @@ export function AiChatProvider({ children }: { children: React.ReactNode }) {
     selectionPreviewUri: null,
     currentPageNumber: null,
     activeAiChatSessionId,
+    aiChatReadOnly: false,
     aiQuestion,
     chatSessionByDocument,
     chatSessionsByDocument,
@@ -86,7 +89,9 @@ export function AiChatProvider({ children }: { children: React.ReactNode }) {
     setAiQuestion,
     setAiError,
     setAiLoading,
+    setSelectionPreviewByDocument,
     setChatSessionByDocument,
+    setViewingAiChatSessionId,
     setLastChatSessionByDocument,
     setChatSessionsByDocument,
     setAllChatSessions,

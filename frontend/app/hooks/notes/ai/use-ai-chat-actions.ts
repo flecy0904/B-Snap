@@ -17,6 +17,25 @@ import { getAiBackendErrorMessage } from './ai-errors';
 
 type SetState<T> = Dispatch<SetStateAction<T>>;
 
+function isCanvasEditIntent(question: string) {
+  const lowerQuestion = question.toLowerCase();
+  const mentionsCanvas = lowerQuestion.includes('canvas') || question.includes('캔버스');
+  if (!mentionsCanvas) return false;
+
+  return [
+    '적어',
+    '써',
+    '정리',
+    '요약',
+    '추가',
+    '수정',
+    '반영',
+    '넣어',
+    '만들',
+    '작성',
+  ].some((keyword) => question.includes(keyword));
+}
+
 export function useAiChatActions(params: {
   studyDocumentId: number | null;
   studyDocument: StudyDocumentEntry | null;
@@ -25,6 +44,7 @@ export function useAiChatActions(params: {
   selectionPreviewUri: string | null;
   currentPageNumber: number | null;
   activeAiChatSessionId: number | null;
+  aiChatReadOnly: boolean;
   aiQuestion: string;
   chatSessionByDocument: Record<number, number>;
   chatSessionsByDocument: Record<number, BackendChatSession[]>;
@@ -33,11 +53,14 @@ export function useAiChatActions(params: {
   setAiQuestion: SetState<string>;
   setAiError: SetState<string | null>;
   setAiLoading: SetState<boolean>;
+  setSelectionPreviewByDocument: SetState<Record<number, string | null>>;
   setChatSessionByDocument: SetState<Record<number, number>>;
+  setViewingAiChatSessionId: SetState<number | null>;
   setLastChatSessionByDocument: SetState<Record<number, number>>;
   setChatSessionsByDocument: SetState<Record<number, BackendChatSession[]>>;
   setAllChatSessions: SetState<BackendChatSession[]>;
   setAiMessagesBySession: SetState<Record<number, BackendChatMessage[]>>;
+  onRequestCanvasEditFromChat?: (payload: { question: string; answer: string }) => Promise<void>;
 }) {
   const buildSelectionImagePayload = async () => {
     const uri = params.selectionPreviewUri;
@@ -53,6 +76,17 @@ export function useAiChatActions(params: {
       params.setAiError('선택 이미지를 첨부하지 못했습니다. 텍스트 질문만으로 답변을 요청합니다.');
       return null;
     }
+  };
+
+  const upsertSession = (session: BackendChatSession) => {
+    params.setAllChatSessions((current) => [session, ...current.filter((item) => item.id !== session.id)]);
+    params.setChatSessionsByDocument((current) => ({
+      ...current,
+      [session.note_id]: [
+        session,
+        ...(current[session.note_id] ?? []).filter((item) => item.id !== session.id),
+      ],
+    }));
   };
 
   const selectAiChatSession = async (sessionId: number) => {
@@ -71,17 +105,18 @@ export function useAiChatActions(params: {
         ?? Object.values(params.chatSessionsByDocument).flat().find((session) => session.id === sessionId)
         ?? null;
       const targetDocumentId = selectedSession?.note_id ?? params.studyDocumentId ?? null;
-      params.setChatSessionByDocument((current) => {
-        const next = { ...current };
-        if (params.studyDocumentId) next[params.studyDocumentId] = sessionId;
-        if (targetDocumentId) next[targetDocumentId] = sessionId;
-        return next;
-      });
-      params.setLastChatSessionByDocument((current) => {
-        const next = { ...current };
-        if (targetDocumentId) next[targetDocumentId] = sessionId;
-        return next;
-      });
+      const isCurrentDocumentSession = Boolean(params.studyDocumentId && targetDocumentId === params.studyDocumentId);
+      params.setViewingAiChatSessionId(isCurrentDocumentSession ? null : sessionId);
+      if (isCurrentDocumentSession) {
+        params.setChatSessionByDocument((current) => ({
+          ...current,
+          [params.studyDocumentId!]: sessionId,
+        }));
+        params.setLastChatSessionByDocument((current) => ({
+          ...current,
+          [params.studyDocumentId!]: sessionId,
+        }));
+      }
       params.setAiMessagesBySession((current) => ({ ...current, [sessionId]: messages }));
 
       const lastAssistant = [...messages].reverse().find((message) => message.role === 'assistant');
@@ -160,6 +195,7 @@ export function useAiChatActions(params: {
         delete next[sessionId];
         return next;
       });
+      params.setViewingAiChatSessionId((current) => (current === sessionId ? null : current));
       params.setChatSessionByDocument((current) => {
         const next = { ...current };
         Object.entries(next).forEach(([documentId, activeSessionId]) => {
@@ -227,12 +263,9 @@ export function useAiChatActions(params: {
         noteId: params.studyDocumentId,
         title: params.studyDocument?.title ? `${params.studyDocument.title} AI 채팅` : 'AI 채팅',
       });
-      params.setChatSessionsByDocument((current) => ({
-        ...current,
-        [params.studyDocumentId!]: [session, ...(current[params.studyDocumentId!] ?? [])],
-      }));
-      params.setAllChatSessions((current) => [session, ...current.filter((item) => item.id !== session.id)]);
+      upsertSession(session);
       params.setChatSessionByDocument((current) => ({ ...current, [params.studyDocumentId!]: session.id }));
+      params.setViewingAiChatSessionId(null);
       params.setAiMessagesBySession((current) => ({ ...current, [session.id]: [] }));
       params.setAiAnswer(null);
       params.setAiQuestion('');
@@ -245,6 +278,7 @@ export function useAiChatActions(params: {
 
   const startNewAiChatSession = () => {
     if (params.studyDocumentId) {
+      params.setViewingAiChatSessionId(null);
       params.setChatSessionByDocument((current) => {
         const next = { ...current };
         delete next[params.studyDocumentId!];
@@ -258,12 +292,20 @@ export function useAiChatActions(params: {
 
   const requestAiAnswer = async () => {
     if (!params.studyDocumentId) return;
+    if (params.aiChatReadOnly) {
+      params.setAiError('보고 있는 노트와 연결된 대화방이 아니라서 읽기만 가능합니다.');
+      return;
+    }
 
     const hasSelection = Boolean(params.selectionRect || params.selectionPreviewUri);
+    const selectionPreviewUri = params.selectionPreviewUri;
     const question = params.aiQuestion.trim() || (hasSelection ? '선택한 영역을 설명해줘' : '현재 페이지를 요약해줘');
     params.setAiLoading(true);
     params.setAiError(null);
     params.setAiQuestion('');
+    if (selectionPreviewUri) {
+      params.setSelectionPreviewByDocument((current) => ({ ...current, [params.studyDocumentId!]: null }));
+    }
     let aiRequestStage: 'chat-session' | 'ai-answer' = 'ai-answer';
 
     try {
@@ -295,11 +337,7 @@ export function useAiChatActions(params: {
           ...current,
           [params.studyDocumentId!]: session.id,
         }));
-        params.setChatSessionsByDocument((current) => ({
-          ...current,
-          [params.studyDocumentId!]: [session, ...(current[params.studyDocumentId!] ?? [])],
-        }));
-        params.setAllChatSessions((current) => [session, ...current.filter((item) => item.id !== session.id)]);
+        upsertSession(session);
       }
 
       aiRequestStage = 'ai-answer';
@@ -308,6 +346,7 @@ export function useAiChatActions(params: {
         session_id: sessionId,
         role: 'user',
         content: question,
+        selection_image_url: selectionPreviewUri,
         model: null,
         created_at: new Date().toISOString(),
       };
@@ -321,9 +360,14 @@ export function useAiChatActions(params: {
         sessionId,
         content: question,
         selectionImage,
+        selectionImageUri: selectionPreviewUri,
         selectionRect: params.selectionRect,
         pageNumber: params.currentPageNumber,
       });
+      const userMessageWithAttachment = {
+        ...response.user_message,
+        selection_image_url: selectionPreviewUri,
+      };
       params.setLastChatSessionByDocument((current) => ({
         ...current,
         [params.studyDocumentId!]: sessionId,
@@ -334,20 +378,24 @@ export function useAiChatActions(params: {
         [sessionId]: (current[sessionId] ?? []).some((message) => message.id === pendingUserMessage.id)
           ? (current[sessionId] ?? []).flatMap((message) => (
             message.id === pendingUserMessage.id
-              ? [response.user_message, response.assistant_message]
+              ? [userMessageWithAttachment, response.assistant_message]
               : [message]
           ))
           : [
             ...(current[sessionId] ?? []),
-            response.user_message,
+            userMessageWithAttachment,
             response.assistant_message,
           ],
       }));
-      params.setAllChatSessions((current) => {
-        const target = current.find((session) => session.id === sessionId);
-        if (!target) return current;
-        return [target, ...current.filter((session) => session.id !== sessionId)];
-      });
+      if (response.chat_session) {
+        upsertSession(response.chat_session);
+      } else {
+        params.setAllChatSessions((current) => {
+          const target = current.find((session) => session.id === sessionId);
+          if (!target) return current;
+          return [target, ...current.filter((session) => session.id !== sessionId)];
+        });
+      }
       params.setAiAnswer({
         question,
         response: content,
@@ -360,6 +408,9 @@ export function useAiChatActions(params: {
         ],
         createdAt: response.assistant_message.created_at,
       });
+      if (params.onRequestCanvasEditFromChat && isCanvasEditIntent(question)) {
+        void params.onRequestCanvasEditFromChat({ question, answer: content });
+      }
     } catch (error) {
       params.setAiError(getAiBackendErrorMessage(
         error,

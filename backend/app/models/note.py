@@ -21,3 +21,4 @@ class Note(Base):
     folder = relationship("Folder", back_populates="notes")
     pages = relationship("NotePage", back_populates="note", cascade="all, delete-orphan")
     chat_sessions = relationship("ChatSession", back_populates="note", cascade="all, delete-orphan")
+    ai_canvas_notes = relationship("AiCanvasNote", back_populates="note", cascade="all, delete-orphan")

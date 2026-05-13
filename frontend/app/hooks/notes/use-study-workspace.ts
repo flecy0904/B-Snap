@@ -1,11 +1,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Platform } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
+import { File } from 'expo-file-system';
 import {
   createBackendNote,
   createBackendNotePage,
   deleteBackendNote,
   ensureFolderForSubject,
+  extractBackendPdfText,
   isBackendApiEnabled,
   listAllBackendChatSessions,
   listBackendChatMessages,
@@ -37,6 +39,7 @@ import {
 import { getAiBackendErrorMessage } from './ai/ai-errors';
 import { useAiChatActions } from './ai/use-ai-chat-actions';
 import { useAiChatDerivedState } from './ai/use-ai-chat-derived-state';
+import { useAiCanvasNotes } from './ai-canvas/use-ai-canvas-notes';
 import { addUniqueId, removeId, upsertStudyDocument } from './document/collection-helpers';
 import { useDocumentPageActions } from './document/use-document-page-actions';
 import { confirmDeleteAction } from './ui/confirm-delete-action';
@@ -56,6 +59,19 @@ type PendingPageSave = {
   attempts: number;
   updatedAt: number;
 };
+
+async function buildPdfDataUriForTextExtraction(picked: DocumentPicker.DocumentPickerAsset, pdfFileUri: string) {
+  if (pdfFileUri.startsWith('data:application/pdf')) return pdfFileUri;
+  if (Platform.OS === 'web' && picked.base64) {
+    return picked.base64.startsWith('data:application/pdf')
+      ? picked.base64
+      : `data:application/pdf;base64,${picked.base64}`;
+  }
+  if (!picked.uri) return null;
+
+  const base64 = await new File(picked.uri).base64();
+  return `data:application/pdf;base64,${base64}`;
+}
 
 export function useStudyWorkspace(props: {
   wide: boolean;
@@ -77,6 +93,7 @@ export function useStudyWorkspace(props: {
   const [redoInkByDocument, setRedoInkByDocument] = useState<Record<number, InkStroke[]>>({});
   const [textAnnotationsByDocument, setTextAnnotationsByDocument] = useState<Record<number, InkTextAnnotation[]>>({});
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
+  const [aiPanelMode, setAiPanelMode] = useState<'floating' | 'sidebar'>('floating');
   const [selectionByDocument, setSelectionByDocument] = useState<Record<number, SelectionRect | null>>({});
   const [aiQuestion, setAiQuestion] = useState('');
   const [incomingAssetSuggestion, setIncomingAssetSuggestion] = useState<CaptureAsset | null>(null);
@@ -96,6 +113,7 @@ export function useStudyWorkspace(props: {
   const [aiError, setAiError] = useState<string | null>(null);
   const [selectionPreviewByDocument, setSelectionPreviewByDocument] = useState<Record<number, string | null>>({});
   const [chatSessionByDocument, setChatSessionByDocument] = useState<Record<number, number>>({});
+  const [viewingAiChatSessionId, setViewingAiChatSessionId] = useState<number | null>(null);
   const [lastChatSessionByDocument, setLastChatSessionByDocument] = useState<Record<number, number>>({});
   const [chatSessionsByDocument, setChatSessionsByDocument] = useState<Record<number, BackendChatSession[]>>({});
   const [allChatSessions, setAllChatSessions] = useState<BackendChatSession[]>([]);
@@ -182,6 +200,7 @@ export function useStudyWorkspace(props: {
     setActivePageByDocument(snapshot.activePageByDocument);
     setBookmarksByDocument(snapshot.bookmarksByDocument ?? {});
     setLastChatSessionByDocument(snapshot.lastChatSessionByDocument ?? {});
+    setAiPanelMode(snapshot.aiPanelMode === 'sidebar' ? 'sidebar' : 'floating');
   }, []);
   const persistedWorkspaceState = useMemo<PersistedStudyWorkspaceState>(() => ({
     version: 1,
@@ -197,8 +216,10 @@ export function useStudyWorkspace(props: {
     activePageByDocument,
     bookmarksByDocument,
     lastChatSessionByDocument,
+    aiPanelMode,
   }), [
     activePageByDocument,
+    aiPanelMode,
     attachmentsByDocument,
     bookmarksByDocument,
     captureAssetsBySubject,
@@ -217,6 +238,7 @@ export function useStudyWorkspace(props: {
   });
   const {
     activeAiChatSessionId,
+    aiChatReadOnly,
     aiMessages,
     selectionPreviewUri,
     noteAiChatSessions: aiChatSessions,
@@ -225,6 +247,7 @@ export function useStudyWorkspace(props: {
   } = useAiChatDerivedState({
     studyDocumentId,
     chatSessionByDocument,
+    viewingAiChatSessionId,
     aiMessagesBySession,
     selectionPreviewByDocument,
     chatSessionsByDocument,
@@ -232,6 +255,13 @@ export function useStudyWorkspace(props: {
     aiChatScope,
     aiChatSearchQuery,
     backendPageIdsByDocument,
+  });
+  const currentAiCanvasPageNumber = currentDocumentPage?.kind === 'pdf' ? currentDocumentPage.pageNumber : currentPdfPage;
+  const aiCanvas = useAiCanvasNotes({
+    noteId: studyDocumentId,
+    enabled: workspaceHydrated && isBackendApiEnabled() && !!studyDocumentId && currentDocumentHasBackendPages,
+    currentPageNumber: currentAiCanvasPageNumber ?? null,
+    onFeedback: setWorkspaceFeedback,
   });
 
   useEffect(() => {
@@ -607,10 +637,13 @@ export function useStudyWorkspace(props: {
     setSubjectId(selected.subjectId);
     setNoteId(null);
     setStudyDocumentId(id);
+    setViewingAiChatSessionId(null);
     setChatSessionByDocument((current) => {
+      const next = { ...current };
       const lastSessionId = lastChatSessionByDocument[id];
-      if (!lastSessionId) return current;
-      return { ...current, [id]: lastSessionId };
+      if (lastSessionId) next[id] = lastSessionId;
+      else delete next[id];
+      return next;
     });
     setInkTool('view');
     setActivePageByDocument((current) => ({
@@ -926,6 +959,36 @@ export function useStudyWorkspace(props: {
             ...current,
             [result.note.id]: pagesByNumber,
           }));
+          void buildPdfDataUriForTextExtraction(picked, localPdfFileUri)
+            .then((pdfData) => {
+              if (!pdfData) return null;
+              return extractBackendPdfText({
+                noteId: result.note.id,
+                pdfData,
+              });
+            })
+            .then((textResult) => {
+              if (!textResult) return;
+              const pagesByNumber = textResult.pages.reduce<Record<number, number>>((next, page) => {
+                next[page.page_number] = page.id;
+                return next;
+              }, {});
+              setBackendPageIdsByDocument((current) => ({
+                ...current,
+                [result.note.id]: {
+                  ...(current[result.note.id] ?? {}),
+                  ...pagesByNumber,
+                },
+              }));
+              setUserStudyDocuments((current) => current.map((item) => (
+                item.id === result.note.id
+                  ? { ...item, pageCount: Math.max(item.pageCount, textResult.pages_extracted) }
+                  : item
+              )));
+            })
+            .catch(() => {
+              setWorkspaceFeedback('PDF text extraction failed.');
+            });
           const document: StudyDocumentEntry = {
             id: result.note.id,
             subjectId: targetSubjectId,
@@ -1281,6 +1344,7 @@ export function useStudyWorkspace(props: {
     selectionPreviewUri,
     currentPageNumber: currentDocumentPage?.kind === 'pdf' ? currentDocumentPage.pageNumber : null,
     activeAiChatSessionId,
+    aiChatReadOnly,
     aiQuestion,
     chatSessionByDocument,
     chatSessionsByDocument,
@@ -1289,11 +1353,14 @@ export function useStudyWorkspace(props: {
     setAiQuestion,
     setAiError,
     setAiLoading,
+    setSelectionPreviewByDocument,
     setChatSessionByDocument,
+    setViewingAiChatSessionId,
     setLastChatSessionByDocument,
     setChatSessionsByDocument,
     setAllChatSessions,
     setAiMessagesBySession,
+    onRequestCanvasEditFromChat: aiCanvas.requestAiEditFromChat,
   });
 
   const acceptIncomingAsset = () => {
@@ -1487,6 +1554,7 @@ export function useStudyWorkspace(props: {
     inkByDocument,
     textAnnotationsByDocument,
     aiPanelOpen,
+    aiPanelMode,
     selectionRect,
     selectionPreviewUri,
     aiQuestion,
@@ -1498,8 +1566,10 @@ export function useStudyWorkspace(props: {
     aiChatScope,
     aiChatSearchQuery,
     activeAiChatSessionId,
+    aiChatReadOnly,
     aiLoading,
     aiError,
+    aiCanvas,
     query,
     sort,
     incomingAssetSuggestion,
@@ -1545,7 +1615,12 @@ export function useStudyWorkspace(props: {
     changeInkTool,
     changePenColor,
     changePenWidth,
-    toggleAiPanel: () => setAiPanelOpen((current) => !current),
+    toggleAiPanel: () => setAiPanelOpen((current) => {
+      const next = !current;
+      if (next) setViewingAiChatSessionId(null);
+      return next;
+    }),
+    setAiPanelMode,
     setAiQuestion,
     setAiChatScope,
     setAiChatSearchQuery,

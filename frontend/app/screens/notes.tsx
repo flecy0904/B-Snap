@@ -6,10 +6,6 @@ import { AiChatProvider } from '../components/notes/ai/ai-chat-context';
 import { CanvasProvider } from '../components/notes/canvas/canvas-context';
 import { NavigationProvider } from '../components/notes/workspace/navigation-context';
 import { DocumentProvider } from '../components/notes/workspace/document-context';
-import { AiAnswer, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NoteEntry, NoteWorkspaceMode, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../types';
-import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../ui-types';
-import { AppStyles } from '../styles';
-import type { BackendChatMessage, BackendChatSession } from '../services/backend-api';
 
 export function MobileNotes(props: any) {
   return (

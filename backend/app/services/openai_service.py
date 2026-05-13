@@ -5,30 +5,26 @@ from fastapi import HTTPException
 from openai import OpenAI, OpenAIError
 
 from backend.app.core.config import get_settings
+from backend.app.services.note_page_content import extract_ai_page_text
+from backend.app.services.prompts.ai_canvas import AI_CANVAS_EDIT_INSTRUCTIONS
+from backend.app.services.prompts.chat_title import CHAT_TITLE_INSTRUCTIONS
+from backend.app.services.prompts.note_assistant import NOTE_CHAT_INSTRUCTIONS
 
 
-NOTE_CHAT_INSTRUCTIONS = """
-You are B-Snap's study note assistant.
-Answer in Korean unless the user explicitly asks for another language.
-Use the provided note title, summary, pages, and previous messages as context.
-If the context is insufficient, say what is missing and give a useful next step.
-Keep the response concise and structured for a student reviewing class notes.
-""".strip()
-
-
-def build_note_context(note: dict, pages: list[dict]) -> str:
+def build_note_context(note: dict, pages: list[dict], current_page_number: int | None = None) -> str:
     page_lines = []
     for page in pages:
-        content = page.get("content") or ""
-        image_url = page.get("image_url") or ""
+        content = extract_ai_page_text(page.get("content"))
+        attachment_status = "has source file" if page.get("image_url") else "no source file"
         page_lines.append(
-            f"- page {page['page_number']}: content={content!r}, image_url={image_url!r}"
+            f"- page {page['page_number']} ({attachment_status}): {content or 'no extracted text yet'}"
         )
 
     return "\n".join(
         [
             f"Note title: {note['title']}",
             f"Note summary: {note.get('summary') or ''}",
+            f"Current page: {current_page_number if current_page_number is not None else 'unknown'}",
             "Pages:",
             "\n".join(page_lines) if page_lines else "- no pages yet",
         ]
@@ -43,26 +39,40 @@ def build_response_input(
     selection_image: str | None = None,
     selection_rect: dict[str, Any] | None = None,
     page_number: int | None = None,
+    current_page_number: int | None = None,
+    selection_image_url: str | None = None,
 ) -> list[dict[str, Any]]:
+    active_page_number = current_page_number if current_page_number is not None else page_number
     input_items: list[dict[str, Any]] = [
         {
             "role": "user",
-            "content": "Use this note context when answering:\n\n" + build_note_context(note, pages),
+            "content": "Use this note context when answering:\n\n"
+            + build_note_context(note, pages, current_page_number=active_page_number),
         }
     ]
 
-    for message in messages[-12:]:
+    if messages:
+        input_items.append({
+            "role": "user",
+            "content": (
+                "Recent conversation below is for continuity only. "
+                "Do not treat it as note or PDF source content."
+            ),
+        })
+
+    for message in messages[-8:]:
         role = message["role"] if message["role"] in {"user", "assistant"} else "user"
         input_items.append({"role": role, "content": message["content"]})
 
     selection_context = build_selection_context(selection_rect=selection_rect, page_number=page_number)
-    if selection_image:
+    image_url = selection_image or selection_image_url
+    if image_url:
         input_items.append(
             {
                 "role": "user",
                 "content": [
                     {"type": "input_text", "text": f"{selection_context}\n\nUser question: {user_content}".strip()},
-                    {"type": "input_image", "image_url": selection_image},
+                    {"type": "input_image", "image_url": image_url},
                 ],
             }
         )
@@ -103,6 +113,8 @@ def generate_note_chat_answer(
     selection_image: str | None = None,
     selection_rect: dict[str, Any] | None = None,
     page_number: int | None = None,
+    current_page_number: int | None = None,
+    selection_image_url: str | None = None,
 ) -> str:
     return generate_text_response(
         model=model,
@@ -115,7 +127,65 @@ def generate_note_chat_answer(
             selection_image=selection_image,
             selection_rect=selection_rect,
             page_number=page_number,
+            current_page_number=current_page_number,
+            selection_image_url=selection_image_url,
         ),
+    )
+
+
+def normalize_chat_title(title: str, fallback: str) -> str:
+    normalized = " ".join(title.replace("\n", " ").split()).strip()
+    normalized = normalized.strip("\"'`“”‘’[](){}")
+    if not normalized:
+        return fallback
+    return normalized[:30]
+
+
+def generate_chat_title(
+    *,
+    model: str,
+    note: dict,
+    user_content: str,
+    assistant_content: str | None = None,
+) -> str:
+    fallback = normalize_chat_title(user_content, "AI 채팅")
+    title = generate_text_response(
+        model=model,
+        instructions=CHAT_TITLE_INSTRUCTIONS,
+        input_items=[{
+            "role": "user",
+            "content": "\n".join([
+                f"Note title: {note['title']}",
+                "Create a chat title from this first user question only:",
+                user_content,
+            ]),
+        }],
+    )
+    return normalize_chat_title(title, fallback)
+
+
+def generate_ai_canvas_edit(
+    *,
+    model: str,
+    title: str,
+    markdown: str,
+    instruction: str,
+) -> str:
+    return generate_text_response(
+        model=model,
+        instructions=AI_CANVAS_EDIT_INSTRUCTIONS,
+        input_items=[{
+            "role": "user",
+            "content": "\n".join([
+                f"Canvas title: {title}",
+                "",
+                "Current Markdown:",
+                markdown or "(empty)",
+                "",
+                "User edit instruction:",
+                instruction,
+            ]),
+        }],
     )
 
 
