@@ -201,6 +201,7 @@ export function AppShell(props: {
                   inkStrokes={notesState.inkStrokes}
                   textAnnotations={notesState.textAnnotations}
                   aiPanelOpen={notesState.aiPanelOpen}
+                  aiPanelMode={notesState.aiPanelMode}
                   selectionRect={notesState.selectionRect}
                   selectionPreviewUri={notesState.selectionPreviewUri}
                   aiQuestion={notesState.aiQuestion}
@@ -238,6 +239,7 @@ export function AppShell(props: {
                   onChangePenColor={notesState.changePenColor}
                   onChangePenWidth={notesState.changePenWidth}
                   onToggleAiPanel={notesState.toggleAiPanel}
+                  onChangeAiPanelMode={notesState.setAiPanelMode}
                   onChangeAiQuestion={notesState.setAiQuestion}
                   onChangeAiChatScope={notesState.setAiChatScope}
                   onChangeAiChatSearchQuery={notesState.setAiChatSearchQuery}

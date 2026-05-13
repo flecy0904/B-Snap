@@ -115,6 +115,11 @@ export function NotesAiAssistantPanel() {
     setMenuSessionId(null);
   };
 
+  const togglePanelMode = () => {
+    closeOpenMenus();
+    workspace.onChangeAiPanelMode(workspace.aiPanelMode === 'floating' ? 'sidebar' : 'floating');
+  };
+
   const scrollToLatestMessage = React.useCallback(() => {
     window.setTimeout(() => {
       messagesScrollRef.current?.scrollToEnd({ animated: true });
@@ -309,6 +314,12 @@ export function NotesAiAssistantPanel() {
           </View>
 
           <View style={workspace.styles.aiHeaderActions}>
+            <Pressable
+              style={[workspace.styles.aiHeaderIconButton, workspace.aiPanelMode === 'sidebar' && workspace.styles.aiHeaderIconButtonActive]}
+              onPress={togglePanelMode}
+            >
+              <MaterialCommunityIcons name={workspace.aiPanelMode === 'floating' ? 'dock-left' : 'window-restore'} size={18} color="#303744" />
+            </Pressable>
             <Pressable style={workspace.styles.aiHeaderNewChatButton} onPress={startNewChat} disabled={workspace.aiLoading}>
               <MaterialCommunityIcons name="square-edit-outline" size={16} color="#303744" />
               <Text style={workspace.styles.aiHeaderNewChatButtonText}>새 채팅</Text>

@@ -8,6 +8,7 @@ export type DesktopNotesWorkspaceContextValue = {
   styles: any;
   blueColor: string;
   aiPanelOpen: boolean;
+  aiPanelMode: 'floating' | 'sidebar';
   selectionRect: SelectionRect | null;
   selectionPreviewUri: string | null;
   aiQuestion: string;
@@ -55,6 +56,7 @@ export type DesktopNotesWorkspaceContextValue = {
   activeGeneratedAttachment: WorkspaceAttachment | null;
   activeGeneratedPreviewImage?: number;
   onToggleAiPanel: () => void;
+  onChangeAiPanelMode: (mode: 'floating' | 'sidebar') => void;
   onChangeAiQuestion: (value: string) => void;
   onChangeAiChatScope: (scope: 'note' | 'all') => void;
   onChangeAiChatSearchQuery: (value: string) => void;

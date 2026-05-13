@@ -82,6 +82,7 @@ export function useStudyWorkspace(props: {
   const [redoInkByDocument, setRedoInkByDocument] = useState<Record<number, InkStroke[]>>({});
   const [textAnnotationsByDocument, setTextAnnotationsByDocument] = useState<Record<number, InkTextAnnotation[]>>({});
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
+  const [aiPanelMode, setAiPanelMode] = useState<'floating' | 'sidebar'>('floating');
   const [selectionByDocument, setSelectionByDocument] = useState<Record<number, SelectionRect | null>>({});
   const [aiQuestion, setAiQuestion] = useState('');
   const [incomingAssetSuggestion, setIncomingAssetSuggestion] = useState<CaptureAsset | null>(null);
@@ -1181,6 +1182,7 @@ export function useStudyWorkspace(props: {
     inkStrokes,
     textAnnotations,
     aiPanelOpen,
+    aiPanelMode,
     selectionRect,
     selectionPreviewUri,
     aiQuestion,
@@ -1244,6 +1246,7 @@ export function useStudyWorkspace(props: {
       if (next) setViewingAiChatSessionId(null);
       return next;
     }),
+    setAiPanelMode,
     setAiQuestion,
     setAiChatScope,
     setAiChatSearchQuery,

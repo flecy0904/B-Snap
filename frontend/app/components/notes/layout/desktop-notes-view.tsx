@@ -44,6 +44,7 @@ export type DesktopNotesViewProps = {
   inkStrokes: InkStroke[];
   textAnnotations: InkTextAnnotation[];
   aiPanelOpen: boolean;
+  aiPanelMode: 'floating' | 'sidebar';
   selectionRect: SelectionRect | null;
   selectionPreviewUri: string | null;
   aiQuestion: string;
@@ -82,6 +83,7 @@ export type DesktopNotesViewProps = {
   onChangePenColor: (color: string) => void;
   onChangePenWidth: (width: number) => void;
   onToggleAiPanel: () => void;
+  onChangeAiPanelMode: (mode: 'floating' | 'sidebar') => void;
   onChangeAiQuestion: (value: string) => void;
   onChangeAiChatScope: (scope: 'note' | 'all') => void;
   onChangeAiChatSearchQuery: (value: string) => void;
@@ -215,6 +217,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           styles: props.styles,
           blueColor: props.blueColor,
           aiPanelOpen: props.aiPanelOpen,
+          aiPanelMode: props.aiPanelMode,
           selectionRect: props.selectionRect,
           selectionPreviewUri: props.selectionPreviewUri,
           aiQuestion: props.aiQuestion,
@@ -262,6 +265,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           activeGeneratedAttachment: workspace.activeGeneratedAttachment,
           activeGeneratedPreviewImage: workspace.activeGeneratedPreviewImage,
           onToggleAiPanel: props.onToggleAiPanel,
+          onChangeAiPanelMode: props.onChangeAiPanelMode,
           onChangeAiQuestion: props.onChangeAiQuestion,
           onChangeAiChatScope: props.onChangeAiChatScope,
           onChangeAiChatSearchQuery: props.onChangeAiChatSearchQuery,

@@ -133,6 +133,7 @@ export function DesktopNotes(props: {
   inkStrokes: InkStroke[];
   textAnnotations: InkTextAnnotation[];
   aiPanelOpen: boolean;
+  aiPanelMode: 'floating' | 'sidebar';
   selectionRect: SelectionRect | null;
   selectionPreviewUri: string | null;
   aiQuestion: string;
@@ -171,6 +172,7 @@ export function DesktopNotes(props: {
   onChangePenColor: (color: string) => void;
   onChangePenWidth: (width: number) => void;
   onToggleAiPanel: () => void;
+  onChangeAiPanelMode: (mode: 'floating' | 'sidebar') => void;
   onChangeAiQuestion: (value: string) => void;
   onChangeAiChatScope: (scope: 'note' | 'all') => void;
   onChangeAiChatSearchQuery: (value: string) => void;
