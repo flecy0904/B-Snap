@@ -1,37 +1,19 @@
 """Crop-focused preprocessing modules for B-SNAP."""
 
 __all__ = [
-    "BoardCropResult",
-    "crop_and_warp_board",
-    "crop_writing_region",
-    "detect_board_corners",
-    "detect_writing_region",
-    "HybridBoardPreprocessor",
-    "HybridPreprocessorConfig",
-    "HybridScoringConfig",
-    "order_points",
-    "preprocess_board_image",
-    "run_hybrid_preprocess",
-    "YoloWorldDetector",
+    "run_yolo_segmentation_preprocess",
+    "SegmentationCropConfig",
+    "YoloSegmentationCropper",
 ]
 
 
 def __getattr__(name: str):
     if name in {
-        "HybridBoardPreprocessor",
-        "HybridPreprocessorConfig",
-        "HybridScoringConfig",
-        "run_hybrid_preprocess",
+        "run_yolo_segmentation_preprocess",
+        "SegmentationCropConfig",
+        "YoloSegmentationCropper",
     }:
-        from . import hybrid_preprocessor
+        from . import yolo_segmentation_cropper
 
-        return getattr(hybrid_preprocessor, name)
-    if name == "YoloWorldDetector":
-        from .yolo_world_detector import YoloWorldDetector
-
-        return YoloWorldDetector
-    if name in __all__:
-        from . import board_cropper
-
-        return getattr(board_cropper, name)
+        return getattr(yolo_segmentation_cropper, name)
     raise AttributeError(f"module 'img_preprocessing.crop' has no attribute '{name}'")
