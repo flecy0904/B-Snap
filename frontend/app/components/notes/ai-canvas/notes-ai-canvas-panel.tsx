@@ -56,19 +56,110 @@ function MarkdownPreview(props: {
 export function NotesAiCanvasPanel() {
   const workspace = useDesktopNotesWorkspaceContext();
   const canvas = workspace.aiCanvas;
+  const [titleMenuOpen, setTitleMenuOpen] = React.useState(false);
+  const [noteListOpen, setNoteListOpen] = React.useState(false);
+  const [renameOpen, setRenameOpen] = React.useState(false);
+  const [renameDraft, setRenameDraft] = React.useState('');
+  const [renameError, setRenameError] = React.useState<string | null>(null);
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = React.useState(false);
+
+  const closeTitleMenu = () => setTitleMenuOpen(false);
+  const startRename = () => {
+    if (!canvas.activeNote) return;
+    closeTitleMenu();
+    setRenameDraft(canvas.activeNote.title);
+    setRenameError(null);
+    setRenameOpen(true);
+  };
+  const cancelRename = () => {
+    setRenameOpen(false);
+    setRenameDraft('');
+    setRenameError(null);
+  };
+  const saveRename = async () => {
+    if (!renameDraft.trim()) {
+      setRenameError('Canvas 이름을 입력해 주세요.');
+      return;
+    }
+    const saved = await canvas.renameActiveNote(renameDraft);
+    if (saved) cancelRename();
+  };
+  const openDeleteConfirm = () => {
+    if (!canvas.activeNote) return;
+    closeTitleMenu();
+    setDeleteConfirmOpen(true);
+  };
+  const confirmDelete = async () => {
+    setDeleteConfirmOpen(false);
+    await canvas.deleteActiveNote();
+  };
 
   return (
     <View style={workspace.styles.aiCanvasPanel}>
       <View style={workspace.styles.aiCanvasHeader}>
         <View style={workspace.styles.aiCanvasHeaderTitleWrap}>
           <Text style={workspace.styles.aiCanvasEyebrow}>AI Canvas</Text>
-          <Text style={workspace.styles.aiCanvasTitle} numberOfLines={1}>
-            {canvas.activeNote?.title ?? 'Canvas Notes'}
-          </Text>
+          <View style={workspace.styles.aiCanvasTitleRow}>
+            <Pressable
+              style={workspace.styles.aiCanvasTitleButton}
+              onPress={() => {
+                if (canvas.activeNote) setTitleMenuOpen((current) => !current);
+              }}
+              disabled={!canvas.activeNote}
+            >
+              <Text style={workspace.styles.aiCanvasTitle} numberOfLines={1}>
+                {canvas.activeNote?.title ?? 'Canvas Notes'}
+              </Text>
+            </Pressable>
+            <Pressable
+              style={workspace.styles.aiCanvasDropdownButton}
+              onPress={() => {
+                closeTitleMenu();
+                setNoteListOpen((current) => !current);
+              }}
+              disabled={!canvas.notes.length}
+            >
+              <MaterialCommunityIcons
+                name={noteListOpen ? 'chevron-up' : 'chevron-down'}
+                size={18}
+                color="#5D6676"
+              />
+            </Pressable>
+          </View>
+          {titleMenuOpen ? (
+            <View style={workspace.styles.aiCanvasTitleMenu}>
+              <Pressable
+                style={workspace.styles.aiCanvasTitleMenuItem}
+                onPress={startRename}
+              >
+                <Text style={workspace.styles.aiCanvasTitleMenuText}>이름 바꾸기</Text>
+              </Pressable>
+              <Pressable
+                style={workspace.styles.aiCanvasTitleMenuItem}
+                onPress={openDeleteConfirm}
+                disabled={canvas.saving}
+              >
+                <Text style={workspace.styles.aiCanvasTitleMenuDangerText}>삭제하기</Text>
+              </Pressable>
+            </View>
+          ) : null}
         </View>
-        <Pressable style={workspace.styles.aiCanvasIconButton} onPress={canvas.close}>
-          <MaterialCommunityIcons name="close" size={18} color="#5D6676" />
-        </Pressable>
+        <View style={workspace.styles.aiCanvasHeaderActions}>
+          <Pressable
+            style={[
+              workspace.styles.aiCanvasHeaderNewButton,
+              (!canvas.canCreateNote || canvas.saving) && workspace.styles.aiCanvasSaveButtonDisabled,
+            ]}
+            onPress={canvas.createNote}
+            disabled={!canvas.canCreateNote || canvas.saving}
+          >
+            <MaterialCommunityIcons name="plus" size={15} color="#FFFFFF" />
+            <Text style={workspace.styles.aiCanvasHeaderNewButtonText}>새 Canvas</Text>
+          </Pressable>
+          <Pressable style={workspace.styles.aiCanvasIconButton} onPress={canvas.close}>
+            <MaterialCommunityIcons name="close" size={18} color="#5D6676" />
+          </Pressable>
+        </View>
       </View>
 
       {!canvas.enabled ? (
@@ -80,10 +171,9 @@ export function NotesAiCanvasPanel() {
       ) : (
         <>
           <View style={workspace.styles.aiCanvasToolbar}>
-            <Pressable style={workspace.styles.aiCanvasPrimaryButton} onPress={canvas.createNote} disabled={canvas.saving}>
-              <MaterialCommunityIcons name="plus" size={15} color="#FFFFFF" />
-              <Text style={workspace.styles.aiCanvasPrimaryButtonText}>새 Canvas</Text>
-            </Pressable>
+            <Text style={workspace.styles.aiCanvasLimitText}>
+              {canvas.notes.length}/{canvas.maxNotesPerNote}
+            </Text>
             <View style={workspace.styles.aiCanvasModeTabs}>
               <Pressable
                 style={[workspace.styles.aiCanvasModeTab, canvas.mode === 'preview' && workspace.styles.aiCanvasModeTabActive]}
@@ -109,20 +199,25 @@ export function NotesAiCanvasPanel() {
 
           {canvas.error ? <Text style={workspace.styles.aiCanvasErrorText}>{canvas.error}</Text> : null}
 
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={workspace.styles.aiCanvasNoteTabs} contentContainerStyle={workspace.styles.aiCanvasNoteTabsContent}>
-            {canvas.notes.map((note) => {
-              const active = note.id === canvas.activeNoteId;
-              return (
-                <Pressable
-                  key={note.id}
-                  style={[workspace.styles.aiCanvasNoteTab, active && workspace.styles.aiCanvasNoteTabActive]}
-                  onPress={() => canvas.selectNote(note.id)}
-                >
-                  <Text style={[workspace.styles.aiCanvasNoteTabText, active && workspace.styles.aiCanvasNoteTabTextActive]} numberOfLines={1}>{note.title}</Text>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
+          {noteListOpen ? (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={workspace.styles.aiCanvasNoteTabs} contentContainerStyle={workspace.styles.aiCanvasNoteTabsContent}>
+              {canvas.notes.map((note) => {
+                const active = note.id === canvas.activeNoteId;
+                return (
+                  <Pressable
+                    key={note.id}
+                    style={[workspace.styles.aiCanvasNoteTab, active && workspace.styles.aiCanvasNoteTabActive]}
+                    onPress={() => {
+                      canvas.selectNote(note.id);
+                      setNoteListOpen(false);
+                    }}
+                  >
+                    <Text style={[workspace.styles.aiCanvasNoteTabText, active && workspace.styles.aiCanvasNoteTabTextActive]} numberOfLines={1}>{note.title}</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          ) : null}
 
           {canvas.activeNote ? (
             <View style={workspace.styles.aiCanvasEditorShell}>
@@ -132,13 +227,6 @@ export function NotesAiCanvasPanel() {
                 keyboardShouldPersistTaps="handled"
                 showsVerticalScrollIndicator
               >
-                <TextInput
-                  value={canvas.titleDraft}
-                  onChangeText={canvas.setTitleDraft}
-                  placeholder="Canvas 제목"
-                  placeholderTextColor="#A2AAB8"
-                  style={workspace.styles.aiCanvasTitleInput}
-                />
                 {canvas.mode === 'edit' ? (
                   <TextInput
                     value={canvas.markdownDraft}
@@ -203,6 +291,57 @@ export function NotesAiCanvasPanel() {
           )}
         </>
       )}
+      {renameOpen ? (
+        <Pressable style={workspace.styles.aiPanelDialogOverlay} onPress={cancelRename}>
+          <Pressable style={workspace.styles.aiRenameModalCard} onPress={(event) => event.stopPropagation()}>
+            <Text style={workspace.styles.aiRenameModalTitle}>Canvas 이름 바꾸기</Text>
+            <TextInput
+              value={renameDraft}
+              onChangeText={(value) => {
+                setRenameDraft(value);
+                if (renameError && value.trim()) setRenameError(null);
+              }}
+              placeholder="Canvas 이름"
+              placeholderTextColor="#8F96A3"
+              style={[workspace.styles.aiRenameModalInput, renameError && workspace.styles.aiRenameModalInputError]}
+              returnKeyType="done"
+              onSubmitEditing={saveRename}
+              autoFocus
+            />
+            {renameError ? <Text style={workspace.styles.aiRenameModalError}>{renameError}</Text> : null}
+            <View style={workspace.styles.aiRenameModalActions}>
+              <Pressable style={workspace.styles.aiRenameModalCancelButton} onPress={cancelRename} disabled={canvas.saving}>
+                <Text style={workspace.styles.aiRenameModalCancelText}>취소</Text>
+              </Pressable>
+              <Pressable
+                style={[workspace.styles.aiRenameModalSaveButton, (!renameDraft.trim() || canvas.saving) && workspace.styles.aiRenameModalSaveButtonDisabled]}
+                onPress={saveRename}
+                disabled={!renameDraft.trim() || canvas.saving}
+              >
+                <Text style={workspace.styles.aiRenameModalSaveText}>이름 바꾸기</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      ) : null}
+      {deleteConfirmOpen ? (
+        <Pressable style={workspace.styles.aiPanelDialogOverlay} onPress={() => setDeleteConfirmOpen(false)}>
+          <Pressable style={workspace.styles.aiRenameModalCard} onPress={(event) => event.stopPropagation()}>
+            <Text style={workspace.styles.aiRenameModalTitle}>Canvas 삭제</Text>
+            <Text style={workspace.styles.aiRenameModalBody}>
+              "{canvas.activeNote?.title ?? ''}" Canvas를 삭제할까요?
+            </Text>
+            <View style={workspace.styles.aiRenameModalActions}>
+              <Pressable style={workspace.styles.aiRenameModalCancelButton} onPress={() => setDeleteConfirmOpen(false)} disabled={canvas.saving}>
+                <Text style={workspace.styles.aiRenameModalCancelText}>취소</Text>
+              </Pressable>
+              <Pressable style={workspace.styles.aiRenameModalDangerButton} onPress={confirmDelete} disabled={canvas.saving}>
+                <Text style={workspace.styles.aiRenameModalSaveText}>삭제</Text>
+              </Pressable>
+            </View>
+          </Pressable>
+        </Pressable>
+      ) : null}
     </View>
   );
 }

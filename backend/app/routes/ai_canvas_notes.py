@@ -17,6 +17,7 @@ from backend.app.services.openai_service import generate_ai_canvas_edit
 
 
 router = APIRouter(tags=["ai-canvas-notes"])
+MAX_AI_CANVAS_NOTES_PER_NOTE = 3
 
 
 def normalize_title(title: str) -> str:
@@ -48,6 +49,17 @@ def create_ai_canvas_note(
     connection: Connection = Depends(get_db_connection),
 ):
     note = get_note(note_id, connection)
+    existing_count = fetch_one(
+        connection,
+        "SELECT COUNT(*) AS count FROM ai_canvas_notes WHERE note_id = %s",
+        (note_id,),
+    )
+    if int(existing_count["count"] if existing_count else 0) >= MAX_AI_CANVAS_NOTES_PER_NOTE:
+        raise HTTPException(
+            status_code=409,
+            detail=f"AI Canvas Notes are limited to {MAX_AI_CANVAS_NOTES_PER_NOTE} per note",
+        )
+
     title = normalize_title(payload.title)
     return execute_returning(
         connection,
