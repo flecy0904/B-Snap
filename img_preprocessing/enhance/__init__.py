@@ -1,5 +1,15 @@
-"""Crop image enhancement utilities for B-SNAP preprocessing."""
+"""OpenCV-based post-processing helpers for cropped board images."""
 
-from .crop_enhancer import enhance_cropped_image
+from .scan_enhancer import (
+    ScanEnhanceOptions,
+    ScanEnhanceResult,
+    preprocess_after_yolo_crop,
+    preprocess_image_file,
+)
 
-__all__ = ["enhance_cropped_image"]
+__all__ = [
+    "ScanEnhanceOptions",
+    "ScanEnhanceResult",
+    "preprocess_after_yolo_crop",
+    "preprocess_image_file",
+]

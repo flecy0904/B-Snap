@@ -1,33 +1,36 @@
 ## 크롭 MVP 구현 후 개선 사항 & 방법 정리
+
 1. 칠판, 판서 이미지 데이터셋 수집하기 (100장 정도)
 2. 수집한 이미지에 4점 라벨링하기
-3. 라벨링한 이미지로 현재 휴리스틱 값 비교 테스트하는 스크립트 만들어서 휴리스틱 파라미터 조정하기
-
-## 크롭 이미지 압축 & 대비 향상 스크립트 개발
+3. 라벨링한 이미지로 현재 contour 기반 원근보정 결과를 비교 테스트하기
+4. 실패 케이스를 기준으로 `mask_margin`, `min_mask_area`, `crop_mode` 기본값 조정하기
 
 ## 전처리 최종 산출물 전달 방식
-1. 전처리 파이프라인은 최종적으로 LLM에 넘길 이미지 1장을 생성한다.
-2. LLM에는 `llm_image_path`가 가리키는 `*_crop_view.jpg`만 전달한다.
-3. 원본 이미지, 중간 crop 이미지, comparison/debug 이미지는 검수용이며 기본 LLM 입력에는 포함하지 않는다.
-4. 현재 `llm_image_type`은 항상 `view`이고, 최종 이미지는 JPEG 형식이다.
+
+1. 전처리 파이프라인은 최종적으로 LLM에 넘길 이미지 1장을 지정한다.
+2. 현재 LLM에는 `llm_image_path`가 가리키는 `enhanced_color` 이미지를 전달한다.
+3. 원본 이미지, crop 이미지, mask, debug overlay, OCR BW 이미지는 검수용이며 기본 LLM 입력에는 포함하지 않는다.
+4. 현재 `llm_image_type`은 항상 `enhanced_color`이다.
 5. 백엔드는 전처리 결과에서 아래 필드를 우선 확인한다.
    - `success`
    - `failure_stage`
    - `llm_image_path`
    - `llm_image_type`
-   - `enhancement_profile`
    - `summary_path`
    - `write_error`
 6. 전처리 실패 시에는 LLM 호출을 하지 않는다.
 7. 프론트에는 서버 내부 파일 경로 대신 preview URL을 내려주는 방식을 권장한다.
 8. 추천 API 응답 예시:
+
 ```json
 {
   "success": true,
   "image_id": "abc123",
-  "llm_image_url": "/api/preprocessed/abc123/view",
-  "preview_image_url": "/api/preprocessed/abc123/view",
-  "enhancement_profile": "scan_document"
+  "llm_image_url": "/api/preprocessed/abc123/enhanced-color",
+  "preview_image_url": "/api/preprocessed/abc123/enhanced-color",
+  "ocr_bw_url": "/api/preprocessed/abc123/ocr-bw",
+  "llm_image_type": "enhanced_color"
 }
 ```
+
 9. 백엔드는 내부적으로 `image_id -> llm_image_path -> summary_path` 매핑을 관리한다.
