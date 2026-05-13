@@ -358,7 +358,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
             </View>
           ) : null}
           <View style={props.styles.desktopDocumentDetailBody}>
-            <NotesAiAssistantPanel />
+            {props.aiPanelMode === 'floating' ? <NotesAiAssistantPanel /> : null}
             <NotesWorkspaceToolbar />
             {props.workspaceFeedback ? (
               <View style={props.styles.workspaceToast}>
@@ -366,8 +366,13 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
                 <Text style={props.styles.workspaceToastText}>{props.workspaceFeedback}</Text>
               </View>
             ) : null}
-            {workspace.showWorkspaceDock ? <NotesWorkspaceDock /> : null}
-            <NotesDocumentViewer />
+            <View style={props.aiPanelMode === 'sidebar' && props.aiPanelOpen ? props.styles.desktopDocumentSidebarContentRow : props.styles.desktopDocumentWorkspacePane}>
+              {props.aiPanelMode === 'sidebar' ? <NotesAiAssistantPanel /> : null}
+              <View style={props.styles.desktopDocumentViewerPane}>
+                {workspace.showWorkspaceDock ? <NotesWorkspaceDock /> : null}
+                <NotesDocumentViewer />
+              </View>
+            </View>
           </View>
         </View>
         <NotesPageListOverlay />

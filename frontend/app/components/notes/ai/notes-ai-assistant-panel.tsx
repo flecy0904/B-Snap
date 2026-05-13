@@ -7,6 +7,8 @@ const FLOATING_PANEL_WIDTH = 300;
 const FLOATING_PANEL_HEIGHT = 620;
 const FLOATING_PANEL_TOP = 66;
 const FLOATING_PANEL_MARGIN = 8;
+const SIDEBAR_MIN_WIDTH = 300;
+const SIDEBAR_DEFAULT_WIDTH = 340;
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
@@ -21,6 +23,8 @@ export function NotesAiAssistantPanel() {
   const [floatingPosition, setFloatingPosition] = React.useState({ x: FLOATING_PANEL_MARGIN, y: FLOATING_PANEL_TOP });
   const floatingPositionRef = React.useRef(floatingPosition);
   const floatingDragOffset = React.useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
+  const [sidebarWidth, setSidebarWidth] = React.useState(SIDEBAR_DEFAULT_WIDTH);
+  const sidebarWidthRef = React.useRef(SIDEBAR_DEFAULT_WIDTH);
   const [menuSessionId, setMenuSessionId] = React.useState<number | null>(null);
   const [headerMenuOpen, setHeaderMenuOpen] = React.useState(false);
   const [headerEditing, setHeaderEditing] = React.useState(false);
@@ -49,6 +53,7 @@ export function NotesAiAssistantPanel() {
   const floatingPanelHeight = Math.min(FLOATING_PANEL_HEIGHT, Math.max(360, height - FLOATING_PANEL_TOP - FLOATING_PANEL_MARGIN));
   const floatingMaxX = Math.max(FLOATING_PANEL_MARGIN, width - FLOATING_PANEL_WIDTH - FLOATING_PANEL_MARGIN);
   const floatingMaxY = Math.max(FLOATING_PANEL_TOP, height - floatingPanelHeight - FLOATING_PANEL_MARGIN);
+  const sidebarMaxWidth = Math.max(SIDEBAR_MIN_WIDTH, Math.floor(width * 0.5));
 
   React.useEffect(() => {
     setFloatingPosition((current) => ({
@@ -60,6 +65,14 @@ export function NotesAiAssistantPanel() {
   React.useEffect(() => {
     floatingPositionRef.current = floatingPosition;
   }, [floatingPosition]);
+
+  React.useEffect(() => {
+    setSidebarWidth((current) => {
+      const next = clamp(current, SIDEBAR_MIN_WIDTH, sidebarMaxWidth);
+      sidebarWidthRef.current = next;
+      return next;
+    });
+  }, [sidebarMaxWidth]);
 
   const floatingPanResponder = React.useMemo(
     () => PanResponder.create({
@@ -101,6 +114,33 @@ export function NotesAiAssistantPanel() {
       },
     }),
     [floatingDragOffset, floatingMaxX, floatingMaxY, workspace.aiPanelMode],
+  );
+
+  const sidebarResizePanResponder = React.useMemo(
+    () => PanResponder.create({
+      onStartShouldSetPanResponder: () => workspace.aiPanelMode === 'sidebar',
+      onMoveShouldSetPanResponder: (_, gesture) => (
+        workspace.aiPanelMode === 'sidebar'
+        && Math.abs(gesture.dx) > 3
+      ),
+      onPanResponderGrant: () => {
+        closeOpenMenus();
+      },
+      onPanResponderMove: (_, gesture) => {
+        setSidebarWidth(clamp(sidebarWidthRef.current + gesture.dx, SIDEBAR_MIN_WIDTH, sidebarMaxWidth));
+      },
+      onPanResponderRelease: (_, gesture) => {
+        const next = clamp(sidebarWidthRef.current + gesture.dx, SIDEBAR_MIN_WIDTH, sidebarMaxWidth);
+        sidebarWidthRef.current = next;
+        setSidebarWidth(next);
+      },
+      onPanResponderTerminate: (_, gesture) => {
+        const next = clamp(sidebarWidthRef.current + gesture.dx, SIDEBAR_MIN_WIDTH, sidebarMaxWidth);
+        sidebarWidthRef.current = next;
+        setSidebarWidth(next);
+      },
+    }),
+    [sidebarMaxWidth, workspace.aiPanelMode],
   );
 
   const startEditingSession = (sessionId: number, title: string) => {
@@ -249,7 +289,7 @@ export function NotesAiAssistantPanel() {
   const floatingTranslate = floatingDragOffset.getTranslateTransform();
   const panelStyle = workspace.aiPanelMode === 'floating'
     ? [workspace.styles.aiPanel, { left: floatingPosition.x, top: floatingPosition.y, bottom: undefined, height: floatingPanelHeight, transform: floatingTranslate }]
-    : workspace.styles.aiPanel;
+    : [workspace.styles.aiPanel, workspace.styles.aiPanelSidebar, { width: sidebarWidth }];
 
   return (
     <Animated.View style={panelStyle}>
@@ -492,6 +532,15 @@ export function NotesAiAssistantPanel() {
       </Animated.View>
       {sidebarVisible ? (
         <Pressable style={workspace.styles.aiSidebarHomeDismissLayer} onPress={closeSidebar} />
+      ) : null}
+      {workspace.aiPanelMode === 'sidebar' ? (
+        <View style={workspace.styles.aiPanelSidebarResizeHandle} {...sidebarResizePanResponder.panHandlers}>
+          <View style={workspace.styles.aiPanelSidebarResizeGrip}>
+            <View style={workspace.styles.aiPanelSidebarResizeDot} />
+            <View style={workspace.styles.aiPanelSidebarResizeDot} />
+            <View style={workspace.styles.aiPanelSidebarResizeDot} />
+          </View>
+        </View>
       ) : null}
       {editingSessionId !== null ? (
         <Pressable style={workspace.styles.aiPanelDialogOverlay} onPress={cancelEditingSession}>
