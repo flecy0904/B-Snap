@@ -1,9 +1,8 @@
 import type { Dispatch, SetStateAction } from 'react';
 import { Share } from 'react-native';
 import { createBackendNotePage, isBackendApiEnabled } from '../../../services/backend-api';
-import type { MockAiAnswer } from '../../../services/mock-ai-service';
 import type { InkStroke, InkTextAnnotation, InkTool } from '../../../ui-types';
-import type { BookmarkedPage, DocumentPageView, GeneratedWorkspacePage, StudyDocumentEntry } from '../../../types';
+import type { AiAnswer, BookmarkedPage, DocumentPageView, GeneratedWorkspacePage, StudyDocumentEntry } from '../../../types';
 import { getDocumentPageLabel, isSameDocumentPage } from '../../../ui-helpers';
 import { upsertStudyDocument } from './collection-helpers';
 import { serializeNotePageContent } from './note-page-content';
@@ -13,7 +12,7 @@ type SetState<T> = Dispatch<SetStateAction<T>>;
 export function useDocumentPageActions(params: {
   studyDocumentId: number | null;
   studyDocument: StudyDocumentEntry | null;
-  aiAnswer: MockAiAnswer | null;
+  aiAnswer: AiAnswer | null;
   currentPdfPage: number;
   currentDocumentPage: DocumentPageView | null;
   currentDocumentPages: DocumentPageView[];

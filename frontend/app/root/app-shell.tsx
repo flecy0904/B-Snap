@@ -10,13 +10,15 @@ import { DesktopNotes, MobileNotes } from '../screens/notes';
 import { DesktopCapture, MobileCapture } from '../screens/capture';
 import { DesktopProfile, MobileProfile } from '../screens/profile';
 import { DesktopSchedule, MobileSchedule } from '../screens/schedule';
-import { resolvePreviewImage } from '../mock-preview-images';
+import { resolvePreviewImage } from '../preview-images';
 import { C, S } from '../styles';
 import type { TabKey } from '../types';
+import type { AuthUser } from './types';
 
 const TABS: TabKey[] = ['schedule', 'notes', 'capture', 'profile'];
 
 export function AppShell(props: {
+  authUser: AuthUser;
   onLogout: () => void;
 }) {
   const { width, height } = useWindowDimensions();
@@ -50,8 +52,11 @@ export function AppShell(props: {
 
   const bannerAsset = wide && tab !== 'capture' ? notesState.activeIncomingBanner : null;
   const bannerSubject = bannerAsset ? scheduleState.semesterSubjects.find((item) => item.id === bannerAsset.subjectId) ?? null : null;
+  const bannerAssetUri = bannerAsset?.thumbnailUrl ?? (bannerAsset?.type === 'image' ? bannerAsset.fileUrl : undefined);
   const bannerPreviewImage = bannerAsset 
-    ? (bannerAsset.previewImageKey?.startsWith('file://') 
+    ? (bannerAssetUri
+        ? { uri: bannerAssetUri }
+        : bannerAsset.previewImageKey?.startsWith('file://')
         ? { uri: bannerAsset.previewImageKey } 
         : resolvePreviewImage(bannerAsset.previewImageKey) ?? bannerAsset.previewImage)
     : undefined;
@@ -135,13 +140,14 @@ export function AppShell(props: {
     : notesState.workspaceHydrated
       ? '켜짐'
       : '준비 중';
+  const notebookFullscreen = tab === 'notes' && notesState.noteWorkspaceMode === 'note' && Boolean(notesState.studyDocument);
 
   return (
     <SafeAreaProvider>
       <SafeAreaView style={S.safe} edges={['top', 'left', 'right']}>
         <StatusBar style="dark" />
         <NativeStatusBar barStyle="dark-content" />
-        {bannerAsset ? (
+        {bannerAsset && !notebookFullscreen ? (
           <View pointerEvents="box-none" style={S.appOverlay}>
             <View style={S.appBannerWrap}>
               <View style={S.appBanner}>
@@ -165,9 +171,11 @@ export function AppShell(props: {
           </View>
         ) : null}
         {wide ? (
-          <View style={[S.desktop, desktopCompact && S.desktopCompact, isWeb && S.webDesktop]}>
-            <Sidebar tab={tab} onTab={changeTab} compact={desktopCompact} styles={S} blueColor={C.blue} isWeb={isWeb} />
-            <View style={[S.main, isWeb && S.webMainShell]}>
+          <View style={[S.desktop, desktopCompact && S.desktopCompact, isWeb && !notebookFullscreen && S.webDesktop, notebookFullscreen && S.notebookFullscreenRoot]}>
+            {!notebookFullscreen ? (
+              <Sidebar tab={tab} onTab={changeTab} compact={desktopCompact} styles={S} blueColor={C.blue} isWeb={isWeb} />
+            ) : null}
+            <View style={[S.main, isWeb && !notebookFullscreen && S.webMainShell, notebookFullscreen && S.notebookFullscreenMain]}>
               {tab === 'schedule' && <DesktopSchedule
                   semester={scheduleState.semester}
                   subjects={scheduleState.semesterSubjects}
@@ -200,6 +208,8 @@ export function AppShell(props: {
                   penWidth={notesState.penWidth}
                   inkStrokes={notesState.inkStrokes}
                   textAnnotations={notesState.textAnnotations}
+                  inkByDocument={notesState.inkByDocument}
+                  textAnnotationsByDocument={notesState.textAnnotationsByDocument}
                   aiPanelOpen={notesState.aiPanelOpen}
                   selectionRect={notesState.selectionRect}
                   selectionPreviewUri={notesState.selectionPreviewUri}
@@ -226,6 +236,7 @@ export function AppShell(props: {
                   memoPages={notesState.memoPages}
                   activeGeneratedPage={notesState.activeGeneratedPage}
                   currentDocumentPages={notesState.currentDocumentPages}
+                  notebookPages={notesState.notebookPages}
                   currentDocumentPage={notesState.currentDocumentPage}
                   currentPdfPage={notesState.currentPdfPage}
                   currentDocumentPageIndex={notesState.currentDocumentPageIndex}
@@ -303,6 +314,7 @@ export function AppShell(props: {
                   captureId={scheduleState.captureId}
                   subjects={scheduleState.semesterSubjects}
                   recentUploads={captureState.recentUploads}
+                  syncStatus={captureState.syncStatus}
                   pendingAction={captureState.pendingAction}
                   captureFeedback={captureState.captureFeedback}
                   captureError={captureState.captureError}
@@ -310,6 +322,7 @@ export function AppShell(props: {
                   onCaptureFromCamera={captureState.captureFromCamera}
                   onPickFromLibrary={captureState.pickImageFromLibrary}
                   onPickPdf={captureState.pickPdfDocument}
+                  onRetryUpload={captureState.retryLastFailedAction}
                   styles={S}
                   isWeb={isWeb}
                 />
@@ -319,6 +332,7 @@ export function AppShell(props: {
                   compact={desktopCompact}
                   styles={S}
                   onLogout={props.onLogout}
+                  authUser={props.authUser}
                   isWeb={isWeb}
                   currentSemesterLabel={scheduleState.semester.label}
                   notificationsEnabled={notificationsEnabled}
@@ -326,6 +340,8 @@ export function AppShell(props: {
                   localSaveStatus={localSaveStatus}
                   helpOpen={profileHelpOpen}
                   currentSubjectCount={scheduleState.semesterSubjects.length}
+                  currentDocumentCount={notesState.allNotes.length + notesState.allStudyDocuments.length}
+                  semesterSchedules={scheduleState.semesterSchedules}
                   onSelectSemester={(id) => {
                     scheduleState.selectSemester(id);
                     const label = scheduleState.semesterSchedules.find(s => s.id === id)?.label;
@@ -342,8 +358,8 @@ export function AppShell(props: {
             </View>
           </View>
         ) : (
-          <View style={S.app}>
-            <View style={S.main}>
+          <View style={[S.app, notebookFullscreen && S.notebookFullscreenRoot]}>
+            <View style={[S.main, notebookFullscreen && S.notebookFullscreenMain]}>
               {tab === 'schedule' && (
                 <MobileSchedule
                   semester={scheduleState.semester}
@@ -384,8 +400,11 @@ export function AppShell(props: {
                   penWidth={notesState.penWidth}
                   inkStrokes={notesState.inkStrokes}
                   textAnnotations={notesState.textAnnotations}
+                  inkByDocument={notesState.inkByDocument}
+                  textAnnotationsByDocument={notesState.textAnnotationsByDocument}
                   currentPdfPage={notesState.currentPdfPage}
                   currentDocumentPages={notesState.currentDocumentPages}
+                  notebookPages={notesState.notebookPages}
                   currentDocumentPage={notesState.currentDocumentPage}
                   memoPages={notesState.memoPages}
                   activeGeneratedPage={notesState.activeGeneratedPage}
@@ -475,6 +494,7 @@ export function AppShell(props: {
                   captureId={scheduleState.captureId}
                   subjects={scheduleState.semesterSubjects}
                   recentUploads={captureState.recentUploads}
+                  syncStatus={captureState.syncStatus}
                   pendingAction={captureState.pendingAction}
                   captureFeedback={captureState.captureFeedback}
                   captureError={captureState.captureError}
@@ -487,6 +507,7 @@ export function AppShell(props: {
                   onCaptureFromCamera={captureState.captureFromCamera}
                   onPickFromLibrary={captureState.pickImageFromLibrary}
                   onPickPdf={captureState.pickPdfDocument}
+                  onRetryUpload={captureState.retryLastFailedAction}
                   styles={S}
                 />
               )}
@@ -494,12 +515,15 @@ export function AppShell(props: {
                 <MobileProfile
                   styles={S}
                   onLogout={props.onLogout}
+                  authUser={props.authUser}
                   currentSemesterLabel={scheduleState.semester.label}
                   notificationsEnabled={notificationsEnabled}
                   feedbackMessage={profileFeedback}
                   localSaveStatus={localSaveStatus}
                   helpOpen={profileHelpOpen}
                   currentSubjectCount={scheduleState.semesterSubjects.length}
+                  currentDocumentCount={notesState.allNotes.length + notesState.allStudyDocuments.length}
+                  semesterSchedules={scheduleState.semesterSchedules}
                   onSelectSemester={(id) => {
                     scheduleState.selectSemester(id);
                     const label = scheduleState.semesterSchedules.find(s => s.id === id)?.label;
@@ -514,16 +538,18 @@ export function AppShell(props: {
                 />
               )}
             </View>
-            <View style={S.tabbar}>
-              {TABS.map((item) => {
-                const active = item === tab;
-                return (
-                  <Pressable key={item} onPress={() => changeTab(item)} style={[S.tabButton, active && S.tabButtonActive]}>
-                    <TabIcon tab={item} active={active} styles={S} blueColor={C.blue} />
-                  </Pressable>
-                );
-              })}
-            </View>
+            {!notebookFullscreen ? (
+              <View style={S.tabbar}>
+                {TABS.map((item) => {
+                  const active = item === tab;
+                  return (
+                    <Pressable key={item} onPress={() => changeTab(item)} style={[S.tabButton, active && S.tabButtonActive]}>
+                      <TabIcon tab={item} active={active} styles={S} blueColor={C.blue} />
+                    </Pressable>
+                  );
+                })}
+              </View>
+            ) : null}
           </View>
         )}
       </SafeAreaView>

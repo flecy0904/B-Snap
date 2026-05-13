@@ -1,7 +1,22 @@
 import React, { useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
-import { subjects as fallbackSubjects } from '../data';
-import { CaptureAsset, Subject } from '../types';
+import { subjects as fallbackSubjects } from '../app-defaults';
+import { CaptureAsset, Subject, SyncBridgeStatus } from '../types';
+
+function getSyncStatusText(status: SyncBridgeStatus) {
+  if (status === 'connected') return '실시간 연결됨';
+  if (status === 'connecting') return '실시간 연결 중';
+  if (status === 'reconnecting') return '재연결 중';
+  if (status === 'offline') return '오프라인 · 로컬 저장';
+  return '로컬 저장 모드';
+}
+
+function getPendingActionText(action: 'camera' | 'library' | 'pdf' | null) {
+  if (action === 'camera') return '카메라 업로드 중';
+  if (action === 'library') return '사진첩 업로드 중';
+  if (action === 'pdf') return 'PDF 업로드 중';
+  return null;
+}
 
 export function MobileCapture(props: {
   captureId: number;
@@ -11,14 +26,18 @@ export function MobileCapture(props: {
   onCaptureId: (id: number) => void;
   onTogglePicker: () => void;
   pendingAction: 'camera' | 'library' | 'pdf' | null;
+  syncStatus: SyncBridgeStatus;
   captureFeedback: string | null;
   captureError: string | null;
   onCaptureFromCamera: () => Promise<void>;
   onPickFromLibrary: () => Promise<void>;
   onPickPdf: () => Promise<void>;
+  onRetryUpload: () => Promise<void>;
   styles: any;
 }) {
   const current = props.subjects.find((item) => item.id === props.captureId) ?? props.subjects[0] ?? fallbackSubjects[0];
+  const busy = props.pendingAction !== null;
+  const pendingText = getPendingActionText(props.pendingAction);
 
   return (
     <ScrollView style={props.styles.main} contentContainerStyle={props.styles.mobilePage}>
@@ -52,22 +71,28 @@ export function MobileCapture(props: {
       ) : null}
 
       <View style={props.styles.captureActions}>
-        <Pressable style={props.styles.primaryButton} onPress={props.onCaptureFromCamera}>
-          <Text style={props.styles.primaryButtonText}>◉ 촬영 시작</Text>
+        <Pressable style={[props.styles.primaryButton, busy && props.styles.disabledButton]} onPress={props.onCaptureFromCamera} disabled={busy}>
+          <Text style={props.styles.primaryButtonText}>{props.pendingAction === 'camera' ? '촬영 업로드 중...' : '◉ 촬영 시작'}</Text>
         </Pressable>
-        <Pressable style={props.styles.secondaryButton} onPress={props.onPickFromLibrary}>
-          <Text style={props.styles.secondaryButtonText}>⌲ 사진첩에서 불러오기</Text>
+        <Pressable style={[props.styles.secondaryButton, busy && props.styles.disabledButton]} onPress={props.onPickFromLibrary} disabled={busy}>
+          <Text style={props.styles.secondaryButtonText}>{props.pendingAction === 'library' ? '사진 업로드 중...' : '⌲ 사진첩에서 불러오기'}</Text>
         </Pressable>
-        <Pressable style={props.styles.tertiaryButton} onPress={props.onPickPdf}>
-          <Text style={props.styles.tertiaryButtonText}>PDF 가져오기</Text>
+        <Pressable style={[props.styles.tertiaryButton, busy && props.styles.disabledButton]} onPress={props.onPickPdf} disabled={busy}>
+          <Text style={props.styles.tertiaryButtonText}>{props.pendingAction === 'pdf' ? 'PDF 업로드 중...' : 'PDF 가져오기'}</Text>
         </Pressable>
       </View>
 
-      <View style={props.styles.captureMockCard}>
-        <Text style={props.styles.captureMockTitle}>업로드 상태</Text>
-        {props.pendingAction ? <Text style={props.styles.capturePendingText}>현재 작업: {props.pendingAction}</Text> : null}
+      <View style={props.styles.captureStatusCard}>
+        <Text style={props.styles.captureStatusTitle}>업로드 상태</Text>
+        <Text style={props.styles.capturePendingText}>동기화: {getSyncStatusText(props.syncStatus)}</Text>
+        {pendingText ? <Text style={props.styles.capturePendingText}>현재 작업: {pendingText}</Text> : null}
         {props.captureFeedback ? <Text style={props.styles.captureFeedbackText}>{props.captureFeedback}</Text> : null}
         {props.captureError ? <Text style={props.styles.captureErrorText}>{props.captureError}</Text> : null}
+        {props.captureError ? (
+          <Pressable style={props.styles.captureRetryButton} onPress={props.onRetryUpload} disabled={busy}>
+            <Text style={props.styles.captureRetryButtonText}>다시 시도</Text>
+          </Pressable>
+        ) : null}
       </View>
       {props.recentUploads.length ? (
         <View style={props.styles.captureRecentCard}>
@@ -107,16 +132,20 @@ export function DesktopCapture(props: {
   recentUploads: CaptureAsset[];
   onCaptureId: (id: number) => void;
   pendingAction: 'camera' | 'library' | 'pdf' | null;
+  syncStatus: SyncBridgeStatus;
   captureFeedback: string | null;
   captureError: string | null;
   onCaptureFromCamera: () => Promise<void>;
   onPickFromLibrary: () => Promise<void>;
   onPickPdf: () => Promise<void>;
+  onRetryUpload: () => Promise<void>;
   styles: any;
   isWeb?: boolean;
 }) {
   const current = props.subjects.find((item) => item.id === props.captureId) ?? props.subjects[0] ?? fallbackSubjects[0];
   const [pickerOpen, setPickerOpen] = useState(false);
+  const busy = props.pendingAction !== null;
+  const pendingText = getPendingActionText(props.pendingAction);
 
   return (
     <ScrollView style={props.styles.main} contentContainerStyle={[props.styles.desktopPage, props.compact && props.styles.desktopPageCompact, props.isWeb && props.styles.webDesktopPage]}>
@@ -175,21 +204,27 @@ export function DesktopCapture(props: {
         ) : null}
 
         <View style={props.styles.desktopCaptureActions}>
-          <Pressable style={props.styles.primaryButton} onPress={props.onCaptureFromCamera}>
-            <Text style={props.styles.primaryButtonText}>◉ 촬영 시작</Text>
+          <Pressable style={[props.styles.primaryButton, busy && props.styles.disabledButton]} onPress={props.onCaptureFromCamera} disabled={busy}>
+            <Text style={props.styles.primaryButtonText}>{props.pendingAction === 'camera' ? '촬영 업로드 중...' : '◉ 촬영 시작'}</Text>
           </Pressable>
-          <Pressable style={props.styles.secondaryButton} onPress={props.onPickFromLibrary}>
-            <Text style={props.styles.secondaryButtonText}>⌲ 사진첩에서 불러오기</Text>
+          <Pressable style={[props.styles.secondaryButton, busy && props.styles.disabledButton]} onPress={props.onPickFromLibrary} disabled={busy}>
+            <Text style={props.styles.secondaryButtonText}>{props.pendingAction === 'library' ? '사진 업로드 중...' : '⌲ 사진첩에서 불러오기'}</Text>
           </Pressable>
-          <Pressable style={props.styles.tertiaryButton} onPress={props.onPickPdf}>
-            <Text style={props.styles.tertiaryButtonText}>PDF 가져오기</Text>
+          <Pressable style={[props.styles.tertiaryButton, busy && props.styles.disabledButton]} onPress={props.onPickPdf} disabled={busy}>
+            <Text style={props.styles.tertiaryButtonText}>{props.pendingAction === 'pdf' ? 'PDF 업로드 중...' : 'PDF 가져오기'}</Text>
           </Pressable>
         </View>
-        <View style={props.styles.captureMockCard}>
-          <Text style={props.styles.captureMockTitle}>업로드 상태</Text>
-          {props.pendingAction ? <Text style={props.styles.capturePendingText}>현재 작업: {props.pendingAction}</Text> : null}
+        <View style={props.styles.captureStatusCard}>
+          <Text style={props.styles.captureStatusTitle}>업로드 상태</Text>
+          <Text style={props.styles.capturePendingText}>동기화: {getSyncStatusText(props.syncStatus)}</Text>
+          {pendingText ? <Text style={props.styles.capturePendingText}>현재 작업: {pendingText}</Text> : null}
           {props.captureFeedback ? <Text style={props.styles.captureFeedbackText}>{props.captureFeedback}</Text> : null}
           {props.captureError ? <Text style={props.styles.captureErrorText}>{props.captureError}</Text> : null}
+          {props.captureError ? (
+            <Pressable style={props.styles.captureRetryButton} onPress={props.onRetryUpload} disabled={busy}>
+              <Text style={props.styles.captureRetryButtonText}>다시 시도</Text>
+            </Pressable>
+          ) : null}
         </View>
         {props.recentUploads.length ? (
           <View style={props.styles.captureRecentCard}>

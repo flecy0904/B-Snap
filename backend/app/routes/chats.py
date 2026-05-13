@@ -1,10 +1,11 @@
 from fastapi import APIRouter, Depends
 from psycopg import Connection
 
+from backend.app.core.auth import get_current_user
 from backend.app.db.crud import execute_commit, execute_returning, fetch_all, fetch_one, require_row
 from backend.app.db.session import get_db_connection
 from backend.app.core.config import get_settings
-from backend.app.routes.notes import get_note
+from backend.app.routes.notes import get_note_for_user
 from backend.app.schemas.chats import (
     ChatAiMessageCreate,
     ChatAiMessageRead,
@@ -27,8 +28,9 @@ def create_chat_session(
     note_id: int,
     payload: ChatSessionCreate,
     connection: Connection = Depends(get_db_connection),
+    current_user: dict = Depends(get_current_user),
 ):
-    get_note(note_id, connection)
+    get_note_for_user(note_id, current_user["id"], connection)
     return execute_returning(
         connection,
         """
@@ -44,8 +46,9 @@ def create_chat_session(
 def list_chat_sessions(
     note_id: int,
     connection: Connection = Depends(get_db_connection),
+    current_user: dict = Depends(get_current_user),
 ):
-    get_note(note_id, connection)
+    get_note_for_user(note_id, current_user["id"], connection)
     return fetch_all(
         connection,
         """
@@ -61,14 +64,18 @@ def list_chat_sessions(
 @router.get("/chat-sessions", response_model=list[ChatSessionRead])
 def list_all_chat_sessions(
     connection: Connection = Depends(get_db_connection),
+    current_user: dict = Depends(get_current_user),
 ):
     return fetch_all(
         connection,
         """
-        SELECT id, note_id, title, model, created_at, updated_at
-        FROM chat_sessions
-        ORDER BY updated_at DESC, id DESC
+        SELECT s.id, s.note_id, s.title, s.model, s.created_at, s.updated_at
+        FROM chat_sessions s
+        JOIN notes n ON n.id = s.note_id
+        WHERE n.user_id = %s
+        ORDER BY s.updated_at DESC, s.id DESC
         """,
+        (current_user["id"],),
     )
 
 
@@ -76,16 +83,18 @@ def list_all_chat_sessions(
 def get_chat_session(
     session_id: int,
     connection: Connection = Depends(get_db_connection),
+    current_user: dict = Depends(get_current_user),
 ):
     session = require_row(
         fetch_one(
             connection,
             """
-            SELECT id, note_id, title, model, created_at, updated_at
-            FROM chat_sessions
-            WHERE id = %s
+            SELECT s.id, s.note_id, s.title, s.model, s.created_at, s.updated_at
+            FROM chat_sessions s
+            JOIN notes n ON n.id = s.note_id
+            WHERE s.id = %s AND n.user_id = %s
             """,
-            (session_id,),
+            (session_id, current_user["id"]),
         ),
         "chat session not found",
     )
@@ -107,8 +116,9 @@ def update_chat_session(
     session_id: int,
     payload: ChatSessionUpdate,
     connection: Connection = Depends(get_db_connection),
+    current_user: dict = Depends(get_current_user),
 ):
-    current = get_chat_session(session_id, connection)
+    current = get_chat_session(session_id, connection, current_user)
     return execute_returning(
         connection,
         """
@@ -129,8 +139,9 @@ def update_chat_session(
 def delete_chat_session(
     session_id: int,
     connection: Connection = Depends(get_db_connection),
+    current_user: dict = Depends(get_current_user),
 ):
-    get_chat_session(session_id, connection)
+    get_chat_session(session_id, connection, current_user)
     execute_commit(connection, "DELETE FROM chat_sessions WHERE id = %s", (session_id,))
 
 
@@ -139,8 +150,9 @@ def create_chat_message(
     session_id: int,
     payload: ChatMessageCreate,
     connection: Connection = Depends(get_db_connection),
+    current_user: dict = Depends(get_current_user),
 ):
-    get_chat_session(session_id, connection)
+    get_chat_session(session_id, connection, current_user)
     message = execute_returning(
         connection,
         """
@@ -159,9 +171,10 @@ def create_ai_chat_message(
     session_id: int,
     payload: ChatAiMessageCreate,
     connection: Connection = Depends(get_db_connection),
+    current_user: dict = Depends(get_current_user),
 ):
-    session = get_chat_session(session_id, connection)
-    note = get_note(session["note_id"], connection)
+    session = get_chat_session(session_id, connection, current_user)
+    note = get_note_for_user(session["note_id"], current_user["id"], connection)
     pages = fetch_all(
         connection,
         """
@@ -182,10 +195,10 @@ def create_ai_chat_message(
         """,
         (session_id,),
     )
-    model = payload.model or session.get("model") or get_settings().openai_default_model
+    model = payload.model or session.get("model") or get_settings().default_ai_model
 
     if payload.use_rag:
-        documents = load_note_documents(connection, note_ids=[session["note_id"]])
+        documents = load_note_documents(connection, note_ids=[session["note_id"]], user_id=current_user["id"])
         answer = ask_with_rag(
             question=payload.content,
             documents=documents,
@@ -199,6 +212,9 @@ def create_ai_chat_message(
             pages=pages,
             messages=previous_messages,
             user_content=payload.content,
+            selection_image=payload.selection_image,
+            selection_rect=payload.selection_rect.model_dump() if payload.selection_rect else None,
+            page_number=payload.page_number,
         )
     user_message = execute_returning(
         connection,
@@ -230,8 +246,9 @@ def create_ai_chat_message(
 def list_chat_messages(
     session_id: int,
     connection: Connection = Depends(get_db_connection),
+    current_user: dict = Depends(get_current_user),
 ):
-    get_chat_session(session_id, connection)
+    get_chat_session(session_id, connection, current_user)
     return fetch_all(
         connection,
         """

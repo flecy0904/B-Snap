@@ -38,12 +38,18 @@ DATABASE_URL=postgresql+psycopg://postgres:<password>@localhost:5432/bsnap
 OPENAI_API_KEY=<your_openai_api_key>
 OPENAI_DEFAULT_MODEL=gpt-4.1-mini
 ALLOWED_ORIGINS=http://localhost:8081,http://localhost:19006
+JWT_SECRET_KEY=replace_with_openssl_rand_hex_32
+JWT_ALGORITHM=HS256
+JWT_ACCESS_TOKEN_MINUTES=10080
+UPLOAD_DIR=backend/uploads
+UPLOAD_MAX_BYTES=31457280
 ```
 
 주의:
 
 - 실제 `.env` 파일은 git에 올리지 않습니다.
 - 실제 API key나 DB 비밀번호를 README, 이슈, PR, 채팅에 적지 않습니다.
+- `JWT_SECRET_KEY`는 팀/환경마다 충분히 긴 랜덤 문자열로 설정합니다.
 
 ### 3. PostgreSQL DB 생성
 
@@ -194,7 +200,7 @@ npm run check
 
 Frontend:
 
-- mock 로그인
+- 이메일/비밀번호 로그인 및 계정별 토큰 저장
 - 시간표 화면
 - 캡처 업로드 프로토타입
 - PDF/빈 노트 워크스페이스
@@ -209,13 +215,19 @@ Frontend:
 Backend:
 
 - FastAPI 앱 구조
+- users/auth API와 JWT 인증
 - PostgreSQL 연결
 - folders/notes/note_pages CRUD
+- folders/notes/chat/upload/RAG API의 사용자별 데이터 제한
 - chat_sessions/chat_messages CRUD
 - 전체 chat session 조회
 - 노트 제목 및 노트 페이지 내용 저장 API
 - OpenAI `gpt-4.1-mini` 연결
 - AI 질문/응답 DB 저장
+
+## 팀 개발 참고 문서
+
+- [Notes Data Contract Draft](docs/notes-data-contract.md): OCR/RAG 연동 전 현재 노트/페이지/업로드 데이터 구조 초안
 
 ## 자주 나는 오류
 

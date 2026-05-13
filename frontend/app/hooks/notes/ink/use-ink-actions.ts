@@ -141,8 +141,8 @@ export function useInkActions(params: {
 
   const addTextAnnotation = (point: InkPoint) => {
     if (!params.studyDocumentId) return;
-    const generatedPageId = params.currentDocumentPage?.kind === 'generated' ? params.currentDocumentPage.pageId : undefined;
-    const pageNumber = generatedPageId ? 1 : params.currentDocumentPage?.kind === 'pdf' ? params.currentDocumentPage.pageNumber : params.currentPdfPage;
+    const generatedPageId = point.generatedPageId ?? (params.currentDocumentPage?.kind === 'generated' ? params.currentDocumentPage.pageId : undefined);
+    const pageNumber = generatedPageId ? 1 : point.pageNumber ?? (params.currentDocumentPage?.kind === 'pdf' ? params.currentDocumentPage.pageNumber : params.currentPdfPage);
     const anchoredSelection = !generatedPageId && params.studyDocument?.type === 'pdf' ? params.selectionByDocument[params.studyDocumentId] ?? null : null;
     const anchorX = anchoredSelection ? Math.max(18, anchoredSelection.x) : Math.max(18, point.x);
     const anchorY = anchoredSelection ? Math.max(18, anchoredSelection.y) : Math.max(18, point.y);

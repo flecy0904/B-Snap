@@ -25,11 +25,17 @@ export function useIncomingAssetSubscription(params: {
       const shouldSuggest = noteWorkspaceMode === 'note' && !!studyDocumentId && subjectId === asset.subjectId;
       const nextAsset = shouldSuggest ? { ...asset, status: 'suggested' as const } : asset;
 
-      setCaptureAssetsBySubject((current) => ({
-        ...current,
-        [asset.subjectId]: [nextAsset, ...(current[asset.subjectId] ?? [])],
-      }));
-      setIncomingBannerQueue((current) => [...current, asset]);
+      setCaptureAssetsBySubject((current) => {
+        const currentSubjectAssets = current[asset.subjectId] ?? [];
+        if (currentSubjectAssets.some((item) => item.id === asset.id)) return current;
+        return {
+          ...current,
+          [asset.subjectId]: [nextAsset, ...currentSubjectAssets],
+        };
+      });
+      setIncomingBannerQueue((current) => (
+        current.some((item) => item.id === asset.id) ? current : [...current, asset]
+      ));
 
       if (shouldSuggest) {
         setIncomingAssetSuggestion(nextAsset);

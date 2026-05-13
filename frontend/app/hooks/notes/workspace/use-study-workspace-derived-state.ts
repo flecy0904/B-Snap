@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import { notes, studyDocuments, subjects as fallbackSubjects } from '../../../data';
+import { subjects as fallbackSubjects } from '../../../app-defaults';
 import { isSameDocumentPage } from '../../../ui-helpers';
 import type { InkStroke, InkTextAnnotation, SelectionRect } from '../../../ui-types';
 import type {
@@ -7,12 +7,13 @@ import type {
   CaptureAsset,
   DocumentPageView,
   GeneratedWorkspacePage,
+  NotebookPage,
   NoteEntry,
   StudyDocumentEntry,
   Subject,
   WorkspaceAttachment,
 } from '../../../types';
-import { buildDocumentPageSequence, filterNotesByQuery, filterStudyDocumentsByQuery } from './helpers';
+import { buildDocumentPageSequence, buildNotebookPageSequence, filterNotesByQuery, filterStudyDocumentsByQuery } from './helpers';
 
 export function useStudyWorkspaceDerivedState(params: {
   subjects: Subject[];
@@ -39,21 +40,15 @@ export function useStudyWorkspaceDerivedState(params: {
   const deletedNoteIds = useMemo(() => new Set(params.deletedNoteIds), [params.deletedNoteIds]);
   const deletedStudyDocumentIds = useMemo(() => new Set(params.deletedStudyDocumentIds), [params.deletedStudyDocumentIds]);
   const visibleNotes = useMemo(
-    () => notes.filter((value) => !deletedNoteIds.has(value.id)),
+    () => [] as NoteEntry[],
     [deletedNoteIds],
   );
   const deletedNotes = useMemo(
-    () => notes.filter((value) => deletedNoteIds.has(value.id)),
+    () => [] as NoteEntry[],
     [deletedNoteIds],
   );
   const mergedStudyDocuments = useMemo(
-    () => {
-      const userDocumentIds = new Set(params.userStudyDocuments.map((document) => document.id));
-      return [
-        ...params.userStudyDocuments,
-        ...studyDocuments.filter((document) => !userDocumentIds.has(document.id)),
-      ];
-    },
+    () => params.userStudyDocuments,
     [params.userStudyDocuments],
   );
   const allStudyDocuments = useMemo(
@@ -93,6 +88,10 @@ export function useStudyWorkspaceDerivedState(params: {
   const currentDocumentPages = useMemo(() => {
     if (!studyDocument) return [];
     return buildDocumentPageSequence(studyDocument.pageCount, generatedWorkspacePages);
+  }, [generatedWorkspacePages, studyDocument]);
+  const notebookPages = useMemo<NotebookPage[]>(() => {
+    if (!studyDocument) return [];
+    return buildNotebookPageSequence(studyDocument.id, studyDocument.pageCount, generatedWorkspacePages);
   }, [generatedWorkspacePages, studyDocument]);
   const currentDocumentPage = useMemo(() => {
     if (!params.studyDocumentId) return null;
@@ -186,6 +185,7 @@ export function useStudyWorkspaceDerivedState(params: {
     generatedWorkspacePages,
     currentPdfPage,
     currentDocumentPages,
+    notebookPages,
     currentDocumentPage,
     currentDocumentPageIndex,
     totalDocumentPageCount,

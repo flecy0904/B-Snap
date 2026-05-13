@@ -1,7 +1,6 @@
 import React from 'react';
-import type { MockAiAnswer } from '../../../services/mock-ai-service';
 import type { BackendChatMessage, BackendChatSession } from '../../../services/backend-api';
-import { NoteSummarySection, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, StudyDocumentEntry, WorkspaceAttachment } from '../../../types';
+import { AiAnswer, NoteSummarySection, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NotebookPage, StudyDocumentEntry, WorkspaceAttachment } from '../../../types';
 import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 
 export type DesktopNotesWorkspaceContextValue = {
@@ -14,7 +13,7 @@ export type DesktopNotesWorkspaceContextValue = {
   normalizedQuestion: string;
   aiResponse: string;
   aiResponseSections?: NoteSummarySection[] | null;
-  aiAnswer: MockAiAnswer | null;
+  aiAnswer: AiAnswer | null;
   aiMessages: BackendChatMessage[];
   aiChatSessions: BackendChatSession[];
   noteAiChatSessions: BackendChatSession[];
@@ -46,6 +45,7 @@ export type DesktopNotesWorkspaceContextValue = {
   captureInbox: CaptureAsset[];
   studyDocument: StudyDocumentEntry;
   currentDocumentPages: DocumentPageView[];
+  notebookPages: NotebookPage[];
   currentPdfPage: number;
   currentDocumentPage: DocumentPageView | null;
   activeGeneratedPage: GeneratedWorkspacePage | null;

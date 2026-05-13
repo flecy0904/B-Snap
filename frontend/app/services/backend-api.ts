@@ -1,9 +1,20 @@
 import { resolveBackendHttpUrl } from '../root/backend-url';
+import { Platform } from 'react-native';
 
 type RequestOptions = {
   method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
   body?: unknown;
 };
+
+let backendAuthToken: string | null = null;
+
+export function setBackendAuthToken(token: string | null) {
+  backendAuthToken = token;
+}
+
+export function getBackendAuthToken() {
+  return backendAuthToken;
+}
 
 export class BackendApiError extends Error {
   status: number | null;
@@ -15,6 +26,26 @@ export class BackendApiError extends Error {
     this.status = status;
     this.detail = detail;
   }
+}
+
+function parseBackendErrorDetail(body: any): string | null {
+  if (!body) return null;
+  if (typeof body.detail === 'string') return body.detail;
+  if (Array.isArray(body.detail)) {
+    const parts = body.detail
+      .map((item: any) => {
+        if (!item) return null;
+        if (typeof item === 'string') return item;
+        if (typeof item.msg === 'string') return item.msg;
+        if (typeof item.message === 'string') return item.message;
+        return null;
+      })
+      .filter((item: string | null): item is string => !!item);
+    if (parts.length > 0) return parts.join(' · ');
+  }
+  if (typeof body.detail?.msg === 'string') return body.detail.msg;
+  if (typeof body.message === 'string') return body.message;
+  return null;
 }
 
 export type BackendFolder = {
@@ -67,8 +98,47 @@ export type BackendAiMessageResponse = {
   };
 };
 
+export type BackendUpload = {
+  filename: string;
+  stored_filename: string;
+  content_type: string | null;
+  size_bytes: number;
+  page_count: number;
+  page_numbers: number[];
+  page_image_urls?: string[];
+  url: string;
+};
+
+export type BackendAuthUser = {
+  id: number;
+  email: string;
+  name: string;
+  created_at: string;
+};
+
+export type BackendAuthSession = {
+  access_token: string;
+  token_type: 'bearer' | string;
+  user: BackendAuthUser;
+};
+
+export type BackendPdfNoteUpload = {
+  upload: BackendUpload;
+  note: BackendNote;
+  pages: BackendNotePage[];
+};
+
 function getBackendUrl() {
   return resolveBackendHttpUrl();
+}
+
+export function resolveBackendAssetUrl(url: string | null | undefined) {
+  if (!url) return null;
+  if (/^https?:\/\//i.test(url) || url.startsWith('file://')) return url;
+
+  const baseUrl = getBackendUrl();
+  if (!baseUrl) return url;
+  return `${baseUrl.replace(/\/$/, '')}/${url.replace(/^\//, '')}`;
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -81,7 +151,10 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   try {
     response = await fetch(`${baseUrl}${path}`, {
       method: options.method ?? 'GET',
-      headers: options.body ? { 'Content-Type': 'application/json' } : undefined,
+      headers: {
+        ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+        ...(backendAuthToken ? { Authorization: `Bearer ${backendAuthToken}` } : {}),
+      },
       body: options.body ? JSON.stringify(options.body) : undefined,
     });
   } catch {
@@ -92,7 +165,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
     let detail: string | null = null;
     try {
       const body = await response.json();
-      detail = typeof body?.detail === 'string' ? body.detail : null;
+      detail = parseBackendErrorDetail(body);
     } catch {
       detail = null;
     }
@@ -108,6 +181,161 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 
 export function isBackendApiEnabled() {
   return !!getBackendUrl();
+}
+
+async function appendUploadFile(formData: FormData, fieldName: string, file: {
+  uri: string;
+  name: string;
+  type: string;
+}) {
+  if (Platform.OS === 'web') {
+    try {
+      const response = await fetch(file.uri);
+      const blob = await response.blob();
+      formData.append(fieldName, blob, file.name);
+    } catch {
+      throw new BackendApiError('선택한 파일을 읽지 못했습니다.');
+    }
+    return;
+  }
+
+  formData.append(fieldName, {
+    uri: file.uri,
+    name: file.name,
+    type: file.type,
+  } as unknown as Blob);
+}
+
+export async function uploadBackendFile(file: {
+  uri: string;
+  name: string;
+  type: string;
+}) {
+  const baseUrl = getBackendUrl();
+  if (!baseUrl) {
+    throw new BackendApiError('Backend URL is not configured.');
+  }
+
+  const formData = new FormData();
+  await appendUploadFile(formData, 'file', file);
+
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}/uploads`, {
+      method: 'POST',
+      headers: backendAuthToken ? { Authorization: `Bearer ${backendAuthToken}` } : undefined,
+      body: formData,
+    });
+  } catch {
+    throw new BackendApiError('Backend server is unreachable.');
+  }
+
+  if (!response.ok) {
+    let detail: string | null = null;
+    try {
+      const body = await response.json();
+      detail = parseBackendErrorDetail(body);
+    } catch {
+      detail = null;
+    }
+    throw new BackendApiError(`Backend upload failed: ${response.status}`, response.status, detail);
+  }
+
+  const upload = await response.json() as BackendUpload;
+  return {
+    ...upload,
+    url: resolveBackendAssetUrl(upload.url) ?? upload.url,
+    page_image_urls: upload.page_image_urls?.map((url) => resolveBackendAssetUrl(url) ?? url) ?? [],
+  };
+}
+
+export async function uploadBackendPdfNote(payload: {
+  file: {
+    uri: string;
+    name: string;
+    type: string;
+  };
+  folderId: number;
+  title: string;
+  summary?: string | null;
+}) {
+  const baseUrl = getBackendUrl();
+  if (!baseUrl) {
+    throw new BackendApiError('Backend URL is not configured.');
+  }
+
+  const formData = new FormData();
+  formData.append('folder_id', String(payload.folderId));
+  formData.append('title', payload.title);
+  if (payload.summary !== undefined && payload.summary !== null) {
+    formData.append('summary', payload.summary);
+  }
+  await appendUploadFile(formData, 'file', payload.file);
+
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}/uploads/pdf-note`, {
+      method: 'POST',
+      headers: backendAuthToken ? { Authorization: `Bearer ${backendAuthToken}` } : undefined,
+      body: formData,
+    });
+  } catch {
+    throw new BackendApiError('Backend server is unreachable.');
+  }
+
+  if (!response.ok) {
+    let detail: string | null = null;
+    try {
+      const body = await response.json();
+      detail = parseBackendErrorDetail(body);
+    } catch {
+      detail = null;
+    }
+    throw new BackendApiError(`Backend PDF upload failed: ${response.status}`, response.status, detail);
+  }
+
+  const result = await response.json() as BackendPdfNoteUpload;
+  return {
+    ...result,
+    upload: {
+      ...result.upload,
+      url: resolveBackendAssetUrl(result.upload.url) ?? result.upload.url,
+      page_image_urls: result.upload.page_image_urls?.map((url) => resolveBackendAssetUrl(url) ?? url) ?? [],
+    },
+    pages: result.pages.map((page) => ({
+      ...page,
+      image_url: resolveBackendAssetUrl(page.image_url) ?? page.image_url,
+    })),
+  };
+}
+
+export async function registerBackendUser(payload: {
+  email: string;
+  password: string;
+  name?: string | null;
+}) {
+  return request<BackendAuthSession>('/auth/register', {
+    method: 'POST',
+    body: {
+      email: payload.email,
+      password: payload.password,
+      name: payload.name ?? null,
+    },
+  });
+}
+
+export async function loginBackendUser(payload: {
+  email: string;
+  password: string;
+}) {
+  return request<BackendAuthSession>('/auth/login', {
+    method: 'POST',
+    body: payload,
+  });
+}
+
+export function getBackendCurrentUser() {
+  return request<BackendAuthUser>('/auth/me');
 }
 
 export async function ensureFolderForSubject(subject: { name: string; color?: string }) {
@@ -133,7 +361,12 @@ export function listBackendNotes() {
 }
 
 export function listBackendNotePages(noteId: number) {
-  return request<BackendNotePage[]>(`/notes/${noteId}/pages`);
+  return request<BackendNotePage[]>(`/notes/${noteId}/pages`).then((pages) => (
+    pages.map((page) => ({
+      ...page,
+      image_url: resolveBackendAssetUrl(page.image_url) ?? page.image_url,
+    }))
+  ));
 }
 
 export async function createBackendNote(payload: {
@@ -177,7 +410,7 @@ export async function createBackendNotePage(payload: {
   content?: string | null;
   imageUrl?: string | null;
 }) {
-  return request<BackendNotePage>(`/notes/${payload.noteId}/pages`, {
+  const page = await request<BackendNotePage>(`/notes/${payload.noteId}/pages`, {
     method: 'POST',
     body: {
       page_number: payload.pageNumber,
@@ -185,6 +418,10 @@ export async function createBackendNotePage(payload: {
       image_url: payload.imageUrl ?? null,
     },
   });
+  return {
+    ...page,
+    image_url: resolveBackendAssetUrl(page.image_url) ?? page.image_url,
+  };
 }
 
 export async function updateBackendNotePage(payload: {
@@ -193,7 +430,7 @@ export async function updateBackendNotePage(payload: {
   content?: string | null;
   imageUrl?: string | null;
 }) {
-  return request<BackendNotePage>(`/note-pages/${payload.pageId}`, {
+  const page = await request<BackendNotePage>(`/note-pages/${payload.pageId}`, {
     method: 'PATCH',
     body: {
       page_number: payload.pageNumber,
@@ -201,6 +438,10 @@ export async function updateBackendNotePage(payload: {
       image_url: payload.imageUrl,
     },
   });
+  return {
+    ...page,
+    image_url: resolveBackendAssetUrl(page.image_url) ?? page.image_url,
+  };
 }
 
 export async function createBackendChatSession(payload: {
@@ -253,12 +494,25 @@ export async function sendBackendAiMessage(payload: {
   sessionId: number;
   content: string;
   model?: string | null;
+  selectionImage?: string | null;
+  selectionRect?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    pageWidth?: number;
+    pageHeight?: number;
+  } | null;
+  pageNumber?: number | null;
 }) {
   return request<BackendAiMessageResponse>(`/chat-sessions/${payload.sessionId}/ai-messages`, {
     method: 'POST',
     body: {
       content: payload.content,
       model: payload.model ?? null,
+      selection_image: payload.selectionImage ?? null,
+      selection_rect: payload.selectionRect ?? null,
+      page_number: payload.pageNumber ?? null,
     },
   });
 }

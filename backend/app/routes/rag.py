@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends
 from psycopg import Connection
 
+from backend.app.core.auth import get_current_user
 from backend.app.db.session import get_db_connection
 from backend.app.schemas.rag import (
     RAGAnswer,
@@ -24,12 +25,14 @@ router = APIRouter(prefix="/ai/rag", tags=["rag"])
 def ask_rag(
     payload: RAGAskRequest,
     connection: Connection = Depends(get_db_connection),
+    current_user: dict = Depends(get_current_user),
 ):
     documents = load_note_documents(
         connection,
         note_ids=payload.note_ids,
         folder_id=payload.folder_id,
         subject_id=payload.subject_id,
+        user_id=current_user["id"],
     )
     return ask_with_rag(
         question=payload.question,
@@ -43,12 +46,14 @@ def ask_rag(
 def summarize_rag(
     payload: RAGSummaryRequest,
     connection: Connection = Depends(get_db_connection),
+    current_user: dict = Depends(get_current_user),
 ):
     documents = load_note_documents(
         connection,
         note_ids=payload.note_ids,
         folder_id=payload.folder_id,
         subject_id=payload.subject_id,
+        user_id=current_user["id"],
     )
     return summarize_note_with_prompt(
         documents=documents,
@@ -62,12 +67,14 @@ def summarize_rag(
 def quiz_rag(
     payload: RAGQuizRequest,
     connection: Connection = Depends(get_db_connection),
+    current_user: dict = Depends(get_current_user),
 ):
     documents = load_note_documents(
         connection,
         note_ids=payload.note_ids,
         folder_id=payload.folder_id,
         subject_id=payload.subject_id,
+        user_id=current_user["id"],
     )
     return generate_quiz_from_context(
         documents=documents,

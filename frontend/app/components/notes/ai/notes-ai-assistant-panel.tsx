@@ -1,10 +1,10 @@
 import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { ActivityIndicator, Animated, Image, LayoutChangeEvent, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
-import { useDesktopNotesWorkspaceContext } from '../workspace/notes-workspace-context';
+import { useNotesGlobalContext } from '../workspace/notes-global-context';
 
 export function NotesAiAssistantPanel() {
-  const workspace = useDesktopNotesWorkspaceContext();
+  const workspace = useNotesGlobalContext();
   const [sidebarOpen, setSidebarOpen] = React.useState(false);
   const [sidebarVisible, setSidebarVisible] = React.useState(false);
   const sidebarProgress = React.useRef(new Animated.Value(0)).current;
@@ -22,12 +22,12 @@ export function NotesAiAssistantPanel() {
   const latestUserMessage = [...workspace.aiMessages].reverse().find((message) => message.role === 'user') ?? null;
   const latestUserMessageId = latestUserMessage?.id ?? null;
   const activeSession = workspace.activeAiChatSessionId
-    ? workspace.allAiChatSessions.find((session) => session.id === workspace.activeAiChatSessionId)
-      ?? workspace.noteAiChatSessions.find((session) => session.id === workspace.activeAiChatSessionId)
+    ? workspace.allAiChatSessions.find((session: any) => session.id === workspace.activeAiChatSessionId)
+      ?? workspace.noteAiChatSessions.find((session: any) => session.id === workspace.activeAiChatSessionId)
       ?? null
     : null;
   const chatSearchTerm = workspace.aiChatSearchQuery.trim().toLowerCase();
-  const sidebarSessions = workspace.allAiChatSessions.filter((session) => {
+  const sidebarSessions = workspace.allAiChatSessions.filter((session: any) => {
     if (!chatSearchTerm) return true;
     return `${session.title} ${session.model ?? ''}`.toLowerCase().includes(chatSearchTerm);
   });
@@ -203,7 +203,7 @@ export function NotesAiAssistantPanel() {
           </View>
 
           <ScrollView style={workspace.styles.aiSidebarList} contentContainerStyle={workspace.styles.aiSidebarListContent} showsVerticalScrollIndicator={false}>
-            {sidebarSessions.length ? sidebarSessions.map((session) => {
+            {sidebarSessions.length ? sidebarSessions.map((session: any) => {
               const active = session.id === workspace.activeAiChatSessionId;
               const editing = false;
               const contextMenuProps = {
@@ -334,7 +334,7 @@ export function NotesAiAssistantPanel() {
           contentContainerStyle={workspace.styles.aiMessagesContent}
           showsVerticalScrollIndicator={false}
         >
-          {hasChatHistory ? workspace.aiMessages.map((message) => {
+          {hasChatHistory ? workspace.aiMessages.map((message: any) => {
             const isUser = message.role === 'user';
             return (
               <View
@@ -362,7 +362,13 @@ export function NotesAiAssistantPanel() {
           {workspace.selectionPreviewUri ? (
             <View style={workspace.styles.aiSelectionAttachment}>
               <Image source={{ uri: workspace.selectionPreviewUri }} style={workspace.styles.aiSelectionAttachmentImage} resizeMode="contain" />
-              <Pressable style={workspace.styles.aiSelectionAttachmentRemove} onPress={() => workspace.onSelectionPreviewChange(null)}>
+              <Pressable
+                style={workspace.styles.aiSelectionAttachmentRemove}
+                onPress={() => {
+                  workspace.onSelectionPreviewChange(null);
+                  workspace.onSelectionChange(null);
+                }}
+              >
                 <MaterialCommunityIcons name="close" size={12} color="#FFFFFF" />
               </Pressable>
             </View>
@@ -372,7 +378,7 @@ export function NotesAiAssistantPanel() {
             <TextInput
               value={workspace.aiQuestion}
               onChangeText={workspace.onChangeAiQuestion}
-              placeholder="메시지 입력"
+              placeholder={workspace.selectionRect || workspace.selectionPreviewUri ? '선택 영역에 대해 물어보세요' : '메시지 입력'}
               placeholderTextColor="#8F96A3"
               multiline
               style={workspace.styles.aiComposerInput}

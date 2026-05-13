@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends
 from psycopg import Connection
 
+from backend.app.core.auth import get_current_user
 from backend.app.db.crud import execute_commit, execute_returning, fetch_all, fetch_one, require_row
 from backend.app.db.session import get_db_connection
 from backend.app.schemas.folders import FolderCreate, FolderRead, FolderUpdate
@@ -13,27 +14,33 @@ router = APIRouter(prefix="/folders", tags=["folders"])
 def create_folder(
     payload: FolderCreate,
     connection: Connection = Depends(get_db_connection),
+    current_user: dict = Depends(get_current_user),
 ):
     return execute_returning(
         connection,
         """
-        INSERT INTO folders (name, color)
-        VALUES (%s, %s)
+        INSERT INTO folders (user_id, name, color)
+        VALUES (%s, %s, %s)
         RETURNING id, name, color, created_at, updated_at
         """,
-        (payload.name, payload.color),
+        (current_user["id"], payload.name, payload.color),
     )
 
 
 @router.get("", response_model=list[FolderRead])
-def list_folders(connection: Connection = Depends(get_db_connection)):
+def list_folders(
+    connection: Connection = Depends(get_db_connection),
+    current_user: dict = Depends(get_current_user),
+):
     return fetch_all(
         connection,
         """
         SELECT id, name, color, created_at, updated_at
         FROM folders
+        WHERE user_id = %s
         ORDER BY updated_at DESC, id DESC
         """,
+        (current_user["id"],),
     )
 
 
@@ -41,6 +48,7 @@ def list_folders(connection: Connection = Depends(get_db_connection)):
 def get_folder(
     folder_id: int,
     connection: Connection = Depends(get_db_connection),
+    current_user: dict = Depends(get_current_user),
 ):
     return require_row(
         fetch_one(
@@ -48,9 +56,9 @@ def get_folder(
             """
             SELECT id, name, color, created_at, updated_at
             FROM folders
-            WHERE id = %s
+            WHERE id = %s AND user_id = %s
             """,
-            (folder_id,),
+            (folder_id, current_user["id"]),
         ),
         "folder not found",
     )
@@ -61,20 +69,22 @@ def update_folder(
     folder_id: int,
     payload: FolderUpdate,
     connection: Connection = Depends(get_db_connection),
+    current_user: dict = Depends(get_current_user),
 ):
-    current = get_folder(folder_id, connection)
+    current = get_folder(folder_id, connection, current_user)
     return execute_returning(
         connection,
         """
         UPDATE folders
         SET name = %s, color = %s, updated_at = now()
-        WHERE id = %s
+        WHERE id = %s AND user_id = %s
         RETURNING id, name, color, created_at, updated_at
         """,
         (
             payload.name if payload.name is not None else current["name"],
             payload.color if payload.color is not None else current["color"],
             folder_id,
+            current_user["id"],
         ),
     )
 
@@ -83,6 +93,7 @@ def update_folder(
 def delete_folder(
     folder_id: int,
     connection: Connection = Depends(get_db_connection),
+    current_user: dict = Depends(get_current_user),
 ):
-    get_folder(folder_id, connection)
-    execute_commit(connection, "DELETE FROM folders WHERE id = %s", (folder_id,))
+    get_folder(folder_id, connection, current_user)
+    execute_commit(connection, "DELETE FROM folders WHERE id = %s AND user_id = %s", (folder_id, current_user["id"]))

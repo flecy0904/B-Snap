@@ -1,5 +1,4 @@
-import { notes } from '../../../data';
-import type { CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NoteEntry, NoteSummarySection, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../../types';
+import type { CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NotebookPage, NoteEntry, NoteSummarySection, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../../types';
 
 export const PEN_BRUSH_COLORS = ['#1F2937', '#2563EB', '#7C3AED', '#D9485F', '#F59E0B', '#16A34A'] as const;
 export const HIGHLIGHT_BRUSH_COLORS = ['#FDE047', '#FB7185', '#86EFAC', '#67E8F9', '#FDBA74'] as const;
@@ -13,21 +12,6 @@ export function buildGeneratedSummary(asset: CaptureAsset, subjects: Subject[]):
   formulaText?: string;
 } {
   const subjectName = subjects.find((value) => value.id === asset.subjectId)?.name ?? '해당 수업';
-  const subjectTemplateNote =
-    notes
-      .filter((value) => value.subjectId === asset.subjectId && value.summarySections?.length)
-      .sort((left, right) => new Date(right.date.replace(/\./g, '-')).getTime() - new Date(left.date.replace(/\./g, '-')).getTime())[0] ?? null;
-
-  if (subjectTemplateNote?.summarySections?.length) {
-    const formulaSection = subjectTemplateNote.summarySections.find((section) => section.tone === 'formula') ?? null;
-
-    return {
-      summaryTitle: subjectTemplateNote.title,
-      summaryIntro: subjectTemplateNote.preview,
-      summarySections: subjectTemplateNote.summarySections.filter((section) => section.tone !== 'formula'),
-      formulaText: formulaSection?.body,
-    };
-  }
 
   return {
     summaryTitle: `${subjectName} 판서+LLM 정리본`,
@@ -67,6 +51,37 @@ export function buildDocumentPageSequence(pageCount: number, generatedPages: Gen
   return pages;
 }
 
+export function buildNotebookPageSequence(documentId: number, pageCount: number, generatedPages: GeneratedWorkspacePage[]): NotebookPage[] {
+  const documentPages = buildDocumentPageSequence(pageCount, generatedPages);
+
+  return documentPages.map((page) => {
+    if (page.kind === 'pdf') {
+      return {
+        id: `pdf:${page.pageNumber}`,
+        documentId,
+        kind: 'pdf',
+        label: `${page.pageNumber} 페이지`,
+        pageNumber: page.pageNumber,
+        sourcePage: page,
+      };
+    }
+
+    const generatedPage = generatedPages.find((value) => value.id === page.pageId);
+    const generatedKind = generatedPage?.pageKind === 'memo' ? 'blank' : 'summary';
+
+    return {
+      id: `generated:${page.pageId}`,
+      documentId,
+      kind: generatedKind,
+      label: generatedKind === 'blank' ? '빈 페이지' : 'AI 정리',
+      generatedPageId: page.pageId,
+      insertAfterPage: generatedPage?.insertAfterPage,
+      template: generatedKind === 'blank' ? 'plain' : undefined,
+      sourcePage: page,
+    };
+  });
+}
+
 export function buildWorkspaceAttachment(asset: CaptureAsset, generatedPageId: string): WorkspaceAttachment {
   return {
     id: `attachment-${generatedPageId}`,
@@ -79,6 +94,8 @@ export function buildWorkspaceAttachment(asset: CaptureAsset, generatedPageId: s
     pageCount: asset.pageCount,
     previewImageKey: asset.previewImageKey,
     previewImage: asset.previewImage,
+    fileUrl: asset.fileUrl,
+    thumbnailUrl: asset.thumbnailUrl,
     placementType: asset.type === 'image' ? 'next_page_insert' : 'side_reference',
   };
 }

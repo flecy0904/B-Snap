@@ -113,7 +113,7 @@ function ensureRequirements() {
 
 function startBackend() {
   const enableReload = process.argv.includes("--reload");
-  const uvicornArgs = ["-m", "uvicorn", "backend.app.main:app", "--host", "localhost", "--port", "8000"];
+  const uvicornArgs = ["-m", "uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8000"];
   if (enableReload) {
     uvicornArgs.splice(3, 0, "--reload");
   }

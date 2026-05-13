@@ -1,150 +1,154 @@
 import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Image, Pressable, ScrollView, Text, View } from 'react-native';
-import { useDesktopNotesWorkspaceContext } from './notes-workspace-context';
+import { useNotesGlobalContext } from './notes-global-context';
+import { useDocumentContext } from './document-context';
+import { useNavigationContext } from './navigation-context';
 
 export function NotesWorkspaceDock() {
-  const workspace = useDesktopNotesWorkspaceContext();
+  const globalContext = useNotesGlobalContext();
+  const documentContext = useDocumentContext();
+  const navigationContext = useNavigationContext();
   const headerIconName = 'image-multiple-outline';
 
   return (
-    <View style={[workspace.styles.workspaceDock, workspace.aiPanelOpen && workspace.styles.workspaceDockShifted]}>
-      <View style={workspace.styles.workspaceDockTop}>
+    <View style={[globalContext.styles.workspaceDock, globalContext.aiPanelOpen && globalContext.styles.workspaceDockShifted]}>
+      <View style={globalContext.styles.workspaceDockTop}>
         <MaterialCommunityIcons name={headerIconName} size={20} color="#5F79FF" />
-        <Pressable style={workspace.styles.workspaceDockClose} onPress={workspace.onCloseWorkspaceDock}>
+        <Pressable style={globalContext.styles.workspaceDockClose} onPress={globalContext.onCloseWorkspaceDock}>
           <MaterialCommunityIcons name="close" size={18} color="#7A8394" />
         </Pressable>
       </View>
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={workspace.styles.workspaceDockContent}>
-        <View style={workspace.styles.workspaceDockSection}>
-          <View style={workspace.styles.workspaceDockSectionHeader}>
-            <Text style={workspace.styles.workspaceDockSectionTitle}>중요 페이지</Text>
-            <Text style={workspace.styles.workspaceDockSectionMeta}>{workspace.bookmarks.length}</Text>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={globalContext.styles.workspaceDockContent}>
+        <View style={globalContext.styles.workspaceDockSection}>
+          <View style={globalContext.styles.workspaceDockSectionHeader}>
+            <Text style={globalContext.styles.workspaceDockSectionTitle}>중요 페이지</Text>
+            <Text style={globalContext.styles.workspaceDockSectionMeta}>{documentContext.currentDocumentBookmarks.length}</Text>
           </View>
-          {workspace.bookmarks.length ? workspace.bookmarks.map((bookmark) => (
-            <View key={bookmark.id} style={workspace.styles.workspaceDockRow}>
-              <Pressable style={workspace.styles.workspaceDockRowMeta} onPress={() => workspace.onOpenBookmarkedPage(bookmark.id)}>
-                <Text style={workspace.styles.workspaceDockRowTitle} numberOfLines={1}>{bookmark.label}</Text>
-                <Text style={workspace.styles.workspaceDockRowBody} numberOfLines={1}>중요 표시한 페이지</Text>
+          {documentContext.currentDocumentBookmarks.length ? documentContext.currentDocumentBookmarks.map((bookmark: any) => (
+            <View key={bookmark.id} style={globalContext.styles.workspaceDockRow}>
+              <Pressable style={globalContext.styles.workspaceDockRowMeta} onPress={() => documentContext.onOpenBookmarkedPage(bookmark.id)}>
+                <Text style={globalContext.styles.workspaceDockRowTitle} numberOfLines={1}>{bookmark.label}</Text>
+                <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={1}>중요 표시한 페이지</Text>
               </Pressable>
-              <View style={workspace.styles.workspaceDockRowButtons}>
-                <Pressable style={workspace.styles.workspaceDockInlineAction} onPress={() => workspace.onOpenBookmarkedPage(bookmark.id)}>
-                  <Text style={workspace.styles.workspaceDockInlineActionText}>열기</Text>
+              <View style={globalContext.styles.workspaceDockRowButtons}>
+                <Pressable style={globalContext.styles.workspaceDockInlineAction} onPress={() => documentContext.onOpenBookmarkedPage(bookmark.id)}>
+                  <Text style={globalContext.styles.workspaceDockInlineActionText}>열기</Text>
                 </Pressable>
-                <Pressable style={workspace.styles.workspaceDockDeleteAction} onPress={() => workspace.onRemoveBookmark(bookmark.id)}>
-                  <Text style={workspace.styles.workspaceDockDeleteActionText}>삭제</Text>
+                <Pressable style={globalContext.styles.workspaceDockDeleteAction} onPress={() => documentContext.onRemoveBookmark(bookmark.id)}>
+                  <Text style={globalContext.styles.workspaceDockDeleteActionText}>삭제</Text>
                 </Pressable>
               </View>
             </View>
           )) : (
-            <Text style={workspace.styles.workspaceDockRowBody}>별표를 눌러 시험/복습 페이지를 저장하세요.</Text>
+            <Text style={globalContext.styles.workspaceDockRowBody}>별표를 눌러 시험/복습 페이지를 저장하세요.</Text>
           )}
         </View>
-        {workspace.studyDocument.type === 'pdf' ? (
-          <View style={workspace.styles.workspaceDockSection}>
-            <View style={workspace.styles.workspaceDockSectionHeader}>
-              <Text style={workspace.styles.workspaceDockSectionTitle}>페이지 삽입</Text>
+        {documentContext.studyDocument?.type === 'pdf' ? (
+          <View style={globalContext.styles.workspaceDockSection}>
+            <View style={globalContext.styles.workspaceDockSectionHeader}>
+              <Text style={globalContext.styles.workspaceDockSectionTitle}>페이지 삽입</Text>
             </View>
-            <Pressable style={workspace.styles.workspacePrimaryAction} onPress={workspace.onCreateMemoPage}>
-              <Text style={workspace.styles.workspacePrimaryActionText}>현재 페이지 뒤에 빈 메모 페이지 추가</Text>
+            <Pressable style={globalContext.styles.workspacePrimaryAction} onPress={documentContext.onCreateMemoPage}>
+              <Text style={globalContext.styles.workspacePrimaryActionText}>현재 페이지 뒤에 빈 메모 페이지 추가</Text>
             </Pressable>
-            {workspace.memoPages.length ? workspace.memoPages.map((page) => (
-              <View key={page.id} style={workspace.styles.workspaceDockRow}>
-                <Pressable style={workspace.styles.workspaceDockRowMeta} onPress={() => workspace.onOpenGeneratedPage(page.id)}>
-                  <Text style={workspace.styles.workspaceDockRowTitle} numberOfLines={1}>{page.title}</Text>
-                  <Text style={workspace.styles.workspaceDockRowBody} numberOfLines={1}>{page.insertAfterPage}페이지 뒤 메모</Text>
+            {documentContext.memoPages.length ? documentContext.memoPages.map((page: any) => (
+              <View key={page.id} style={globalContext.styles.workspaceDockRow}>
+                <Pressable style={globalContext.styles.workspaceDockRowMeta} onPress={() => documentContext.onOpenGeneratedPage(page.id)}>
+                  <Text style={globalContext.styles.workspaceDockRowTitle} numberOfLines={1}>{page.title}</Text>
+                  <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={1}>{page.insertAfterPage}페이지 뒤 메모</Text>
                 </Pressable>
-                <View style={workspace.styles.workspaceDockRowButtons}>
-                  <Pressable style={workspace.styles.workspaceDockInlineAction} onPress={() => workspace.onOpenGeneratedPage(page.id)}>
-                    <Text style={workspace.styles.workspaceDockInlineActionText}>열기</Text>
+                <View style={globalContext.styles.workspaceDockRowButtons}>
+                  <Pressable style={globalContext.styles.workspaceDockInlineAction} onPress={() => documentContext.onOpenGeneratedPage(page.id)}>
+                    <Text style={globalContext.styles.workspaceDockInlineActionText}>열기</Text>
                   </Pressable>
-                  <Pressable style={workspace.styles.workspaceDockDeleteAction} onPress={() => workspace.onRemoveGeneratedPage(page.id)}>
-                    <Text style={workspace.styles.workspaceDockDeleteActionText}>삭제</Text>
+                  <Pressable style={globalContext.styles.workspaceDockDeleteAction} onPress={() => documentContext.onRemoveGeneratedPage(page.id)}>
+                    <Text style={globalContext.styles.workspaceDockDeleteActionText}>삭제</Text>
                   </Pressable>
                 </View>
               </View>
             )) : null}
           </View>
         ) : null}
-        {workspace.previewTitle ? (
-          <View style={workspace.styles.workspaceDockCard}>
-            <Text style={workspace.styles.workspaceDockLabel}>
-              {workspace.previewedIncoming ? '새 자료' : workspace.previewedAttachment ? '삽입 미리보기' : 'Inbox 미리보기'}
+        {globalContext.previewTitle ? (
+          <View style={globalContext.styles.workspaceDockCard}>
+            <Text style={globalContext.styles.workspaceDockLabel}>
+              {globalContext.previewedIncoming ? '새 자료' : globalContext.previewedAttachment ? '삽입 미리보기' : 'Inbox 미리보기'}
             </Text>
-            {workspace.previewImage ? (
-              <View style={workspace.styles.workspaceDockPreviewFrame}>
-                <Image source={workspace.previewImage} style={workspace.styles.workspaceDockPreviewImage} resizeMode="cover" />
+            {globalContext.previewImage ? (
+              <View style={globalContext.styles.workspaceDockPreviewFrame}>
+                <Image source={globalContext.previewImage} style={globalContext.styles.workspaceDockPreviewImage} resizeMode="cover" />
               </View>
             ) : (
-              <View style={workspace.styles.workspaceDockPreviewFallback}>
+              <View style={globalContext.styles.workspaceDockPreviewFallback}>
                 <MaterialCommunityIcons name="image-outline" size={24} color="#6D7BD9" />
               </View>
             )}
-            <Text style={workspace.styles.workspaceDockTitle}>
-              {workspace.previewedIncoming ? '사진 1장 도착' : workspace.previewedAttachment ? '삽입된 정리본 미리보기' : 'Inbox 사진 미리보기'}
+            <Text style={globalContext.styles.workspaceDockTitle}>
+              {globalContext.previewedIncoming ? '사진 1장 도착' : globalContext.previewedAttachment ? '삽입된 정리본 미리보기' : 'Inbox 사진 미리보기'}
             </Text>
-            <Text style={workspace.styles.workspaceDockMeta}>{workspace.previewTitle}</Text>
-            {workspace.previewMeta ? <Text style={workspace.styles.workspaceDockMetaMuted}>{workspace.previewMeta}</Text> : null}
-            <View style={workspace.styles.workspaceDockActions}>
-              {workspace.previewedIncoming ? (
+            <Text style={globalContext.styles.workspaceDockMeta}>{globalContext.previewTitle}</Text>
+            {globalContext.previewMeta ? <Text style={globalContext.styles.workspaceDockMetaMuted}>{globalContext.previewMeta}</Text> : null}
+            <View style={globalContext.styles.workspaceDockActions}>
+              {globalContext.previewedIncoming ? (
                 <>
-                  <Pressable style={workspace.styles.workspacePrimaryAction} onPress={workspace.onAcceptIncomingAsset}><Text style={workspace.styles.workspacePrimaryActionText}>삽입</Text></Pressable>
-                  <Pressable style={workspace.styles.workspaceGhostAction} onPress={workspace.onDismissIncomingAsset}><Text style={workspace.styles.workspaceGhostActionText}>무시</Text></Pressable>
+                  <Pressable style={globalContext.styles.workspacePrimaryAction} onPress={globalContext.onAcceptIncomingAsset}><Text style={globalContext.styles.workspacePrimaryActionText}>삽입</Text></Pressable>
+                  <Pressable style={globalContext.styles.workspaceGhostAction} onPress={globalContext.onDismissIncomingAsset}><Text style={globalContext.styles.workspaceGhostActionText}>무시</Text></Pressable>
                 </>
               ) : null}
-              {workspace.previewedAttachment ? (
+              {globalContext.previewedAttachment ? (
                 <>
-                  <Pressable style={workspace.styles.workspacePrimaryAction} onPress={() => workspace.onOpenWorkspaceAttachment(workspace.previewedAttachment!.id)}><Text style={workspace.styles.workspacePrimaryActionText}>열기</Text></Pressable>
-                  <Pressable style={workspace.styles.workspaceDockDeleteAction} onPress={() => workspace.onRemoveWorkspaceAttachment(workspace.previewedAttachment!.id)}><Text style={workspace.styles.workspaceDockDeleteActionText}>삭제</Text></Pressable>
+                  <Pressable style={globalContext.styles.workspacePrimaryAction} onPress={() => globalContext.onOpenWorkspaceAttachment(globalContext.previewedAttachment!.id)}><Text style={globalContext.styles.workspacePrimaryActionText}>열기</Text></Pressable>
+                  <Pressable style={globalContext.styles.workspaceDockDeleteAction} onPress={() => globalContext.onRemoveWorkspaceAttachment(globalContext.previewedAttachment!.id)}><Text style={globalContext.styles.workspaceDockDeleteActionText}>삭제</Text></Pressable>
                 </>
               ) : null}
-              {workspace.previewedInbox ? (
+              {globalContext.previewedInbox ? (
                 <>
-                  <Pressable style={workspace.styles.workspacePrimaryAction} onPress={() => workspace.onInsertInboxAsset(workspace.previewedInbox!.id)}><Text style={workspace.styles.workspacePrimaryActionText}>삽입</Text></Pressable>
-                  <Pressable style={workspace.styles.workspaceDockDeleteAction} onPress={() => workspace.onRemoveInboxAsset(workspace.previewedInbox!.id)}><Text style={workspace.styles.workspaceDockDeleteActionText}>삭제</Text></Pressable>
+                  <Pressable style={globalContext.styles.workspacePrimaryAction} onPress={() => globalContext.onInsertInboxAsset(globalContext.previewedInbox!.id)}><Text style={globalContext.styles.workspacePrimaryActionText}>삽입</Text></Pressable>
+                  <Pressable style={globalContext.styles.workspaceDockDeleteAction} onPress={() => globalContext.onRemoveInboxAsset(globalContext.previewedInbox!.id)}><Text style={globalContext.styles.workspaceDockDeleteActionText}>삭제</Text></Pressable>
                 </>
               ) : null}
             </View>
           </View>
         ) : null}
-        {workspace.workspaceAttachments.length ? (
-          <View style={workspace.styles.workspaceDockSection}>
-            <View style={workspace.styles.workspaceDockSectionHeader}>
-              <Text style={workspace.styles.workspaceDockSectionTitle}>추가한 정리 페이지</Text>
-              <Text style={workspace.styles.workspaceDockSectionMeta}>{workspace.workspaceAttachments.length}</Text>
+        {globalContext.workspaceAttachments.length ? (
+          <View style={globalContext.styles.workspaceDockSection}>
+            <View style={globalContext.styles.workspaceDockSectionHeader}>
+              <Text style={globalContext.styles.workspaceDockSectionTitle}>추가한 정리 페이지</Text>
+              <Text style={globalContext.styles.workspaceDockSectionMeta}>{globalContext.workspaceAttachments.length}</Text>
             </View>
-            {workspace.workspaceAttachments.map((asset, index) => (
-              <View key={`${asset.id}-${asset.generatedPageId ?? asset.assetId}-${index}`} style={workspace.styles.workspaceDockRow}>
-                <Pressable style={workspace.styles.workspaceDockRowMeta} onPress={() => workspace.onPreviewAttachment(asset.assetId, asset.id)}>
-                  <Text style={workspace.styles.workspaceDockRowTitle} numberOfLines={1}>{asset.title}</Text>
-                  <Text style={workspace.styles.workspaceDockRowBody} numberOfLines={2}>{asset.type === 'image' ? '다음 정리 페이지' : 'PDF 참고자료'}</Text>
+            {globalContext.workspaceAttachments.map((asset: any, index: number) => (
+              <View key={`${asset.id}-${asset.generatedPageId ?? asset.assetId}-${index}`} style={globalContext.styles.workspaceDockRow}>
+                <Pressable style={globalContext.styles.workspaceDockRowMeta} onPress={() => globalContext.onPreviewAttachment(asset.assetId, asset.id)}>
+                  <Text style={globalContext.styles.workspaceDockRowTitle} numberOfLines={1}>{asset.title}</Text>
+                  <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>{asset.type === 'image' ? '다음 정리 페이지' : 'PDF 참고자료'}</Text>
                 </Pressable>
-                <Pressable style={workspace.styles.workspaceDockInlineAction} onPress={() => workspace.onRemoveWorkspaceAttachment(asset.id)}><Text style={workspace.styles.workspaceDockInlineActionText}>삭제</Text></Pressable>
+                <Pressable style={globalContext.styles.workspaceDockInlineAction} onPress={() => globalContext.onRemoveWorkspaceAttachment(asset.id)}><Text style={globalContext.styles.workspaceDockInlineActionText}>삭제</Text></Pressable>
               </View>
             ))}
           </View>
         ) : null}
-        {workspace.captureInbox.length ? (
-          <View style={workspace.styles.workspaceDockSection}>
-            <View style={workspace.styles.workspaceDockSectionHeader}>
-              <Text style={workspace.styles.workspaceDockSectionTitle}>Inbox</Text>
-              <Pressable style={workspace.styles.workspaceDockToggle} onPress={workspace.onToggleInboxPanel}>
-                <Text style={workspace.styles.workspaceDockToggleText}>{workspace.inboxPanelOpen ? '접기' : `${workspace.captureInbox.length}건`}</Text>
+        {globalContext.captureInbox.length ? (
+          <View style={globalContext.styles.workspaceDockSection}>
+            <View style={globalContext.styles.workspaceDockSectionHeader}>
+              <Text style={globalContext.styles.workspaceDockSectionTitle}>Inbox</Text>
+              <Pressable style={globalContext.styles.workspaceDockToggle} onPress={globalContext.onToggleInboxPanel}>
+                <Text style={globalContext.styles.workspaceDockToggleText}>{globalContext.inboxPanelOpen ? '접기' : `${globalContext.captureInbox.length}건`}</Text>
               </Pressable>
             </View>
-            {workspace.inboxPanelOpen ? workspace.captureInbox.map((asset) => (
-              <View key={asset.id} style={workspace.styles.workspaceDockRow}>
-                <Pressable style={workspace.styles.workspaceDockRowMeta} onPress={() => workspace.onPreviewInboxAsset(asset.id)}>
-                  <Text style={workspace.styles.workspaceDockRowTitle} numberOfLines={1}>{asset.title}</Text>
-                  <Text style={workspace.styles.workspaceDockRowBody} numberOfLines={2}>{asset.sourceDeviceLabel}</Text>
+            {globalContext.inboxPanelOpen ? globalContext.captureInbox.map((asset: any) => (
+              <View key={asset.id} style={globalContext.styles.workspaceDockRow}>
+                <Pressable style={globalContext.styles.workspaceDockRowMeta} onPress={() => globalContext.onPreviewInboxAsset(asset.id)}>
+                  <Text style={globalContext.styles.workspaceDockRowTitle} numberOfLines={1}>{asset.title}</Text>
+                  <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>{asset.sourceDeviceLabel}</Text>
                 </Pressable>
                 {asset.status !== 'accepted' ? (
-                  <View style={workspace.styles.workspaceDockRowButtons}>
-                    <Pressable style={workspace.styles.workspaceDockInlineAction} onPress={() => workspace.onInsertInboxAsset(asset.id)}><Text style={workspace.styles.workspaceDockInlineActionText}>삽입</Text></Pressable>
-                    <Pressable style={workspace.styles.workspaceDockDeleteAction} onPress={() => workspace.onRemoveInboxAsset(asset.id)}><Text style={workspace.styles.workspaceDockDeleteActionText}>삭제</Text></Pressable>
+                  <View style={globalContext.styles.workspaceDockRowButtons}>
+                    <Pressable style={globalContext.styles.workspaceDockInlineAction} onPress={() => globalContext.onInsertInboxAsset(asset.id)}><Text style={globalContext.styles.workspaceDockInlineActionText}>삽입</Text></Pressable>
+                    <Pressable style={globalContext.styles.workspaceDockDeleteAction} onPress={() => globalContext.onRemoveInboxAsset(asset.id)}><Text style={globalContext.styles.workspaceDockDeleteActionText}>삭제</Text></Pressable>
                   </View>
                 ) : (
-                  <Pressable style={workspace.styles.workspaceDockDeleteAction} onPress={() => workspace.onRemoveInboxAsset(asset.id)}><Text style={workspace.styles.workspaceDockDeleteActionText}>삭제</Text></Pressable>
+                  <Pressable style={globalContext.styles.workspaceDockDeleteAction} onPress={() => globalContext.onRemoveInboxAsset(asset.id)}><Text style={globalContext.styles.workspaceDockDeleteActionText}>삭제</Text></Pressable>
                 )}
               </View>
             )) : null}

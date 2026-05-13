@@ -1,5 +1,5 @@
 import getStroke, { StrokeOptions } from 'perfect-freehand';
-import { InkPoint, InkStroke, InkTextAnnotation, SelectionRect } from './ui-types';
+import { InkPoint, InkShape, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from './ui-types';
 import { DocumentPageView, GeneratedWorkspacePage, TimetableEntry } from './types';
 
 export const DAYS = ['MON', 'TUE', 'WED', 'THU', 'FRI'] as const;
@@ -94,6 +94,22 @@ export function findHitInkStrokeId(strokes: InkStroke[], point: InkPoint, tolera
     const stroke = strokes[strokeIndex];
     const threshold = Math.max(tolerance, stroke.width * 2.5);
 
+    if (stroke.style === 'shape') {
+      const rect = getInkStrokeBounds(stroke);
+      if (!rect) continue;
+      const inLooseBounds =
+        point.x >= rect.x - threshold &&
+        point.x <= rect.x + rect.width + threshold &&
+        point.y >= rect.y - threshold &&
+        point.y <= rect.y + rect.height + threshold;
+      if (!inLooseBounds) continue;
+      if (stroke.shape === 'rect' || stroke.shape === 'ellipse') return stroke.id;
+      if (stroke.points.length >= 2 && distanceToSegment(point, stroke.points[0], stroke.points[stroke.points.length - 1]) <= threshold) {
+        return stroke.id;
+      }
+      continue;
+    }
+
     if (stroke.points.length === 1) {
       if (Math.hypot(point.x - stroke.points[0].x, point.y - stroke.points[0].y) <= threshold) {
         return stroke.id;
@@ -138,6 +154,30 @@ export function scaleInkStrokeToPageSize(stroke: InkStroke, pageWidth: number, p
   };
 }
 
+export function isShapeTool(tool: InkTool): tool is InkShape {
+  return tool === 'line' || tool === 'arrow' || tool === 'rect' || tool === 'ellipse';
+}
+
+export function isDrawingTool(tool: InkTool) {
+  return tool === 'pen' || tool === 'highlight' || isShapeTool(tool);
+}
+
+export function getInkStrokeBounds(stroke: InkStroke): SelectionRect | null {
+  if (!stroke.points.length) return null;
+  const xs = stroke.points.map((point) => point.x);
+  const ys = stroke.points.map((point) => point.y);
+  const x = Math.min(...xs);
+  const y = Math.min(...ys);
+  return {
+    x,
+    y,
+    width: Math.max(1, Math.max(...xs) - x),
+    height: Math.max(1, Math.max(...ys) - y),
+    pageWidth: stroke.pageWidth,
+    pageHeight: stroke.pageHeight,
+  };
+}
+
 export function scaleSelectionRectToPageSize(rect: SelectionRect | null, pageWidth: number, pageHeight: number): SelectionRect | null {
   if (!rect) return null;
   const { widthScale, heightScale } = resolveScale(rect.pageWidth, rect.pageHeight, pageWidth, pageHeight);
@@ -175,6 +215,19 @@ export function findInkStrokesInRect(strokes: InkStroke[], rect: { x: number; y:
   const selectedIds: string[] = [];
 
   for (const stroke of strokes) {
+    const bounds = getInkStrokeBounds(stroke);
+    if (bounds) {
+      const overlaps =
+        bounds.x <= rect.x + rect.width &&
+        bounds.x + bounds.width >= rect.x &&
+        bounds.y <= rect.y + rect.height &&
+        bounds.y + bounds.height >= rect.y;
+      if (overlaps) {
+        selectedIds.push(stroke.id);
+        continue;
+      }
+    }
+
     // 모든 점이 사각형 안에 있는지 확인 (또는 일부 점이라도 있는지)
     // 여기서는 선의 일부라도 포함되면 선택되도록 합니다.
     let isInside = false;
@@ -284,6 +337,39 @@ export function getInkStrokeSvgPath(stroke: InkStroke, complete = true) {
     return '';
   }
 
+  if (stroke.style === 'shape') {
+    const start = stroke.points[0];
+    const end = stroke.points[stroke.points.length - 1] ?? start;
+    const x = Math.min(start.x, end.x);
+    const y = Math.min(start.y, end.y);
+    const width = Math.abs(end.x - start.x);
+    const height = Math.abs(end.y - start.y);
+
+    if (stroke.shape === 'rect') {
+      return `M ${x} ${y} H ${x + width} V ${y + height} H ${x} Z`;
+    }
+
+    if (stroke.shape === 'ellipse') {
+      const rx = Math.max(1, width / 2);
+      const ry = Math.max(1, height / 2);
+      const cx = x + rx;
+      const cy = y + ry;
+      return `M ${cx - rx} ${cy} a ${rx} ${ry} 0 1 0 ${rx * 2} 0 a ${rx} ${ry} 0 1 0 ${-rx * 2} 0`;
+    }
+
+    if (stroke.shape === 'arrow') {
+      const angle = Math.atan2(end.y - start.y, end.x - start.x);
+      const headLength = Math.max(12, stroke.width * 4);
+      const leftX = end.x - headLength * Math.cos(angle - Math.PI / 6);
+      const leftY = end.y - headLength * Math.sin(angle - Math.PI / 6);
+      const rightX = end.x - headLength * Math.cos(angle + Math.PI / 6);
+      const rightY = end.y - headLength * Math.sin(angle + Math.PI / 6);
+      return `M ${start.x} ${start.y} L ${end.x} ${end.y} M ${end.x} ${end.y} L ${leftX} ${leftY} M ${end.x} ${end.y} L ${rightX} ${rightY}`;
+    }
+
+    return `M ${start.x} ${start.y} L ${end.x} ${end.y}`;
+  }
+
   if (stroke.points.length === 1) {
     const point = stroke.points[0];
     const radius = Math.max(1.2, stroke.width / 2);
@@ -314,5 +400,12 @@ export function resolveInkStrokeAppearance(tool: 'pen' | 'highlight', color: str
   return {
     color,
     width: Math.max(2, width * 1.3),
+  };
+}
+
+export function resolveShapeStrokeAppearance(color: string, width: number) {
+  return {
+    color,
+    width: Math.max(2, width * 1.15),
   };
 }

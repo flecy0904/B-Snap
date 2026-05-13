@@ -1,24 +1,20 @@
-import { createContext, createElement, useContext, useMemo, type ReactNode } from 'react';
-import { notes } from '../data';
-import { MOCK_PREVIEW_IMAGE_KEY, resolvePreviewImage } from '../mock-preview-images';
-import type { CaptureAsset, CaptureAssetEvent, CaptureAssetType, CaptureSource, CaptureSyncBridge, PublishAssetResult } from '../types';
+import { createContext, createElement, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { DEFAULT_CAPTURE_PREVIEW_IMAGE_KEY, resolvePreviewImage } from '../preview-images';
+import type { CaptureAsset, CaptureAssetEvent, CaptureAssetType, CaptureSource, CaptureSyncBridge, PublishAssetResult, SyncBridgeStatus } from '../types';
 
 type AssetListener = (event: CaptureAssetEvent) => void;
+type StatusListener = (status: SyncBridgeStatus) => void;
 
 const assetListeners = new Set<AssetListener>();
 let assetSequence = 1;
-const mockPresentationImage = resolvePreviewImage(MOCK_PREVIEW_IMAGE_KEY);
+const defaultPreviewImage = resolvePreviewImage(DEFAULT_CAPTURE_PREVIEW_IMAGE_KEY);
 
 function nextAssetId() {
   return `asset-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
 }
 
 function findPreviewImage(subjectId: number) {
-  return (
-    mockPresentationImage ??
-    notes.find((note) => note.subjectId === 102)?.image ??
-    notes.find((note) => note.subjectId === subjectId)?.image
-  );
+  return defaultPreviewImage;
 }
 
 export function createCaptureAsset(props: {
@@ -28,17 +24,16 @@ export function createCaptureAsset(props: {
   source: CaptureSource;
   fileName?: string;
   pageCount?: number;
-}) {
+}): CaptureAsset {
   const suffix = assetSequence;
+  assetSequence += 1;
   const defaultTitle = props.type === 'image' ? `${props.subjectName} 판서 스냅 ${suffix}` : `${props.subjectName} 보조 PDF ${suffix}`;
   const sourceLabel =
     props.source === 'camera'
       ? 'iPhone camera import'
       : props.source === 'library'
         ? 'iPhone photo library'
-        : props.source === 'document'
-          ? 'iPhone document picker'
-          : 'iPhone mock upload';
+        : 'iPhone document picker';
 
   return {
     id: nextAssetId(),
@@ -48,25 +43,14 @@ export function createCaptureAsset(props: {
     title: props.fileName || defaultTitle,
     summary:
       props.type === 'image'
-        ? `${props.source === 'camera' ? '카메라' : props.source === 'library' ? '사진첩' : 'mock'}에서 가져온 이미지입니다. 현재 PDF 위에 바로 붙이거나 보관함에만 저장할 수 있습니다.`
-        : `${props.source === 'document' ? '파일 선택기' : 'mock'}에서 가져온 PDF입니다. 현재 문서에 참고자료로 연결하거나 보관함으로만 저장할 수 있습니다.`,
+        ? `${props.source === 'camera' ? '카메라' : '사진첩'}에서 가져온 이미지입니다. 현재 PDF 위에 바로 붙이거나 보관함에만 저장할 수 있습니다.`
+        : '파일 선택기에서 가져온 PDF입니다. 현재 문서에 참고자료로 연결하거나 보관함으로만 저장할 수 있습니다.',
     createdAt: '방금 전 · phone',
     sourceDeviceLabel: sourceLabel,
-    previewImageKey: props.type === 'image' ? MOCK_PREVIEW_IMAGE_KEY : undefined,
-    previewImage: props.type === 'image' ? (props.source === 'mock' ? mockPresentationImage : findPreviewImage(props.subjectId)) : undefined,
+    previewImageKey: props.type === 'image' ? DEFAULT_CAPTURE_PREVIEW_IMAGE_KEY : undefined,
+    previewImage: props.type === 'image' ? findPreviewImage(props.subjectId) : undefined,
     pageCount: props.type === 'pdf' ? props.pageCount ?? 6 + (suffix % 5) : undefined,
   };
-}
-
-export function createMockCaptureAsset(props: {
-  subjectId: number;
-  subjectName: string;
-  type: CaptureAssetType;
-}) {
-  return createCaptureAsset({
-    ...props,
-    source: 'mock',
-  });
 }
 
 function emitToListeners(listeners: Set<AssetListener>, event: CaptureAssetEvent) {
@@ -86,9 +70,20 @@ function publishLocally(listeners: Set<AssetListener>, asset: CaptureAsset): Pub
   return { delivery: 'local' };
 }
 
-function createMockSyncBridge(): CaptureSyncBridge {
+function createLocalSyncBridge(): CaptureSyncBridge {
+  const statusListeners = new Set<StatusListener>();
   return {
-    mode: 'mock',
+    mode: 'local',
+    getStatus() {
+      return 'local';
+    },
+    subscribeToStatus(listener) {
+      statusListeners.add(listener);
+      listener('local');
+      return () => {
+        statusListeners.delete(listener);
+      };
+    },
     publishAsset(asset) {
       return publishLocally(assetListeners, asset);
     },
@@ -105,13 +100,25 @@ function createMockSyncBridge(): CaptureSyncBridge {
 export function createWebSocketBridge(props: {
   httpUrl: string;
   wsUrl?: string;
+  authToken?: string | null;
 }): CaptureSyncBridge {
   const listeners = new Set<AssetListener>();
+  const statusListeners = new Set<StatusListener>();
   const httpUrl = props.httpUrl.replace(/\/$/, '');
-  const wsUrl = (props.wsUrl ?? httpUrl.replace(/^http/, 'ws') + '/ws').replace(/\/$/, '');
+  const baseWsUrl = (props.wsUrl ?? httpUrl.replace(/^http/, 'ws') + '/ws').replace(/\/$/, '');
+  const wsUrl = props.authToken
+    ? `${baseWsUrl}${baseWsUrl.includes('?') ? '&' : '?'}token=${encodeURIComponent(props.authToken)}`
+    : baseWsUrl;
   let socket: WebSocket | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   let closed = false;
+  let status: SyncBridgeStatus = 'connecting';
+
+  const setStatus = (nextStatus: SyncBridgeStatus) => {
+    if (status === nextStatus) return;
+    status = nextStatus;
+    statusListeners.forEach((listener) => listener(status));
+  };
 
   const clearReconnectTimer = () => {
     if (!reconnectTimer) return;
@@ -121,6 +128,7 @@ export function createWebSocketBridge(props: {
 
   const scheduleReconnect = () => {
     if (closed || reconnectTimer) return;
+    setStatus('reconnecting');
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
       connect();
@@ -130,7 +138,11 @@ export function createWebSocketBridge(props: {
   const connect = () => {
     if (closed || socket?.readyState === WebSocket.OPEN || socket?.readyState === WebSocket.CONNECTING) return;
 
+    setStatus(status === 'reconnecting' ? 'reconnecting' : 'connecting');
     socket = new WebSocket(wsUrl);
+    socket.onopen = () => {
+      setStatus('connected');
+    };
     socket.onmessage = (event) => {
       try {
         const payload = JSON.parse(String(event.data)) as CaptureAssetEvent;
@@ -145,6 +157,7 @@ export function createWebSocketBridge(props: {
       scheduleReconnect();
     };
     socket.onerror = () => {
+      setStatus('offline');
       socket?.close();
     };
   };
@@ -153,6 +166,18 @@ export function createWebSocketBridge(props: {
 
   return {
     mode: 'websocket',
+    getStatus() {
+      return status;
+    },
+    subscribeToStatus(listener) {
+      statusListeners.add(listener);
+      listener(status);
+      connect();
+
+      return () => {
+        statusListeners.delete(listener);
+      };
+    },
     async publishAsset(asset) {
       connect();
 
@@ -161,6 +186,7 @@ export function createWebSocketBridge(props: {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
+            ...(props.authToken ? { Authorization: `Bearer ${props.authToken}` } : {}),
           },
           body: JSON.stringify({ asset }),
         });
@@ -171,6 +197,7 @@ export function createWebSocketBridge(props: {
 
         return { delivery: 'remote' };
       } catch {
+        setStatus(socket?.readyState === WebSocket.OPEN ? 'connected' : 'offline');
         // Preserve the prototype flow when the debug server is unavailable.
         return publishLocally(listeners, asset);
       }
@@ -189,7 +216,7 @@ export function createWebSocketBridge(props: {
   };
 }
 
-const defaultBridge = createMockSyncBridge();
+const defaultBridge = createLocalSyncBridge();
 
 const SyncBridgeContext = createContext<CaptureSyncBridge>(defaultBridge);
 
@@ -205,6 +232,15 @@ export function useSyncBridge() {
   return useContext(SyncBridgeContext);
 }
 
-export function createMockBridge() {
-  return createMockSyncBridge();
+export function useSyncBridgeStatus() {
+  const bridge = useSyncBridge();
+  const [status, setStatus] = useState<SyncBridgeStatus>(() => bridge.getStatus());
+
+  useEffect(() => bridge.subscribeToStatus(setStatus), [bridge]);
+
+  return status;
+}
+
+export function createLocalBridge() {
+  return createLocalSyncBridge();
 }

@@ -5,9 +5,8 @@ import { ActivityIndicator, Image, Pressable, ScrollView, Text, TextInput, useWi
 import { PdfPreview } from '../pdf/pdf-preview';
 import { BlankNoteCanvas } from '../canvas/blank-note-canvas';
 import { NoteSummaryContent } from '../shared/notes-shared';
-import type { MockAiAnswer } from '../../../services/mock-ai-service';
 import type { BackendChatMessage, BackendChatSession } from '../../../services/backend-api';
-import { BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NoteEntry, NoteWorkspaceMode, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../../types';
+import { AiAnswer, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NotebookPage, NoteEntry, NoteWorkspaceMode, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../../types';
 import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { darkenHex, getDocumentPageLabel, isSameDocumentPage } from '../../../ui-helpers';
 
@@ -21,6 +20,11 @@ const MOBILE_HANDWRITING_TOOLS: Array<{ value: InkTool; icon: React.ComponentPro
   { value: 'highlight', icon: 'marker' },
   { value: 'erase', icon: 'eraser-variant' },
   { value: 'select', icon: 'selection-drag' },
+  { value: 'text', icon: 'format-textbox' },
+  { value: 'line', icon: 'vector-line' },
+  { value: 'arrow', icon: 'arrow-top-right' },
+  { value: 'rect', icon: 'rectangle-outline' },
+  { value: 'ellipse', icon: 'circle-outline' },
 ];
 
 export function MobileNotesView(props: {
@@ -42,15 +46,18 @@ export function MobileNotesView(props: {
   penWidth: number;
   inkStrokes: InkStroke[];
   textAnnotations: InkTextAnnotation[];
+  inkByDocument: Record<number, InkStroke[]>;
+  textAnnotationsByDocument: Record<number, InkTextAnnotation[]>;
   currentPdfPage: number;
   currentDocumentPages: DocumentPageView[];
+  notebookPages: NotebookPage[];
   currentDocumentPage: DocumentPageView | null;
   memoPages: GeneratedWorkspacePage[];
   activeGeneratedPage: GeneratedWorkspacePage | null;
   aiPanelOpen: boolean;
   selectionRect: SelectionRect | null;
   aiQuestion: string;
-  aiAnswer: MockAiAnswer | null;
+  aiAnswer: AiAnswer | null;
   aiMessages: BackendChatMessage[];
   aiChatSessions: BackendChatSession[];
   noteAiChatSessions: BackendChatSession[];
@@ -159,23 +166,13 @@ export function MobileNotesView(props: {
     }
     setPageListOpen(false);
   };
-  const currentDocumentPageIndex = React.useMemo(
-    () => props.currentDocumentPages.findIndex((page) => isSameDocumentPage(props.currentDocumentPage, page)),
-    [props.currentDocumentPage, props.currentDocumentPages],
-  );
-  const canGoToPreviousPage = currentDocumentPageIndex > 0;
-  const canGoToNextPage = currentDocumentPageIndex >= 0 && currentDocumentPageIndex < props.currentDocumentPages.length - 1;
-  const navigateByOffset = (offset: -1 | 1) => {
-    const nextPage = props.currentDocumentPages[currentDocumentPageIndex + offset];
-    if (nextPage) navigateToPage(nextPage);
-  };
   const toggleSelectionMode = () => {
     props.onChangeInkTool(props.inkTool === 'select' ? 'view' : 'select');
   };
 
   const normalizedQuestion = props.aiAnswer?.question ?? props.aiQuestion.trim();
   const aiResponseSections = props.aiAnswer?.sections ?? null;
-  const aiResponse = props.aiAnswer?.response ?? (props.selectionRect ? '응답 생성을 누르면 선택 영역 기준으로 mock AI 정리를 만듭니다.' : '먼저 선택 모드로 문서 영역을 드래그해 주세요.');
+  const aiResponse = props.aiAnswer?.response ?? (props.selectionRect ? '응답 생성을 누르면 선택 영역 기준으로 AI 답변을 요청합니다.' : '먼저 선택 모드로 문서 영역을 드래그해 주세요.');
   const activeDeletedNotes = React.useMemo(
     () => props.subject ? props.deletedNotes.filter((note) => note.subjectId === props.subject!.id) : props.deletedNotes,
     [props.deletedNotes, props.subject],
@@ -237,7 +234,7 @@ export function MobileNotesView(props: {
               <View key={item.id} style={props.styles.recoveryRow}>
                 <View style={props.styles.recoveryRowMeta}>
                   <Text style={props.styles.recoveryRowTitle} numberOfLines={1}>{item.title}</Text>
-                  <Text style={props.styles.recoveryRowBody} numberOfLines={1}>{item.type === 'pdf' ? 'PDF' : '빈 노트'} · {item.pageCount}페이지</Text>
+                  <Text style={props.styles.recoveryRowBody} numberOfLines={1}>{item.type === 'pdf' ? 'PDF' : item.type === 'image' ? '이미지' : '빈 노트'} · {item.pageCount}페이지</Text>
                 </View>
                 <Pressable style={props.styles.recoveryRestoreButton} onPress={() => props.onRestoreStudyDocument(item.id)}>
                   <Text style={props.styles.recoveryRestoreButtonText}>복구</Text>
@@ -298,25 +295,11 @@ export function MobileNotesView(props: {
         ) : null}
         {phoneViewerOnly ? (
           <View style={props.styles.mobileViewerToolbar}>
-            <Pressable
-              style={[props.styles.mobileViewerToolButton, !canGoToPreviousPage && props.styles.mobileViewerToolButtonDisabled]}
-              onPress={() => navigateByOffset(-1)}
-              disabled={!canGoToPreviousPage}
-            >
-              <MaterialCommunityIcons name="chevron-left" size={20} color={canGoToPreviousPage ? '#556070' : '#B6BECC'} />
-            </Pressable>
             <Pressable style={props.styles.mobileViewerPagePill} onPress={() => setPageListOpen(true)}>
               <Text style={props.styles.mobileViewerPagePillText} numberOfLines={1}>
                 {getPageLabel(props.currentDocumentPage || { kind: 'pdf', pageNumber: props.currentPdfPage })}
               </Text>
               <MaterialCommunityIcons name="menu-down" size={15} color="#7D8797" />
-            </Pressable>
-            <Pressable
-              style={[props.styles.mobileViewerToolButton, !canGoToNextPage && props.styles.mobileViewerToolButtonDisabled]}
-              onPress={() => navigateByOffset(1)}
-              disabled={!canGoToNextPage}
-            >
-              <MaterialCommunityIcons name="chevron-right" size={20} color={canGoToNextPage ? '#556070' : '#B6BECC'} />
             </Pressable>
             <Pressable
               style={[props.styles.mobileViewerToolButton, props.inkTool === 'select' && props.styles.mobileViewerToolButtonActive]}
@@ -429,12 +412,6 @@ export function MobileNotesView(props: {
             </View>
           </View>
         ) : null}
-        {props.workspaceFeedback ? (
-          <View style={props.styles.workspaceToast}>
-            <MaterialCommunityIcons name="check-circle-outline" size={16} color="#4D67D8" />
-            <Text style={props.styles.workspaceToastText}>{props.workspaceFeedback}</Text>
-          </View>
-        ) : null}
         {props.workspaceAttachments.length ? (
           <View style={props.styles.workspaceSection}>
             <View style={props.styles.workspaceSectionHeader}>
@@ -503,19 +480,16 @@ export function MobileNotesView(props: {
           </View>
         ) : null}
         <View style={[props.styles.mobilePdfStage, phoneViewerOnly && props.styles.mobileViewerStage]}>
-          {props.activeGeneratedPage?.pageKind === 'memo' && phoneViewerOnly ? (
-            <View style={props.styles.mobileViewerFallbackCard}>
-              <MaterialCommunityIcons name="notebook-outline" size={24} color="#5F79FF" />
-              <Text style={props.styles.mobileViewerFallbackTitle}>메모 페이지</Text>
-              <Text style={props.styles.mobileViewerFallbackBody}>폰에서는 보기 모드만 지원합니다. 필기 편집은 iPad에서 이어서 할 수 있습니다.</Text>
-            </View>
-          ) : props.activeGeneratedPage?.pageKind === 'memo' ? (
-            <BlankNoteCanvas
-              inkTool={props.inkTool}
+          {props.studyDocument.type === 'pdf' && props.studyDocument.file ? (
+            <PdfPreview
+              file={props.studyDocument.file}
+              page={props.currentPdfPage}
+              inkTool={phoneViewerOnly ? (props.inkTool === 'select' ? 'select' : 'view') : props.inkTool}
               penColor={props.penColor}
               penWidth={props.penWidth}
-              inkStrokes={props.inkStrokes}
-              textAnnotations={props.textAnnotations}
+              inkStrokes={props.inkByDocument[props.studyDocument.id] ?? props.inkStrokes}
+              textAnnotations={props.textAnnotationsByDocument[props.studyDocument.id] ?? props.textAnnotations}
+              textAnnotationVariant={phoneViewerOnly ? 'marker' : undefined}
               selectionRect={props.selectionRect}
               onCommitInkStroke={props.onCommitInkStroke}
               onRemoveInkStroke={props.onRemoveInkStroke}
@@ -523,6 +497,22 @@ export function MobileNotesView(props: {
               onUpdateTextAnnotation={props.onUpdateTextAnnotation}
               onRemoveTextAnnotation={props.onRemoveTextAnnotation}
               onSelectionChange={props.onSelectionChange}
+              onDocumentLoaded={props.onUpdateStudyDocumentPageCount}
+              onPageChanged={props.onSetCurrentPdfPage}
+              onOpenGeneratedPage={props.onOpenGeneratedPage}
+              notebookPages={props.notebookPages}
+              activeGeneratedPageId={props.currentDocumentPage?.kind === 'generated' ? props.currentDocumentPage.pageId : null}
+              pageImageUrls={props.studyDocument.pageImageUrls}
+              styles={props.styles}
+            />
+          ) : props.activeGeneratedPage?.pageKind === 'memo' && phoneViewerOnly ? (
+            <View style={props.styles.mobileViewerFallbackCard}>
+              <MaterialCommunityIcons name="notebook-outline" size={24} color="#5F79FF" />
+              <Text style={props.styles.mobileViewerFallbackTitle}>메모 페이지</Text>
+              <Text style={props.styles.mobileViewerFallbackBody}>폰에서는 보기 모드만 지원합니다. 필기 편집은 iPad에서 이어서 할 수 있습니다.</Text>
+            </View>
+          ) : props.activeGeneratedPage?.pageKind === 'memo' ? (
+            <BlankNoteCanvas
               styles={props.styles}
             />
           ) : props.activeGeneratedPage ? (
@@ -540,25 +530,9 @@ export function MobileNotesView(props: {
                 </ScrollView>
               </View>
             </View>
-          ) : props.studyDocument.file ? (
-            <PdfPreview
-              file={props.studyDocument.file}
-              page={props.currentPdfPage}
-              inkTool={phoneViewerOnly ? (props.inkTool === 'select' ? 'select' : 'view') : props.inkTool}
-              penColor={props.penColor}
-              penWidth={props.penWidth}
-              inkStrokes={props.inkStrokes}
-              textAnnotations={props.textAnnotations}
-              textAnnotationVariant={phoneViewerOnly ? 'marker' : undefined}
-              selectionRect={props.selectionRect}
-              onCommitInkStroke={props.onCommitInkStroke}
-              onRemoveInkStroke={props.onRemoveInkStroke}
-              onAddTextAnnotation={props.onAddTextAnnotation}
-              onUpdateTextAnnotation={props.onUpdateTextAnnotation}
-              onRemoveTextAnnotation={props.onRemoveTextAnnotation}
-              onSelectionChange={props.onSelectionChange}
-              onDocumentLoaded={props.onUpdateStudyDocumentPageCount}
-              onPageChanged={props.onSetCurrentPdfPage}
+          ) : props.studyDocument.type === 'image' && typeof props.studyDocument.file === 'object' ? (
+            <BlankNoteCanvas
+              backgroundImageUri={props.studyDocument.file.uri}
               styles={props.styles}
             />
           ) : phoneViewerOnly ? (
@@ -569,16 +543,6 @@ export function MobileNotesView(props: {
             </View>
           ) : (
             <BlankNoteCanvas
-              inkTool={props.inkTool}
-              penColor={props.penColor}
-              penWidth={props.penWidth}
-              inkStrokes={props.inkStrokes}
-              textAnnotations={props.textAnnotations}
-              onCommitInkStroke={props.onCommitInkStroke}
-              onRemoveInkStroke={props.onRemoveInkStroke}
-              onAddTextAnnotation={props.onAddTextAnnotation}
-              onUpdateTextAnnotation={props.onUpdateTextAnnotation}
-              onRemoveTextAnnotation={props.onRemoveTextAnnotation}
               styles={props.styles}
             />
           )}
@@ -844,11 +808,12 @@ export function MobileNotesView(props: {
           : props.studyDocuments.length
             ? props.studyDocuments.map((item) => {
                 const isPdf = item.type === 'pdf';
+                const isImage = item.type === 'image';
                 return (
                   <Pressable key={item.id} style={[props.styles.mobileDocumentCard, { borderColor: currentSubject.bgColor }]} onPress={() => props.onOpenStudyDocument(item.id)}>
                     <View style={[props.styles.noteListRail, { backgroundColor: currentSubject.color }]} />
-                    <View style={[props.styles.mobileDocumentThumb, isPdf ? props.styles.mobileDocumentThumbPdf : props.styles.mobileDocumentThumbBlank]}>
-                      <Text style={[props.styles.mobileDocumentThumbText, { color: isPdf ? props.blueColor : '#6B7280' }]}>{isPdf ? 'PDF' : 'NOTE'}</Text>
+                    <View style={[props.styles.mobileDocumentThumb, isPdf ? props.styles.mobileDocumentThumbPdf : props.styles.mobileDocumentThumbBlank, isImage && { backgroundColor: '#F3FAF7' }]}>
+                      <Text style={[props.styles.mobileDocumentThumbText, { color: isPdf ? props.blueColor : isImage ? '#23845F' : '#6B7280' }]}>{isPdf ? 'PDF' : isImage ? 'IMG' : 'NOTE'}</Text>
                     </View>
                     <View style={props.styles.fill}>
                       <Text style={props.styles.noteListTitle} numberOfLines={2}>{item.title}</Text>

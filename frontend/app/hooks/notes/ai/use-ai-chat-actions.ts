@@ -1,5 +1,5 @@
 import type { Dispatch, SetStateAction } from 'react';
-import { requestMockAiAnswer, type MockAiAnswer } from '../../../services/mock-ai-service';
+import * as FileSystem from 'expo-file-system/legacy';
 import {
   createBackendChatSession,
   deleteBackendChatSession,
@@ -10,8 +10,8 @@ import {
   type BackendChatMessage,
   type BackendChatSession,
 } from '../../../services/backend-api';
+import type { AiAnswer, StudyDocumentEntry } from '../../../types';
 import type { SelectionRect } from '../../../ui-types';
-import type { StudyDocumentEntry } from '../../../types';
 import { buildAiChatTitle } from './ai-chat-title';
 import { getAiBackendErrorMessage } from './ai-errors';
 
@@ -20,15 +20,16 @@ type SetState<T> = Dispatch<SetStateAction<T>>;
 export function useAiChatActions(params: {
   studyDocumentId: number | null;
   studyDocument: StudyDocumentEntry | null;
-  selectionRect: SelectionRect | null;
-  currentAiPageLabel: string;
   currentDocumentHasBackendPages: boolean;
+  selectionRect: SelectionRect | null;
+  selectionPreviewUri: string | null;
+  currentPageNumber: number | null;
   activeAiChatSessionId: number | null;
   aiQuestion: string;
   chatSessionByDocument: Record<number, number>;
   chatSessionsByDocument: Record<number, BackendChatSession[]>;
   allChatSessions: BackendChatSession[];
-  setAiAnswer: SetState<MockAiAnswer | null>;
+  setAiAnswer: SetState<AiAnswer | null>;
   setAiQuestion: SetState<string>;
   setAiError: SetState<string | null>;
   setAiLoading: SetState<boolean>;
@@ -38,6 +39,22 @@ export function useAiChatActions(params: {
   setAllChatSessions: SetState<BackendChatSession[]>;
   setAiMessagesBySession: SetState<Record<number, BackendChatMessage[]>>;
 }) {
+  const buildSelectionImagePayload = async () => {
+    const uri = params.selectionPreviewUri;
+    if (!uri) return null;
+    if (/^data:image\//i.test(uri) || /^https?:\/\//i.test(uri)) return uri;
+
+    try {
+      const base64 = await FileSystem.readAsStringAsync(uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      return `data:image/png;base64,${base64}`;
+    } catch {
+      params.setAiError('선택 이미지를 첨부하지 못했습니다. 텍스트 질문만으로 답변을 요청합니다.');
+      return null;
+    }
+  };
+
   const selectAiChatSession = async (sessionId: number) => {
     if (!isBackendApiEnabled()) {
       params.setAiAnswer(null);
@@ -182,10 +199,24 @@ export function useAiChatActions(params: {
   };
 
   const createAiChatSession = async () => {
-    if (!params.studyDocumentId || !isBackendApiEnabled() || !params.currentDocumentHasBackendPages) {
+    if (!params.studyDocumentId) {
       params.setAiAnswer(null);
       params.setAiQuestion('');
-      params.setAiError(isBackendApiEnabled() ? null : '백엔드 서버에 연결할 수 없습니다. 백엔드가 실행 중인지 확인해 주세요.');
+      params.setAiError('AI 채팅을 시작할 노트를 먼저 선택해 주세요.');
+      return;
+    }
+
+    if (!isBackendApiEnabled()) {
+      params.setAiAnswer(null);
+      params.setAiQuestion('');
+      params.setAiError('백엔드 서버에 연결할 수 없습니다. 백엔드가 실행 중인지 확인해 주세요.');
+      return;
+    }
+
+    if (!params.currentDocumentHasBackendPages) {
+      params.setAiAnswer(null);
+      params.setAiQuestion('');
+      params.setAiError('AI 채팅은 백엔드에 저장된 노트에서 사용할 수 있습니다. 새 빈 노트나 PDF 업로드로 만든 노트에서 다시 시도해 주세요.');
       return;
     }
 
@@ -228,100 +259,107 @@ export function useAiChatActions(params: {
   const requestAiAnswer = async () => {
     if (!params.studyDocumentId) return;
 
-    const question = params.aiQuestion.trim() || '현재 페이지를 요약해줘';
+    const hasSelection = Boolean(params.selectionRect || params.selectionPreviewUri);
+    const question = params.aiQuestion.trim() || (hasSelection ? '선택한 영역을 설명해줘' : '현재 페이지를 요약해줘');
     params.setAiLoading(true);
     params.setAiError(null);
     params.setAiQuestion('');
     let aiRequestStage: 'chat-session' | 'ai-answer' = 'ai-answer';
 
     try {
-      if (isBackendApiEnabled() && params.currentDocumentHasBackendPages) {
-        let sessionId = params.chatSessionByDocument[params.studyDocumentId];
-        if (!sessionId) {
-          aiRequestStage = 'chat-session';
-          const session = await createBackendChatSession({
-            noteId: params.studyDocumentId,
-            title: buildAiChatTitle(question, params.studyDocument?.title),
-          });
-          sessionId = session.id;
-          params.setChatSessionByDocument((current) => ({
-            ...current,
-            [params.studyDocumentId!]: session.id,
-          }));
-          params.setLastChatSessionByDocument((current) => ({
-            ...current,
-            [params.studyDocumentId!]: session.id,
-          }));
-          params.setChatSessionsByDocument((current) => ({
-            ...current,
-            [params.studyDocumentId!]: [session, ...(current[params.studyDocumentId!] ?? [])],
-          }));
-          params.setAllChatSessions((current) => [session, ...current.filter((item) => item.id !== session.id)]);
-        }
-
-        aiRequestStage = 'ai-answer';
-        const pendingUserMessage: BackendChatMessage = {
-          id: -Date.now(),
-          session_id: sessionId,
-          role: 'user',
-          content: question,
-          model: null,
-          created_at: new Date().toISOString(),
-        };
-        params.setAiMessagesBySession((current) => ({
-          ...current,
-          [sessionId]: [...(current[sessionId] ?? []), pendingUserMessage],
-        }));
-
-        const response = await sendBackendAiMessage({
-          sessionId,
-          content: question,
-        });
-        params.setLastChatSessionByDocument((current) => ({
-          ...current,
-          [params.studyDocumentId!]: sessionId,
-        }));
-        const content = response.assistant_message.content;
-        params.setAiMessagesBySession((current) => ({
-          ...current,
-          [sessionId]: (current[sessionId] ?? []).some((message) => message.id === pendingUserMessage.id)
-            ? (current[sessionId] ?? []).flatMap((message) => (
-              message.id === pendingUserMessage.id
-                ? [response.user_message, response.assistant_message]
-                : [message]
-            ))
-            : [
-              ...(current[sessionId] ?? []),
-              response.user_message,
-              response.assistant_message,
-            ],
-        }));
-        params.setAllChatSessions((current) => {
-          const target = current.find((session) => session.id === sessionId);
-          if (!target) return current;
-          return [target, ...current.filter((session) => session.id !== sessionId)];
-        });
-        params.setAiAnswer({
-          question,
-          response: content,
-          sections: [
-            {
-              title: 'AI 답변',
-              body: content,
-              tone: 'highlight',
-            },
-          ],
-          createdAt: response.assistant_message.created_at,
-        });
+      if (!isBackendApiEnabled()) {
+        params.setAiAnswer(null);
+        params.setAiError('백엔드 서버에 연결할 수 없습니다. 백엔드가 실행 중인지 확인해 주세요.');
         return;
       }
 
-      const answer = await requestMockAiAnswer({
-        question,
+      if (!params.currentDocumentHasBackendPages) {
+        params.setAiAnswer(null);
+        params.setAiError('AI 채팅은 백엔드에 저장된 노트에서 사용할 수 있습니다. 새 빈 노트나 PDF 업로드로 만든 노트에서 다시 시도해 주세요.');
+        return;
+      }
+
+      let sessionId = params.chatSessionByDocument[params.studyDocumentId];
+      if (!sessionId) {
+        aiRequestStage = 'chat-session';
+        const session = await createBackendChatSession({
+          noteId: params.studyDocumentId,
+          title: buildAiChatTitle(question, params.studyDocument?.title),
+        });
+        sessionId = session.id;
+        params.setChatSessionByDocument((current) => ({
+          ...current,
+          [params.studyDocumentId!]: session.id,
+        }));
+        params.setLastChatSessionByDocument((current) => ({
+          ...current,
+          [params.studyDocumentId!]: session.id,
+        }));
+        params.setChatSessionsByDocument((current) => ({
+          ...current,
+          [params.studyDocumentId!]: [session, ...(current[params.studyDocumentId!] ?? [])],
+        }));
+        params.setAllChatSessions((current) => [session, ...current.filter((item) => item.id !== session.id)]);
+      }
+
+      aiRequestStage = 'ai-answer';
+      const pendingUserMessage: BackendChatMessage = {
+        id: -Date.now(),
+        session_id: sessionId,
+        role: 'user',
+        content: question,
+        model: null,
+        created_at: new Date().toISOString(),
+      };
+      params.setAiMessagesBySession((current) => ({
+        ...current,
+        [sessionId]: [...(current[sessionId] ?? []), pendingUserMessage],
+      }));
+
+      const selectionImage = await buildSelectionImagePayload();
+      const response = await sendBackendAiMessage({
+        sessionId,
+        content: question,
+        selectionImage,
         selectionRect: params.selectionRect,
-        currentPageLabel: params.currentAiPageLabel,
+        pageNumber: params.currentPageNumber,
       });
-      params.setAiAnswer(answer);
+      params.setLastChatSessionByDocument((current) => ({
+        ...current,
+        [params.studyDocumentId!]: sessionId,
+      }));
+      const content = response.assistant_message.content;
+      params.setAiMessagesBySession((current) => ({
+        ...current,
+        [sessionId]: (current[sessionId] ?? []).some((message) => message.id === pendingUserMessage.id)
+          ? (current[sessionId] ?? []).flatMap((message) => (
+            message.id === pendingUserMessage.id
+              ? [response.user_message, response.assistant_message]
+              : [message]
+          ))
+          : [
+            ...(current[sessionId] ?? []),
+            response.user_message,
+            response.assistant_message,
+          ],
+      }));
+      params.setAllChatSessions((current) => {
+        const target = current.find((session) => session.id === sessionId);
+        if (!target) return current;
+        return [target, ...current.filter((session) => session.id !== sessionId)];
+      });
+      params.setAiAnswer({
+        question,
+        response: content,
+        sections: [
+          {
+            title: 'AI 답변',
+            body: content,
+            tone: 'highlight',
+          },
+        ],
+        createdAt: response.assistant_message.created_at,
+      });
     } catch (error) {
       params.setAiError(getAiBackendErrorMessage(
         error,

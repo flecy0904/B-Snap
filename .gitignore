@@ -81,6 +81,7 @@ backend/.Python
 backend/celerybeat-schedule
 backend/*.log
 backend/.ruff_cache/
+backend/uploads/
 
 # ==============================
 # Database & Configs

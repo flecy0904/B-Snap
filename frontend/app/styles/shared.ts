@@ -15,6 +15,8 @@ export const sharedStyles = {
   fill: { flex: 1 },
   desktop: { flex: 1, flexDirection: 'row' as const },
   desktopCompact: { backgroundColor: C.bg },
+  notebookFullscreenRoot: { flex: 1, backgroundColor: '#EFF2F8' },
+  notebookFullscreenMain: { flex: 1, backgroundColor: '#EFF2F8' },
   webDesktop: { padding: 18, gap: 18, backgroundColor: '#EEF3F8' },
   webMainShell: { flex: 1, borderRadius: 28, overflow: 'hidden' as const, backgroundColor: '#F7FAFD', borderWidth: 1, borderColor: '#DDE6F0' },
   webPanelSurface: { flex: 1, backgroundColor: '#F7FAFD' },

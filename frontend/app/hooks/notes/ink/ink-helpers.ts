@@ -36,9 +36,13 @@ export function scopeInkStrokeToPage(params: {
     return { ...stroke, generatedPageId: currentDocumentPage.pageId, pageNumber: undefined };
   }
 
+  if (stroke.generatedPageId) {
+    return { ...stroke, pageNumber: undefined };
+  }
+
   return {
     ...stroke,
     generatedPageId: undefined,
-    pageNumber: currentDocumentPage?.kind === 'pdf' ? currentDocumentPage.pageNumber : currentPdfPage,
+    pageNumber: currentDocumentPage?.kind === 'pdf' ? stroke.pageNumber ?? currentDocumentPage.pageNumber : stroke.pageNumber ?? currentPdfPage,
   };
 }

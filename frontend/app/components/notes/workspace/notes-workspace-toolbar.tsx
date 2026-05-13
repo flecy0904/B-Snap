@@ -1,10 +1,11 @@
 import React from 'react';
-import { Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { Pressable, ScrollView, Text, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { InkTool } from '../../../ui-types';
+import { useDocumentContext } from './document-context';
+import { useCanvasContext } from '../canvas/canvas-context';
+import { NotebookPage } from '../../../types';
 import { useDesktopNotesWorkspaceContext } from './notes-workspace-context';
-import { DocumentPageView } from '../../../types';
-import { getDocumentPageLabel, isSameDocumentPage } from '../../../ui-helpers';
 
 const PRIMARY_TOOLS: Array<{
   value: InkTool;
@@ -15,6 +16,11 @@ const PRIMARY_TOOLS: Array<{
   { value: 'highlight', icon: 'marker' },
   { value: 'erase', icon: 'eraser-variant' },
   { value: 'select', icon: 'selection-drag' },
+  { value: 'text', icon: 'format-textbox' },
+  { value: 'line', icon: 'vector-line' },
+  { value: 'arrow', icon: 'arrow-top-right' },
+  { value: 'rect', icon: 'rectangle-outline' },
+  { value: 'ellipse', icon: 'circle-outline' },
 ];
 
 const PEN_COLORS = ['#1F2937', '#2563EB', '#7C3AED', '#D9485F', '#F59E0B', '#16A34A'];
@@ -82,43 +88,74 @@ function BrushPopover(props: {
 }
 
 export function NotesPageListOverlay() {
-  const workspace = useDesktopNotesWorkspaceContext();
+  const workspaceContext = useDesktopNotesWorkspaceContext();
+  const documentContext = useDocumentContext();
   
-  if (!workspace.pageListOpen) return null;
+  if (!workspaceContext.pageListOpen) return null;
 
-  const getPageLabel = (page: DocumentPageView) => (
-    getDocumentPageLabel({
-      page,
-      pages: workspace.currentDocumentPages,
-      memoPages: workspace.memoPages,
-      pdfSuffix: '원본 PDF',
-    })
-  );
+  const getNotebookPageIcon = (page: NotebookPage): React.ComponentProps<typeof MaterialCommunityIcons>['name'] => {
+    if (page.kind === 'blank') return 'note-edit-outline';
+    if (page.kind === 'summary') return 'star-four-points-outline';
+    return 'file-pdf-box';
+  };
 
-  const navigateToPage = (page: DocumentPageView) => {
-    if (page.kind === 'pdf') workspace.onSetCurrentPdfPage(page.pageNumber);
-    else workspace.onOpenGeneratedPage(page.pageId);
-    workspace.setPageListOpen(false);
+  const getNotebookPageMeta = (page: NotebookPage) => {
+    if (page.kind === 'blank') return '빈 페이지';
+    if (page.kind === 'summary') return 'AI 정리';
+    return '원본 PDF';
+  };
+
+  const isActiveNotebookPage = (page: NotebookPage) => {
+    const current = documentContext.currentDocumentPage;
+    if (!current) return false;
+    if (page.kind === 'pdf' && current.kind === 'pdf') return page.pageNumber === current.pageNumber;
+    if (page.generatedPageId && current.kind === 'generated') return page.generatedPageId === current.pageId;
+    return false;
+  };
+
+  const notebookPages = documentContext.notebookPages.length ? documentContext.notebookPages : [];
+
+  const navigateToPage = (page: NotebookPage) => {
+    if (page.kind === 'pdf' && page.pageNumber) documentContext.onSetCurrentPdfPage(page.pageNumber);
+    else if (page.generatedPageId) documentContext.onOpenGeneratedPage(page.generatedPageId);
+    workspaceContext.setPageListOpen(false);
   };
 
   return (
     <View style={{ position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, zIndex: 9999, elevation: 99 }}>
-      <Pressable style={{ position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, backgroundColor: 'rgba(0,0,0,0.1)' }} onPress={() => workspace.setPageListOpen(false)} />
-      <View pointerEvents="box-none" style={{ position: 'absolute', top: 96, left: 40, width: 220, bottom: 0 }}>
-        <View style={{ width: 220, maxHeight: 400, backgroundColor: '#FFFFFF', borderRadius: 12, borderWidth: 1, borderColor: '#E6EAF2', shadowColor: '#9098A8', shadowOpacity: 0.16, shadowRadius: 16, shadowOffset: { width: 0, height: 8 }, elevation: 8 }}>
+      <Pressable style={{ position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, backgroundColor: 'rgba(0,0,0,0.1)' }} onPress={() => workspaceContext.setPageListOpen(false)} />
+      <View pointerEvents="box-none" style={{ position: 'absolute', top: 74, left: 30, width: 260, bottom: 0 }}>
+        <View style={{ width: 260, maxHeight: 460, backgroundColor: '#FFFFFF', borderRadius: 12, borderWidth: 1, borderColor: '#E6EAF2', shadowColor: '#9098A8', shadowOpacity: 0.16, shadowRadius: 16, shadowOffset: { width: 0, height: 8 }, elevation: 8 }}>
+          <View style={{ paddingHorizontal: 12, paddingTop: 12, paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: '#EEF1F6' }}>
+            <Text style={{ fontSize: 12, fontWeight: '900', color: '#303744' }}>페이지</Text>
+            <Text style={{ marginTop: 2, fontSize: 11, fontWeight: '700', color: '#8A93A3' }}>{notebookPages.length}개 페이지 블록</Text>
+          </View>
           <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={true} style={{ padding: 8, maxHeight: 380 }}>
-            {workspace.currentDocumentPages.map((page) => {
-              const isActive = isSameDocumentPage(workspace.currentDocumentPage, page);
-              const bookmarked = workspace.bookmarks.some((bookmark) => isSameDocumentPage(bookmark.page, page));
+            {notebookPages.map((page, index) => {
+              const isActive = isActiveNotebookPage(page);
+              const bookmarked = page.sourcePage
+                ? documentContext.currentDocumentBookmarks.some((bookmark) => {
+                    if (!page.sourcePage || bookmark.page.kind !== page.sourcePage.kind) return false;
+                    if (bookmark.page.kind === 'pdf' && page.sourcePage.kind === 'pdf') return bookmark.page.pageNumber === page.sourcePage.pageNumber;
+                    if (bookmark.page.kind === 'generated' && page.sourcePage.kind === 'generated') return bookmark.page.pageId === page.sourcePage.pageId;
+                    return false;
+                  })
+                : false;
               return (
                 <Pressable 
-                  key={`${page.kind}-${page.kind === 'pdf' ? page.pageNumber : page.pageId}`}
-                  style={{ paddingVertical: 12, paddingHorizontal: 12, borderRadius: 6, backgroundColor: isActive ? '#F0F4FF' : 'transparent' }}
+                  key={page.id}
+                  style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, paddingHorizontal: 10, borderRadius: 8, backgroundColor: isActive ? '#F0F4FF' : 'transparent' }}
                   onPress={() => navigateToPage(page)}
                 >
-                  <Text style={{ fontSize: 13, fontWeight: isActive ? '800' : '600', color: isActive ? '#4F68D2' : '#556070' }}>
-                    {bookmarked ? '★ ' : ''}{getPageLabel(page)}
-                  </Text>
+                  <View style={{ width: 30, height: 38, borderRadius: 6, backgroundColor: page.kind === 'pdf' ? '#F8FAFD' : '#FFFDF7', borderWidth: 1, borderColor: isActive ? '#C8D4FF' : '#E7ECF4', alignItems: 'center', justifyContent: 'center' }}>
+                    <MaterialCommunityIcons name={getNotebookPageIcon(page)} size={16} color={isActive ? '#4F68D2' : '#7B8494'} />
+                  </View>
+                  <View style={{ flex: 1, minWidth: 0 }}>
+                    <Text style={{ fontSize: 13, fontWeight: isActive ? '900' : '700', color: isActive ? '#4F68D2' : '#414B5D' }} numberOfLines={1}>
+                      {bookmarked ? '★ ' : ''}{page.label || `${index + 1} 페이지`}
+                    </Text>
+                    <Text style={{ marginTop: 2, fontSize: 10, fontWeight: '800', color: '#9AA3B2' }}>{getNotebookPageMeta(page)}</Text>
+                  </View>
                 </Pressable>
               );
             })}
@@ -130,104 +167,98 @@ export function NotesPageListOverlay() {
 }
 
 export const NotesWorkspaceToolbar = React.memo(function NotesWorkspaceToolbar() {
-  const workspace = useDesktopNotesWorkspaceContext();
+  const workspaceContext = useDesktopNotesWorkspaceContext();
+  const documentContext = useDocumentContext();
+  const canvasContext = useCanvasContext();
   const [activeBrushPopover, setActiveBrushPopover] = React.useState<BrushTool | null>(null);
 
   React.useEffect(() => {
-    if (workspace.inkTool !== 'pen' && workspace.inkTool !== 'highlight') setActiveBrushPopover(null);
-  }, [workspace.inkTool]);
+    if (canvasContext.inkTool !== 'pen' && canvasContext.inkTool !== 'highlight') setActiveBrushPopover(null);
+  }, [canvasContext.inkTool]);
 
   const handleToolPress = (tool: InkTool) => {
     if (tool === 'pen' || tool === 'highlight') {
-      workspace.onChangeInkTool(tool);
+      canvasContext.setInkTool(tool);
       setActiveBrushPopover((current) => (current === tool ? null : tool));
-      workspace.setPageListOpen(false);
+      workspaceContext.setPageListOpen(false);
       return;
     }
-    workspace.onChangeInkTool(tool);
+    canvasContext.setInkTool(tool);
     setActiveBrushPopover(null);
-    workspace.setPageListOpen(false);
+    workspaceContext.setPageListOpen(false);
   };
 
   const handleBrushColorChange = (tool: BrushTool, color: string) => {
-    workspace.onChangeInkTool(tool);
-    workspace.onChangePenColor(color);
+    canvasContext.setInkTool(tool);
+    canvasContext.setPenColor(color);
     setActiveBrushPopover(tool);
   };
 
   const handleBrushWidthChange = (tool: BrushTool, width: number) => {
-    workspace.onChangeInkTool(tool);
-    workspace.onChangePenWidth(width);
+    canvasContext.setInkTool(tool);
+    canvasContext.setPenWidth(width);
     setActiveBrushPopover(tool);
   };
 
   return (
-    <View style={workspace.styles.inkToolbarWrap}>
-      <View style={workspace.styles.inkToolbar}>
-        <View style={[workspace.styles.documentPageNavigator, { position: 'relative' }]}>
-          <Pressable style={workspace.styles.documentPageNavButton} onPress={workspace.onGoToPreviousDocumentPage}>
-            <MaterialCommunityIcons name="chevron-left" size={18} color="#5B6474" />
-          </Pressable>
-          
-          <Pressable 
-            style={{ paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, backgroundColor: workspace.pageListOpen ? '#F0F4FF' : 'transparent' }} 
+    <View style={workspaceContext.styles.inkToolbarWrap}>
+      <View style={workspaceContext.styles.inkToolbar}>
+        <View style={[workspaceContext.styles.documentPageNavigator, { position: 'relative' }]}>
+          <Pressable
+            style={{ height: 34, minWidth: 92, paddingHorizontal: 10, borderRadius: 10, backgroundColor: workspaceContext.pageListOpen ? '#F0F4FF' : '#F8FAFD', borderWidth: 1, borderColor: workspaceContext.pageListOpen ? '#DCE4FF' : '#EEF1F6', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 3 }}
             onPress={() => {
-              workspace.setPageListOpen(!workspace.pageListOpen);
+              workspaceContext.setPageListOpen(!workspaceContext.pageListOpen);
               setActiveBrushPopover(null);
             }}
           >
-            <Text style={workspace.styles.documentPageLabel}>
-              {workspace.currentPageLabel} <MaterialCommunityIcons name={workspace.pageListOpen ? "menu-up" : "menu-down"} size={14} color="#5B6474" />
+            <Text style={workspaceContext.styles.documentPageLabel}>
+              {workspaceContext.currentPageLabel}
             </Text>
-          </Pressable>
-
-          <Pressable style={workspace.styles.documentPageNavButton} onPress={workspace.onGoToNextDocumentPage}>
-            <MaterialCommunityIcons name="chevron-right" size={18} color="#5B6474" />
+            <MaterialCommunityIcons name={workspaceContext.pageListOpen ? "menu-up" : "menu-down"} size={14} color="#5B6474" />
           </Pressable>
           
           <Pressable 
-            style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#F0F4FF', paddingHorizontal: 10, height: 34, borderRadius: 10, marginLeft: 12, gap: 4, borderWidth: 1, borderColor: '#DCE4FF' }} 
-            onPress={workspace.onCreateMemoPage}
+            style={workspaceContext.styles.inkActionButton}
+            onPress={documentContext.onCreateMemoPage}
           >
-            <MaterialCommunityIcons name="plus" size={16} color="#4F68D2" />
-            <Text style={{ fontSize: 12, fontWeight: '800', color: '#4F68D2' }}>빈 페이지 추가</Text>
+            <MaterialCommunityIcons name="note-plus-outline" size={18} color="#4F68D2" />
           </Pressable>
           <Pressable
-            style={[workspace.styles.inkActionButton, workspace.currentPageBookmarked && workspace.styles.inkToolButtonActive]}
-            onPress={workspace.onToggleBookmarkCurrentPage}
+            style={[workspaceContext.styles.inkActionButton, documentContext.currentPageBookmarked && workspaceContext.styles.inkToolButtonActive]}
+            onPress={documentContext.onToggleBookmarkCurrentPage}
           >
-            <MaterialCommunityIcons name={workspace.currentPageBookmarked ? 'star' : 'star-outline'} size={18} color={workspace.currentPageBookmarked ? '#F59E0B' : '#556070'} />
+            <MaterialCommunityIcons name={documentContext.currentPageBookmarked ? 'star' : 'star-outline'} size={18} color={documentContext.currentPageBookmarked ? '#F59E0B' : '#556070'} />
           </Pressable>
-          <Pressable style={workspace.styles.inkActionButton} onPress={workspace.onExportCurrentDocument}>
+          <Pressable style={workspaceContext.styles.inkActionButton} onPress={documentContext.onExportCurrentDocument}>
             <MaterialCommunityIcons name="share-variant-outline" size={18} color="#556070" />
           </Pressable>
         </View>
 
-        <View style={workspace.styles.inkToolbarTools}>
-          <View style={workspace.styles.inkToolCluster}>
+        <View style={workspaceContext.styles.inkToolbarTools}>
+          <View style={workspaceContext.styles.inkToolCluster}>
             {PRIMARY_TOOLS.map((tool) => {
-              const active = workspace.inkTool === tool.value;
+              const active = canvasContext.inkTool === tool.value;
               const popoverOpen = activeBrushPopover === tool.value;
               const isBrushTool = tool.value === 'pen' || tool.value === 'highlight';
 
               return (
-                <View key={tool.value} style={workspace.styles.inkToolAnchor}>
+                <View key={tool.value} style={workspaceContext.styles.inkToolAnchor}>
                   <Pressable
                     style={[
-                      workspace.styles.inkToolButton,
-                      active && workspace.styles.inkToolButtonActive,
-                      popoverOpen && workspace.styles.inkToolButtonPopoverOpen,
+                      workspaceContext.styles.inkToolButton,
+                      active && workspaceContext.styles.inkToolButtonActive,
+                      popoverOpen && workspaceContext.styles.inkToolButtonPopoverOpen,
                     ]}
                     onPress={() => handleToolPress(tool.value)}
                   >
-                    <MaterialCommunityIcons name={tool.icon} size={18} color={active ? workspace.blueColor : '#556070'} />
+                    <MaterialCommunityIcons name={tool.icon} size={18} color={active ? workspaceContext.blueColor : '#556070'} />
                   </Pressable>
                   {isBrushTool && popoverOpen ? (
                     <BrushPopover
                       tool={tool.value as BrushTool}
-                      styles={workspace.styles}
-                      penColor={workspace.penColor}
-                      penWidth={workspace.penWidth}
+                      styles={workspaceContext.styles}
+                      penColor={canvasContext.penColor}
+                      penWidth={canvasContext.penWidth}
                       onSelectColor={handleBrushColorChange}
                       onSelectWidth={handleBrushWidthChange}
                     />
@@ -237,52 +268,52 @@ export const NotesWorkspaceToolbar = React.memo(function NotesWorkspaceToolbar()
             })}
           </View>
 
-          <View style={workspace.styles.inkToolbarDivider} />
+          <View style={workspaceContext.styles.inkToolbarDivider} />
 
-          <View style={workspace.styles.inkSecondaryCluster}>
-            {workspace.selectionRect ? (
+          <View style={workspaceContext.styles.inkSecondaryCluster}>
+            {canvasContext.selectionRect ? (
               <Pressable
-                style={[workspace.styles.inkActionButton, { flexDirection: 'row', gap: 4, width: 'auto', paddingHorizontal: 10 }]}
-                onPress={workspace.deleteSelectedStrokes}
+                style={[workspaceContext.styles.inkActionButton, { flexDirection: 'row', gap: 4, width: 'auto', paddingHorizontal: 10 }]}
+                onPress={canvasContext.deleteSelectedStrokes}
               >
                 <MaterialCommunityIcons name="delete-outline" size={16} color="#EF4444" />
                 <Text style={{ fontSize: 12, fontWeight: '700', color: '#EF4444' }}>선택 지우기</Text>
               </Pressable>
             ) : (
               <>
-                <Pressable style={workspace.styles.inkActionButton} onPress={workspace.onUndoInk}>
+                <Pressable style={workspaceContext.styles.inkActionButton} onPress={canvasContext.undoInk}>
                   <MaterialCommunityIcons name="undo-variant" size={18} color="#556070" />
                 </Pressable>
-                <Pressable style={workspace.styles.inkActionButton} onPress={workspace.onRedoInk}>
+                <Pressable style={workspaceContext.styles.inkActionButton} onPress={canvasContext.redoInk}>
                   <MaterialCommunityIcons name="redo-variant" size={18} color="#556070" />
                 </Pressable>
-                <Pressable style={workspace.styles.inkActionButton} onPress={workspace.onClearInk}>
+                <Pressable style={workspaceContext.styles.inkActionButton} onPress={canvasContext.clearInk}>
                   <MaterialCommunityIcons name="trash-can-outline" size={18} color="#556070" />
                 </Pressable>
               </>
             )}
           </View>
 
-          <View style={workspace.styles.inkToolbarDivider} />
+          <View style={workspaceContext.styles.inkToolbarDivider} />
 
-          <View style={workspace.styles.inkSecondaryCluster}>
+          <View style={workspaceContext.styles.inkSecondaryCluster}>
             {/* 자료 및 독(Dock) 열기 버튼 */}
             <Pressable
-              style={[workspace.styles.inkActionButton, workspace.styles.workspaceDockButton, workspace.showWorkspaceDock && workspace.styles.workspaceDockButtonActive]}
-              onPress={workspace.onToggleWorkspaceDock}
+              style={[workspaceContext.styles.inkActionButton, workspaceContext.styles.workspaceDockButton, workspaceContext.showWorkspaceDock && workspaceContext.styles.workspaceDockButtonActive]}
+              onPress={workspaceContext.onToggleWorkspaceDock}
             >
               <MaterialCommunityIcons
                 name="image-multiple-outline"
                 size={18}
-                color={workspace.showWorkspaceDock ? '#5A74E8' : workspace.hasWorkspaceDockContent ? '#556EDB' : '#77839A'}
+                color={workspaceContext.showWorkspaceDock ? '#5A74E8' : workspaceContext.hasWorkspaceDockContent ? '#556EDB' : '#77839A'}
               />
-              {workspace.hasWorkspaceDockContent ? <View style={workspace.styles.workspaceDockBadge} /> : null}
+              {workspaceContext.hasWorkspaceDockContent ? <View style={workspaceContext.styles.workspaceDockBadge} /> : null}
             </Pressable>
             <Pressable
-              style={[workspace.styles.inkActionButton, workspace.styles.aiIconButton, workspace.aiPanelOpen && workspace.styles.aiIconButtonActive]}
-              onPress={workspace.onToggleAiPanel}
+              style={[workspaceContext.styles.inkActionButton, workspaceContext.styles.aiIconButton, workspaceContext.aiPanelOpen && workspaceContext.styles.aiIconButtonActive]}
+              onPress={workspaceContext.onToggleAiPanel}
             >
-              <MaterialCommunityIcons name="star-four-points" size={18} color={workspace.aiPanelOpen ? '#5A74E8' : '#7786D8'} />
+              <MaterialCommunityIcons name="star-four-points" size={18} color={workspaceContext.aiPanelOpen ? '#5A74E8' : '#7786D8'} />
             </Pressable>
           </View>
         </View>

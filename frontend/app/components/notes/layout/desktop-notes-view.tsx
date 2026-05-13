@@ -1,7 +1,7 @@
 import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Image, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
-import { subjects as allSubjects } from '../../../data';
+import { subjects as allSubjects } from '../../../app-defaults';
 import { useDesktopNotesWorkspaceViewModel } from '../../../hooks/notes/use-desktop-notes-workspace-view-model';
 import { buildAiResponse, NoteSummaryContent } from '../shared/notes-shared';
 import { NotesAiAssistantPanel } from '../ai/notes-ai-assistant-panel';
@@ -11,13 +11,14 @@ import { NotesWorkspaceDock } from '../workspace/notes-workspace-dock';
 import { NotesDetailHeader } from './notes-detail-header';
 import { NotesBrowser } from './notes-browser';
 import { DesktopNotesWorkspaceProvider } from '../workspace/notes-workspace-context';
-import type { MockAiAnswer } from '../../../services/mock-ai-service';
 import type { BackendChatMessage, BackendChatSession } from '../../../services/backend-api';
 import {
+  AiAnswer,
   CaptureAsset,
   BookmarkedPage,
   DocumentPageView,
   GeneratedWorkspacePage,
+  NotebookPage,
   NoteEntry,
   NoteWorkspaceMode,
   StudyDocumentEntry,
@@ -43,11 +44,13 @@ export type DesktopNotesViewProps = {
   penWidth: number;
   inkStrokes: InkStroke[];
   textAnnotations: InkTextAnnotation[];
+  inkByDocument: Record<number, InkStroke[]>;
+  textAnnotationsByDocument: Record<number, InkTextAnnotation[]>;
   aiPanelOpen: boolean;
   selectionRect: SelectionRect | null;
   selectionPreviewUri: string | null;
   aiQuestion: string;
-  aiAnswer: MockAiAnswer | null;
+  aiAnswer: AiAnswer | null;
   aiMessages: BackendChatMessage[];
   aiChatSessions: BackendChatSession[];
   noteAiChatSessions: BackendChatSession[];
@@ -71,6 +74,7 @@ export type DesktopNotesViewProps = {
   currentDocumentPage: DocumentPageView | null;
   currentPdfPage: number;
   currentDocumentPages: DocumentPageView[];
+  notebookPages: NotebookPage[];
   currentDocumentPageIndex: number;
   totalDocumentPageCount: number;
   subjects: Subject[];
@@ -252,6 +256,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           captureInbox: props.captureInbox,
           studyDocument: props.studyDocument,
           currentDocumentPages: props.currentDocumentPages,
+          notebookPages: props.notebookPages,
           currentPdfPage: props.currentPdfPage,
           currentDocumentPage: props.currentDocumentPage,
           activeGeneratedPage: props.activeGeneratedPage,
@@ -314,24 +319,22 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
         }}
       >
         <View style={props.styles.fill}>
-          <NotesDetailHeader
-            styles={props.styles}
-            compact={props.compact}
-            caption={props.subject.name}
-            title={props.studyDocument.title}
-            metaText={`${props.studyDocument.type === 'pdf' ? 'PDF' : '빈 노트'} · ${props.studyDocument.pageCount}페이지`}
-            onBack={() => props.onOpenStudyDocument(null)}
-            rightAction={
-              <View style={props.styles.headerActionRow}>
-                <Pressable style={[props.styles.libraryEditButton, props.styles.headerIconButton]} onPress={startRename}>
-                  <MaterialCommunityIcons name="pencil-outline" size={18} color="#4F68D2" />
-                </Pressable>
-                <Pressable style={[props.styles.libraryDeleteButton, props.styles.headerIconButton]} onPress={() => props.onDeleteStudyDocument(props.studyDocument!.id)}>
-                  <MaterialCommunityIcons name="trash-can-outline" size={18} color="#C04B4B" />
-                </Pressable>
-              </View>
-            }
-          />
+          <View style={props.styles.notebookTitleBar}>
+            <Pressable style={props.styles.notebookTitleButton} onPress={() => props.onOpenStudyDocument(null)}>
+              <MaterialCommunityIcons name="chevron-left" size={24} color="#151A22" />
+            </Pressable>
+            <Text style={props.styles.notebookTitleText} numberOfLines={1}>
+              {props.studyDocument.title}
+            </Text>
+            <View style={props.styles.notebookTitleActions}>
+              <Pressable style={props.styles.notebookTitleButton} onPress={startRename}>
+                <MaterialCommunityIcons name="pencil-outline" size={18} color="#4F68D2" />
+              </Pressable>
+              <Pressable style={[props.styles.notebookTitleButton, props.styles.notebookTitleButtonDanger]} onPress={() => props.onDeleteStudyDocument(props.studyDocument!.id)}>
+                <MaterialCommunityIcons name="trash-can-outline" size={18} color="#C04B4B" />
+              </Pressable>
+            </View>
+          </View>
           {renameOpen ? (
             <View style={props.styles.documentRenamePanel}>
               <TextInput
@@ -354,12 +357,6 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           <View style={props.styles.desktopDocumentDetailBody}>
             <NotesAiAssistantPanel />
             <NotesWorkspaceToolbar />
-            {props.workspaceFeedback ? (
-              <View style={props.styles.workspaceToast}>
-                <MaterialCommunityIcons name="check-circle-outline" size={16} color="#4D67D8" />
-                <Text style={props.styles.workspaceToastText}>{props.workspaceFeedback}</Text>
-              </View>
-            ) : null}
             {workspace.showWorkspaceDock ? <NotesWorkspaceDock /> : null}
             <NotesDocumentViewer />
           </View>
