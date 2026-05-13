@@ -272,6 +272,9 @@ export function AppShell(props: {
                   onRemoveInkStroke={notesState.removeInkStroke}
                   deleteSelectedStrokes={notesState.deleteSelectedStrokes}
                   changeSelectedStrokesColor={notesState.changeSelectedStrokesColor}
+                  duplicateSelectedStrokes={notesState.duplicateSelectedStrokes}
+                  resizeSelectedStrokes={notesState.resizeSelectedStrokes}
+                  nudgeSelectedStrokes={notesState.nudgeSelectedStrokes}
                   onAddTextAnnotation={notesState.addTextAnnotation}
                   onUpdateTextAnnotation={notesState.updateTextAnnotation}
                   onRemoveTextAnnotation={notesState.removeTextAnnotation}
@@ -288,6 +291,8 @@ export function AppShell(props: {
                   onOpenWorkspaceAttachment={notesState.openWorkspaceAttachment}
                   onOpenGeneratedPage={notesState.openGeneratedPage}
                   onRemoveGeneratedPage={notesState.removeGeneratedPage}
+                  onDuplicateGeneratedPage={notesState.duplicateGeneratedPage}
+                  onMoveGeneratedPage={notesState.moveGeneratedPage}
                   onCreateMemoPage={notesState.createMemoPage}
                   onQuery={notesState.setQuery}
                   onSort={notesState.toggleSort}

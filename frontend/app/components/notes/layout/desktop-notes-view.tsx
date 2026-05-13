@@ -9,6 +9,8 @@ import { NotesAiCanvasPanel } from '../ai-canvas/notes-ai-canvas-panel';
 import { NotesDocumentViewer } from '../workspace/notes-document-viewer';
 import { NotesWorkspaceToolbar, NotesPageListOverlay } from '../workspace/notes-workspace-toolbar';
 import { NotesWorkspaceDock } from '../workspace/notes-workspace-dock';
+import { FloatingToolPalette } from '../workspace/floating-tool-palette';
+import { NotebookThumbnailSidebar } from '../workspace/notebook-thumbnail-sidebar';
 import { NotesDetailHeader } from './notes-detail-header';
 import { NotesBrowser } from './notes-browser';
 import { DesktopNotesWorkspaceProvider } from '../workspace/notes-workspace-context';
@@ -109,6 +111,9 @@ export type DesktopNotesViewProps = {
   onClearInk: () => void;
   deleteSelectedStrokes: () => void;
   changeSelectedStrokesColor: (color: string) => void;
+  duplicateSelectedStrokes: () => void;
+  resizeSelectedStrokes: (scale: number) => void;
+  nudgeSelectedStrokes: (dx: number, dy: number) => void;
   onCommitInkStroke: (stroke: InkStroke) => void;
   onRemoveInkStroke: (strokeId: string) => void;
   onAddTextAnnotation: (point: InkPoint) => void;
@@ -127,6 +132,8 @@ export type DesktopNotesViewProps = {
   onOpenWorkspaceAttachment: (attachmentId: string) => void;
   onOpenGeneratedPage: (pageId: string) => void;
   onRemoveGeneratedPage: (pageId: string) => void;
+  onDuplicateGeneratedPage: (pageId: string) => void;
+  onMoveGeneratedPage: (pageId: string, delta: -1 | 1) => void;
   onCreateMemoPage: () => void;
   onQuery: (value: string) => void;
   onSort: () => void;
@@ -306,6 +313,8 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           onRemoveBookmark: props.onRemoveBookmark,
           onExportCurrentDocument: props.onExportCurrentDocument,
           onRemoveGeneratedPage: props.onRemoveGeneratedPage,
+          onDuplicateGeneratedPage: props.onDuplicateGeneratedPage,
+          onMoveGeneratedPage: props.onMoveGeneratedPage,
           onCreateMemoPage: props.onCreateMemoPage,
           onInsertInboxAsset: props.onInsertInboxAsset,
           onRemoveInboxAsset: props.onRemoveInboxAsset,
@@ -324,6 +333,9 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           onClearSelection: props.onClearSelection,
           deleteSelectedStrokes: props.deleteSelectedStrokes,
           changeSelectedStrokesColor: props.changeSelectedStrokesColor,
+          duplicateSelectedStrokes: props.duplicateSelectedStrokes,
+          resizeSelectedStrokes: props.resizeSelectedStrokes,
+          nudgeSelectedStrokes: props.nudgeSelectedStrokes,
           onSetCurrentPdfPage: props.onSetCurrentPdfPage,
           onUpdateStudyDocumentPageCount: props.onUpdateStudyDocumentPageCount,
         }}
@@ -367,13 +379,15 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           <View style={props.styles.desktopDocumentDetailBody}>
             {props.aiPanelMode === 'floating' ? <NotesAiAssistantPanel /> : null}
             <NotesWorkspaceToolbar />
+            <FloatingToolPalette />
             {props.workspaceFeedback ? (
               <View style={props.styles.workspaceToast}>
                 <MaterialCommunityIcons name="check-circle-outline" size={16} color="#4D67D8" />
                 <Text style={props.styles.workspaceToastText}>{props.workspaceFeedback}</Text>
               </View>
             ) : null}
-            <View style={(props.aiPanelMode === 'sidebar' && props.aiPanelOpen) || props.aiCanvas.isOpen ? props.styles.desktopDocumentSidebarContentRow : props.styles.desktopDocumentWorkspacePane}>
+            <View style={props.styles.desktopDocumentSidebarContentRow}>
+              <NotebookThumbnailSidebar />
               {props.aiPanelMode === 'sidebar' ? <NotesAiAssistantPanel /> : null}
               <View style={props.styles.desktopDocumentViewerPane}>
                 {workspace.showWorkspaceDock ? <NotesWorkspaceDock /> : null}

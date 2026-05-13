@@ -24,6 +24,8 @@ export type DocumentActions = {
   onCreateMemoPage: () => void;
   onOpenGeneratedPage: (pageId: string) => void;
   onRemoveGeneratedPage: (pageId: string) => void;
+  onDuplicateGeneratedPage: (pageId: string) => void;
+  onMoveGeneratedPage: (pageId: string, delta: -1 | 1) => void;
   onUpdateStudyDocumentPageCount: (pageCount: number) => void;
   onSetCurrentPdfPage: (pageNumber: number) => void;
   onGoToPreviousDocumentPage: () => void;
@@ -59,6 +61,8 @@ export function DocumentProvider({ children }: { children: React.ReactNode }) {
     onCreateMemoPage: global.onCreateMemoPage,
     onOpenGeneratedPage: global.onOpenGeneratedPage,
     onRemoveGeneratedPage: global.onRemoveGeneratedPage,
+    onDuplicateGeneratedPage: global.onDuplicateGeneratedPage,
+    onMoveGeneratedPage: global.onMoveGeneratedPage,
     onUpdateStudyDocumentPageCount: global.onUpdateStudyDocumentPageCount,
     onSetCurrentPdfPage: global.onSetCurrentPdfPage,
     onGoToPreviousDocumentPage: global.onGoToPreviousDocumentPage,

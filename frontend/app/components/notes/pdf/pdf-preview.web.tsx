@@ -216,8 +216,11 @@ export function PdfPreview(props: {
   styles: any;
 }) {
   const { width, height } = useWindowDimensions();
-  const viewerWidth = Math.min(1240, Math.max(860, width - 150));
-  const viewerHeight = Math.max(700, height - 130);
+  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
+  const availableWidth = Math.max(320, containerSize.width || width);
+  const availableHeight = Math.max(520, containerSize.height || height);
+  const viewerWidth = Math.min(1240, Math.max(320, availableWidth - 28));
+  const viewerHeight = Math.max(520, availableHeight - 20);
   const pageGap = 22;
   const [pdfDocument, setPdfDocument] = useState<PdfJsDocument | null>(null);
   const [pageFrames, setPageFrames] = useState<Record<number, PageFrame>>({});
@@ -509,7 +512,7 @@ export function PdfPreview(props: {
 
   const beginInteraction = (page: NotebookPage) => {
     if (page.generatedPageId) props.onOpenGeneratedPage?.(page.generatedPageId);
-    if (page.pageNumber && props.page !== page.pageNumber) props.onPageChanged?.(page.pageNumber);
+    if (page.pageNumber) props.onPageChanged?.(page.pageNumber);
   };
 
   const finishSelection = (page: NotebookPage) => {
@@ -697,7 +700,16 @@ export function PdfPreview(props: {
   };
 
   return (
-    <View style={props.styles.pdfViewerCard}>
+    <View
+      style={props.styles.pdfViewerCard}
+      onLayout={(event) => {
+        const nextWidth = Math.floor(event.nativeEvent.layout.width);
+        const nextHeight = Math.floor(event.nativeEvent.layout.height);
+        if (nextWidth !== containerSize.width || nextHeight !== containerSize.height) {
+          setContainerSize({ width: nextWidth, height: nextHeight });
+        }
+      }}
+    >
       <ScrollView
         style={{ width: '100%', maxHeight: viewerHeight }}
         contentContainerStyle={{ alignItems: 'center', paddingTop: 18, paddingBottom: 36 }}

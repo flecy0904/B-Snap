@@ -2,9 +2,10 @@ import React, { useState } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { Image, KeyboardAvoidingView, Platform, Pressable, ScrollView, StatusBar as NativeStatusBar, Text, TextInput, View } from 'react-native';
 import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
-import { loginBackendUser, registerBackendUser, setBackendAuthToken } from '../services/backend-api';
+import { BackendApiError, loginBackendUser, registerBackendUser, setBackendAuthToken } from '../services/backend-api';
 import { S } from '../styles';
 import { saveAuthSession } from './auth-storage';
+import { resolveBackendHttpUrl } from './backend-url';
 import type { AuthSession } from './types';
 
 export function LoginScreen(props: {
@@ -17,6 +18,26 @@ export function LoginScreen(props: {
   const [mode, setMode] = useState<'login' | 'register'>('login');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const backendUrl = resolveBackendHttpUrl();
+
+  const getAuthErrorMessage = (err: unknown) => {
+    if (err instanceof BackendApiError) {
+      if (err.detail) return err.detail;
+      if (err.message === 'Backend server is unreachable.') {
+        return `백엔드 서버에 연결할 수 없습니다. 현재 주소: ${backendUrl}`;
+      }
+      if (err.message === 'Backend request timed out.') {
+        return `백엔드 응답 시간이 초과됐습니다. 현재 주소를 확인해주세요: ${backendUrl}`;
+      }
+      if (err.message === 'Backend URL is not configured.') {
+        return '백엔드 주소가 설정되지 않았습니다.';
+      }
+      if (err.status) return `로그인 요청에 실패했습니다. (${err.status})`;
+      return err.message;
+    }
+    if (err instanceof Error && err.message) return err.message;
+    return mode === 'register' ? '회원가입에 실패했습니다.' : '로그인에 실패했습니다.';
+  };
 
   const submit = async () => {
     const normalizedLoginId = email.trim();
@@ -45,14 +66,10 @@ export function LoginScreen(props: {
         },
       };
       setBackendAuthToken(session.accessToken);
-      await saveAuthSession(session);
       props.onLogin(session);
+      void saveAuthSession(session).catch(() => undefined);
     } catch (err: any) {
-      setError(
-        err?.detail
-        ?? err?.message
-        ?? (mode === 'register' ? '회원가입에 실패했습니다.' : '로그인에 실패했습니다.'),
-      );
+      setError(getAuthErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -157,6 +174,7 @@ export function LoginScreen(props: {
                 </Pressable>
 
                 <Text style={S.loginHint}>계정별로 업로드, 필기, AI 채팅 데이터가 분리됩니다.</Text>
+                <Text style={S.loginHint}>Backend: {backendUrl}</Text>
               </View>
             </View>
           </ScrollView>

@@ -207,6 +207,83 @@ export function useDocumentPageActions(params: {
     params.setWorkspaceFeedback('메모 페이지를 삭제했습니다.');
   };
 
+  const duplicateGeneratedPage = (pageId: string) => {
+    if (!params.studyDocumentId) return;
+    const target = (params.generatedPagesByDocument[params.studyDocumentId] ?? []).find((page) => page.id === pageId);
+    if (!target) return;
+
+    const nextPageId = `${target.pageKind}-page-${params.studyDocumentId}-${Date.now()}`;
+    const copiedPage: GeneratedWorkspacePage = {
+      ...target,
+      id: nextPageId,
+      sourceAssetId: `${target.sourceAssetId}-copy-${Date.now()}`,
+      title: `${target.title} 복사본`,
+      createdAt: new Date().toISOString(),
+    };
+
+    params.setGeneratedPagesByDocument((current) => ({
+      ...current,
+      [params.studyDocumentId!]: [...(current[params.studyDocumentId!] ?? []), copiedPage],
+    }));
+    params.setInkByDocument((current) => {
+      const copiedStrokes = (current[params.studyDocumentId!] ?? [])
+        .filter((stroke) => stroke.generatedPageId === pageId)
+        .map((stroke, index) => ({
+          ...stroke,
+          id: `${stroke.id}-page-copy-${Date.now()}-${index}`,
+          generatedPageId: nextPageId,
+        }));
+      return {
+        ...current,
+        [params.studyDocumentId!]: [...(current[params.studyDocumentId!] ?? []), ...copiedStrokes],
+      };
+    });
+    params.setTextAnnotationsByDocument((current) => {
+      const copiedAnnotations = (current[params.studyDocumentId!] ?? [])
+        .filter((annotation) => annotation.generatedPageId === pageId)
+        .map((annotation, index) => ({
+          ...annotation,
+          id: `${annotation.id}-page-copy-${Date.now()}-${index}`,
+          generatedPageId: nextPageId,
+        }));
+      return {
+        ...current,
+        [params.studyDocumentId!]: [...(current[params.studyDocumentId!] ?? []), ...copiedAnnotations],
+      };
+    });
+    params.clearCurrentSelection();
+    params.setActivePageByDocument((current) => ({
+      ...current,
+      [params.studyDocumentId!]: { kind: 'generated', pageId: nextPageId },
+    }));
+    params.setWorkspaceFeedback('페이지를 복제했습니다.');
+  };
+
+  const moveGeneratedPage = (pageId: string, delta: -1 | 1) => {
+    if (!params.studyDocumentId || !params.studyDocument) return;
+    const target = (params.generatedPagesByDocument[params.studyDocumentId] ?? []).find((page) => page.id === pageId);
+    if (!target) return;
+
+    const nextInsertAfterPage = Math.max(1, Math.min(params.studyDocument.pageCount, target.insertAfterPage + delta));
+    if (nextInsertAfterPage === target.insertAfterPage) return;
+
+    params.setGeneratedPagesByDocument((current) => ({
+      ...current,
+      [params.studyDocumentId!]: (current[params.studyDocumentId!] ?? []).map((page) =>
+        page.id === pageId
+          ? {
+              ...page,
+              insertAfterPage: nextInsertAfterPage,
+              title: page.pageKind === 'memo' ? `${nextInsertAfterPage}페이지 메모` : page.title,
+              createdAt: new Date(Date.now() + delta).toISOString(),
+            }
+          : page,
+      ),
+    }));
+    params.clearCurrentSelection();
+    params.setWorkspaceFeedback(delta < 0 ? '페이지를 위로 이동했습니다.' : '페이지를 아래로 이동했습니다.');
+  };
+
   const updateStudyDocumentPageCount = (pageCount: number) => {
     if (!params.studyDocumentId || !params.studyDocument || !Number.isFinite(pageCount) || pageCount < 1) return;
     params.setUserStudyDocuments((current) => upsertStudyDocument(current, {
@@ -369,6 +446,8 @@ export function useDocumentPageActions(params: {
     createMemoPage,
     openGeneratedPage,
     removeGeneratedPage,
+    duplicateGeneratedPage,
+    moveGeneratedPage,
     updateStudyDocumentPageCount,
     setCurrentPdfPage,
     moveDocumentPage,

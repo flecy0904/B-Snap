@@ -4,6 +4,7 @@ import { Platform } from 'react-native';
 type RequestOptions = {
   method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
   body?: unknown;
+  timeoutMs?: number;
 };
 
 let backendAuthToken: string | null = null;
@@ -173,17 +174,25 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
   }
 
   let response: Response;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 12000);
   try {
     response = await fetch(`${baseUrl}${path}`, {
       method: options.method ?? 'GET',
+      signal: controller.signal,
       headers: {
         ...(options.body ? { 'Content-Type': 'application/json' } : {}),
         ...(backendAuthToken ? { Authorization: `Bearer ${backendAuthToken}` } : {}),
       },
       body: options.body ? JSON.stringify(options.body) : undefined,
     });
-  } catch {
+  } catch (error: any) {
+    if (error?.name === 'AbortError') {
+      throw new BackendApiError('Backend request timed out.');
+    }
     throw new BackendApiError('Backend server is unreachable.');
+  } finally {
+    clearTimeout(timeout);
   }
 
   if (!response.ok) {

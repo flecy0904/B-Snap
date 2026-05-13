@@ -11,6 +11,7 @@ export type InkStroke = {
   shape?: InkShape;
   pageNumber?: number;
   generatedPageId?: string;
+  historyGroupId?: string;
 } & InkPageSize;
 export type InkTextAnnotation = {
   id: string;

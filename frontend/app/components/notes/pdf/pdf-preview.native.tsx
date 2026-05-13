@@ -96,13 +96,15 @@ export function PdfPreview(props: {
   styles: any;
 }) {
   const { width, height } = useWindowDimensions();
+  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
+  const availableWidth = Math.max(320, containerSize.width || width);
   const compactViewer = width < 900;
   const phoneViewer = width < 700;
   const viewerWidth = phoneViewer
-    ? Math.max(320, width - 12)
+    ? Math.max(320, availableWidth - 12)
     : compactViewer
-      ? Math.max(520, width - 24)
-      : Math.min(1500, Math.max(900, width - 56));
+      ? Math.max(360, availableWidth - 24)
+      : Math.min(1500, Math.max(420, availableWidth - 32));
   const [pdfPageSize, setPdfPageSize] = useState<{ width: number; height: number } | null>(null);
   const pageAspectRatio = pdfPageSize ? Math.max(0.45, Math.min(3.2, pdfPageSize.width / pdfPageSize.height)) : 16 / 9;
   const viewerHeight = Math.round(viewerWidth / pageAspectRatio);
@@ -209,7 +211,7 @@ export function PdfPreview(props: {
 
   const beginInteraction = (page: NotebookPage) => {
     if (page.generatedPageId) props.onOpenGeneratedPage?.(page.generatedPageId);
-    if (page.pageNumber && props.page !== page.pageNumber) props.onPageChanged?.(page.pageNumber);
+    if (page.pageNumber) props.onPageChanged?.(page.pageNumber);
   };
 
   const handlePageScroll = (event: NativeSyntheticEvent<NativeScrollEvent>) => {
@@ -443,7 +445,16 @@ export function PdfPreview(props: {
   };
 
   return (
-    <View style={props.styles.pdfViewerCard}>
+    <View
+      style={props.styles.pdfViewerCard}
+      onLayout={(event) => {
+        const nextWidth = Math.floor(event.nativeEvent.layout.width);
+        const nextHeight = Math.floor(event.nativeEvent.layout.height);
+        if (nextWidth !== containerSize.width || nextHeight !== containerSize.height) {
+          setContainerSize({ width: nextWidth, height: nextHeight });
+        }
+      }}
+    >
       <FlatList
         data={pageItems}
         keyExtractor={(item) => item.id}

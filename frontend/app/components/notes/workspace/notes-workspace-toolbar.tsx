@@ -1,91 +1,10 @@
 import React from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { InkTool } from '../../../ui-types';
 import { useDocumentContext } from './document-context';
 import { useCanvasContext } from '../canvas/canvas-context';
 import { NotebookPage } from '../../../types';
 import { useDesktopNotesWorkspaceContext } from './notes-workspace-context';
-
-const PRIMARY_TOOLS: Array<{
-  value: InkTool;
-  icon: React.ComponentProps<typeof MaterialCommunityIcons>['name'];
-}> = [
-  { value: 'view', icon: 'cursor-default-outline' },
-  { value: 'pen', icon: 'pencil-outline' },
-  { value: 'highlight', icon: 'marker' },
-  { value: 'erase', icon: 'eraser-variant' },
-  { value: 'select', icon: 'selection-drag' },
-  { value: 'text', icon: 'format-textbox' },
-  { value: 'line', icon: 'vector-line' },
-  { value: 'arrow', icon: 'arrow-top-right' },
-  { value: 'rect', icon: 'rectangle-outline' },
-  { value: 'ellipse', icon: 'circle-outline' },
-];
-
-const PEN_COLORS = ['#1F2937', '#2563EB', '#7C3AED', '#D9485F', '#F59E0B', '#16A34A'];
-const HIGHLIGHT_COLORS = ['#FDE047', '#FB7185', '#86EFAC', '#67E8F9', '#FDBA74'];
-const PEN_WIDTHS = [2, 3, 4, 6, 8, 10];
-const HIGHLIGHT_WIDTHS = [10, 12, 14, 18, 22, 26];
-
-type BrushTool = 'pen' | 'highlight';
-
-function BrushPopover(props: {
-  tool: BrushTool;
-  styles: any;
-  penColor: string;
-  penWidth: number;
-  onSelectColor: (tool: BrushTool, color: string) => void;
-  onSelectWidth: (tool: BrushTool, width: number) => void;
-}) {
-  const widths = props.tool === 'highlight' ? HIGHLIGHT_WIDTHS : PEN_WIDTHS;
-
-  return (
-    <View style={props.styles.inkPopoverAnchor} pointerEvents="box-none">
-      <View style={props.styles.inkPopoverInline}>
-        <View style={props.styles.inkPopoverSection}>
-          <Text style={props.styles.inkPopoverLabel}>{props.tool === 'highlight' ? '형광 색상' : '펜 색상'}</Text>
-          <View style={props.styles.inkPresetGroup}>
-            {(props.tool === 'highlight' ? HIGHLIGHT_COLORS : PEN_COLORS).map((color) => (
-              <Pressable
-                key={color}
-                style={[
-                  props.styles.inkColorSwatch,
-                  { backgroundColor: color },
-                  props.penColor === color && props.styles.inkColorSwatchActive,
-                ]}
-                onPress={() => props.onSelectColor(props.tool, color)}
-              />
-            ))}
-          </View>
-        </View>
-        <View style={props.styles.inkPopoverSection}>
-          <Text style={props.styles.inkPopoverLabel}>{props.tool === 'highlight' ? '형광 두께' : '펜 굵기'}</Text>
-          <View style={props.styles.inkPresetGroup}>
-            {widths.map((width) => (
-              <Pressable
-                key={width}
-                style={[props.styles.inkWidthButton, props.penWidth === width && props.styles.inkWidthButtonActive]}
-                onPress={() => props.onSelectWidth(props.tool, width)}
-              >
-                <View
-                  style={[
-                    props.styles.inkWidthDot,
-                    {
-                      width: props.tool === 'highlight' ? Math.min(24, Math.max(10, width)) : width + 2,
-                      height: props.tool === 'highlight' ? 10 : width + 2,
-                      borderRadius: 99,
-                    },
-                  ]}
-                />
-              </Pressable>
-            ))}
-          </View>
-        </View>
-      </View>
-    </View>
-  );
-}
 
 export function NotesPageListOverlay() {
   const workspaceContext = useDesktopNotesWorkspaceContext();
@@ -170,35 +89,6 @@ export const NotesWorkspaceToolbar = React.memo(function NotesWorkspaceToolbar()
   const workspaceContext = useDesktopNotesWorkspaceContext();
   const documentContext = useDocumentContext();
   const canvasContext = useCanvasContext();
-  const [activeBrushPopover, setActiveBrushPopover] = React.useState<BrushTool | null>(null);
-
-  React.useEffect(() => {
-    if (canvasContext.inkTool !== 'pen' && canvasContext.inkTool !== 'highlight') setActiveBrushPopover(null);
-  }, [canvasContext.inkTool]);
-
-  const handleToolPress = (tool: InkTool) => {
-    if (tool === 'pen' || tool === 'highlight') {
-      canvasContext.setInkTool(tool);
-      setActiveBrushPopover((current) => (current === tool ? null : tool));
-      workspaceContext.setPageListOpen(false);
-      return;
-    }
-    canvasContext.setInkTool(tool);
-    setActiveBrushPopover(null);
-    workspaceContext.setPageListOpen(false);
-  };
-
-  const handleBrushColorChange = (tool: BrushTool, color: string) => {
-    canvasContext.setInkTool(tool);
-    canvasContext.setPenColor(color);
-    setActiveBrushPopover(tool);
-  };
-
-  const handleBrushWidthChange = (tool: BrushTool, width: number) => {
-    canvasContext.setInkTool(tool);
-    canvasContext.setPenWidth(width);
-    setActiveBrushPopover(tool);
-  };
 
   return (
     <View style={workspaceContext.styles.inkToolbarWrap}>
@@ -208,7 +98,6 @@ export const NotesWorkspaceToolbar = React.memo(function NotesWorkspaceToolbar()
             style={{ height: 34, minWidth: 92, paddingHorizontal: 10, borderRadius: 10, backgroundColor: workspaceContext.pageListOpen ? '#F0F4FF' : '#F8FAFD', borderWidth: 1, borderColor: workspaceContext.pageListOpen ? '#DCE4FF' : '#EEF1F6', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 3 }}
             onPress={() => {
               workspaceContext.setPageListOpen(!workspaceContext.pageListOpen);
-              setActiveBrushPopover(null);
             }}
           >
             <Text style={workspaceContext.styles.documentPageLabel}>
@@ -235,50 +124,16 @@ export const NotesWorkspaceToolbar = React.memo(function NotesWorkspaceToolbar()
         </View>
 
         <View style={workspaceContext.styles.inkToolbarTools}>
-          <View style={workspaceContext.styles.inkToolCluster}>
-            {PRIMARY_TOOLS.map((tool) => {
-              const active = canvasContext.inkTool === tool.value;
-              const popoverOpen = activeBrushPopover === tool.value;
-              const isBrushTool = tool.value === 'pen' || tool.value === 'highlight';
-
-              return (
-                <View key={tool.value} style={workspaceContext.styles.inkToolAnchor}>
-                  <Pressable
-                    style={[
-                      workspaceContext.styles.inkToolButton,
-                      active && workspaceContext.styles.inkToolButtonActive,
-                      popoverOpen && workspaceContext.styles.inkToolButtonPopoverOpen,
-                    ]}
-                    onPress={() => handleToolPress(tool.value)}
-                  >
-                    <MaterialCommunityIcons name={tool.icon} size={18} color={active ? workspaceContext.blueColor : '#556070'} />
-                  </Pressable>
-                  {isBrushTool && popoverOpen ? (
-                    <BrushPopover
-                      tool={tool.value as BrushTool}
-                      styles={workspaceContext.styles}
-                      penColor={canvasContext.penColor}
-                      penWidth={canvasContext.penWidth}
-                      onSelectColor={handleBrushColorChange}
-                      onSelectWidth={handleBrushWidthChange}
-                    />
-                  ) : null}
-                </View>
-              );
-            })}
-          </View>
-
-          <View style={workspaceContext.styles.inkToolbarDivider} />
-
           <View style={workspaceContext.styles.inkSecondaryCluster}>
             {canvasContext.selectionRect ? (
-              <Pressable
-                style={[workspaceContext.styles.inkActionButton, { flexDirection: 'row', gap: 4, width: 'auto', paddingHorizontal: 10 }]}
-                onPress={canvasContext.deleteSelectedStrokes}
-              >
-                <MaterialCommunityIcons name="delete-outline" size={16} color="#EF4444" />
-                <Text style={{ fontSize: 12, fontWeight: '700', color: '#EF4444' }}>선택 지우기</Text>
-              </Pressable>
+              <>
+                <Pressable style={workspaceContext.styles.inkActionButton} onPress={canvasContext.duplicateSelectedStrokes}>
+                  <MaterialCommunityIcons name="content-copy" size={18} color="#556070" />
+                </Pressable>
+                <Pressable style={workspaceContext.styles.inkActionButton} onPress={canvasContext.deleteSelectedStrokes}>
+                  <MaterialCommunityIcons name="delete-outline" size={18} color="#EF4444" />
+                </Pressable>
+              </>
             ) : (
               <>
                 <Pressable style={workspaceContext.styles.inkActionButton} onPress={canvasContext.undoInk}>

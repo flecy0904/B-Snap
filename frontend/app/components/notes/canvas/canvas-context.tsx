@@ -32,6 +32,9 @@ export type CanvasActions = {
   removeTextAnnotation: (id: string) => void;
   deleteSelectedStrokes: () => void;
   changeSelectedStrokesColor: (color: string) => void;
+  duplicateSelectedStrokes: () => void;
+  resizeSelectedStrokes: (scale: number) => void;
+  nudgeSelectedStrokes: (dx: number, dy: number) => void;
 };
 
 const CanvasContext = createContext<(CanvasState & CanvasActions) | null>(null);
@@ -66,6 +69,9 @@ export function CanvasProvider({ children }: { children: React.ReactNode }) {
     removeTextAnnotation: globalContext.onRemoveTextAnnotation,
     deleteSelectedStrokes: globalContext.deleteSelectedStrokes,
     changeSelectedStrokesColor: globalContext.changeSelectedStrokesColor,
+    duplicateSelectedStrokes: globalContext.duplicateSelectedStrokes,
+    resizeSelectedStrokes: globalContext.resizeSelectedStrokes,
+    nudgeSelectedStrokes: globalContext.nudgeSelectedStrokes,
   };
 
   return <CanvasContext.Provider value={value}>{children}</CanvasContext.Provider>;

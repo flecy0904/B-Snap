@@ -91,6 +91,8 @@ export function useStudyWorkspace(props: {
   const [penWidth, setPenWidth] = useState(3);
   const [inkByDocument, setInkByDocument] = useState<Record<number, InkStroke[]>>({});
   const [redoInkByDocument, setRedoInkByDocument] = useState<Record<number, InkStroke[]>>({});
+  const [inkHistoryByDocument, setInkHistoryByDocument] = useState<Record<number, InkStroke[][]>>({});
+  const [redoInkHistoryByDocument, setRedoInkHistoryByDocument] = useState<Record<number, InkStroke[][]>>({});
   const [textAnnotationsByDocument, setTextAnnotationsByDocument] = useState<Record<number, InkTextAnnotation[]>>({});
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
   const [aiPanelMode, setAiPanelMode] = useState<'floating' | 'sidebar'>('floating');
@@ -1449,6 +1451,9 @@ export function useStudyWorkspace(props: {
     removeTextAnnotation,
     deleteSelectedStrokes,
     changeSelectedStrokesColor,
+    duplicateSelectedStrokes,
+    resizeSelectedStrokes,
+    nudgeSelectedStrokes,
   } = useInkActions({
     studyDocumentId,
     studyDocument,
@@ -1457,8 +1462,12 @@ export function useStudyWorkspace(props: {
     selectionRect,
     selectionByDocument,
     inkByDocument,
+    inkHistoryByDocument,
+    redoInkHistoryByDocument,
     setInkByDocument,
     setRedoInkByDocument,
+    setInkHistoryByDocument,
+    setRedoInkHistoryByDocument,
     setTextAnnotationsByDocument,
     setSelectionByDocument,
     setInkTool,
@@ -1496,6 +1505,8 @@ export function useStudyWorkspace(props: {
     createMemoPage,
     openGeneratedPage,
     removeGeneratedPage,
+    duplicateGeneratedPage,
+    moveGeneratedPage,
     updateStudyDocumentPageCount,
     setCurrentPdfPage,
     moveDocumentPage,
@@ -1646,6 +1657,9 @@ export function useStudyWorkspace(props: {
     removeInkStroke,
     deleteSelectedStrokes,
     changeSelectedStrokesColor,
+    duplicateSelectedStrokes,
+    resizeSelectedStrokes,
+    nudgeSelectedStrokes,
     acceptIncomingAsset,
     archiveIncomingAsset,
     dismissIncomingAsset,
@@ -1662,6 +1676,8 @@ export function useStudyWorkspace(props: {
     exportCurrentDocumentSummary,
     openGeneratedPage,
     removeGeneratedPage,
+    duplicateGeneratedPage,
+    moveGeneratedPage,
     updateStudyDocumentPageCount,
     setCurrentPdfPage,
     goToPreviousDocumentPage: () => moveDocumentPage(-1),
