@@ -38,6 +38,7 @@ import {
 import { getAiBackendErrorMessage } from './ai/ai-errors';
 import { useAiChatActions } from './ai/use-ai-chat-actions';
 import { useAiChatDerivedState } from './ai/use-ai-chat-derived-state';
+import { useAiCanvasNotes } from './ai-canvas/use-ai-canvas-notes';
 import { addUniqueId, removeId, upsertStudyDocument } from './document/collection-helpers';
 import { useDocumentPageActions } from './document/use-document-page-actions';
 import { confirmDeleteAction } from './ui/confirm-delete-action';
@@ -231,6 +232,13 @@ export function useStudyWorkspace(props: {
     aiChatScope,
     aiChatSearchQuery,
     backendPageIdsByDocument,
+  });
+  const currentAiCanvasPageNumber = currentDocumentPage?.kind === 'pdf' ? currentDocumentPage.pageNumber : currentPdfPage;
+  const aiCanvas = useAiCanvasNotes({
+    noteId: studyDocumentId,
+    enabled: workspaceHydrated && isBackendApiEnabled() && !!studyDocumentId && currentDocumentHasBackendPages,
+    currentPageNumber: currentAiCanvasPageNumber ?? null,
+    onFeedback: setWorkspaceFeedback,
   });
 
   useEffect(() => {
@@ -1200,6 +1208,7 @@ export function useStudyWorkspace(props: {
     aiChatReadOnly,
     aiLoading,
     aiError,
+    aiCanvas,
     query,
     sort,
     incomingAssetSuggestion,

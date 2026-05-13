@@ -284,6 +284,12 @@ export const NotesWorkspaceToolbar = React.memo(function NotesWorkspaceToolbar()
             >
               <MaterialCommunityIcons name="star-four-points" size={18} color={workspace.aiPanelOpen ? '#5A74E8' : '#7786D8'} />
             </Pressable>
+            <Pressable
+              style={[workspace.styles.inkActionButton, workspace.styles.aiCanvasToolbarButton, workspace.aiCanvas.isOpen && workspace.styles.aiCanvasToolbarButtonActive]}
+              onPress={workspace.aiCanvas.toggle}
+            >
+              <MaterialCommunityIcons name="note-edit-outline" size={18} color={workspace.aiCanvas.isOpen ? '#5A74E8' : '#77839A'} />
+            </Pressable>
           </View>
         </View>
       </View>

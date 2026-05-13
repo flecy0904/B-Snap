@@ -5,6 +5,7 @@ import { subjects as allSubjects } from '../../../data';
 import { useDesktopNotesWorkspaceViewModel } from '../../../hooks/notes/use-desktop-notes-workspace-view-model';
 import { buildAiResponse, NoteSummaryContent } from '../shared/notes-shared';
 import { NotesAiAssistantPanel } from '../ai/notes-ai-assistant-panel';
+import { NotesAiCanvasPanel } from '../ai-canvas/notes-ai-canvas-panel';
 import { NotesDocumentViewer } from '../workspace/notes-document-viewer';
 import { NotesWorkspaceToolbar, NotesPageListOverlay } from '../workspace/notes-workspace-toolbar';
 import { NotesWorkspaceDock } from '../workspace/notes-workspace-dock';
@@ -13,6 +14,7 @@ import { NotesBrowser } from './notes-browser';
 import { DesktopNotesWorkspaceProvider } from '../workspace/notes-workspace-context';
 import type { MockAiAnswer } from '../../../services/mock-ai-service';
 import type { BackendChatMessage, BackendChatSession } from '../../../services/backend-api';
+import type { UseAiCanvasNotesResult } from '../../../hooks/notes/ai-canvas/use-ai-canvas-notes';
 import {
   CaptureAsset,
   BookmarkedPage,
@@ -59,6 +61,7 @@ export type DesktopNotesViewProps = {
   aiChatReadOnly: boolean;
   aiLoading: boolean;
   aiError: string | null;
+  aiCanvas: UseAiCanvasNotesResult;
   incomingAssetSuggestion: CaptureAsset | null;
   inboxHint: string | null;
   inboxPendingCount: number;
@@ -235,6 +238,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           aiChatReadOnly: props.aiChatReadOnly,
           aiLoading: props.aiLoading,
           aiError: props.aiError,
+          aiCanvas: props.aiCanvas,
           inkTool: props.inkTool,
           penColor: props.penColor,
           penWidth: props.penWidth,
@@ -366,12 +370,13 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
                 <Text style={props.styles.workspaceToastText}>{props.workspaceFeedback}</Text>
               </View>
             ) : null}
-            <View style={props.aiPanelMode === 'sidebar' && props.aiPanelOpen ? props.styles.desktopDocumentSidebarContentRow : props.styles.desktopDocumentWorkspacePane}>
+            <View style={(props.aiPanelMode === 'sidebar' && props.aiPanelOpen) || props.aiCanvas.isOpen ? props.styles.desktopDocumentSidebarContentRow : props.styles.desktopDocumentWorkspacePane}>
               {props.aiPanelMode === 'sidebar' ? <NotesAiAssistantPanel /> : null}
               <View style={props.styles.desktopDocumentViewerPane}>
                 {workspace.showWorkspaceDock ? <NotesWorkspaceDock /> : null}
                 <NotesDocumentViewer />
               </View>
+              {props.aiCanvas.isOpen ? <NotesAiCanvasPanel /> : null}
             </View>
           </View>
         </View>

@@ -216,6 +216,7 @@ export function AppShell(props: {
                   aiChatReadOnly={notesState.aiChatReadOnly}
                   aiLoading={notesState.aiLoading}
                   aiError={notesState.aiError}
+                  aiCanvas={notesState.aiCanvas}
                   incomingAssetSuggestion={notesState.incomingAssetSuggestion}
                   inboxHint={notesState.inboxHint}
                   inboxPendingCount={notesState.inboxPendingCount}

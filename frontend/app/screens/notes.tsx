@@ -6,6 +6,7 @@ import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '
 import { AppStyles } from '../styles';
 import type { MockAiAnswer } from '../services/mock-ai-service';
 import type { BackendChatMessage, BackendChatSession } from '../services/backend-api';
+import type { UseAiCanvasNotesResult } from '../hooks/notes/ai-canvas/use-ai-canvas-notes';
 
 export function MobileNotes(props: {
   subject: Subject | null;
@@ -148,6 +149,7 @@ export function DesktopNotes(props: {
   aiChatReadOnly: boolean;
   aiLoading: boolean;
   aiError: string | null;
+  aiCanvas: UseAiCanvasNotesResult;
   incomingAssetSuggestion: CaptureAsset | null;
   inboxHint: string | null;
   inboxPendingCount: number;

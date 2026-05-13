@@ -1,6 +1,7 @@
 import React from 'react';
 import type { MockAiAnswer } from '../../../services/mock-ai-service';
 import type { BackendChatMessage, BackendChatSession } from '../../../services/backend-api';
+import type { UseAiCanvasNotesResult } from '../../../hooks/notes/ai-canvas/use-ai-canvas-notes';
 import { NoteSummarySection, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, StudyDocumentEntry, WorkspaceAttachment } from '../../../types';
 import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 
@@ -26,6 +27,7 @@ export type DesktopNotesWorkspaceContextValue = {
   aiChatReadOnly: boolean;
   aiLoading: boolean;
   aiError: string | null;
+  aiCanvas: UseAiCanvasNotesResult;
   inkTool: InkTool;
   penColor: string;
   penWidth: number;
