@@ -3,7 +3,18 @@ from psycopg import Connection
 
 from backend.app.db.crud import execute_commit, execute_returning, fetch_all, fetch_one, require_row
 from backend.app.db.session import get_db_connection
-from backend.app.schemas.notes import NoteCreate, NotePageCreate, NotePageRead, NotePageUpdate, NoteRead, NoteUpdate
+from backend.app.schemas.notes import (
+    NoteCreate,
+    NotePageCreate,
+    NotePageRead,
+    NotePageUpdate,
+    NoteRead,
+    NoteUpdate,
+    PdfTextExtractionCreate,
+    PdfTextExtractionRead,
+)
+from backend.app.services.note_page_content import merge_page_state_content
+from backend.app.services.pdf_text_extractor import extract_pdf_text_pages
 
 
 router = APIRouter(tags=["notes"])
@@ -140,6 +151,65 @@ def list_note_pages(
     )
 
 
+@router.post("/notes/{note_id}/extract-pdf-text", response_model=PdfTextExtractionRead)
+def extract_note_pdf_text(
+    note_id: int,
+    payload: PdfTextExtractionCreate,
+    connection: Connection = Depends(get_db_connection),
+):
+    get_note(note_id, connection)
+    page_texts = extract_pdf_text_pages(payload.pdf_data)
+    existing_pages = fetch_all(
+        connection,
+        """
+        SELECT id, note_id, page_number, content, image_url, created_at, updated_at
+        FROM note_pages
+        WHERE note_id = %s
+        ORDER BY page_number ASC, id ASC
+        """,
+        (note_id,),
+    )
+    pages_by_number = {page["page_number"]: page for page in existing_pages}
+
+    for index, pdf_text in enumerate(page_texts, start=1):
+        current = pages_by_number.get(index)
+        if current:
+            execute_returning(
+                connection,
+                """
+                UPDATE note_pages
+                SET content = %s, updated_at = now()
+                WHERE id = %s
+                RETURNING id, note_id, page_number, content, image_url, created_at, updated_at
+                """,
+                (
+                    merge_page_state_content(current["content"], None, pdf_text=pdf_text),
+                    current["id"],
+                ),
+            )
+        else:
+            execute_returning(
+                connection,
+                """
+                INSERT INTO note_pages (note_id, page_number, content, image_url)
+                VALUES (%s, %s, %s, NULL)
+                RETURNING id, note_id, page_number, content, image_url, created_at, updated_at
+                """,
+                (
+                    note_id,
+                    index,
+                    merge_page_state_content(None, None, pdf_text=pdf_text),
+                ),
+            )
+
+    pages = list_note_pages(note_id, connection)
+    return {
+        "note_id": note_id,
+        "pages_extracted": len(page_texts),
+        "pages": pages,
+    }
+
+
 @router.patch("/note-pages/{page_id}", response_model=NotePageRead)
 def update_note_page(
     page_id: int,
@@ -168,7 +238,9 @@ def update_note_page(
         """,
         (
             payload.page_number if payload.page_number is not None else current["page_number"],
-            payload.content if payload.content is not None else current["content"],
+            merge_page_state_content(current["content"], payload.content)
+            if payload.content is not None
+            else current["content"],
             payload.image_url if payload.image_url is not None else current["image_url"],
             page_id,
         ),

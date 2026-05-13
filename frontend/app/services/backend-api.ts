@@ -69,6 +69,12 @@ export type BackendAiMessageResponse = {
   chat_session?: BackendChatSession | null;
 };
 
+export type BackendPdfTextExtractionResponse = {
+  note_id: number;
+  pages_extracted: number;
+  pages: BackendNotePage[];
+};
+
 function getBackendUrl() {
   return resolveBackendHttpUrl();
 }
@@ -201,6 +207,18 @@ export async function updateBackendNotePage(payload: {
       page_number: payload.pageNumber,
       content: payload.content,
       image_url: payload.imageUrl,
+    },
+  });
+}
+
+export async function extractBackendPdfText(payload: {
+  noteId: number;
+  pdfData: string;
+}) {
+  return request<BackendPdfTextExtractionResponse>(`/notes/${payload.noteId}/extract-pdf-text`, {
+    method: 'POST',
+    body: {
+      pdf_data: payload.pdfData,
     },
   });
 }

@@ -4,6 +4,7 @@ from fastapi import HTTPException
 from openai import OpenAI, OpenAIError
 
 from backend.app.core.config import get_settings
+from backend.app.services.note_page_content import extract_ai_page_text
 from backend.app.services.prompts.chat_title import CHAT_TITLE_INSTRUCTIONS
 from backend.app.services.prompts.note_assistant import NOTE_CHAT_INSTRUCTIONS
 
@@ -11,10 +12,10 @@ from backend.app.services.prompts.note_assistant import NOTE_CHAT_INSTRUCTIONS
 def build_note_context(note: dict, pages: list[dict], current_page_number: int | None = None) -> str:
     page_lines = []
     for page in pages:
-        content = page.get("content") or ""
-        image_url = page.get("image_url") or ""
+        content = extract_ai_page_text(page.get("content"))
+        attachment_status = "has source file" if page.get("image_url") else "no source file"
         page_lines.append(
-            f"- page {page['page_number']}: content={content!r}, image_url={image_url!r}"
+            f"- page {page['page_number']} ({attachment_status}): {content or 'no extracted text yet'}"
         )
 
     return "\n".join(
