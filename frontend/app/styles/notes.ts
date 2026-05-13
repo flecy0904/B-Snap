@@ -299,6 +299,7 @@ export const notesStyles = {
   aiHomePaneShifted: { transform: [{ translateX: 238 }], opacity: 0.46 },
   aiSidebarHomeDismissLayer: { position: 'absolute' as const, top: 0, right: 0, bottom: 0, left: 238, zIndex: 45 },
   aiPanelHeader: { minHeight: 32, flexDirection: 'row' as const, alignItems: 'center' as const, gap: 8, paddingRight: 140, marginBottom: 10, position: 'relative' as const, zIndex: 70 },
+  aiPanelHeaderDraggable: { cursor: 'move' as const },
   aiHeaderIconButton: { width: 30, height: 30, borderRadius: 8, alignItems: 'center' as const, justifyContent: 'center' as const, backgroundColor: '#F1F3F6' },
   aiHeaderIconButtonActive: { backgroundColor: '#E8EDFF', borderWidth: 1, borderColor: '#DCE4FF' },
   aiHeaderIconButtonDisabled: { opacity: 0.5 },
