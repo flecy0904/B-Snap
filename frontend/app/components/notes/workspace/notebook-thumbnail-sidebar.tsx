@@ -32,6 +32,8 @@ export function NotebookThumbnailSidebar() {
     return 'note-edit-outline';
   };
 
+  const getInsertAfterPage = (page: NotebookPage) => page.pageNumber ?? page.insertAfterPage ?? documentContext.currentPdfPage;
+
   if (!open) {
     return (
       <View style={workspaceContext.styles.thumbnailSidebarCollapsed}>
@@ -79,46 +81,57 @@ export function NotebookThumbnailSidebar() {
               <Text style={[workspaceContext.styles.thumbnailLabel, active && workspaceContext.styles.thumbnailLabelActive]} numberOfLines={1}>
                 {page.label || `${index + 1}`}
               </Text>
-              {page.generatedPageId ? (
-                <View style={workspaceContext.styles.thumbnailActionRow}>
-                  <Pressable
-                    style={workspaceContext.styles.thumbnailActionButton}
-                    onPress={(event) => {
-                      event.stopPropagation();
-                      documentContext.onMoveGeneratedPage(page.generatedPageId!, -1);
-                    }}
-                  >
-                    <MaterialCommunityIcons name="arrow-up" size={12} color="#667085" />
-                  </Pressable>
-                  <Pressable
-                    style={workspaceContext.styles.thumbnailActionButton}
-                    onPress={(event) => {
-                      event.stopPropagation();
-                      documentContext.onMoveGeneratedPage(page.generatedPageId!, 1);
-                    }}
-                  >
-                    <MaterialCommunityIcons name="arrow-down" size={12} color="#667085" />
-                  </Pressable>
-                  <Pressable
-                    style={workspaceContext.styles.thumbnailActionButton}
-                    onPress={(event) => {
-                      event.stopPropagation();
-                      documentContext.onDuplicateGeneratedPage(page.generatedPageId!);
-                    }}
-                  >
-                    <MaterialCommunityIcons name="content-copy" size={12} color="#667085" />
-                  </Pressable>
-                  <Pressable
-                    style={[workspaceContext.styles.thumbnailActionButton, workspaceContext.styles.thumbnailActionButtonDanger]}
-                    onPress={(event) => {
-                      event.stopPropagation();
-                      documentContext.onRemoveGeneratedPage(page.generatedPageId!);
-                    }}
-                  >
-                    <MaterialCommunityIcons name="trash-can-outline" size={12} color="#D05252" />
-                  </Pressable>
-                </View>
-              ) : null}
+              <View style={workspaceContext.styles.thumbnailActionRow}>
+                <Pressable
+                  style={workspaceContext.styles.thumbnailActionButton}
+                  onPress={(event) => {
+                    event.stopPropagation();
+                    documentContext.onCreateMemoPage(getInsertAfterPage(page));
+                  }}
+                >
+                  <MaterialCommunityIcons name="note-plus-outline" size={12} color="#4F68D2" />
+                </Pressable>
+                {page.generatedPageId ? (
+                  <>
+                    <Pressable
+                      style={workspaceContext.styles.thumbnailActionButton}
+                      onPress={(event) => {
+                        event.stopPropagation();
+                        documentContext.onMoveGeneratedPage(page.generatedPageId!, -1);
+                      }}
+                    >
+                      <MaterialCommunityIcons name="arrow-up" size={12} color="#667085" />
+                    </Pressable>
+                    <Pressable
+                      style={workspaceContext.styles.thumbnailActionButton}
+                      onPress={(event) => {
+                        event.stopPropagation();
+                        documentContext.onMoveGeneratedPage(page.generatedPageId!, 1);
+                      }}
+                    >
+                      <MaterialCommunityIcons name="arrow-down" size={12} color="#667085" />
+                    </Pressable>
+                    <Pressable
+                      style={workspaceContext.styles.thumbnailActionButton}
+                      onPress={(event) => {
+                        event.stopPropagation();
+                        documentContext.onDuplicateGeneratedPage(page.generatedPageId!);
+                      }}
+                    >
+                      <MaterialCommunityIcons name="content-copy" size={12} color="#667085" />
+                    </Pressable>
+                    <Pressable
+                      style={[workspaceContext.styles.thumbnailActionButton, workspaceContext.styles.thumbnailActionButtonDanger]}
+                      onPress={(event) => {
+                        event.stopPropagation();
+                        documentContext.onRemoveGeneratedPage(page.generatedPageId!);
+                      }}
+                    >
+                      <MaterialCommunityIcons name="trash-can-outline" size={12} color="#D05252" />
+                    </Pressable>
+                  </>
+                ) : null}
+              </View>
             </Pressable>
           );
         })}

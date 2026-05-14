@@ -48,7 +48,7 @@ import { parseNotePageContent, serializeNotePageContent } from './document/note-
 import { useIncomingAssetSubscription } from './workspace/use-incoming-asset-subscription';
 import { useStudyWorkspaceDerivedState } from './workspace/use-study-workspace-derived-state';
 import { useStudyWorkspacePersistence } from './workspace/use-study-workspace-persistence';
-import type { InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../ui-types';
+import type { InkBrush, InkLinePattern, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../ui-types';
 import type { AiAnswer, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NoteWorkspaceMode, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../types';
 
 type PendingPageSave = {
@@ -89,6 +89,8 @@ export function useStudyWorkspace(props: {
   const [inkTool, setInkTool] = useState<InkTool>('view');
   const [penColor, setPenColor] = useState<string>(DEFAULT_PEN_COLOR);
   const [penWidth, setPenWidth] = useState(3);
+  const [brushType, setBrushType] = useState<InkBrush>('ballpoint');
+  const [linePattern, setLinePattern] = useState<InkLinePattern>('solid');
   const [inkByDocument, setInkByDocument] = useState<Record<number, InkStroke[]>>({});
   const [redoInkByDocument, setRedoInkByDocument] = useState<Record<number, InkStroke[]>>({});
   const [inkHistoryByDocument, setInkHistoryByDocument] = useState<Record<number, InkStroke[][]>>({});
@@ -339,8 +341,13 @@ export function useStudyWorkspace(props: {
               );
             });
 
+            const pageImageUrls = pages.reduce<Record<number, string>>((next, page) => {
+              if (page.image_url) next[page.page_number] = page.image_url;
+              return next;
+            }, {});
             const firstPageUrl = firstPage?.image_url ?? null;
-            const documentType = firstPageUrl ? (isPdfAssetUrl(firstPageUrl) ? 'pdf' as const : 'image' as const) : 'blank' as const;
+            const pdfLikeBackendNote = /\.pdf$/i.test(backendNote.title.trim()) || pages.length > 1 || isPdfAssetUrl(firstPageUrl);
+            const documentType = pdfLikeBackendNote ? 'pdf' as const : firstPageUrl ? 'image' as const : 'blank' as const;
 
             return {
               id: backendNote.id,
@@ -351,6 +358,7 @@ export function useStudyWorkspace(props: {
               pageCount: Math.max(1, pages.length),
               preview: backendNote.summary ?? firstPage?.content ?? '백엔드에 저장된 노트입니다.',
               file: firstPageUrl ? { uri: firstPageUrl } : undefined,
+              pageImageUrls: Object.keys(pageImageUrls).length ? pageImageUrls : undefined,
             } satisfies StudyDocumentEntry;
           }),
         );
@@ -937,6 +945,7 @@ export function useStudyWorkspace(props: {
       const targetSubject = availableSubjects.find((value) => value.id === targetSubjectId);
       if (!targetSubject) return;
       const localPdfFileUri = Platform.OS === 'web' && picked.base64 ? picked.base64 : picked.uri;
+      setWorkspaceFeedback('PDF를 노트 페이지로 변환하는 중입니다.');
 
       if (isBackendApiEnabled()) {
         try {
@@ -1136,6 +1145,18 @@ export function useStudyWorkspace(props: {
 
   const changePenWidth = (width: number) => {
     setPenWidth(width);
+    setInkTool((current) => (current !== 'pen' && current !== 'highlight' ? 'pen' : current));
+  };
+
+  const changeBrushType = (brush: InkBrush) => {
+    setBrushType(brush);
+    setInkTool(brush === 'highlighter' ? 'highlight' : 'pen');
+    if (brush === 'highlighter' && penWidth < 8) setPenWidth(12);
+    if (brush !== 'highlighter' && penWidth > 10) setPenWidth(4);
+  };
+
+  const changeLinePattern = (pattern: InkLinePattern) => {
+    setLinePattern(pattern);
     setInkTool((current) => (current !== 'pen' && current !== 'highlight' ? 'pen' : current));
   };
 
@@ -1547,8 +1568,19 @@ export function useStudyWorkspace(props: {
     clearCurrentSelection,
   });
   const failedPageSaveCount = Object.keys(failedPageSaveKeys).length;
+  const pendingPageSaveCount = Object.keys(pendingPageSaves).length;
+  const savingPageCount = Object.keys(savingPageKeys).length;
   const pageSaveFeedback = failedPageSaveCount ? `필기 저장 실패 ${failedPageSaveCount}건 · 자동 재시도 중` : null;
   const effectiveWorkspaceFeedback = workspaceFeedback ?? pageSaveFeedback;
+  const documentSaveStatus = failedPageSaveCount
+    ? `저장 실패 ${failedPageSaveCount} · 재시도 중`
+    : savingPageCount
+      ? `저장 중 ${savingPageCount}`
+      : pendingPageSaveCount
+        ? `저장 대기 ${pendingPageSaveCount}`
+        : workspaceHydrated
+          ? '저장됨'
+          : '저장 준비 중';
 
   return {
     subjectId,
@@ -1560,6 +1592,8 @@ export function useStudyWorkspace(props: {
     inkTool,
     penColor,
     penWidth,
+    brushType,
+    linePattern,
     inkStrokes,
     textAnnotations,
     inkByDocument,
@@ -1587,6 +1621,7 @@ export function useStudyWorkspace(props: {
     inboxHint,
     inboxPendingCount,
     workspaceFeedback: effectiveWorkspaceFeedback,
+    documentSaveStatus,
     workspaceHydrated,
     localPersistenceError,
     activeIncomingBanner,
@@ -1626,6 +1661,8 @@ export function useStudyWorkspace(props: {
     changeInkTool,
     changePenColor,
     changePenWidth,
+    changeBrushType,
+    changeLinePattern,
     toggleAiPanel: () => setAiPanelOpen((current) => {
       const next = !current;
       if (next) setViewingAiChatSessionId(null);

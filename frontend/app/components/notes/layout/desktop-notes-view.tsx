@@ -29,7 +29,7 @@ import {
   Subject,
   WorkspaceAttachment,
 } from '../../../types';
-import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
+import { InkBrush, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 
 export type DesktopNotesViewProps = {
   compact: boolean;
@@ -46,6 +46,8 @@ export type DesktopNotesViewProps = {
   inkTool: InkTool;
   penColor: string;
   penWidth: number;
+  brushType: InkBrush;
+  linePattern: InkLinePattern;
   inkStrokes: InkStroke[];
   textAnnotations: InkTextAnnotation[];
   inkByDocument: Record<number, InkStroke[]>;
@@ -71,6 +73,7 @@ export type DesktopNotesViewProps = {
   inboxHint: string | null;
   inboxPendingCount: number;
   workspaceFeedback: string | null;
+  documentSaveStatus: string;
   captureInbox: CaptureAsset[];
   workspaceAttachments: WorkspaceAttachment[];
   bookmarks: BookmarkedPage[];
@@ -91,6 +94,8 @@ export type DesktopNotesViewProps = {
   onChangeInkTool: (tool: InkTool) => void;
   onChangePenColor: (color: string) => void;
   onChangePenWidth: (width: number) => void;
+  onChangeBrushType: (brush: InkBrush) => void;
+  onChangeLinePattern: (pattern: InkLinePattern) => void;
   onToggleAiPanel: () => void;
   onChangeAiPanelMode: (mode: 'floating' | 'sidebar') => void;
   onChangeAiQuestion: (value: string) => void;
@@ -134,7 +139,7 @@ export type DesktopNotesViewProps = {
   onRemoveGeneratedPage: (pageId: string) => void;
   onDuplicateGeneratedPage: (pageId: string) => void;
   onMoveGeneratedPage: (pageId: string, delta: -1 | 1) => void;
-  onCreateMemoPage: () => void;
+  onCreateMemoPage: (insertAfterPage?: number) => void;
   onQuery: (value: string) => void;
   onSort: () => void;
   onOpenStudyDocument: (id: number | null) => void;
@@ -161,6 +166,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
   const [pageListOpen, setPageListOpen] = React.useState(false);
   const [renameOpen, setRenameOpen] = React.useState(false);
   const [renameDraft, setRenameDraft] = React.useState('');
+  const [focusMode, setFocusMode] = React.useState(false);
   const { normalizedQuestion, aiResponse, aiResponseSections } = buildAiResponse(props.aiQuestion, props.selectionRect, true);
   const workspace = useDesktopNotesWorkspaceViewModel({
     incomingAssetSuggestion: props.incomingAssetSuggestion,
@@ -178,7 +184,15 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
   React.useEffect(() => {
     setRenameOpen(false);
     setRenameDraft('');
+    setFocusMode(false);
+    setPageListOpen(false);
   }, [props.studyDocument?.id]);
+
+  const toggleFocusMode = () => {
+    setFocusMode((current) => !current);
+    setRenameOpen(false);
+    setPageListOpen(false);
+  };
 
   const startRename = () => {
     if (!props.studyDocument) return;
@@ -253,6 +267,8 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           inkTool: props.inkTool,
           penColor: props.penColor,
           penWidth: props.penWidth,
+          brushType: props.brushType,
+          linePattern: props.linePattern,
           inkStrokes: props.inkStrokes,
           textAnnotations: props.textAnnotations,
           currentPageLabel: workspace.currentPageLabel,
@@ -278,6 +294,8 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           activeGeneratedPage: props.activeGeneratedPage,
           pageListOpen,
           setPageListOpen,
+          focusMode,
+          onToggleFocusMode: toggleFocusMode,
           activeGeneratedAttachment: workspace.activeGeneratedAttachment,
           activeGeneratedPreviewImage: workspace.activeGeneratedPreviewImage,
           onToggleAiPanel: props.onToggleAiPanel,
@@ -297,6 +315,8 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           onChangeInkTool: props.onChangeInkTool,
           onChangePenColor: props.onChangePenColor,
           onChangePenWidth: props.onChangePenWidth,
+          onChangeBrushType: props.onChangeBrushType,
+          onChangeLinePattern: props.onChangeLinePattern,
           onUndoInk: props.onUndoInk,
           onRedoInk: props.onRedoInk,
           onClearInk: props.onClearInk,
@@ -341,6 +361,21 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
         }}
       >
         <View style={props.styles.fill}>
+          {focusMode ? (
+            <View style={props.styles.notebookFocusBar}>
+              <Pressable style={props.styles.notebookFocusBackButton} onPress={() => props.onOpenStudyDocument(null)}>
+                <MaterialCommunityIcons name="chevron-left" size={24} color="#151A22" />
+              </Pressable>
+              <Text style={props.styles.notebookFocusTitle} numberOfLines={1}>{props.studyDocument.title}</Text>
+              <View style={props.styles.notebookSaveStatusPill}>
+                <MaterialCommunityIcons name="cloud-check-outline" size={14} color="#5D6A7C" />
+                <Text style={props.styles.notebookSaveStatusText} numberOfLines={1}>{props.documentSaveStatus}</Text>
+              </View>
+              <Pressable style={[props.styles.notebookFocusBackButton, props.styles.inkToolButtonActive]} onPress={toggleFocusMode}>
+                <MaterialCommunityIcons name="fullscreen-exit" size={18} color="#4F68D2" />
+              </Pressable>
+            </View>
+          ) : (
           <View style={props.styles.notebookTitleBar}>
             <Pressable style={props.styles.notebookTitleButton} onPress={() => props.onOpenStudyDocument(null)}>
               <MaterialCommunityIcons name="chevron-left" size={24} color="#151A22" />
@@ -349,15 +384,23 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
               {props.studyDocument.title}
             </Text>
             <View style={props.styles.notebookTitleActions}>
+              <View style={props.styles.notebookSaveStatusPill}>
+                <MaterialCommunityIcons name="cloud-check-outline" size={14} color="#5D6A7C" />
+                <Text style={props.styles.notebookSaveStatusText} numberOfLines={1}>{props.documentSaveStatus}</Text>
+              </View>
               <Pressable style={props.styles.notebookTitleButton} onPress={startRename}>
                 <MaterialCommunityIcons name="pencil-outline" size={18} color="#4F68D2" />
               </Pressable>
               <Pressable style={[props.styles.notebookTitleButton, props.styles.notebookTitleButtonDanger]} onPress={() => props.onDeleteStudyDocument(props.studyDocument!.id)}>
                 <MaterialCommunityIcons name="trash-can-outline" size={18} color="#C04B4B" />
               </Pressable>
+              <Pressable style={props.styles.notebookTitleButton} onPress={toggleFocusMode}>
+                <MaterialCommunityIcons name="fullscreen" size={18} color="#4F68D2" />
+              </Pressable>
             </View>
           </View>
-          {renameOpen ? (
+          )}
+          {renameOpen && !focusMode ? (
             <View style={props.styles.documentRenamePanel}>
               <TextInput
                 value={renameDraft}
@@ -376,8 +419,8 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
               </Pressable>
             </View>
           ) : null}
-          <View style={props.styles.desktopDocumentDetailBody}>
-            {props.aiPanelMode === 'floating' ? <NotesAiAssistantPanel /> : null}
+          <View style={[props.styles.desktopDocumentDetailBody, focusMode && props.styles.desktopDocumentDetailBodyFocus]}>
+            {!focusMode && props.aiPanelMode === 'floating' ? <NotesAiAssistantPanel /> : null}
             <NotesWorkspaceToolbar />
             <FloatingToolPalette />
             {props.workspaceFeedback ? (
@@ -386,14 +429,14 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
                 <Text style={props.styles.workspaceToastText}>{props.workspaceFeedback}</Text>
               </View>
             ) : null}
-            <View style={props.styles.desktopDocumentSidebarContentRow}>
-              <NotebookThumbnailSidebar />
-              {props.aiPanelMode === 'sidebar' ? <NotesAiAssistantPanel /> : null}
-              <View style={props.styles.desktopDocumentViewerPane}>
-                {workspace.showWorkspaceDock ? <NotesWorkspaceDock /> : null}
+            <View style={[props.styles.desktopDocumentSidebarContentRow, focusMode && props.styles.desktopDocumentSidebarContentRowFocus]}>
+              {!focusMode ? <NotebookThumbnailSidebar /> : null}
+              {!focusMode && props.aiPanelMode === 'sidebar' ? <NotesAiAssistantPanel /> : null}
+              <View style={[props.styles.desktopDocumentViewerPane, focusMode && props.styles.desktopDocumentViewerPaneFocus]}>
+                {!focusMode && workspace.showWorkspaceDock ? <NotesWorkspaceDock /> : null}
                 <NotesDocumentViewer />
               </View>
-              {props.aiCanvas.isOpen ? <NotesAiCanvasPanel /> : null}
+              {!focusMode && props.aiCanvas.isOpen ? <NotesAiCanvasPanel /> : null}
             </View>
           </View>
         </View>

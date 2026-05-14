@@ -1,11 +1,13 @@
 import React, { createContext, useContext } from 'react';
-import type { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
+import type { InkBrush, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { useNotesGlobalContext } from '../workspace/notes-global-context';
 
 export type CanvasState = {
   inkTool: InkTool;
   penColor: string;
   penWidth: number;
+  brushType: InkBrush;
+  linePattern: InkLinePattern;
   inkStrokes: InkStroke[];
   textAnnotations: InkTextAnnotation[];
   selectionRect: SelectionRect | null;
@@ -19,6 +21,8 @@ export type CanvasActions = {
   setInkTool: (tool: InkTool) => void;
   setPenColor: (color: string) => void;
   setPenWidth: (width: number) => void;
+  setBrushType: (brush: InkBrush) => void;
+  setLinePattern: (pattern: InkLinePattern) => void;
   setSelectionRect: (rect: SelectionRect | null) => void;
   setSelectionPreviewUri: (uri: string | null) => void;
   clearCurrentSelection: () => void;
@@ -46,6 +50,8 @@ export function CanvasProvider({ children }: { children: React.ReactNode }) {
     inkTool: globalContext.inkTool,
     penColor: globalContext.penColor,
     penWidth: globalContext.penWidth,
+    brushType: globalContext.brushType,
+    linePattern: globalContext.linePattern,
     inkStrokes: globalContext.inkStrokes ?? [],
     textAnnotations: globalContext.textAnnotations ?? [],
     selectionRect: globalContext.selectionRect ?? null,
@@ -56,6 +62,8 @@ export function CanvasProvider({ children }: { children: React.ReactNode }) {
     setInkTool: globalContext.onChangeInkTool,
     setPenColor: globalContext.onChangePenColor,
     setPenWidth: globalContext.onChangePenWidth,
+    setBrushType: globalContext.onChangeBrushType,
+    setLinePattern: globalContext.onChangeLinePattern,
     setSelectionRect: globalContext.onSelectionChange,
     setSelectionPreviewUri: globalContext.onSelectionPreviewChange,
     clearCurrentSelection: globalContext.onClearSelection,

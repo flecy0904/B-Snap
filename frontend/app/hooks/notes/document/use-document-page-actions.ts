@@ -41,7 +41,10 @@ export function useDocumentPageActions(params: {
   setBookmarksByDocument: SetState<Record<number, BookmarkedPage[]>>;
   clearCurrentSelection: () => void;
 }) {
-  const getInsertAfterPage = () => {
+  const getInsertAfterPage = (preferredPage?: number) => {
+    if (preferredPage && Number.isFinite(preferredPage)) {
+      return Math.max(1, Math.min(params.studyDocument?.pageCount ?? preferredPage, Math.floor(preferredPage)));
+    }
     const page = params.currentDocumentPage;
     if (page?.kind !== 'generated') return params.currentPdfPage;
     return (
@@ -89,7 +92,7 @@ export function useDocumentPageActions(params: {
     params.setWorkspaceFeedback('AI 응답을 정리 페이지로 추가했습니다.');
   };
 
-  const createMemoPage = () => {
+  const createMemoPage = (insertAfterPageOverride?: number) => {
     if (!params.studyDocumentId || !params.studyDocument) return;
 
     if (params.studyDocument.type === 'blank') {
@@ -133,7 +136,7 @@ export function useDocumentPageActions(params: {
       return;
     }
 
-    const insertAfterPage = getInsertAfterPage();
+    const insertAfterPage = getInsertAfterPage(insertAfterPageOverride);
     const generatedPageId = `memo-page-${params.studyDocumentId}-${Date.now()}`;
     const nextMemoCount =
       (params.generatedPagesByDocument[params.studyDocumentId] ?? []).filter((value) => value.pageKind === 'memo' && value.insertAfterPage === insertAfterPage).length + 1;

@@ -2,7 +2,7 @@ import React from 'react';
 import type { BackendChatMessage, BackendChatSession } from '../../../services/backend-api';
 import type { UseAiCanvasNotesResult } from '../../../hooks/notes/ai-canvas/use-ai-canvas-notes';
 import { AiAnswer, NoteSummarySection, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NotebookPage, StudyDocumentEntry, WorkspaceAttachment } from '../../../types';
-import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
+import { InkBrush, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 
 export type DesktopNotesWorkspaceContextValue = {
   styles: any;
@@ -30,6 +30,8 @@ export type DesktopNotesWorkspaceContextValue = {
   inkTool: InkTool;
   penColor: string;
   penWidth: number;
+  brushType: InkBrush;
+  linePattern: InkLinePattern;
   inkStrokes: InkStroke[];
   textAnnotations: InkTextAnnotation[];
   currentPageLabel: string;
@@ -55,6 +57,8 @@ export type DesktopNotesWorkspaceContextValue = {
   activeGeneratedPage: GeneratedWorkspacePage | null;
   pageListOpen: boolean;
   setPageListOpen: (open: boolean) => void;
+  focusMode: boolean;
+  onToggleFocusMode: () => void;
   activeGeneratedAttachment: WorkspaceAttachment | null;
   activeGeneratedPreviewImage?: number;
   onToggleAiPanel: () => void;
@@ -74,6 +78,8 @@ export type DesktopNotesWorkspaceContextValue = {
   onChangeInkTool: (tool: InkTool) => void;
   onChangePenColor: (color: string) => void;
   onChangePenWidth: (width: number) => void;
+  onChangeBrushType: (brush: InkBrush) => void;
+  onChangeLinePattern: (pattern: InkLinePattern) => void;
   onUndoInk: () => void;
   onRedoInk: () => void;
   onClearInk: () => void;
@@ -92,7 +98,7 @@ export type DesktopNotesWorkspaceContextValue = {
   onRemoveGeneratedPage: (pageId: string) => void;
   onDuplicateGeneratedPage: (pageId: string) => void;
   onMoveGeneratedPage: (pageId: string, delta: -1 | 1) => void;
-  onCreateMemoPage: () => void;
+  onCreateMemoPage: (insertAfterPage?: number) => void;
   onInsertInboxAsset: (assetId: string) => void;
   onRemoveInboxAsset: (assetId: string) => void;
   onPreviewAttachment: (assetId: string, attachmentId: string) => void;

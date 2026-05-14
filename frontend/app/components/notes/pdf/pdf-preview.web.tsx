@@ -2,15 +2,38 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { GestureResponderEvent, Image, ScrollView, Text, useWindowDimensions, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { TextAnnotationLayer } from '../canvas/text-annotation-layer';
-import { findHitInkStrokeId, getInkStrokeSvgPath, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize } from '../../../ui-helpers';
-import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
+import { findHitInkStrokeId, getInkCenterlinePath, getInkStrokeSvgPath, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize } from '../../../ui-helpers';
+import { InkBrush, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { NotebookPage } from '../../../types';
 
 function InkPath({ stroke, draft = false }: { stroke: InkStroke; draft?: boolean }) {
+  if (stroke.linePattern && stroke.linePattern !== 'solid' && stroke.style !== 'highlight' && stroke.style !== 'shape') {
+    const centerlinePath = getInkCenterlinePath(stroke.points);
+    if (!centerlinePath) return null;
+    const dashArray = stroke.linePattern === 'dotted' ? `${Math.max(1, stroke.width * 0.45)} ${Math.max(6, stroke.width * 2)}` : `${Math.max(8, stroke.width * 3)} ${Math.max(5, stroke.width * 1.8)}`;
+    return (
+      <Path
+        key={stroke.id}
+        d={centerlinePath}
+        fill="none"
+        stroke={stroke.color}
+        strokeWidth={stroke.width}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeDasharray={dashArray}
+      />
+    );
+  }
+
   const path = getInkStrokeSvgPath(stroke, !draft);
   if (!path) return null;
 
   if (stroke.style === 'shape') {
+    const dashArray = stroke.linePattern && stroke.linePattern !== 'solid'
+      ? stroke.linePattern === 'dotted'
+        ? `${Math.max(1, stroke.width * 0.45)} ${Math.max(6, stroke.width * 2)}`
+        : `${Math.max(8, stroke.width * 3)} ${Math.max(5, stroke.width * 1.8)}`
+      : undefined;
     return (
       <Path
         key={stroke.id}
@@ -20,6 +43,7 @@ function InkPath({ stroke, draft = false }: { stroke: InkStroke; draft?: boolean
         strokeWidth={stroke.width}
         strokeLinecap="round"
         strokeLinejoin="round"
+        strokeDasharray={dashArray}
       />
     );
   }
@@ -182,7 +206,20 @@ function drawPath(context: CanvasRenderingContext2D, stroke: InkStroke, opacity 
     context.lineWidth = stroke.width;
     context.lineCap = 'round';
     context.lineJoin = 'round';
+    if (stroke.linePattern && stroke.linePattern !== 'solid') {
+      context.setLineDash(stroke.linePattern === 'dotted' ? [Math.max(1, stroke.width * 0.45), Math.max(6, stroke.width * 2)] : [Math.max(8, stroke.width * 3), Math.max(5, stroke.width * 1.8)]);
+    }
     context.stroke(new Path2D(path));
+  } else if (stroke.linePattern && stroke.linePattern !== 'solid' && stroke.style !== 'highlight') {
+    const centerlinePath = getInkCenterlinePath(stroke.points);
+    if (centerlinePath) {
+      context.strokeStyle = stroke.color;
+      context.lineWidth = stroke.width;
+      context.lineCap = 'round';
+      context.lineJoin = 'round';
+      context.setLineDash(stroke.linePattern === 'dotted' ? [Math.max(1, stroke.width * 0.45), Math.max(6, stroke.width * 2)] : [Math.max(8, stroke.width * 3), Math.max(5, stroke.width * 1.8)]);
+      context.stroke(new Path2D(centerlinePath));
+    }
   } else {
     context.fillStyle = stroke.color;
     context.fill(new Path2D(path));
@@ -196,6 +233,8 @@ export function PdfPreview(props: {
   inkTool: InkTool;
   penColor: string;
   penWidth: number;
+  brushType: InkBrush;
+  linePattern: InkLinePattern;
   inkStrokes: InkStroke[];
   textAnnotations: InkTextAnnotation[];
   textAnnotationVariant?: 'floating' | 'marker';
@@ -206,6 +245,7 @@ export function PdfPreview(props: {
   onUpdateTextAnnotation: (id: string, text: string) => void;
   onRemoveTextAnnotation: (id: string) => void;
   onSelectionChange: (rect: SelectionRect | null) => void;
+  onMoveSelection?: (dx: number, dy: number) => void;
   onSelectionPreviewChange?: (uri: string | null) => void;
   onPageChanged?: (page: number) => void;
   onOpenGeneratedPage?: (pageId: string) => void;
@@ -224,12 +264,15 @@ export function PdfPreview(props: {
   const pageGap = 22;
   const [pdfDocument, setPdfDocument] = useState<PdfJsDocument | null>(null);
   const [pageFrames, setPageFrames] = useState<Record<number, PageFrame>>({});
+  const [cachedImageFrames, setCachedImageFrames] = useState<Record<number, PageFrame>>({});
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [currentStroke, setCurrentStroke] = useState<InkStroke | null>(null);
   const [draftSelection, setDraftSelection] = useState<SelectionRect | null>(null);
   const currentStrokeRef = useRef<InkStroke | null>(null);
   const selectionOriginRef = useRef<InkPoint | null>(null);
+  const selectionMoveOriginRef = useRef<InkPoint | null>(null);
+  const selectionMoveStartRectRef = useRef<SelectionRect | null>(null);
   const draftSelectionRef = useRef<SelectionRect | null>(null);
   const textTapRef = useRef<InkPoint | null>(null);
   const canvasRefs = useRef<Record<number, HTMLCanvasElement | null>>({});
@@ -241,6 +284,7 @@ export function PdfPreview(props: {
     return props.file.uri ?? null;
   }, [props.file]);
   const pageCount = pdfDocument?.numPages ?? 0;
+  const hasCachedPageImages = Object.keys(props.pageImageUrls ?? {}).length > 0;
   const pageItems = useMemo<NotebookPage[]>(
     () => props.notebookPages?.length
       ? props.notebookPages
@@ -254,10 +298,65 @@ export function PdfPreview(props: {
     [pageCount, props.notebookPages, props.page],
   );
 
+  const fitPageFrame = (naturalWidth?: number, naturalHeight?: number): PageFrame => {
+    const aspectRatio = naturalWidth && naturalHeight
+      ? Math.max(0.45, Math.min(3.2, naturalWidth / naturalHeight))
+      : 16 / 9;
+    const width = Math.min(1180, Math.max(320, viewerWidth - 64));
+    return { width, height: Math.round(width / aspectRatio) };
+  };
+
+  useEffect(() => {
+    const entries = Object.entries(props.pageImageUrls ?? {});
+    if (!entries.length) {
+      setCachedImageFrames({});
+      return;
+    }
+
+    let cancelled = false;
+    const [firstPageNumberText, firstImageUri] = entries[0];
+    const firstPageNumber = Number(firstPageNumberText);
+
+    Image.getSize(
+      firstImageUri,
+      (naturalWidth, naturalHeight) => {
+        if (cancelled) return;
+        const firstFrame = fitPageFrame(naturalWidth, naturalHeight);
+        setCachedImageFrames((current) => {
+          const next: Record<number, PageFrame> = { ...current, [firstPageNumber]: firstFrame };
+          entries.forEach(([pageNumberText]) => {
+            const pageNumber = Number(pageNumberText);
+            if (!next[pageNumber]) next[pageNumber] = firstFrame;
+          });
+          return next;
+        });
+      },
+      () => {
+        if (!cancelled) setCachedImageFrames({});
+      },
+    );
+
+    entries.slice(1).forEach(([pageNumberText, uri]) => {
+      const pageNumber = Number(pageNumberText);
+      Image.getSize(
+        uri,
+        (naturalWidth, naturalHeight) => {
+          if (!cancelled) setCachedImageFrames((current) => ({ ...current, [pageNumber]: fitPageFrame(naturalWidth, naturalHeight) }));
+        },
+        () => undefined,
+      );
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [props.pageImageUrls, viewerWidth]);
+
   const getFrameForPage = (page: NotebookPage): PageFrame => {
     const sourcePageNumber = page.pageNumber ?? page.insertAfterPage;
+    if (sourcePageNumber && cachedImageFrames[sourcePageNumber]) return cachedImageFrames[sourcePageNumber];
     if (sourcePageNumber && pageFrames[sourcePageNumber]) return pageFrames[sourcePageNumber];
-    return { width: Math.min(960, viewerWidth - 80), height: 900 };
+    return fitPageFrame();
   };
 
   const getPageStrokesForView = (page: NotebookPage) => {
@@ -282,13 +381,13 @@ export function PdfPreview(props: {
 
   const getPdfPageStrokesForView = (pageNumber: number) => {
     const frame = pageFrames[pageNumber];
-    const pageStrokes = props.inkStrokes.filter((stroke) => !stroke.pageNumber || stroke.pageNumber === pageNumber);
+    const pageStrokes = props.inkStrokes.filter((stroke) => !stroke.generatedPageId && (!stroke.pageNumber || stroke.pageNumber === pageNumber));
     return frame ? pageStrokes.map((stroke) => scaleInkStrokeToPageSize(stroke, frame.width, frame.height)) : pageStrokes;
   };
 
   const getPdfPageTextAnnotationsForView = (pageNumber: number) => {
     const frame = pageFrames[pageNumber];
-    const pageAnnotations = props.textAnnotations.filter((annotation) => annotation.pageNumber === pageNumber);
+    const pageAnnotations = props.textAnnotations.filter((annotation) => !annotation.generatedPageId && annotation.pageNumber === pageNumber);
     return frame ? pageAnnotations.map((annotation) => scaleTextAnnotationToPageSize(annotation, frame.width, frame.height)) : pageAnnotations;
   };
 
@@ -381,6 +480,14 @@ export function PdfPreview(props: {
     let cancelled = false;
     let task: { promise: Promise<PdfJsDocument>; destroy?: () => void } | null = null;
 
+    if (hasCachedPageImages) {
+      setPdfDocument(null);
+      setPageFrames({});
+      setIsLoading(false);
+      setLoadError(null);
+      return;
+    }
+
     if (!pdfUri) {
       setPdfDocument(null);
       setPageFrames({});
@@ -416,7 +523,7 @@ export function PdfPreview(props: {
       cancelled = true;
       task?.destroy?.();
     };
-  }, [pdfUri]);
+  }, [hasCachedPageImages, pdfUri]);
 
   useEffect(() => {
     let cancelled = false;
@@ -432,6 +539,7 @@ export function PdfPreview(props: {
     const renderPages = async () => {
       const nextFrames: Record<number, PageFrame> = {};
       for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
+        if (props.pageImageUrls?.[pageNumber]) continue;
         if (Math.abs(pageNumber - props.page) > 1) continue;
         const canvas = canvasRefs.current[pageNumber];
         if (!canvas || cancelled) continue;
@@ -475,17 +583,17 @@ export function PdfPreview(props: {
       cancelled = true;
       renderTasks.forEach((task) => task.cancel?.());
     };
-  }, [pdfDocument, props.page, viewerWidth]);
+  }, [pdfDocument, props.page, props.pageImageUrls, viewerWidth]);
 
   useEffect(() => {
-    if (!pageFrames[props.page]) return;
+    if (!pageFrames[props.page] && !cachedImageFrames[props.page]) return;
     scrollingProgrammaticallyRef.current = true;
     const element = document.getElementById(`bsnap-pdf-page-${props.page}`);
     element?.scrollIntoView({ block: 'nearest' });
     window.setTimeout(() => {
       scrollingProgrammaticallyRef.current = false;
     }, 120);
-  }, [props.page, pageFrames]);
+  }, [cachedImageFrames, props.page, pageFrames]);
 
   const handleScroll = (event: any) => {
     if (scrollingProgrammaticallyRef.current || props.inkTool !== 'view') return;
@@ -518,6 +626,19 @@ export function PdfPreview(props: {
   const finishSelection = (page: NotebookPage) => {
     if (props.inkTool === 'select') {
       const rect = draftSelectionRef.current;
+      const moveOrigin = selectionMoveOriginRef.current;
+      const moveStartRect = selectionMoveStartRectRef.current;
+      if (rect && moveOrigin && moveStartRect) {
+        const dx = rect.x - moveStartRect.x;
+        const dy = rect.y - moveStartRect.y;
+        if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) props.onMoveSelection?.(dx, dy);
+        selectionMoveOriginRef.current = null;
+        selectionMoveStartRectRef.current = null;
+        draftSelectionRef.current = null;
+        selectionOriginRef.current = null;
+        setDraftSelection(null);
+        return;
+      }
       if (rect && rect.width > 24 && rect.height > 24) {
         props.onSelectionChange(rect);
         props.onSelectionPreviewChange?.(buildSelectionPreview(page, rect));
@@ -539,6 +660,7 @@ export function PdfPreview(props: {
     const active = page.generatedPageId ? page.generatedPageId === props.activeGeneratedPageId : page.pageNumber === props.page;
     const selectionRectStyle = active ? scaleSelectionRectToPageSize(props.selectionRect, frame.width, frame.height) : null;
     const draftSelectionStyle = (page.generatedPageId ? currentStroke?.generatedPageId === page.generatedPageId : currentStroke?.pageNumber === page.pageNumber) ? draftSelection : null;
+    const cachedPageImageUri = page.pageNumber ? props.pageImageUrls?.[page.pageNumber] : undefined;
 
     return (
       <View
@@ -546,7 +668,13 @@ export function PdfPreview(props: {
         nativeID={page.pageNumber ? `bsnap-pdf-page-${page.pageNumber}` : `bsnap-page-${page.id}`}
         style={{ width: frame.width, height: frame.height, marginBottom: pageGap, backgroundColor: '#FFFFFF', shadowColor: '#182436', shadowOpacity: 0.08, shadowRadius: 18, shadowOffset: { width: 0, height: 10 }, position: 'relative' }}
       >
-        {page.kind === 'pdf' && page.pageNumber ? (
+        {page.kind === 'pdf' && cachedPageImageUri ? (
+          <Image
+            source={{ uri: cachedPageImageUri }}
+            style={{ position: 'absolute', left: 0, top: 0, width: frame.width, height: frame.height, backgroundColor: '#FFFFFF' }}
+            resizeMode="contain"
+          />
+        ) : page.kind === 'pdf' && page.pageNumber ? (
           <canvas
             ref={(node) => {
               canvasRefs.current[page.pageNumber!] = node;
@@ -596,12 +724,14 @@ export function PdfPreview(props: {
             if (isDrawingTool(props.inkTool)) {
               const appearance = isShapeTool(props.inkTool)
                 ? resolveShapeStrokeAppearance(props.penColor, props.penWidth)
-                : resolveInkStrokeAppearance(props.inkTool, props.penColor, props.penWidth);
+                : resolveInkStrokeAppearance(props.inkTool, props.penColor, props.penWidth, props.brushType);
               const stroke: InkStroke = {
                 id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
                 color: appearance.color,
                 width: appearance.width,
                 style: isShapeTool(props.inkTool) ? 'shape' : props.inkTool === 'highlight' ? 'highlight' : 'pen',
+                brush: isShapeTool(props.inkTool) ? undefined : props.brushType,
+                linePattern: props.linePattern,
                 shape: isShapeTool(props.inkTool) ? props.inkTool : undefined,
                 pageNumber: page.pageNumber,
                 generatedPageId: page.generatedPageId,
@@ -615,6 +745,20 @@ export function PdfPreview(props: {
             }
 
             if (props.inkTool === 'select') {
+              const currentSelection = active ? scaleSelectionRectToPageSize(props.selectionRect, frame.width, frame.height) : null;
+              if (
+                currentSelection &&
+                point.x >= currentSelection.x &&
+                point.x <= currentSelection.x + currentSelection.width &&
+                point.y >= currentSelection.y &&
+                point.y <= currentSelection.y + currentSelection.height
+              ) {
+                selectionMoveOriginRef.current = point;
+                selectionMoveStartRectRef.current = currentSelection;
+                draftSelectionRef.current = currentSelection;
+                setDraftSelection(currentSelection);
+                return;
+              }
               props.onSelectionChange(null);
               props.onSelectionPreviewChange?.(null);
               selectionOriginRef.current = point;
@@ -656,6 +800,20 @@ export function PdfPreview(props: {
             }
 
             if (props.inkTool === 'select') {
+              const moveOrigin = selectionMoveOriginRef.current;
+              const moveStartRect = selectionMoveStartRectRef.current;
+              if (moveOrigin && moveStartRect) {
+                const rect = {
+                  ...moveStartRect,
+                  x: moveStartRect.x + point.x - moveOrigin.x,
+                  y: moveStartRect.y + point.y - moveOrigin.y,
+                  pageWidth: point.pageWidth,
+                  pageHeight: point.pageHeight,
+                };
+                draftSelectionRef.current = rect;
+                setDraftSelection(rect);
+                return;
+              }
               const origin = selectionOriginRef.current;
               if (!origin) return;
               const rect = {
@@ -683,6 +841,8 @@ export function PdfPreview(props: {
             currentStrokeRef.current = null;
             draftSelectionRef.current = null;
             selectionOriginRef.current = null;
+            selectionMoveOriginRef.current = null;
+            selectionMoveStartRectRef.current = null;
             textTapRef.current = null;
             setDraftSelection(null);
             setCurrentStroke(null);

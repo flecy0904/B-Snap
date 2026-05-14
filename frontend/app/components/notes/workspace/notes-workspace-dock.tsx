@@ -49,7 +49,7 @@ export function NotesWorkspaceDock() {
             <View style={globalContext.styles.workspaceDockSectionHeader}>
               <Text style={globalContext.styles.workspaceDockSectionTitle}>페이지 삽입</Text>
             </View>
-            <Pressable style={globalContext.styles.workspacePrimaryAction} onPress={documentContext.onCreateMemoPage}>
+            <Pressable style={globalContext.styles.workspacePrimaryAction} onPress={() => documentContext.onCreateMemoPage()}>
               <Text style={globalContext.styles.workspacePrimaryActionText}>현재 페이지 뒤에 빈 메모 페이지 추가</Text>
             </Pressable>
             {documentContext.memoPages.length ? documentContext.memoPages.map((page: any) => (

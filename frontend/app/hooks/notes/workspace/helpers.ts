@@ -53,6 +53,7 @@ export function buildDocumentPageSequence(pageCount: number, generatedPages: Gen
 
 export function buildNotebookPageSequence(documentId: number, pageCount: number, generatedPages: GeneratedWorkspacePage[]): NotebookPage[] {
   const documentPages = buildDocumentPageSequence(pageCount, generatedPages);
+  const generatedOrdinalBySource = new Map<number, number>();
 
   return documentPages.map((page) => {
     if (page.kind === 'pdf') {
@@ -68,14 +69,17 @@ export function buildNotebookPageSequence(documentId: number, pageCount: number,
 
     const generatedPage = generatedPages.find((value) => value.id === page.pageId);
     const generatedKind = generatedPage?.pageKind === 'memo' ? 'blank' : 'summary';
+    const sourcePage = generatedPage?.insertAfterPage ?? 1;
+    const ordinal = (generatedOrdinalBySource.get(sourcePage) ?? 0) + 1;
+    generatedOrdinalBySource.set(sourcePage, ordinal);
 
     return {
       id: `generated:${page.pageId}`,
       documentId,
       kind: generatedKind,
-      label: generatedKind === 'blank' ? '빈 페이지' : 'AI 정리',
+      label: generatedKind === 'blank' ? `${sourcePage}-${ordinal} 메모` : `${sourcePage}-${ordinal} AI 정리`,
       generatedPageId: page.pageId,
-      insertAfterPage: generatedPage?.insertAfterPage,
+      insertAfterPage: sourcePage,
       template: generatedKind === 'blank' ? 'plain' : undefined,
       sourcePage: page,
     };

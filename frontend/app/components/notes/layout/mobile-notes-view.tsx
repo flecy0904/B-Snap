@@ -7,13 +7,27 @@ import { BlankNoteCanvas } from '../canvas/blank-note-canvas';
 import { NoteSummaryContent } from '../shared/notes-shared';
 import type { BackendChatMessage, BackendChatSession } from '../../../services/backend-api';
 import { AiAnswer, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NotebookPage, NoteEntry, NoteWorkspaceMode, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../../types';
-import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
+import { InkBrush, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { darkenHex, getDocumentPageLabel, isSameDocumentPage } from '../../../ui-helpers';
 
 const PEN_COLORS = ['#1F2937', '#2563EB', '#7C3AED', '#D9485F', '#F59E0B', '#16A34A'];
 const HIGHLIGHT_COLORS = ['#FDE047', '#FB7185', '#86EFAC', '#67E8F9', '#FDBA74'];
 const PEN_WIDTHS = [2, 3, 4, 6, 8, 10];
 const HIGHLIGHT_WIDTHS = [10, 12, 14, 18, 22, 26];
+const PEN_BRUSHES: Array<{ label: string; value: InkBrush }> = [
+  { label: '볼펜', value: 'ballpoint' },
+  { label: '만년필', value: 'fountain' },
+  { label: '연필', value: 'pencil' },
+  { label: '마커', value: 'marker' },
+];
+const HIGHLIGHT_BRUSHES: Array<{ label: string; value: InkBrush }> = [
+  { label: '형광펜', value: 'highlighter' },
+];
+const LINE_PATTERNS: Array<{ label: string; value: InkLinePattern }> = [
+  { label: '실선', value: 'solid' },
+  { label: '점선', value: 'dotted' },
+  { label: '대시', value: 'dashed' },
+];
 const MOBILE_HANDWRITING_TOOLS: Array<{ value: InkTool; icon: React.ComponentProps<typeof MaterialCommunityIcons>['name'] }> = [
   { value: 'view', icon: 'cursor-default-outline' },
   { value: 'pen', icon: 'pencil-outline' },
@@ -44,6 +58,8 @@ export function MobileNotesView(props: {
   inkTool: InkTool;
   penColor: string;
   penWidth: number;
+  brushType: InkBrush;
+  linePattern: InkLinePattern;
   inkStrokes: InkStroke[];
   textAnnotations: InkTextAnnotation[];
   inkByDocument: Record<number, InkStroke[]>;
@@ -71,6 +87,7 @@ export function MobileNotesView(props: {
   inboxHint: string | null;
   inboxPendingCount: number;
   workspaceFeedback: string | null;
+  documentSaveStatus: string;
   captureInbox: CaptureAsset[];
   workspaceAttachments: WorkspaceAttachment[];
   bookmarks: BookmarkedPage[];
@@ -80,6 +97,8 @@ export function MobileNotesView(props: {
   onChangeInkTool: (tool: InkTool) => void;
   onChangePenColor: (color: string) => void;
   onChangePenWidth: (width: number) => void;
+  onChangeBrushType: (brush: InkBrush) => void;
+  onChangeLinePattern: (pattern: InkLinePattern) => void;
   onToggleAiPanel: () => void;
   onChangeAiQuestion: (value: string) => void;
   onChangeAiChatScope: (scope: 'note' | 'all') => void;
@@ -93,6 +112,7 @@ export function MobileNotesView(props: {
   onClearInk: () => void;
   onCommitInkStroke: (stroke: InkStroke) => void;
   onRemoveInkStroke: (strokeId: string) => void;
+  onMoveSelection?: (dx: number, dy: number) => void;
   deleteSelectedStrokes: () => void;
   changeSelectedStrokesColor: (color: string) => void;
   onAddTextAnnotation: (point: InkPoint) => void;
@@ -265,6 +285,7 @@ export function MobileNotesView(props: {
               </Text>
               <MaterialCommunityIcons name={pageListOpen ? "menu-up" : "menu-down"} size={16} color="#A2AAB8" />
             </Pressable>
+            <Text style={props.styles.mobileDocumentSaveStatus} numberOfLines={1}>{props.documentSaveStatus}</Text>
           </View>
           <View style={props.styles.mobileHeaderActions}>
             <Pressable style={props.styles.navIcon} onPress={startDocumentRename}>
@@ -360,12 +381,36 @@ export function MobileNotesView(props: {
                             ))}
                           </View>
                           <View style={props.styles.mobileInkPopoverRow}>
+                            {(tool.value === 'highlight' ? HIGHLIGHT_BRUSHES : PEN_BRUSHES).map((brush) => (
+                              <Pressable
+                                key={brush.value}
+                                style={[props.styles.mobileInkBrushButton, props.brushType === brush.value && props.styles.mobileInkBrushButtonActive]}
+                                onPress={() => props.onChangeBrushType(brush.value)}
+                              >
+                                <Text style={[props.styles.mobileInkBrushButtonText, props.brushType === brush.value && props.styles.mobileInkBrushButtonTextActive]}>{brush.label}</Text>
+                              </Pressable>
+                            ))}
+                          </View>
+                          <View style={props.styles.mobileInkPopoverRow}>
                             {(tool.value === 'highlight' ? HIGHLIGHT_WIDTHS : PEN_WIDTHS).map((width) => (
                               <Pressable key={width} style={[props.styles.mobileInkWidthButton, props.penWidth === width && props.styles.mobileInkWidthButtonActive]} onPress={() => props.onChangePenWidth(width)}>
                                 <View style={[props.styles.mobileInkWidthDot, { width: width + 2, height: width + 2, borderRadius: 99 }]} />
                               </Pressable>
                             ))}
                           </View>
+                          {tool.value === 'pen' ? (
+                            <View style={props.styles.mobileInkPopoverRow}>
+                              {LINE_PATTERNS.map((pattern) => (
+                                <Pressable
+                                  key={pattern.value}
+                                  style={[props.styles.mobileInkBrushButton, props.linePattern === pattern.value && props.styles.mobileInkBrushButtonActive]}
+                                  onPress={() => props.onChangeLinePattern(pattern.value)}
+                                >
+                                  <Text style={[props.styles.mobileInkBrushButtonText, props.linePattern === pattern.value && props.styles.mobileInkBrushButtonTextActive]}>{pattern.label}</Text>
+                                </Pressable>
+                              ))}
+                            </View>
+                          ) : null}
                         </View>
                       </View>
                     ) : null}
@@ -488,6 +533,8 @@ export function MobileNotesView(props: {
               inkTool={phoneViewerOnly ? (props.inkTool === 'select' ? 'select' : 'view') : props.inkTool}
               penColor={props.penColor}
               penWidth={props.penWidth}
+              brushType={props.brushType}
+              linePattern={props.linePattern}
               inkStrokes={props.inkByDocument[props.studyDocument.id] ?? props.inkStrokes}
               textAnnotations={props.textAnnotationsByDocument[props.studyDocument.id] ?? props.textAnnotations}
               textAnnotationVariant={phoneViewerOnly ? 'marker' : undefined}
@@ -498,6 +545,7 @@ export function MobileNotesView(props: {
               onUpdateTextAnnotation={props.onUpdateTextAnnotation}
               onRemoveTextAnnotation={props.onRemoveTextAnnotation}
               onSelectionChange={props.onSelectionChange}
+              onMoveSelection={props.onMoveSelection}
               onDocumentLoaded={props.onUpdateStudyDocumentPageCount}
               onPageChanged={props.onSetCurrentPdfPage}
               onOpenGeneratedPage={props.onOpenGeneratedPage}

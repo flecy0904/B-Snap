@@ -21,7 +21,7 @@ export type DocumentState = {
 
 export type DocumentActions = {
   onInsertAiAnswerPage: () => void;
-  onCreateMemoPage: () => void;
+  onCreateMemoPage: (insertAfterPage?: number) => void;
   onOpenGeneratedPage: (pageId: string) => void;
   onRemoveGeneratedPage: (pageId: string) => void;
   onDuplicateGeneratedPage: (pageId: string) => void;

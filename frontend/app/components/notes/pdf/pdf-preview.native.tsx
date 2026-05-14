@@ -5,15 +5,38 @@ import Pdf from 'react-native-pdf';
 import Svg, { Path } from 'react-native-svg';
 import { captureRef } from 'react-native-view-shot';
 import { TextAnnotationLayer } from '../canvas/text-annotation-layer';
-import { findHitInkStrokeId, getInkStrokeSvgPath, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize } from '../../../ui-helpers';
-import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
+import { findHitInkStrokeId, getInkCenterlinePath, getInkStrokeSvgPath, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize } from '../../../ui-helpers';
+import { InkBrush, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { NotebookPage } from '../../../types';
 
 function InkPath({ stroke, draft = false }: { stroke: InkStroke; draft?: boolean }) {
+  if (stroke.linePattern && stroke.linePattern !== 'solid' && stroke.style !== 'highlight' && stroke.style !== 'shape') {
+    const centerlinePath = getInkCenterlinePath(stroke.points);
+    if (!centerlinePath) return null;
+    const dashArray = stroke.linePattern === 'dotted' ? `${Math.max(1, stroke.width * 0.45)} ${Math.max(6, stroke.width * 2)}` : `${Math.max(8, stroke.width * 3)} ${Math.max(5, stroke.width * 1.8)}`;
+    return (
+      <Path
+        key={stroke.id}
+        d={centerlinePath}
+        fill="none"
+        stroke={stroke.color}
+        strokeWidth={stroke.width}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeDasharray={dashArray}
+      />
+    );
+  }
+
   const path = getInkStrokeSvgPath(stroke, !draft);
   if (!path) return null;
 
   if (stroke.style === 'shape') {
+    const dashArray = stroke.linePattern && stroke.linePattern !== 'solid'
+      ? stroke.linePattern === 'dotted'
+        ? `${Math.max(1, stroke.width * 0.45)} ${Math.max(6, stroke.width * 2)}`
+        : `${Math.max(8, stroke.width * 3)} ${Math.max(5, stroke.width * 1.8)}`
+      : undefined;
     return (
       <Path
         key={stroke.id}
@@ -23,6 +46,7 @@ function InkPath({ stroke, draft = false }: { stroke: InkStroke; draft?: boolean
         strokeWidth={stroke.width}
         strokeLinecap="round"
         strokeLinejoin="round"
+        strokeDasharray={dashArray}
       />
     );
   }
@@ -76,6 +100,8 @@ export function PdfPreview(props: {
   inkTool: InkTool;
   penColor: string;
   penWidth: number;
+  brushType: InkBrush;
+  linePattern: InkLinePattern;
   inkStrokes: InkStroke[];
   textAnnotations: InkTextAnnotation[];
   textAnnotationVariant?: 'floating' | 'marker';
@@ -86,6 +112,7 @@ export function PdfPreview(props: {
   onUpdateTextAnnotation: (id: string, text: string) => void;
   onRemoveTextAnnotation: (id: string) => void;
   onSelectionChange: (rect: SelectionRect | null) => void;
+  onMoveSelection?: (dx: number, dy: number) => void;
   onSelectionPreviewChange?: (uri: string | null) => void;
   onPageChanged?: (page: number) => void;
   onOpenGeneratedPage?: (pageId: string) => void;
@@ -116,9 +143,12 @@ export function PdfPreview(props: {
   const [loadError, setLoadError] = useState<string | null>(null);
   const currentStrokeRef = useRef<InkStroke | null>(null);
   const selectionOriginRef = useRef<InkPoint | null>(null);
+  const selectionMoveOriginRef = useRef<InkPoint | null>(null);
+  const selectionMoveStartRectRef = useRef<SelectionRect | null>(null);
   const draftSelectionRef = useRef<SelectionRect | null>(null);
   const textTapRef = useRef<InkPoint | null>(null);
   const pageCaptureRefs = useRef<Record<string, View | null>>({});
+  const listRef = useRef<FlatList<NotebookPage> | null>(null);
 
   const pageItems = useMemo<NotebookPage[]>(
     () => props.notebookPages?.length
@@ -227,6 +257,12 @@ export function PdfPreview(props: {
     page.generatedPageId ? page.generatedPageId === props.activeGeneratedPageId : page.pageNumber === props.page
   );
 
+  useEffect(() => {
+    const currentIndex = pageItems.findIndex(isCurrentNotebookPage);
+    if (currentIndex < 0) return;
+    listRef.current?.scrollToIndex({ index: currentIndex, animated: false });
+  }, [props.activeGeneratedPageId, props.page, pageItems, viewerHeight]);
+
   const renderInkLayers = (page: NotebookPage) => {
     const pageStrokes = getPageStrokesForView(page);
     const pageTextAnnotations = getPageTextAnnotationsForView(page);
@@ -334,12 +370,14 @@ export function PdfPreview(props: {
             if (isDrawingTool(props.inkTool)) {
               const appearance = isShapeTool(props.inkTool)
                 ? resolveShapeStrokeAppearance(props.penColor, props.penWidth)
-                : resolveInkStrokeAppearance(props.inkTool, props.penColor, props.penWidth);
+                : resolveInkStrokeAppearance(props.inkTool, props.penColor, props.penWidth, props.brushType);
               const stroke: InkStroke = {
                 id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
                 color: appearance.color,
                 width: appearance.width,
                 style: isShapeTool(props.inkTool) ? 'shape' : props.inkTool === 'highlight' ? 'highlight' : 'pen',
+                brush: isShapeTool(props.inkTool) ? undefined : props.brushType,
+                linePattern: props.linePattern,
                 shape: isShapeTool(props.inkTool) ? props.inkTool : undefined,
                 pageNumber: page.pageNumber,
                 generatedPageId: page.generatedPageId,
@@ -353,6 +391,20 @@ export function PdfPreview(props: {
             }
 
             if (props.inkTool === 'select') {
+              const currentSelection = isCurrentNotebookPage(page) ? scaleSelectionRectToPageSize(props.selectionRect, viewerWidth, viewerHeight) : null;
+              if (
+                currentSelection &&
+                point.x >= currentSelection.x &&
+                point.x <= currentSelection.x + currentSelection.width &&
+                point.y >= currentSelection.y &&
+                point.y <= currentSelection.y + currentSelection.height
+              ) {
+                selectionMoveOriginRef.current = point;
+                selectionMoveStartRectRef.current = currentSelection;
+                draftSelectionRef.current = currentSelection;
+                setDraftSelection(currentSelection);
+                return;
+              }
               props.onSelectionChange(null);
               props.onSelectionPreviewChange?.(null);
               selectionOriginRef.current = point;
@@ -393,6 +445,20 @@ export function PdfPreview(props: {
             }
 
             if (props.inkTool === 'select') {
+              const moveOrigin = selectionMoveOriginRef.current;
+              const moveStartRect = selectionMoveStartRectRef.current;
+              if (moveOrigin && moveStartRect) {
+                const rect = {
+                  ...moveStartRect,
+                  x: moveStartRect.x + point.x - moveOrigin.x,
+                  y: moveStartRect.y + point.y - moveOrigin.y,
+                  pageWidth: point.pageWidth,
+                  pageHeight: point.pageHeight,
+                };
+                draftSelectionRef.current = rect;
+                setDraftSelection(rect);
+                return;
+              }
               const origin = selectionOriginRef.current;
               if (!origin) return;
               const rect = {
@@ -413,10 +479,18 @@ export function PdfPreview(props: {
 
             if (props.inkTool === 'select') {
               const rect = draftSelectionRef.current;
+              const moveOrigin = selectionMoveOriginRef.current;
+              const moveStartRect = selectionMoveStartRectRef.current;
               draftSelectionRef.current = null;
               selectionOriginRef.current = null;
+              selectionMoveOriginRef.current = null;
+              selectionMoveStartRectRef.current = null;
               setDraftSelection(null);
-              if (rect && rect.width > 24 && rect.height > 24) {
+              if (rect && moveOrigin && moveStartRect) {
+                const dx = rect.x - moveStartRect.x;
+                const dy = rect.y - moveStartRect.y;
+                if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) props.onMoveSelection?.(dx, dy);
+              } else if (rect && rect.width > 24 && rect.height > 24) {
                 void buildSelectionPreview(page, rect).then((uri) => {
                   props.onSelectionChange(rect);
                   props.onSelectionPreviewChange?.(uri);
@@ -435,6 +509,8 @@ export function PdfPreview(props: {
             currentStrokeRef.current = null;
             draftSelectionRef.current = null;
             selectionOriginRef.current = null;
+            selectionMoveOriginRef.current = null;
+            selectionMoveStartRectRef.current = null;
             textTapRef.current = null;
             setDraftSelection(null);
             setCurrentStroke(null);
@@ -456,6 +532,7 @@ export function PdfPreview(props: {
       }}
     >
       <FlatList
+        ref={listRef}
         data={pageItems}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => renderPage(item)}

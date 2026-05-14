@@ -1,5 +1,5 @@
 import getStroke, { StrokeOptions } from 'perfect-freehand';
-import { InkPoint, InkShape, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from './ui-types';
+import { InkBrush, InkPoint, InkShape, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from './ui-types';
 import { DocumentPageView, GeneratedWorkspacePage, TimetableEntry } from './types';
 
 export const DAYS = ['MON', 'TUE', 'WED', 'THU', 'FRI'] as const;
@@ -283,13 +283,52 @@ function getSvgPathFromOutline(points: number[][], closed = true) {
   return result;
 }
 
-function getStrokeOptions(style: InkStroke['style'], width: number, complete: boolean): StrokeOptions {
+function getStrokeOptions(style: InkStroke['style'], width: number, complete: boolean, brush: InkBrush = 'ballpoint'): StrokeOptions {
   if (style === 'highlight') {
     return {
       size: Math.max(16, width),
       thinning: -0.2,
       smoothing: 0.8,
       streamline: 0.6,
+      simulatePressure: false,
+      start: { cap: true, taper: 0 },
+      end: { cap: true, taper: 0 },
+      last: complete,
+    };
+  }
+
+  if (brush === 'fountain') {
+    return {
+      size: Math.max(2, width),
+      thinning: 0.72,
+      smoothing: 0.54,
+      streamline: 0.55,
+      simulatePressure: true,
+      start: { cap: true, taper: 16, easing: (t) => t },
+      end: { cap: true, taper: 18, easing: (t) => t },
+      last: complete,
+    };
+  }
+
+  if (brush === 'pencil') {
+    return {
+      size: Math.max(2, width),
+      thinning: 0.58,
+      smoothing: 0.34,
+      streamline: 0.34,
+      simulatePressure: true,
+      start: { cap: true, taper: 8, easing: (t) => t },
+      end: { cap: true, taper: 12, easing: (t) => t },
+      last: complete,
+    };
+  }
+
+  if (brush === 'marker') {
+    return {
+      size: Math.max(5, width * 1.25),
+      thinning: 0.05,
+      smoothing: 0.74,
+      streamline: 0.72,
       simulatePressure: false,
       start: { cap: true, taper: 0 },
       end: { cap: true, taper: 0 },
@@ -383,17 +422,38 @@ export function getInkStrokeSvgPath(stroke: InkStroke, complete = true) {
   const style = stroke.style ?? 'pen';
   const outline = getStroke(
     stroke.points.map((point) => [point.x, point.y]),
-    getStrokeOptions(style, stroke.width, complete),
+    getStrokeOptions(style, stroke.width, complete, stroke.brush),
   );
 
   return getSvgPathFromOutline(outline as number[][]);
 }
 
-export function resolveInkStrokeAppearance(tool: 'pen' | 'highlight', color: string, width: number) {
+export function resolveInkStrokeAppearance(tool: 'pen' | 'highlight', color: string, width: number, brush: InkBrush = tool === 'highlight' ? 'highlighter' : 'ballpoint') {
   if (tool === 'highlight') {
     return {
       color: hexToRgba(color, 0.34),
       width: Math.max(14, width * 2.8),
+    };
+  }
+
+  if (brush === 'pencil') {
+    return {
+      color: hexToRgba(color, 0.74),
+      width: Math.max(2, width * 1.08),
+    };
+  }
+
+  if (brush === 'fountain') {
+    return {
+      color,
+      width: Math.max(2, width * 1.42),
+    };
+  }
+
+  if (brush === 'marker') {
+    return {
+      color: hexToRgba(color, 0.82),
+      width: Math.max(5, width * 2.1),
     };
   }
 

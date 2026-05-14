@@ -206,6 +206,8 @@ export function AppShell(props: {
                   inkTool={notesState.inkTool}
                   penColor={notesState.penColor}
                   penWidth={notesState.penWidth}
+                  brushType={notesState.brushType}
+                  linePattern={notesState.linePattern}
                   inkStrokes={notesState.inkStrokes}
                   textAnnotations={notesState.textAnnotations}
                   inkByDocument={notesState.inkByDocument}
@@ -231,6 +233,7 @@ export function AppShell(props: {
                   inboxHint={notesState.inboxHint}
                   inboxPendingCount={notesState.inboxPendingCount}
                   workspaceFeedback={notesState.workspaceFeedback}
+                  documentSaveStatus={notesState.documentSaveStatus}
                   captureInbox={notesState.captureInbox}
                   workspaceAttachments={notesState.workspaceAttachments}
                   bookmarks={notesState.currentDocumentBookmarks}
@@ -250,6 +253,8 @@ export function AppShell(props: {
                   onChangeInkTool={notesState.changeInkTool}
                   onChangePenColor={notesState.changePenColor}
                   onChangePenWidth={notesState.changePenWidth}
+                  onChangeBrushType={notesState.changeBrushType}
+                  onChangeLinePattern={notesState.changeLinePattern}
                   onToggleAiPanel={notesState.toggleAiPanel}
                   onChangeAiPanelMode={notesState.setAiPanelMode}
                   onChangeAiQuestion={notesState.setAiQuestion}
@@ -270,6 +275,7 @@ export function AppShell(props: {
                   onClearInk={notesState.clearInk}
                   onCommitInkStroke={notesState.commitInkStroke}
                   onRemoveInkStroke={notesState.removeInkStroke}
+                  onMoveSelection={notesState.nudgeSelectedStrokes}
                   deleteSelectedStrokes={notesState.deleteSelectedStrokes}
                   changeSelectedStrokesColor={notesState.changeSelectedStrokesColor}
                   duplicateSelectedStrokes={notesState.duplicateSelectedStrokes}
@@ -407,6 +413,8 @@ export function AppShell(props: {
                   inkTool={notesState.inkTool}
                   penColor={notesState.penColor}
                   penWidth={notesState.penWidth}
+                  brushType={notesState.brushType}
+                  linePattern={notesState.linePattern}
                   inkStrokes={notesState.inkStrokes}
                   textAnnotations={notesState.textAnnotations}
                   inkByDocument={notesState.inkByDocument}
@@ -436,6 +444,7 @@ export function AppShell(props: {
                   inboxHint={notesState.inboxHint}
                   inboxPendingCount={notesState.inboxPendingCount}
                   workspaceFeedback={notesState.workspaceFeedback}
+                  documentSaveStatus={notesState.documentSaveStatus}
                   captureInbox={notesState.captureInbox}
                   workspaceAttachments={notesState.workspaceAttachments}
                   bookmarks={notesState.currentDocumentBookmarks}
@@ -445,6 +454,8 @@ export function AppShell(props: {
                   onChangeInkTool={notesState.changeInkTool}
                   onChangePenColor={notesState.changePenColor}
                   onChangePenWidth={notesState.changePenWidth}
+                  onChangeBrushType={notesState.changeBrushType}
+                  onChangeLinePattern={notesState.changeLinePattern}
                   onToggleAiPanel={notesState.toggleAiPanel}
                   onChangeAiQuestion={notesState.setAiQuestion}
                   onChangeAiChatScope={notesState.setAiChatScope}

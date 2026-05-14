@@ -108,7 +108,7 @@ export const NotesWorkspaceToolbar = React.memo(function NotesWorkspaceToolbar()
           
           <Pressable 
             style={workspaceContext.styles.inkActionButton}
-            onPress={documentContext.onCreateMemoPage}
+            onPress={() => documentContext.onCreateMemoPage()}
           >
             <MaterialCommunityIcons name="note-plus-outline" size={18} color="#4F68D2" />
           </Pressable>
@@ -120,6 +120,12 @@ export const NotesWorkspaceToolbar = React.memo(function NotesWorkspaceToolbar()
           </Pressable>
           <Pressable style={workspaceContext.styles.inkActionButton} onPress={documentContext.onExportCurrentDocument}>
             <MaterialCommunityIcons name="share-variant-outline" size={18} color="#556070" />
+          </Pressable>
+          <Pressable
+            style={[workspaceContext.styles.inkActionButton, workspaceContext.focusMode && workspaceContext.styles.inkToolButtonActive]}
+            onPress={workspaceContext.onToggleFocusMode}
+          >
+            <MaterialCommunityIcons name={workspaceContext.focusMode ? 'fullscreen-exit' : 'fullscreen'} size={18} color={workspaceContext.focusMode ? '#4F68D2' : '#556070'} />
           </Pressable>
         </View>
 

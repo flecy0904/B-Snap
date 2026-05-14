@@ -169,11 +169,16 @@ export function NotesBrowser(props: NotesBrowserProps) {
                 const subjectColor = subject?.color ?? '#D6DCE8';
                 const isPdf = item.type === 'pdf';
                 const isImage = item.type === 'image';
+                const documentPreviewUri = item.pageImageUrls?.[1] ?? (typeof item.file === 'object' && item.file && 'uri' in item.file ? item.file.uri : null);
                 return (
                   <Pressable key={item.id} style={props.styles.documentListCard} onPress={() => props.onOpenStudyDocument(item.id)}>
                     <View style={[props.styles.documentListRail, { backgroundColor: subjectColor }]} />
                     <View style={[props.styles.documentThumb, { backgroundColor: isPdf ? '#F6F8FE' : isImage ? '#F3FAF7' : '#EEF1F6' }]}>
-                      <Text style={[props.styles.documentThumbText, { color: isPdf ? props.blueColor : isImage ? '#23845F' : '#6B7280' }]}>{isPdf ? 'PDF' : isImage ? 'IMG' : 'NOTE'}</Text>
+                      {documentPreviewUri ? (
+                        <Image source={{ uri: documentPreviewUri }} style={props.styles.documentThumbImage} resizeMode="cover" />
+                      ) : (
+                        <Text style={[props.styles.documentThumbText, { color: isPdf ? props.blueColor : isImage ? '#23845F' : '#6B7280' }]}>{isPdf ? 'PDF' : isImage ? 'IMG' : 'NOTE'}</Text>
+                      )}
                     </View>
                     <View style={props.styles.fill}>
                       <View style={props.styles.documentTitleRow}>
