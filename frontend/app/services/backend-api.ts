@@ -42,6 +42,7 @@ export type BackendChatMessage = {
   session_id: number;
   role: 'user' | 'assistant' | string;
   content: string;
+  selection_image_url?: string | null;
   model: string | null;
   created_at: string;
 };
@@ -65,6 +66,13 @@ export type BackendAiMessageResponse = {
     model: string | null;
     created_at: string;
   };
+  chat_session?: BackendChatSession | null;
+};
+
+export type BackendPdfTextExtractionResponse = {
+  note_id: number;
+  pages_extracted: number;
+  pages: BackendNotePage[];
 };
 
 function getBackendUrl() {
@@ -203,6 +211,18 @@ export async function updateBackendNotePage(payload: {
   });
 }
 
+export async function extractBackendPdfText(payload: {
+  noteId: number;
+  pdfData: string;
+}) {
+  return request<BackendPdfTextExtractionResponse>(`/notes/${payload.noteId}/extract-pdf-text`, {
+    method: 'POST',
+    body: {
+      pdf_data: payload.pdfData,
+    },
+  });
+}
+
 export async function createBackendChatSession(payload: {
   noteId: number;
   title: string;
@@ -253,12 +273,16 @@ export async function sendBackendAiMessage(payload: {
   sessionId: number;
   content: string;
   model?: string | null;
+  pageNumber?: number | null;
+  selectionImageUri?: string | null;
 }) {
   return request<BackendAiMessageResponse>(`/chat-sessions/${payload.sessionId}/ai-messages`, {
     method: 'POST',
     body: {
       content: payload.content,
       model: payload.model ?? null,
+      page_number: payload.pageNumber ?? null,
+      selection_image_url: payload.selectionImageUri ?? null,
     },
   });
 }

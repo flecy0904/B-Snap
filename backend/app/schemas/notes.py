@@ -38,6 +38,10 @@ class NotePageUpdate(BaseModel):
     image_url: str | None = None
 
 
+class PdfTextExtractionCreate(BaseModel):
+    pdf_data: str
+
+
 class NotePageRead(BaseModel):
     id: int
     note_id: int
@@ -48,3 +52,9 @@ class NotePageRead(BaseModel):
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class PdfTextExtractionRead(BaseModel):
+    note_id: int
+    pages_extracted: int
+    pages: list[NotePageRead]

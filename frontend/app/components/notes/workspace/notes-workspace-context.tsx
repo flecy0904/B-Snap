@@ -22,6 +22,7 @@ export type DesktopNotesWorkspaceContextValue = {
   aiChatScope: 'note' | 'all';
   aiChatSearchQuery: string;
   activeAiChatSessionId: number | null;
+  aiChatReadOnly: boolean;
   aiLoading: boolean;
   aiError: string | null;
   inkTool: InkTool;

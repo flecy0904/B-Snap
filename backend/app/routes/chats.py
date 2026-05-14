@@ -15,11 +15,27 @@ from backend.app.schemas.chats import (
     ChatSessionRead,
     ChatSessionUpdate,
 )
-from backend.app.services.openai_service import generate_note_chat_answer
+from backend.app.services.openai_service import generate_chat_title, generate_note_chat_answer
 from backend.app.services.rag_service import ask_with_rag, load_note_documents
 
 
 router = APIRouter(tags=["chats"])
+
+
+def select_chat_context_pages(pages: list[dict], page_number: int | None) -> list[dict]:
+    if not pages:
+        return []
+    if page_number is None:
+        return pages[:3]
+
+    start_page = max(1, page_number - 1)
+    end_page = page_number + 1
+    selected_pages = [
+        page
+        for page in pages
+        if start_page <= page["page_number"] <= end_page
+    ]
+    return selected_pages or pages[:3]
 
 
 @router.post("/notes/{note_id}/chat-sessions", response_model=ChatSessionRead)
@@ -193,12 +209,15 @@ def create_ai_chat_message(
             model=model,
         ).answer
     else:
+        context_pages = select_chat_context_pages(pages, payload.page_number)
         answer = generate_note_chat_answer(
             model=model,
             note=note,
-            pages=pages,
+            pages=context_pages,
             messages=previous_messages,
             user_content=payload.content,
+            current_page_number=payload.page_number,
+            selection_image_url=payload.selection_image_url,
         )
     user_message = execute_returning(
         connection,
@@ -218,11 +237,37 @@ def create_ai_chat_message(
         """,
         (session_id, answer, model),
     )
-    execute_commit(connection, "UPDATE chat_sessions SET model = %s, updated_at = now() WHERE id = %s", (model, session_id))
+    updated_session = None
+    if not previous_messages:
+        generated_title = None
+        try:
+            generated_title = generate_chat_title(
+                model=model,
+                note=note,
+                user_content=payload.content,
+                assistant_content=answer,
+            )
+        except Exception:
+            generated_title = None
+        if generated_title:
+            updated_session = execute_returning(
+                connection,
+                """
+                UPDATE chat_sessions
+                SET title = %s, model = %s, updated_at = now()
+                WHERE id = %s
+                RETURNING id, note_id, title, model, created_at, updated_at
+                """,
+                (generated_title, model, session_id),
+            )
+
+    if updated_session is None:
+        execute_commit(connection, "UPDATE chat_sessions SET model = %s, updated_at = now() WHERE id = %s", (model, session_id))
     return {
         "model": model,
         "user_message": user_message,
         "assistant_message": assistant_message,
+        "chat_session": updated_session,
     }
 
 

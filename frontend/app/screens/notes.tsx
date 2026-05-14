@@ -43,6 +43,7 @@ export function MobileNotes(props: {
   aiChatScope: 'note' | 'all';
   aiChatSearchQuery: string;
   activeAiChatSessionId: number | null;
+  aiChatReadOnly: boolean;
   aiLoading: boolean;
   aiError: string | null;
   incomingAssetSuggestion: CaptureAsset | null;
@@ -143,6 +144,7 @@ export function DesktopNotes(props: {
   aiChatScope: 'note' | 'all';
   aiChatSearchQuery: string;
   activeAiChatSessionId: number | null;
+  aiChatReadOnly: boolean;
   aiLoading: boolean;
   aiError: string | null;
   incomingAssetSuggestion: CaptureAsset | null;

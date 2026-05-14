@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Platform } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
+import { File } from 'expo-file-system';
 import { notes } from '../../data';
 import type { MockAiAnswer } from '../../services/mock-ai-service';
 import {
@@ -8,6 +9,7 @@ import {
   createBackendNotePage,
   deleteBackendNote,
   ensureFolderForSubject,
+  extractBackendPdfText,
   isBackendApiEnabled,
   listAllBackendChatSessions,
   listBackendChatMessages,
@@ -46,6 +48,19 @@ import { useStudyWorkspaceDerivedState } from './workspace/use-study-workspace-d
 import { useStudyWorkspacePersistence } from './workspace/use-study-workspace-persistence';
 import type { InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../ui-types';
 import type { BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NoteWorkspaceMode, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../types';
+
+async function buildPdfDataUriForTextExtraction(picked: DocumentPicker.DocumentPickerAsset, pdfFileUri: string) {
+  if (pdfFileUri.startsWith('data:application/pdf')) return pdfFileUri;
+  if (Platform.OS === 'web' && picked.base64) {
+    return picked.base64.startsWith('data:application/pdf')
+      ? picked.base64
+      : `data:application/pdf;base64,${picked.base64}`;
+  }
+  if (!picked.uri) return null;
+
+  const base64 = await new File(picked.uri).base64();
+  return `data:application/pdf;base64,${base64}`;
+}
 
 export function useStudyWorkspace(props: {
   wide: boolean;
@@ -86,6 +101,7 @@ export function useStudyWorkspace(props: {
   const [aiError, setAiError] = useState<string | null>(null);
   const [selectionPreviewByDocument, setSelectionPreviewByDocument] = useState<Record<number, string | null>>({});
   const [chatSessionByDocument, setChatSessionByDocument] = useState<Record<number, number>>({});
+  const [viewingAiChatSessionId, setViewingAiChatSessionId] = useState<number | null>(null);
   const [lastChatSessionByDocument, setLastChatSessionByDocument] = useState<Record<number, number>>({});
   const [chatSessionsByDocument, setChatSessionsByDocument] = useState<Record<number, BackendChatSession[]>>({});
   const [allChatSessions, setAllChatSessions] = useState<BackendChatSession[]>([]);
@@ -194,6 +210,7 @@ export function useStudyWorkspace(props: {
   });
   const {
     activeAiChatSessionId,
+    aiChatReadOnly,
     aiMessages,
     selectionPreviewUri,
     noteAiChatSessions: aiChatSessions,
@@ -202,6 +219,7 @@ export function useStudyWorkspace(props: {
   } = useAiChatDerivedState({
     studyDocumentId,
     chatSessionByDocument,
+    viewingAiChatSessionId,
     aiMessagesBySession,
     selectionPreviewByDocument,
     chatSessionsByDocument,
@@ -482,10 +500,13 @@ export function useStudyWorkspace(props: {
     setSubjectId(selected.subjectId);
     setNoteId(null);
     setStudyDocumentId(id);
+    setViewingAiChatSessionId(null);
     setChatSessionByDocument((current) => {
+      const next = { ...current };
       const lastSessionId = lastChatSessionByDocument[id];
-      if (!lastSessionId) return current;
-      return { ...current, [id]: lastSessionId };
+      if (lastSessionId) next[id] = lastSessionId;
+      else delete next[id];
+      return next;
     });
     setInkTool('view');
     setActivePageByDocument((current) => ({
@@ -705,6 +726,36 @@ export function useStudyWorkspace(props: {
               1: backendPage.id,
             },
           }));
+          void buildPdfDataUriForTextExtraction(picked, pdfFileUri)
+            .then((pdfData) => {
+              if (!pdfData) return null;
+              return extractBackendPdfText({
+                noteId: backendNote.id,
+                pdfData,
+              });
+            })
+            .then((result) => {
+              if (!result) return;
+              const pagesByNumber = result.pages.reduce<Record<number, number>>((next, page) => {
+                next[page.page_number] = page.id;
+                return next;
+              }, {});
+              setBackendPageIdsByDocument((current) => ({
+                ...current,
+                [backendNote.id]: {
+                  ...(current[backendNote.id] ?? {}),
+                  ...pagesByNumber,
+                },
+              }));
+              setUserStudyDocuments((current) => current.map((item) => (
+                item.id === backendNote.id
+                  ? { ...item, pageCount: Math.max(item.pageCount, result.pages_extracted) }
+                  : item
+              )));
+            })
+            .catch(() => {
+              setWorkspaceFeedback('PDF text extraction failed.');
+            });
           const document: StudyDocumentEntry = {
             id: backendNote.id,
             subjectId: targetSubjectId,
@@ -921,9 +972,12 @@ export function useStudyWorkspace(props: {
     studyDocumentId,
     studyDocument,
     selectionRect,
+    selectionPreviewUri,
     currentAiPageLabel,
+    currentAiPageNumber: currentDocumentPage?.kind === 'pdf' ? currentDocumentPage.pageNumber : currentPdfPage,
     currentDocumentHasBackendPages,
     activeAiChatSessionId,
+    aiChatReadOnly,
     aiQuestion,
     chatSessionByDocument,
     chatSessionsByDocument,
@@ -932,7 +986,9 @@ export function useStudyWorkspace(props: {
     setAiQuestion,
     setAiError,
     setAiLoading,
+    setSelectionPreviewByDocument,
     setChatSessionByDocument,
+    setViewingAiChatSessionId,
     setLastChatSessionByDocument,
     setChatSessionsByDocument,
     setAllChatSessions,
@@ -1136,6 +1192,7 @@ export function useStudyWorkspace(props: {
     aiChatScope,
     aiChatSearchQuery,
     activeAiChatSessionId,
+    aiChatReadOnly,
     aiLoading,
     aiError,
     query,
@@ -1182,7 +1239,11 @@ export function useStudyWorkspace(props: {
     changeInkTool,
     changePenColor,
     changePenWidth,
-    toggleAiPanel: () => setAiPanelOpen((current) => !current),
+    toggleAiPanel: () => setAiPanelOpen((current) => {
+      const next = !current;
+      if (next) setViewingAiChatSessionId(null);
+      return next;
+    }),
     setAiQuestion,
     setAiChatScope,
     setAiChatSearchQuery,

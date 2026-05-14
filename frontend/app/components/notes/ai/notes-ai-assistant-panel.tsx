@@ -1,6 +1,6 @@
 import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { ActivityIndicator, Animated, Image, LayoutChangeEvent, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Animated, Image, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { useDesktopNotesWorkspaceContext } from '../workspace/notes-workspace-context';
 
 export function NotesAiAssistantPanel() {
@@ -17,20 +17,22 @@ export function NotesAiAssistantPanel() {
   const [editingTitleError, setEditingTitleError] = React.useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = React.useState<{ id: number; title: string } | null>(null);
   const messagesScrollRef = React.useRef<ScrollView | null>(null);
-  const messageLayoutsRef = React.useRef<Record<number, { y: number; height: number }>>({});
   const hasChatHistory = workspace.aiMessages.length > 0;
-  const latestUserMessage = [...workspace.aiMessages].reverse().find((message) => message.role === 'user') ?? null;
-  const latestUserMessageId = latestUserMessage?.id ?? null;
   const activeSession = workspace.activeAiChatSessionId
     ? workspace.allAiChatSessions.find((session) => session.id === workspace.activeAiChatSessionId)
       ?? workspace.noteAiChatSessions.find((session) => session.id === workspace.activeAiChatSessionId)
       ?? null
     : null;
+  const canManageActiveSession = Boolean(activeSession && !workspace.aiChatReadOnly);
   const chatSearchTerm = workspace.aiChatSearchQuery.trim().toLowerCase();
   const sidebarSessions = workspace.allAiChatSessions.filter((session) => {
     if (!chatSearchTerm) return true;
     return `${session.title} ${session.model ?? ''}`.toLowerCase().includes(chatSearchTerm);
   });
+  const currentNoteSessionIds = React.useMemo(
+    () => new Set(workspace.noteAiChatSessions.map((session) => session.id)),
+    [workspace.noteAiChatSessions],
+  );
 
   const startEditingSession = (sessionId: number, title: string) => {
     setMenuSessionId(null);
@@ -85,6 +87,15 @@ export function NotesAiAssistantPanel() {
     closeSidebar();
   };
 
+  const returnToCurrentNoteSession = () => {
+    const session = workspace.noteAiChatSessions[0] ?? null;
+    if (session) {
+      void workspace.onSelectAiChatSession(session.id);
+      return;
+    }
+    workspace.onStartNewAiChatSession();
+  };
+
   const startHeaderEditing = () => {
     if (!activeSession) return;
     startEditingSession(activeSession.id, activeSession.title);
@@ -104,20 +115,15 @@ export function NotesAiAssistantPanel() {
     setMenuSessionId(null);
   };
 
-  const scrollToLatestUserMessage = React.useCallback(() => {
-    const latestUserLayout = latestUserMessageId ? messageLayoutsRef.current[latestUserMessageId] : null;
-    if (!latestUserLayout) return;
+  const scrollToLatestMessage = React.useCallback(() => {
     window.setTimeout(() => {
-      messagesScrollRef.current?.scrollTo({
-        y: Math.max(0, latestUserLayout.y - 4),
-        animated: true,
-      });
+      messagesScrollRef.current?.scrollToEnd({ animated: true });
     }, 40);
-  }, [latestUserMessageId]);
+  }, []);
 
   React.useEffect(() => {
-    scrollToLatestUserMessage();
-  }, [latestUserMessageId, workspace.aiMessages.length, scrollToLatestUserMessage]);
+    scrollToLatestMessage();
+  }, [workspace.aiMessages.length, workspace.aiLoading, workspace.activeAiChatSessionId, scrollToLatestMessage]);
 
   React.useEffect(() => {
     if (sidebarOpen) {
@@ -138,11 +144,6 @@ export function NotesAiAssistantPanel() {
       if (finished) setSidebarVisible(false);
     });
   }, [sidebarOpen, sidebarProgress]);
-
-  const handleMessageLayout = (id: number, event: LayoutChangeEvent) => {
-    const { y, height } = event.nativeEvent.layout;
-    messageLayoutsRef.current[id] = { y, height };
-  };
 
   const closeSidebar = () => setSidebarOpen(false);
   const openSidebar = () => setSidebarOpen(true);
@@ -205,6 +206,7 @@ export function NotesAiAssistantPanel() {
           <ScrollView style={workspace.styles.aiSidebarList} contentContainerStyle={workspace.styles.aiSidebarListContent} showsVerticalScrollIndicator={false}>
             {sidebarSessions.length ? sidebarSessions.map((session) => {
               const active = session.id === workspace.activeAiChatSessionId;
+              const connected = currentNoteSessionIds.has(session.id);
               const editing = false;
               const contextMenuProps = {
                 onContextMenu: (event: { preventDefault?: () => void }) => {
@@ -240,7 +242,12 @@ export function NotesAiAssistantPanel() {
                       onLongPress={() => setMenuSessionId((current) => (current === session.id ? null : session.id))}
                       delayLongPress={450}
                     >
-                      <Text style={workspace.styles.aiSidebarChatText} numberOfLines={1}>{session.title}</Text>
+                      <View style={workspace.styles.aiSidebarChatContent}>
+                        <Text style={workspace.styles.aiSidebarChatText} numberOfLines={1}>{session.title}</Text>
+                        {connected ? (
+                          <Text style={workspace.styles.aiSidebarConnectedBadge}>연결됨</Text>
+                        ) : null}
+                      </View>
                     </Pressable>
                   )}
 
@@ -294,6 +301,9 @@ export function NotesAiAssistantPanel() {
                 <Text style={workspace.styles.aiHeaderTitle} numberOfLines={1}>
                   {activeSession ? activeSession.title : '새 채팅'}
                 </Text>
+                {workspace.aiChatReadOnly ? (
+                  <Text style={workspace.styles.aiHeaderSubtitle} numberOfLines={1}>읽기 전용</Text>
+                ) : null}
               </>
             )}
           </View>
@@ -305,13 +315,13 @@ export function NotesAiAssistantPanel() {
             </Pressable>
             <View style={workspace.styles.aiHeaderMenuWrap}>
               <Pressable
-                style={[workspace.styles.aiHeaderIconButton, !activeSession && workspace.styles.aiHeaderIconButtonDisabled]}
-                onPress={() => activeSession && setHeaderMenuOpen((current) => !current)}
-                disabled={!activeSession || workspace.aiLoading}
+                style={[workspace.styles.aiHeaderIconButton, !canManageActiveSession && workspace.styles.aiHeaderIconButtonDisabled]}
+                onPress={() => canManageActiveSession && setHeaderMenuOpen((current) => !current)}
+                disabled={!canManageActiveSession || workspace.aiLoading}
               >
-                <MaterialCommunityIcons name="dots-vertical" size={20} color={activeSession ? '#303744' : '#A0A7B3'} />
+                <MaterialCommunityIcons name="dots-vertical" size={20} color={canManageActiveSession ? '#303744' : '#A0A7B3'} />
               </Pressable>
-              {headerMenuOpen && activeSession ? (
+              {headerMenuOpen && activeSession && !workspace.aiChatReadOnly ? (
                 <View style={workspace.styles.aiHeaderContextMenu}>
                   <Pressable style={workspace.styles.aiSidebarContextMenuItem} onPress={startHeaderEditing}>
                     <MaterialCommunityIcons name="pencil-outline" size={15} color="#111827" />
@@ -340,8 +350,10 @@ export function NotesAiAssistantPanel() {
               <View
                 key={message.id}
                 style={[workspace.styles.aiMessageBubble, isUser ? workspace.styles.aiMessageBubbleUser : workspace.styles.aiMessageBubbleAssistant]}
-                onLayout={(event) => handleMessageLayout(message.id, event)}
               >
+                {isUser && message.selection_image_url ? (
+                  <Image source={{ uri: message.selection_image_url }} style={workspace.styles.aiMessageAttachmentImage} resizeMode="cover" />
+                ) : null}
                 <Text style={[workspace.styles.aiMessageText, isUser ? workspace.styles.aiMessageTextUser : workspace.styles.aiMessageTextAssistant]}>{message.content}</Text>
               </View>
             );
@@ -359,6 +371,15 @@ export function NotesAiAssistantPanel() {
         </ScrollView>
 
         <View style={workspace.styles.aiComposer}>
+          {workspace.aiChatReadOnly ? (
+            <View style={workspace.styles.aiReadOnlyNotice}>
+              <MaterialCommunityIcons name="lock-outline" size={14} color="#5B6472" />
+              <Text style={workspace.styles.aiReadOnlyNoticeText}>보고 있는 노트와 연결된 대화방이 아니라서 읽기만 가능합니다.</Text>
+              <Pressable style={workspace.styles.aiReadOnlyReturnButton} onPress={returnToCurrentNoteSession}>
+                <Text style={workspace.styles.aiReadOnlyReturnText}>돌아가기</Text>
+              </Pressable>
+            </View>
+          ) : null}
           {workspace.selectionPreviewUri ? (
             <View style={workspace.styles.aiSelectionAttachment}>
               <Image source={{ uri: workspace.selectionPreviewUri }} style={workspace.styles.aiSelectionAttachmentImage} resizeMode="contain" />
@@ -375,9 +396,10 @@ export function NotesAiAssistantPanel() {
               placeholder="메시지 입력"
               placeholderTextColor="#8F96A3"
               multiline
+              editable={!workspace.aiChatReadOnly && !workspace.aiLoading}
               style={workspace.styles.aiComposerInput}
             />
-            <Pressable style={workspace.styles.aiSendButton} onPress={workspace.onRequestAiAnswer} disabled={workspace.aiLoading}>
+            <Pressable style={[workspace.styles.aiSendButton, workspace.aiChatReadOnly && workspace.styles.aiSendButtonDisabled]} onPress={workspace.onRequestAiAnswer} disabled={workspace.aiLoading || workspace.aiChatReadOnly}>
               {workspace.aiLoading ? <ActivityIndicator size="small" color="#FFFFFF" /> : <MaterialCommunityIcons name="arrow-up" size={18} color="#FFFFFF" />}
             </Pressable>
           </View>

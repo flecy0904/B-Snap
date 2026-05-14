@@ -212,6 +212,7 @@ export function AppShell(props: {
                   aiChatScope={notesState.aiChatScope}
                   aiChatSearchQuery={notesState.aiChatSearchQuery}
                   activeAiChatSessionId={notesState.activeAiChatSessionId}
+                  aiChatReadOnly={notesState.aiChatReadOnly}
                   aiLoading={notesState.aiLoading}
                   aiError={notesState.aiError}
                   incomingAssetSuggestion={notesState.incomingAssetSuggestion}
@@ -401,6 +402,7 @@ export function AppShell(props: {
                   aiChatScope={notesState.aiChatScope}
                   aiChatSearchQuery={notesState.aiChatSearchQuery}
                   activeAiChatSessionId={notesState.activeAiChatSessionId}
+                  aiChatReadOnly={notesState.aiChatReadOnly}
                   aiLoading={notesState.aiLoading}
                   aiError={notesState.aiError}
                   incomingAssetSuggestion={notesState.incomingAssetSuggestion}
