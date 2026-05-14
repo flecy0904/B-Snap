@@ -3,7 +3,7 @@ import { GestureResponderEvent, Image, ScrollView, Text, useWindowDimensions, Vi
 import Svg, { Path } from 'react-native-svg';
 import { TextAnnotationLayer } from '../canvas/text-annotation-layer';
 import { findHitInkStrokeId, getInkCenterlinePath, getInkStrokeSvgPath, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize } from '../../../ui-helpers';
-import { InkBrush, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
+import { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { NotebookPage } from '../../../types';
 
 function InkPath({ stroke, draft = false }: { stroke: InkStroke; draft?: boolean }) {
@@ -110,6 +110,7 @@ type PdfJsLib = {
 };
 type PageFrame = { width: number; height: number };
 type WebGestureNativeEvent = GestureResponderEvent['nativeEvent'] & { buttons?: number };
+type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
 
 declare global {
   interface Window {
@@ -122,6 +123,60 @@ let pdfJsLoaderPromise: Promise<PdfJsLib> | null = null;
 function isPrimaryPointerEvent(event: GestureResponderEvent) {
   const nativeEvent = event.nativeEvent as WebGestureNativeEvent;
   return nativeEvent.buttons === undefined || nativeEvent.buttons === 1;
+}
+
+function isPdfUri(uri: string | undefined) {
+  return !!uri && /\.pdf(?:$|[?#])/i.test(uri);
+}
+
+function getResizeCorner(rect: SelectionRect | null, point: InkPoint): ResizeCorner | null {
+  if (!rect) return null;
+  const threshold = 24;
+  const corners: Array<{ corner: ResizeCorner; x: number; y: number }> = [
+    { corner: 'nw', x: rect.x, y: rect.y },
+    { corner: 'ne', x: rect.x + rect.width, y: rect.y },
+    { corner: 'sw', x: rect.x, y: rect.y + rect.height },
+    { corner: 'se', x: rect.x + rect.width, y: rect.y + rect.height },
+  ];
+  return corners.find((corner) => Math.hypot(point.x - corner.x, point.y - corner.y) <= threshold)?.corner ?? null;
+}
+
+function resizeRectFromCorner(source: SelectionRect, corner: ResizeCorner, point: InkPoint): SelectionRect {
+  const minSize = 24;
+  const right = source.x + source.width;
+  const bottom = source.y + source.height;
+  const nextLeft = corner === 'nw' || corner === 'sw' ? Math.min(point.x, right - minSize) : source.x;
+  const nextRight = corner === 'ne' || corner === 'se' ? Math.max(point.x, source.x + minSize) : right;
+  const nextTop = corner === 'nw' || corner === 'ne' ? Math.min(point.y, bottom - minSize) : source.y;
+  const nextBottom = corner === 'sw' || corner === 'se' ? Math.max(point.y, source.y + minSize) : bottom;
+  return {
+    x: Math.max(0, nextLeft),
+    y: Math.max(0, nextTop),
+    width: Math.max(minSize, nextRight - nextLeft),
+    height: Math.max(minSize, nextBottom - nextTop),
+    pageWidth: point.pageWidth,
+    pageHeight: point.pageHeight,
+  };
+}
+
+function SelectionOverlay(props: { rect: SelectionRect; styles: any; draft?: boolean }) {
+  const handleOffset = -7;
+  return (
+    <View style={[props.styles.selectionOverlayRect, props.draft && props.styles.selectionOverlayDraft, { left: props.rect.x, top: props.rect.y, width: props.rect.width, height: props.rect.height, pointerEvents: 'none' }]}>
+      {(['nw', 'ne', 'sw', 'se'] as const).map((corner) => (
+        <View
+          key={corner}
+          style={[
+            props.styles.selectionResizeHandle,
+            {
+              left: corner === 'nw' || corner === 'sw' ? handleOffset : props.rect.width + handleOffset,
+              top: corner === 'nw' || corner === 'ne' ? handleOffset : props.rect.height + handleOffset,
+            },
+          ]}
+        />
+      ))}
+    </View>
+  );
 }
 
 function loadPdfJs(): Promise<PdfJsLib> {
@@ -235,6 +290,7 @@ export function PdfPreview(props: {
   penWidth: number;
   brushType: InkBrush;
   linePattern: InkLinePattern;
+  brushSettings?: InkBrushSettings;
   inkStrokes: InkStroke[];
   textAnnotations: InkTextAnnotation[];
   textAnnotationVariant?: 'floating' | 'marker';
@@ -246,6 +302,7 @@ export function PdfPreview(props: {
   onRemoveTextAnnotation: (id: string) => void;
   onSelectionChange: (rect: SelectionRect | null) => void;
   onMoveSelection?: (dx: number, dy: number) => void;
+  onResizeSelection?: (rect: SelectionRect) => void;
   onSelectionPreviewChange?: (uri: string | null) => void;
   onPageChanged?: (page: number) => void;
   onOpenGeneratedPage?: (pageId: string) => void;
@@ -273,10 +330,13 @@ export function PdfPreview(props: {
   const selectionOriginRef = useRef<InkPoint | null>(null);
   const selectionMoveOriginRef = useRef<InkPoint | null>(null);
   const selectionMoveStartRectRef = useRef<SelectionRect | null>(null);
+  const selectionResizeCornerRef = useRef<ResizeCorner | null>(null);
+  const selectionResizeStartRectRef = useRef<SelectionRect | null>(null);
   const draftSelectionRef = useRef<SelectionRect | null>(null);
   const textTapRef = useRef<InkPoint | null>(null);
   const canvasRefs = useRef<Record<number, HTMLCanvasElement | null>>({});
   const scrollingProgrammaticallyRef = useRef(false);
+  const suppressNextScrollSyncRef = useRef(false);
 
   const pdfUri = useMemo(() => {
     if (typeof props.file === 'string') return props.file;
@@ -284,7 +344,11 @@ export function PdfPreview(props: {
     return props.file.uri ?? null;
   }, [props.file]);
   const pageCount = pdfDocument?.numPages ?? 0;
-  const hasCachedPageImages = Object.keys(props.pageImageUrls ?? {}).length > 0;
+  const pageImageUrls = useMemo(() => {
+    const entries = Object.entries(props.pageImageUrls ?? {}).filter(([, uri]) => !isPdfUri(uri));
+    return Object.fromEntries(entries) as Record<number, string>;
+  }, [props.pageImageUrls]);
+  const hasCachedPageImages = Object.keys(pageImageUrls).length > 0;
   const pageItems = useMemo<NotebookPage[]>(
     () => props.notebookPages?.length
       ? props.notebookPages
@@ -307,7 +371,7 @@ export function PdfPreview(props: {
   };
 
   useEffect(() => {
-    const entries = Object.entries(props.pageImageUrls ?? {});
+    const entries = Object.entries(pageImageUrls);
     if (!entries.length) {
       setCachedImageFrames({});
       return;
@@ -350,7 +414,7 @@ export function PdfPreview(props: {
     return () => {
       cancelled = true;
     };
-  }, [props.pageImageUrls, viewerWidth]);
+  }, [pageImageUrls, viewerWidth]);
 
   const getFrameForPage = (page: NotebookPage): PageFrame => {
     const sourcePageNumber = page.pageNumber ?? page.insertAfterPage;
@@ -539,7 +603,7 @@ export function PdfPreview(props: {
     const renderPages = async () => {
       const nextFrames: Record<number, PageFrame> = {};
       for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
-        if (props.pageImageUrls?.[pageNumber]) continue;
+        if (pageImageUrls[pageNumber]) continue;
         if (Math.abs(pageNumber - props.page) > 1) continue;
         const canvas = canvasRefs.current[pageNumber];
         if (!canvas || cancelled) continue;
@@ -583,17 +647,21 @@ export function PdfPreview(props: {
       cancelled = true;
       renderTasks.forEach((task) => task.cancel?.());
     };
-  }, [pdfDocument, props.page, props.pageImageUrls, viewerWidth]);
+  }, [pageImageUrls, pdfDocument, props.page, viewerWidth]);
 
   useEffect(() => {
     if (!pageFrames[props.page] && !cachedImageFrames[props.page]) return;
+    if (suppressNextScrollSyncRef.current) {
+      suppressNextScrollSyncRef.current = false;
+      return;
+    }
     scrollingProgrammaticallyRef.current = true;
     const element = document.getElementById(`bsnap-pdf-page-${props.page}`);
     element?.scrollIntoView({ block: 'nearest' });
     window.setTimeout(() => {
       scrollingProgrammaticallyRef.current = false;
     }, 120);
-  }, [cachedImageFrames, props.page, pageFrames]);
+  }, [cachedImageFrames[props.page], pageFrames[props.page], props.page]);
 
   const handleScroll = (event: any) => {
     if (scrollingProgrammaticallyRef.current || props.inkTool !== 'view') return;
@@ -615,19 +683,38 @@ export function PdfPreview(props: {
     });
     const activePage = bestNotebookPage as NotebookPage | null;
     if (activePage?.generatedPageId) props.onOpenGeneratedPage?.(activePage.generatedPageId);
-    if (bestPage !== props.page) props.onPageChanged?.(bestPage);
+    if (bestPage !== props.page) {
+      suppressNextScrollSyncRef.current = true;
+      props.onPageChanged?.(bestPage);
+    }
   };
 
   const beginInteraction = (page: NotebookPage) => {
     if (page.generatedPageId) props.onOpenGeneratedPage?.(page.generatedPageId);
-    if (page.pageNumber) props.onPageChanged?.(page.pageNumber);
+    if (page.pageNumber) {
+      suppressNextScrollSyncRef.current = true;
+      props.onPageChanged?.(page.pageNumber);
+    }
   };
 
   const finishSelection = (page: NotebookPage) => {
     if (props.inkTool === 'select') {
       const rect = draftSelectionRef.current;
+      const resizeCorner = selectionResizeCornerRef.current;
+      const resizeStartRect = selectionResizeStartRectRef.current;
       const moveOrigin = selectionMoveOriginRef.current;
       const moveStartRect = selectionMoveStartRectRef.current;
+      if (rect && resizeCorner && resizeStartRect) {
+        props.onResizeSelection?.(rect);
+        selectionResizeCornerRef.current = null;
+        selectionResizeStartRectRef.current = null;
+        selectionMoveOriginRef.current = null;
+        selectionMoveStartRectRef.current = null;
+        draftSelectionRef.current = null;
+        selectionOriginRef.current = null;
+        setDraftSelection(null);
+        return;
+      }
       if (rect && moveOrigin && moveStartRect) {
         const dx = rect.x - moveStartRect.x;
         const dy = rect.y - moveStartRect.y;
@@ -660,7 +747,7 @@ export function PdfPreview(props: {
     const active = page.generatedPageId ? page.generatedPageId === props.activeGeneratedPageId : page.pageNumber === props.page;
     const selectionRectStyle = active ? scaleSelectionRectToPageSize(props.selectionRect, frame.width, frame.height) : null;
     const draftSelectionStyle = (page.generatedPageId ? currentStroke?.generatedPageId === page.generatedPageId : currentStroke?.pageNumber === page.pageNumber) ? draftSelection : null;
-    const cachedPageImageUri = page.pageNumber ? props.pageImageUrls?.[page.pageNumber] : undefined;
+    const cachedPageImageUri = page.pageNumber ? pageImageUrls[page.pageNumber] : undefined;
 
     return (
       <View
@@ -731,6 +818,7 @@ export function PdfPreview(props: {
                 width: appearance.width,
                 style: isShapeTool(props.inkTool) ? 'shape' : props.inkTool === 'highlight' ? 'highlight' : 'pen',
                 brush: isShapeTool(props.inkTool) ? undefined : props.brushType,
+                brushSettings: isShapeTool(props.inkTool) ? undefined : props.brushSettings,
                 linePattern: props.linePattern,
                 shape: isShapeTool(props.inkTool) ? props.inkTool : undefined,
                 pageNumber: page.pageNumber,
@@ -746,6 +834,14 @@ export function PdfPreview(props: {
 
             if (props.inkTool === 'select') {
               const currentSelection = active ? scaleSelectionRectToPageSize(props.selectionRect, frame.width, frame.height) : null;
+              const resizeCorner = getResizeCorner(currentSelection, point);
+              if (currentSelection && resizeCorner) {
+                selectionResizeCornerRef.current = resizeCorner;
+                selectionResizeStartRectRef.current = currentSelection;
+                draftSelectionRef.current = currentSelection;
+                setDraftSelection(currentSelection);
+                return;
+              }
               if (
                 currentSelection &&
                 point.x >= currentSelection.x &&
@@ -800,6 +896,14 @@ export function PdfPreview(props: {
             }
 
             if (props.inkTool === 'select') {
+              const resizeCorner = selectionResizeCornerRef.current;
+              const resizeStartRect = selectionResizeStartRectRef.current;
+              if (resizeCorner && resizeStartRect) {
+                const rect = resizeRectFromCorner(resizeStartRect, resizeCorner, point);
+                draftSelectionRef.current = rect;
+                setDraftSelection(rect);
+                return;
+              }
               const moveOrigin = selectionMoveOriginRef.current;
               const moveStartRect = selectionMoveStartRectRef.current;
               if (moveOrigin && moveStartRect) {
@@ -843,6 +947,8 @@ export function PdfPreview(props: {
             selectionOriginRef.current = null;
             selectionMoveOriginRef.current = null;
             selectionMoveStartRectRef.current = null;
+            selectionResizeCornerRef.current = null;
+            selectionResizeStartRectRef.current = null;
             textTapRef.current = null;
             setDraftSelection(null);
             setCurrentStroke(null);
@@ -852,8 +958,8 @@ export function PdfPreview(props: {
             {pageStrokesForView.filter((stroke) => stroke.style !== 'highlight').map((stroke) => <InkPath key={stroke.id} stroke={stroke} />)}
             {(page.generatedPageId ? currentStroke?.generatedPageId === page.generatedPageId : currentStroke?.pageNumber === page.pageNumber) && currentStroke?.style !== 'highlight' && currentStroke ? <InkPath stroke={currentStroke} draft /> : null}
           </Svg>
-          {!draftSelectionStyle && selectionRectStyle ? <View style={[props.styles.selectionOverlayRect, { left: selectionRectStyle.x, top: selectionRectStyle.y, width: selectionRectStyle.width, height: selectionRectStyle.height, pointerEvents: 'none' }]} /> : null}
-          {draftSelectionStyle ? <View style={[props.styles.selectionOverlayRect, props.styles.selectionOverlayDraft, { left: draftSelectionStyle.x, top: draftSelectionStyle.y, width: draftSelectionStyle.width, height: draftSelectionStyle.height, pointerEvents: 'none' }]} /> : null}
+          {!draftSelectionStyle && selectionRectStyle ? <SelectionOverlay rect={selectionRectStyle} styles={props.styles} /> : null}
+          {draftSelectionStyle ? <SelectionOverlay rect={draftSelectionStyle} styles={props.styles} draft /> : null}
         </View>
       </View>
     );

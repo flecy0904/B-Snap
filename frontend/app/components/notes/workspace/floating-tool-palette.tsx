@@ -1,36 +1,9 @@
 import React from 'react';
 import { Animated, PanResponder, Pressable, Text, useWindowDimensions, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import type { InkBrush, InkLinePattern, InkTool } from '../../../ui-types';
+import type { InkBrush, InkBrushSettings, InkTool } from '../../../ui-types';
 import { useCanvasContext } from '../canvas/canvas-context';
 import { useDesktopNotesWorkspaceContext } from './notes-workspace-context';
-
-type ToolPreset = {
-  id: string;
-  label: string;
-  tool: InkTool;
-  color: string;
-  width: number;
-  brush: InkBrush;
-  linePattern: InkLinePattern;
-  kind: 'pen' | 'highlight';
-};
-
-const PEN_PRESETS: ToolPreset[] = [
-  { id: 'ballpoint-black', label: '볼펜', tool: 'pen', color: '#111827', width: 3, brush: 'ballpoint', linePattern: 'solid', kind: 'pen' },
-  { id: 'fountain-red', label: '만년필', tool: 'pen', color: '#E11D48', width: 4, brush: 'fountain', linePattern: 'solid', kind: 'pen' },
-  { id: 'pencil-gray', label: '연필', tool: 'pen', color: '#4B5563', width: 4, brush: 'pencil', linePattern: 'solid', kind: 'pen' },
-  { id: 'marker-blue', label: '마커', tool: 'pen', color: '#2563EB', width: 6, brush: 'marker', linePattern: 'solid', kind: 'pen' },
-  { id: 'ballpoint-green', label: '볼펜', tool: 'pen', color: '#16A34A', width: 3, brush: 'ballpoint', linePattern: 'solid', kind: 'pen' },
-];
-
-const HIGHLIGHT_PRESETS: ToolPreset[] = [
-  { id: 'highlight-yellow', label: 'Yellow', tool: 'highlight', color: '#FDE047', width: 16, brush: 'highlighter', linePattern: 'solid', kind: 'highlight' },
-  { id: 'highlight-pink', label: 'Pink', tool: 'highlight', color: '#FB7185', width: 16, brush: 'highlighter', linePattern: 'solid', kind: 'highlight' },
-  { id: 'highlight-green', label: 'Green', tool: 'highlight', color: '#86EFAC', width: 16, brush: 'highlighter', linePattern: 'solid', kind: 'highlight' },
-  { id: 'highlight-blue', label: 'Blue', tool: 'highlight', color: '#60A5FA', width: 16, brush: 'highlighter', linePattern: 'solid', kind: 'highlight' },
-  { id: 'highlight-orange', label: 'Orange', tool: 'highlight', color: '#FDBA74', width: 16, brush: 'highlighter', linePattern: 'solid', kind: 'highlight' },
-];
 
 const SHAPE_TOOLS: Array<{ tool: InkTool; icon: React.ComponentProps<typeof MaterialCommunityIcons>['name'] }> = [
   { tool: 'line', icon: 'vector-line' },
@@ -50,30 +23,17 @@ const BRUSH_LABELS: Record<InkBrush, string> = {
   marker: '마커',
   highlighter: '형광펜',
 };
-
-function ToolImage(props: { preset: ToolPreset; active: boolean }) {
-  const isHighlight = props.preset.kind === 'highlight';
-
-  return (
-    <View style={{ width: 38, height: 38, borderRadius: 99, alignItems: 'center', justifyContent: 'center' }}>
-      <View
-        style={{
-          width: 28,
-          height: 28,
-          borderRadius: 99,
-          backgroundColor: props.preset.color,
-          borderWidth: props.active ? 2 : 1,
-          borderColor: props.active ? '#2563EB' : '#FFFFFF',
-          opacity: isHighlight ? 0.78 : 1,
-          shadowColor: '#64748B',
-          shadowOpacity: 0.18,
-          shadowRadius: 5,
-          shadowOffset: { width: 0, height: 2 },
-        }}
-      />
-    </View>
-  );
-}
+const LINE_PATTERN_LABELS = {
+  solid: '실선',
+  dotted: '점선',
+  dashed: '파선',
+} as const;
+const ADVANCED_CONTROLS: Array<{ key: keyof InkBrushSettings; label: string }> = [
+  { key: 'stability', label: '안정성' },
+  { key: 'sharpness', label: '날카로움' },
+  { key: 'pressure', label: '압력 민감도' },
+  { key: 'density', label: '농도' },
+];
 
 export function FloatingToolPalette() {
   const workspaceContext = useDesktopNotesWorkspaceContext();
@@ -82,6 +42,7 @@ export function FloatingToolPalette() {
   const [expanded, setExpanded] = React.useState<'pen' | 'highlight' | 'shape' | 'select' | null>('pen');
   const [collapsed, setCollapsed] = React.useState(false);
   const [detailOpen, setDetailOpen] = React.useState(false);
+  const [advancedOpen, setAdvancedOpen] = React.useState(false);
   const [position, setPosition] = React.useState(() => ({
     x: Math.max(10, Math.min(Math.max(10, width - 420), Math.round(width * 0.47))),
     y: 10,
@@ -127,23 +88,6 @@ export function FloatingToolPalette() {
     },
   }), [height, position, width]);
 
-  const activatePreset = (preset: ToolPreset) => {
-    const alreadyActive =
-      canvasContext.inkTool === preset.tool &&
-      canvasContext.penColor === preset.color &&
-      canvasContext.penWidth === preset.width &&
-      canvasContext.brushType === preset.brush &&
-      canvasContext.linePattern === preset.linePattern;
-    canvasContext.setInkTool(preset.tool);
-    canvasContext.setPenColor(preset.color);
-    canvasContext.setPenWidth(preset.width);
-    canvasContext.setBrushType(preset.brush);
-    canvasContext.setLinePattern(preset.linePattern);
-    setExpanded(preset.kind);
-    setDetailOpen(alreadyActive);
-    workspaceContext.setPageListOpen(false);
-  };
-
   const activateTool = (tool: InkTool, nextExpanded: typeof expanded = null) => {
     const alreadyActiveTool = canvasContext.inkTool === tool && expanded === nextExpanded;
     canvasContext.setInkTool(tool);
@@ -170,18 +114,14 @@ export function FloatingToolPalette() {
     );
   };
 
-  const presetList = expanded === 'highlight' ? HIGHLIGHT_PRESETS : PEN_PRESETS;
-  const activePreset = presetList.find((preset) => (
-    canvasContext.inkTool === preset.tool &&
-    canvasContext.penColor === preset.color &&
-    canvasContext.penWidth === preset.width &&
-    canvasContext.brushType === preset.brush &&
-    canvasContext.linePattern === preset.linePattern
-  ));
-  const detailBrush = activePreset?.brush ?? (expanded === 'highlight' ? 'highlighter' : canvasContext.brushType);
-  const detailKind = expanded === 'highlight' ? 'highlight' : 'pen';
-  const detailColors = detailKind === 'highlight' ? HIGHLIGHT_COLORS : PEN_COLORS;
-  const detailWidths = detailKind === 'highlight' ? HIGHLIGHT_WIDTHS : PEN_WIDTHS;
+  const detailMode = expanded === 'highlight' ? 'highlight' : expanded === 'shape' ? 'shape' : 'pen';
+  const detailBrush = detailMode === 'highlight' ? 'highlighter' : canvasContext.brushType;
+  const detailColors = detailMode === 'highlight' ? HIGHLIGHT_COLORS : PEN_COLORS;
+  const detailWidths = detailMode === 'highlight' ? HIGHLIGHT_WIDTHS : PEN_WIDTHS;
+  const detailTitle = detailMode === 'shape' ? '도형' : BRUSH_LABELS[detailBrush];
+  const setBrushSetting = (key: keyof InkBrushSettings, value: number) => {
+    canvasContext.setBrushSettings({ [key]: Math.max(0, Math.min(100, value)) });
+  };
   const collapseIcon = topDocked
     ? (collapsed ? 'chevron-down' : 'chevron-up')
     : sideDocked
@@ -227,26 +167,6 @@ export function FloatingToolPalette() {
         ) : null}
       </View>
 
-      {!collapsed && (expanded === 'pen' || expanded === 'highlight') ? (
-        <View style={[
-          workspaceContext.styles.floatingToolShelf,
-          sideDocked && workspaceContext.styles.floatingToolShelfSide,
-        ]}>
-          {presetList.map((preset) => {
-            const active = canvasContext.inkTool === preset.tool && canvasContext.penColor === preset.color && canvasContext.penWidth === preset.width && canvasContext.brushType === preset.brush && canvasContext.linePattern === preset.linePattern;
-            return (
-              <Pressable
-                key={preset.id}
-                style={[workspaceContext.styles.floatingToolPreset, active && workspaceContext.styles.floatingToolPresetActive]}
-                onPress={() => activatePreset(preset)}
-              >
-                <ToolImage preset={preset} active={active} />
-              </Pressable>
-            );
-          })}
-        </View>
-      ) : null}
-
       {!collapsed && expanded === 'shape' ? (
         <View style={[
           workspaceContext.styles.floatingToolShelfCompact,
@@ -264,7 +184,7 @@ export function FloatingToolPalette() {
         </View>
       ) : null}
 
-      {!collapsed && detailOpen && (expanded === 'pen' || expanded === 'highlight') ? (
+      {!collapsed && detailOpen && (expanded === 'pen' || expanded === 'highlight' || expanded === 'shape') ? (
         <View style={[
           workspaceContext.styles.penDetailPopover,
           sideDocked && workspaceContext.styles.penDetailPopoverSide,
@@ -272,15 +192,15 @@ export function FloatingToolPalette() {
           <View style={workspaceContext.styles.penDetailArrow} />
           <View style={workspaceContext.styles.penDetailHeader}>
             <Pressable onPress={() => {
-              canvasContext.setPenColor(detailKind === 'highlight' ? '#FDE047' : '#111827');
-              canvasContext.setPenWidth(detailKind === 'highlight' ? 16 : 3);
-              canvasContext.setBrushType(detailKind === 'highlight' ? 'highlighter' : 'ballpoint');
+              canvasContext.setPenColor(detailMode === 'highlight' ? '#FDE047' : '#111827');
+              canvasContext.setPenWidth(detailMode === 'highlight' ? 16 : 3);
+              if (detailMode !== 'shape') canvasContext.setBrushType(detailMode === 'highlight' ? 'highlighter' : 'ballpoint');
               canvasContext.setLinePattern('solid');
             }}>
               <Text style={workspaceContext.styles.penDetailLink}>리셋</Text>
             </Pressable>
-            <Text style={workspaceContext.styles.penDetailTitle}>{BRUSH_LABELS[detailBrush]}</Text>
-            <Pressable>
+            <Text style={workspaceContext.styles.penDetailTitle}>{detailTitle}</Text>
+            <Pressable onPress={() => setAdvancedOpen((current) => !current)}>
               <Text style={workspaceContext.styles.penDetailLink}>고급</Text>
             </Pressable>
           </View>
@@ -290,8 +210,8 @@ export function FloatingToolPalette() {
                 workspaceContext.styles.penDetailPreviewStroke,
                 {
                   backgroundColor: canvasContext.penColor,
-                  height: detailKind === 'highlight' ? Math.min(18, Math.max(8, canvasContext.penWidth * 0.7)) : Math.min(16, Math.max(5, canvasContext.penWidth * 1.8)),
-                  opacity: detailKind === 'highlight' ? 0.44 : detailBrush === 'pencil' ? 0.68 : 1,
+                  height: detailMode === 'highlight' ? Math.min(18, Math.max(8, canvasContext.penWidth * 0.7)) : Math.min(16, Math.max(5, canvasContext.penWidth * 1.8)),
+                  opacity: detailMode === 'highlight' ? 0.44 : detailBrush === 'pencil' ? 0.68 : 1,
                 },
               ]}
             />
@@ -316,7 +236,7 @@ export function FloatingToolPalette() {
           <View style={workspaceContext.styles.penDetailSection}>
             <View style={workspaceContext.styles.penDetailRowHeader}>
               <Text style={workspaceContext.styles.penDetailLabel}>선 스타일</Text>
-              <Text style={workspaceContext.styles.penDetailValue}>실선</Text>
+              <Text style={workspaceContext.styles.penDetailValue}>{LINE_PATTERN_LABELS[canvasContext.linePattern]}</Text>
             </View>
             <View style={workspaceContext.styles.penDetailPatternRow}>
               {['solid', 'dotted', 'dashed'].map((pattern) => (
@@ -334,6 +254,32 @@ export function FloatingToolPalette() {
               ))}
             </View>
           </View>
+          {advancedOpen ? (
+            <View style={workspaceContext.styles.penDetailSection}>
+              {ADVANCED_CONTROLS.map((control) => {
+                const value = canvasContext.brushSettings[control.key];
+                return (
+                  <View key={control.key} style={workspaceContext.styles.penDetailAdvancedRow}>
+                    <View style={workspaceContext.styles.penDetailRowHeader}>
+                      <Text style={workspaceContext.styles.penDetailLabel}>{control.label}</Text>
+                      <Text style={workspaceContext.styles.penDetailValue}>{Math.round(value)}%</Text>
+                    </View>
+                    <View style={workspaceContext.styles.penDetailSliderRow}>
+                      <Pressable style={workspaceContext.styles.penDetailStepperButton} onPress={() => setBrushSetting(control.key, value - 10)}>
+                        <MaterialCommunityIcons name="minus" size={14} color="#1684FF" />
+                      </Pressable>
+                      <Pressable style={workspaceContext.styles.penDetailSliderTrack} onPress={() => setBrushSetting(control.key, value + 10)}>
+                        <View style={[workspaceContext.styles.penDetailSliderFill, { width: `${Math.max(4, Math.min(100, value))}%` }]} />
+                      </Pressable>
+                      <Pressable style={workspaceContext.styles.penDetailStepperButton} onPress={() => setBrushSetting(control.key, value + 10)}>
+                        <MaterialCommunityIcons name="plus" size={14} color="#1684FF" />
+                      </Pressable>
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+          ) : null}
           <View style={workspaceContext.styles.penDetailSection}>
             <View style={workspaceContext.styles.penDetailColorHeader}>
               <Text style={workspaceContext.styles.penDetailLabel}>색상</Text>
@@ -366,6 +312,17 @@ export function FloatingToolPalette() {
           workspaceContext.styles.floatingSelectionShelf,
           sideDocked && workspaceContext.styles.floatingSelectionShelfSide,
         ]}>
+          <View style={workspaceContext.styles.floatingSelectionColorRow}>
+            {PEN_COLORS.slice(0, 5).map((color) => (
+              <Pressable
+                key={color}
+                style={workspaceContext.styles.floatingSelectionColorButton}
+                onPress={() => canvasContext.changeSelectedStrokesColor(color)}
+              >
+                <View style={[workspaceContext.styles.floatingSelectionColorDot, { backgroundColor: color }]} />
+              </Pressable>
+            ))}
+          </View>
           <Pressable style={workspaceContext.styles.floatingSelectionButton} onPress={canvasContext.duplicateSelectedStrokes}>
             <MaterialCommunityIcons name="content-copy" size={16} color="#455062" />
           </Pressable>

@@ -1,6 +1,13 @@
 import type { Dispatch, SetStateAction } from 'react';
 import { Share } from 'react-native';
-import { createBackendNotePage, isBackendApiEnabled } from '../../../services/backend-api';
+import {
+  createBackendNotePage,
+  deleteBackendNotePageByNumber,
+  duplicateBackendNotePage,
+  isBackendApiEnabled,
+  moveBackendNotePage,
+  type BackendNotePage,
+} from '../../../services/backend-api';
 import type { InkStroke, InkTextAnnotation, InkTool } from '../../../ui-types';
 import type { AiAnswer, BookmarkedPage, DocumentPageView, GeneratedWorkspacePage, StudyDocumentEntry } from '../../../types';
 import { getDocumentPageLabel, isSameDocumentPage } from '../../../ui-helpers';
@@ -40,6 +47,7 @@ export function useDocumentPageActions(params: {
   setTextAnnotationsByDocument: SetState<Record<number, InkTextAnnotation[]>>;
   setBookmarksByDocument: SetState<Record<number, BookmarkedPage[]>>;
   clearCurrentSelection: () => void;
+  pushWorkspaceHistorySnapshot: () => void;
 }) {
   const getInsertAfterPage = (preferredPage?: number) => {
     if (preferredPage && Number.isFinite(preferredPage)) {
@@ -63,8 +71,182 @@ export function useDocumentPageActions(params: {
     });
   };
 
+  const isPdfAssetUrl = (url: string | null | undefined) => !!url && /\.pdf(?:$|[?#])/i.test(url);
+
+  const applyBackendPageList = (pages: BackendNotePage[], activePageNumber: number, feedback: string) => {
+    if (!params.studyDocumentId || !params.studyDocument) return;
+    const pageImageUrls = pages.reduce<Record<number, string>>((next, page) => {
+      if (page.image_url && !isPdfAssetUrl(page.image_url)) next[page.page_number] = page.image_url;
+      return next;
+    }, {});
+    const backendPageIds = pages.reduce<Record<number, number>>((next, page) => {
+      next[page.page_number] = page.id;
+      return next;
+    }, {});
+    const nextPageCount = Math.max(1, pages.length);
+    const nextActivePage = Math.max(1, Math.min(nextPageCount, activePageNumber));
+
+    params.setBackendPageIdsByDocument((current) => ({
+      ...current,
+      [params.studyDocumentId!]: backendPageIds,
+    }));
+    params.setUserStudyDocuments((current) => upsertStudyDocument(current, {
+      ...params.studyDocument!,
+      pageCount: nextPageCount,
+      pageImageUrls: Object.keys(pageImageUrls).length ? pageImageUrls : undefined,
+      updatedAt: '방금 전',
+    }));
+    params.setCurrentPdfPageByDocument((current) => ({
+      ...current,
+      [params.studyDocumentId!]: nextActivePage,
+    }));
+    params.setActivePageByDocument((current) => ({
+      ...current,
+      [params.studyDocumentId!]: { kind: 'pdf', pageNumber: nextActivePage },
+    }));
+    params.clearCurrentSelection();
+    params.setWorkspaceFeedback(feedback);
+  };
+
+  const duplicatePdfPageLocally = (pageNumber: number) => {
+    if (!params.studyDocumentId) return;
+    const timestamp = Date.now();
+    params.setInkByDocument((current) => {
+      const strokes = current[params.studyDocumentId!] ?? [];
+      const shifted = strokes.map((stroke) => (
+        !stroke.generatedPageId && stroke.pageNumber && stroke.pageNumber > pageNumber
+          ? { ...stroke, pageNumber: stroke.pageNumber + 1 }
+          : stroke
+      ));
+      const copied = strokes
+        .filter((stroke) => !stroke.generatedPageId && stroke.pageNumber === pageNumber)
+        .map((stroke, index) => ({
+          ...stroke,
+          id: `${stroke.id}-pdf-page-copy-${timestamp}-${index}`,
+          pageNumber: pageNumber + 1,
+        }));
+      return { ...current, [params.studyDocumentId!]: [...shifted, ...copied] };
+    });
+    params.setTextAnnotationsByDocument((current) => {
+      const annotations = current[params.studyDocumentId!] ?? [];
+      const shifted = annotations.map((annotation) => (
+        !annotation.generatedPageId && annotation.pageNumber > pageNumber
+          ? { ...annotation, pageNumber: annotation.pageNumber + 1 }
+          : annotation
+      ));
+      const copied = annotations
+        .filter((annotation) => !annotation.generatedPageId && annotation.pageNumber === pageNumber)
+        .map((annotation, index) => ({
+          ...annotation,
+          id: `${annotation.id}-pdf-page-copy-${timestamp}-${index}`,
+          pageNumber: pageNumber + 1,
+        }));
+      return { ...current, [params.studyDocumentId!]: [...shifted, ...copied] };
+    });
+    params.setGeneratedPagesByDocument((current) => ({
+      ...current,
+      [params.studyDocumentId!]: (current[params.studyDocumentId!] ?? []).map((page) => (
+        page.insertAfterPage > pageNumber ? { ...page, insertAfterPage: page.insertAfterPage + 1 } : page
+      )),
+    }));
+    params.setBookmarksByDocument((current) => ({
+      ...current,
+      [params.studyDocumentId!]: (current[params.studyDocumentId!] ?? []).map((bookmark) => (
+        bookmark.page.kind === 'pdf' && bookmark.page.pageNumber > pageNumber
+          ? { ...bookmark, page: { kind: 'pdf', pageNumber: bookmark.page.pageNumber + 1 } }
+          : bookmark
+      )),
+    }));
+  };
+
+  const deletePdfPageLocally = (pageNumber: number) => {
+    if (!params.studyDocumentId) return;
+    const removedGeneratedPageIds = new Set(
+      (params.generatedPagesByDocument[params.studyDocumentId] ?? [])
+        .filter((page) => page.insertAfterPage === pageNumber)
+        .map((page) => page.id),
+    );
+    params.setInkByDocument((current) => ({
+      ...current,
+      [params.studyDocumentId!]: (current[params.studyDocumentId!] ?? [])
+        .filter((stroke) => stroke.generatedPageId ? !removedGeneratedPageIds.has(stroke.generatedPageId) : stroke.pageNumber !== pageNumber)
+        .map((stroke) => (
+          !stroke.generatedPageId && stroke.pageNumber && stroke.pageNumber > pageNumber
+            ? { ...stroke, pageNumber: stroke.pageNumber - 1 }
+            : stroke
+        )),
+    }));
+    params.setTextAnnotationsByDocument((current) => ({
+      ...current,
+      [params.studyDocumentId!]: (current[params.studyDocumentId!] ?? [])
+        .filter((annotation) => annotation.generatedPageId ? !removedGeneratedPageIds.has(annotation.generatedPageId) : annotation.pageNumber !== pageNumber)
+        .map((annotation) => (
+          !annotation.generatedPageId && annotation.pageNumber > pageNumber
+            ? { ...annotation, pageNumber: annotation.pageNumber - 1 }
+            : annotation
+        )),
+    }));
+    params.setGeneratedPagesByDocument((current) => ({
+      ...current,
+      [params.studyDocumentId!]: (current[params.studyDocumentId!] ?? [])
+        .filter((page) => page.insertAfterPage !== pageNumber)
+        .map((page) => (
+          page.insertAfterPage > pageNumber ? { ...page, insertAfterPage: page.insertAfterPage - 1 } : page
+        )),
+    }));
+    params.setBookmarksByDocument((current) => ({
+      ...current,
+      [params.studyDocumentId!]: (current[params.studyDocumentId!] ?? [])
+        .filter((bookmark) => {
+          if (bookmark.page.kind === 'generated') return !removedGeneratedPageIds.has(bookmark.page.pageId);
+          return bookmark.page.pageNumber !== pageNumber;
+        })
+        .map((bookmark) => (
+          bookmark.page.kind === 'pdf' && bookmark.page.pageNumber > pageNumber
+            ? { ...bookmark, page: { kind: 'pdf', pageNumber: bookmark.page.pageNumber - 1 } }
+            : bookmark
+        )),
+    }));
+  };
+
+  const swapPdfPagesLocally = (pageNumber: number, delta: -1 | 1) => {
+    if (!params.studyDocumentId) return;
+    const nextPageNumber = pageNumber + delta;
+    const swapNumber = (value: number) => (value === pageNumber ? nextPageNumber : value === nextPageNumber ? pageNumber : value);
+    params.setInkByDocument((current) => ({
+      ...current,
+      [params.studyDocumentId!]: (current[params.studyDocumentId!] ?? []).map((stroke) => (
+        !stroke.generatedPageId && stroke.pageNumber
+          ? { ...stroke, pageNumber: swapNumber(stroke.pageNumber) }
+          : stroke
+      )),
+    }));
+    params.setTextAnnotationsByDocument((current) => ({
+      ...current,
+      [params.studyDocumentId!]: (current[params.studyDocumentId!] ?? []).map((annotation) => (
+        !annotation.generatedPageId ? { ...annotation, pageNumber: swapNumber(annotation.pageNumber) } : annotation
+      )),
+    }));
+    params.setGeneratedPagesByDocument((current) => ({
+      ...current,
+      [params.studyDocumentId!]: (current[params.studyDocumentId!] ?? []).map((page) => ({
+        ...page,
+        insertAfterPage: swapNumber(page.insertAfterPage),
+      })),
+    }));
+    params.setBookmarksByDocument((current) => ({
+      ...current,
+      [params.studyDocumentId!]: (current[params.studyDocumentId!] ?? []).map((bookmark) => (
+        bookmark.page.kind === 'pdf'
+          ? { ...bookmark, page: { kind: 'pdf', pageNumber: swapNumber(bookmark.page.pageNumber) } }
+          : bookmark
+      )),
+    }));
+  };
+
   const insertAiAnswerPage = () => {
     if (!params.studyDocumentId || !params.aiAnswer) return;
+    params.pushWorkspaceHistorySnapshot();
 
     const generatedPageId = `ai-answer-page-${params.studyDocumentId}-${Date.now()}`;
     const generatedPage: GeneratedWorkspacePage = {
@@ -137,6 +319,7 @@ export function useDocumentPageActions(params: {
     }
 
     const insertAfterPage = getInsertAfterPage(insertAfterPageOverride);
+    params.pushWorkspaceHistorySnapshot();
     const generatedPageId = `memo-page-${params.studyDocumentId}-${Date.now()}`;
     const nextMemoCount =
       (params.generatedPagesByDocument[params.studyDocumentId] ?? []).filter((value) => value.pageKind === 'memo' && value.insertAfterPage === insertAfterPage).length + 1;
@@ -179,6 +362,7 @@ export function useDocumentPageActions(params: {
     if (!params.studyDocumentId) return;
     const target = (params.generatedPagesByDocument[params.studyDocumentId] ?? []).find((page) => page.id === pageId);
     if (!target || (target.pageKind !== 'memo' && !target.sourceAssetId.startsWith('ai-answer-'))) return;
+    params.pushWorkspaceHistorySnapshot();
 
     params.setGeneratedPagesByDocument((current) => ({
       ...current,
@@ -214,6 +398,7 @@ export function useDocumentPageActions(params: {
     if (!params.studyDocumentId) return;
     const target = (params.generatedPagesByDocument[params.studyDocumentId] ?? []).find((page) => page.id === pageId);
     if (!target) return;
+    params.pushWorkspaceHistorySnapshot();
 
     const nextPageId = `${target.pageKind}-page-${params.studyDocumentId}-${Date.now()}`;
     const copiedPage: GeneratedWorkspacePage = {
@@ -269,6 +454,7 @@ export function useDocumentPageActions(params: {
 
     const nextInsertAfterPage = Math.max(1, Math.min(params.studyDocument.pageCount, target.insertAfterPage + delta));
     if (nextInsertAfterPage === target.insertAfterPage) return;
+    params.pushWorkspaceHistorySnapshot();
 
     params.setGeneratedPagesByDocument((current) => ({
       ...current,
@@ -285,6 +471,67 @@ export function useDocumentPageActions(params: {
     }));
     params.clearCurrentSelection();
     params.setWorkspaceFeedback(delta < 0 ? '페이지를 위로 이동했습니다.' : '페이지를 아래로 이동했습니다.');
+  };
+
+  const duplicatePdfPage = (pageNumber = params.currentPdfPage) => {
+    if (!params.studyDocumentId || !params.studyDocument) return;
+    if (!isBackendApiEnabled() || !params.currentDocumentHasBackendPages) {
+      params.setWorkspaceFeedback('백엔드에 저장된 PDF만 페이지 복제를 지원합니다.');
+      return;
+    }
+
+    void duplicateBackendNotePage({ noteId: params.studyDocumentId, pageNumber })
+      .then((pages) => {
+        params.pushWorkspaceHistorySnapshot();
+        duplicatePdfPageLocally(pageNumber);
+        applyBackendPageList(pages, pageNumber + 1, 'PDF 페이지를 복제했습니다.');
+      })
+      .catch(() => {
+        params.setWorkspaceFeedback('PDF 페이지 복제 저장에 실패했습니다. 새로고침 후 다시 시도해주세요.');
+      });
+  };
+
+  const removePdfPage = (pageNumber = params.currentPdfPage) => {
+    if (!params.studyDocumentId || !params.studyDocument) return;
+    if (params.studyDocument.pageCount <= 1) {
+      params.setWorkspaceFeedback('마지막 페이지는 삭제할 수 없습니다.');
+      return;
+    }
+    if (!isBackendApiEnabled() || !params.currentDocumentHasBackendPages) {
+      params.setWorkspaceFeedback('백엔드에 저장된 PDF만 페이지 삭제를 지원합니다.');
+      return;
+    }
+
+    const nextActivePage = Math.max(1, Math.min(params.studyDocument.pageCount - 1, pageNumber));
+    void deleteBackendNotePageByNumber({ noteId: params.studyDocumentId, pageNumber })
+      .then((pages) => {
+        params.pushWorkspaceHistorySnapshot();
+        deletePdfPageLocally(pageNumber);
+        applyBackendPageList(pages, nextActivePage, 'PDF 페이지를 삭제했습니다.');
+      })
+      .catch(() => {
+        params.setWorkspaceFeedback('PDF 페이지 삭제 저장에 실패했습니다. 새로고침 후 다시 시도해주세요.');
+      });
+  };
+
+  const movePdfPage = (pageNumber = params.currentPdfPage, delta: -1 | 1) => {
+    if (!params.studyDocumentId || !params.studyDocument) return;
+    const nextPageNumber = pageNumber + delta;
+    if (nextPageNumber < 1 || nextPageNumber > params.studyDocument.pageCount) return;
+    if (!isBackendApiEnabled() || !params.currentDocumentHasBackendPages) {
+      params.setWorkspaceFeedback('백엔드에 저장된 PDF만 페이지 이동을 지원합니다.');
+      return;
+    }
+
+    void moveBackendNotePage({ noteId: params.studyDocumentId, pageNumber, delta })
+      .then((pages) => {
+        params.pushWorkspaceHistorySnapshot();
+        swapPdfPagesLocally(pageNumber, delta);
+        applyBackendPageList(pages, nextPageNumber, delta < 0 ? 'PDF 페이지를 위로 이동했습니다.' : 'PDF 페이지를 아래로 이동했습니다.');
+      })
+      .catch(() => {
+        params.setWorkspaceFeedback('PDF 페이지 이동 저장에 실패했습니다. 새로고침 후 다시 시도해주세요.');
+      });
   };
 
   const updateStudyDocumentPageCount = (pageCount: number) => {
@@ -451,6 +698,9 @@ export function useDocumentPageActions(params: {
     removeGeneratedPage,
     duplicateGeneratedPage,
     moveGeneratedPage,
+    duplicatePdfPage,
+    removePdfPage,
+    movePdfPage,
     updateStudyDocumentPageCount,
     setCurrentPdfPage,
     moveDocumentPage,

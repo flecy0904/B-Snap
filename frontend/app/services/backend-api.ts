@@ -124,6 +124,11 @@ export type BackendPdfTextExtractionResponse = {
   pages: BackendNotePage[];
 };
 
+export type BackendPdfCacheRegenerationResponse = {
+  note_id: number;
+  pages: BackendNotePage[];
+};
+
 export type BackendUpload = {
   filename: string;
   stored_filename: string;
@@ -478,6 +483,41 @@ export async function updateBackendNotePage(payload: {
   };
 }
 
+function normalizeBackendNotePages(pages: BackendNotePage[]) {
+  return pages.map((page) => ({
+    ...page,
+    image_url: resolveBackendAssetUrl(page.image_url) ?? page.image_url,
+  }));
+}
+
+export async function duplicateBackendNotePage(payload: {
+  noteId: number;
+  pageNumber: number;
+}) {
+  return request<BackendNotePage[]>(`/notes/${payload.noteId}/pages/${payload.pageNumber}/duplicate`, {
+    method: 'POST',
+  }).then(normalizeBackendNotePages);
+}
+
+export async function deleteBackendNotePageByNumber(payload: {
+  noteId: number;
+  pageNumber: number;
+}) {
+  return request<BackendNotePage[]>(`/notes/${payload.noteId}/pages/by-number/${payload.pageNumber}`, {
+    method: 'DELETE',
+  }).then(normalizeBackendNotePages);
+}
+
+export async function moveBackendNotePage(payload: {
+  noteId: number;
+  pageNumber: number;
+  delta: -1 | 1;
+}) {
+  return request<BackendNotePage[]>(`/notes/${payload.noteId}/pages/${payload.pageNumber}/move?delta=${payload.delta}`, {
+    method: 'POST',
+  }).then(normalizeBackendNotePages);
+}
+
 export async function extractBackendPdfText(payload: {
   noteId: number;
   pdfData: string;
@@ -488,6 +528,20 @@ export async function extractBackendPdfText(payload: {
       pdf_data: payload.pdfData,
     },
   });
+}
+
+export async function regenerateBackendPdfCache(noteId: number) {
+  const result = await request<BackendPdfCacheRegenerationResponse>(`/notes/${noteId}/pdf-cache/regenerate`, {
+    method: 'POST',
+    timeoutMs: 60000,
+  });
+  return {
+    ...result,
+    pages: result.pages.map((page) => ({
+      ...page,
+      image_url: resolveBackendAssetUrl(page.image_url) ?? page.image_url,
+    })),
+  };
 }
 
 export function listBackendAiCanvasNotes(noteId: number) {

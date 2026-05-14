@@ -9,6 +9,7 @@ export function NotebookThumbnailSidebar() {
   const workspaceContext = useDesktopNotesWorkspaceContext();
   const documentContext = useDocumentContext();
   const [open, setOpen] = React.useState(false);
+  const scrollRef = React.useRef<ScrollView | null>(null);
   const pages = documentContext.notebookPages;
 
   const isActivePage = (page: NotebookPage) => {
@@ -17,6 +18,12 @@ export function NotebookThumbnailSidebar() {
     if (page.kind === 'pdf' && current.kind === 'pdf') return page.pageNumber === current.pageNumber;
     return Boolean(page.generatedPageId && current.kind === 'generated' && current.pageId === page.generatedPageId);
   };
+  const activeIndex = pages.findIndex((page) => isActivePage(page));
+
+  React.useEffect(() => {
+    if (!open || activeIndex < 0) return;
+    scrollRef.current?.scrollTo({ y: Math.max(0, activeIndex * 132 - 80), animated: true });
+  }, [activeIndex, open]);
 
   const openPage = (page: NotebookPage) => {
     if (page.kind === 'pdf' && page.pageNumber) {
@@ -57,6 +64,7 @@ export function NotebookThumbnailSidebar() {
         </Pressable>
       </View>
       <ScrollView
+        ref={scrollRef}
         showsVerticalScrollIndicator={false}
         contentContainerStyle={workspaceContext.styles.thumbnailSidebarContent}
       >
@@ -77,6 +85,13 @@ export function NotebookThumbnailSidebar() {
                     <MaterialCommunityIcons name={getPageIcon(page)} size={18} color={active ? '#4F68D2' : '#7F8999'} />
                   </View>
                 )}
+                {page.kind === 'pdf' ? (
+                  <View style={[workspaceContext.styles.thumbnailCacheBadge, imageUrl && workspaceContext.styles.thumbnailCacheBadgeReady]}>
+                    <Text style={[workspaceContext.styles.thumbnailCacheBadgeText, imageUrl && workspaceContext.styles.thumbnailCacheBadgeTextReady]}>
+                      {imageUrl ? '캐시' : '원본'}
+                    </Text>
+                  </View>
+                ) : null}
               </View>
               <Text style={[workspaceContext.styles.thumbnailLabel, active && workspaceContext.styles.thumbnailLabelActive]} numberOfLines={1}>
                 {page.label || `${index + 1}`}
@@ -125,6 +140,46 @@ export function NotebookThumbnailSidebar() {
                       onPress={(event) => {
                         event.stopPropagation();
                         documentContext.onRemoveGeneratedPage(page.generatedPageId!);
+                      }}
+                    >
+                      <MaterialCommunityIcons name="trash-can-outline" size={12} color="#D05252" />
+                    </Pressable>
+                  </>
+                ) : null}
+                {page.kind === 'pdf' && page.pageNumber ? (
+                  <>
+                    <Pressable
+                      style={workspaceContext.styles.thumbnailActionButton}
+                      onPress={(event) => {
+                        event.stopPropagation();
+                        documentContext.onMovePdfPage(page.pageNumber, -1);
+                      }}
+                    >
+                      <MaterialCommunityIcons name="arrow-up" size={12} color="#667085" />
+                    </Pressable>
+                    <Pressable
+                      style={workspaceContext.styles.thumbnailActionButton}
+                      onPress={(event) => {
+                        event.stopPropagation();
+                        documentContext.onMovePdfPage(page.pageNumber, 1);
+                      }}
+                    >
+                      <MaterialCommunityIcons name="arrow-down" size={12} color="#667085" />
+                    </Pressable>
+                    <Pressable
+                      style={workspaceContext.styles.thumbnailActionButton}
+                      onPress={(event) => {
+                        event.stopPropagation();
+                        documentContext.onDuplicatePdfPage(page.pageNumber);
+                      }}
+                    >
+                      <MaterialCommunityIcons name="content-copy" size={12} color="#667085" />
+                    </Pressable>
+                    <Pressable
+                      style={[workspaceContext.styles.thumbnailActionButton, workspaceContext.styles.thumbnailActionButtonDanger]}
+                      onPress={(event) => {
+                        event.stopPropagation();
+                        documentContext.onRemovePdfPage(page.pageNumber);
                       }}
                     >
                       <MaterialCommunityIcons name="trash-can-outline" size={12} color="#D05252" />

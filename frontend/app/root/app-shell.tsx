@@ -208,6 +208,7 @@ export function AppShell(props: {
                   penWidth={notesState.penWidth}
                   brushType={notesState.brushType}
                   linePattern={notesState.linePattern}
+                  brushSettings={notesState.brushSettings}
                   inkStrokes={notesState.inkStrokes}
                   textAnnotations={notesState.textAnnotations}
                   inkByDocument={notesState.inkByDocument}
@@ -255,6 +256,7 @@ export function AppShell(props: {
                   onChangePenWidth={notesState.changePenWidth}
                   onChangeBrushType={notesState.changeBrushType}
                   onChangeLinePattern={notesState.changeLinePattern}
+                  onChangeBrushSettings={notesState.changeBrushSettings}
                   onToggleAiPanel={notesState.toggleAiPanel}
                   onChangeAiPanelMode={notesState.setAiPanelMode}
                   onChangeAiQuestion={notesState.setAiQuestion}
@@ -280,6 +282,7 @@ export function AppShell(props: {
                   changeSelectedStrokesColor={notesState.changeSelectedStrokesColor}
                   duplicateSelectedStrokes={notesState.duplicateSelectedStrokes}
                   resizeSelectedStrokes={notesState.resizeSelectedStrokes}
+                  resizeSelectedStrokesToRect={notesState.resizeSelectedStrokesToRect}
                   nudgeSelectedStrokes={notesState.nudgeSelectedStrokes}
                   onAddTextAnnotation={notesState.addTextAnnotation}
                   onUpdateTextAnnotation={notesState.updateTextAnnotation}
@@ -294,11 +297,15 @@ export function AppShell(props: {
                   onOpenBookmarkedPage={notesState.openBookmarkedPage}
                   onRemoveBookmark={notesState.removeBookmark}
                   onExportCurrentDocument={notesState.exportCurrentDocumentSummary}
+                  onRegeneratePdfCache={notesState.regeneratePdfPageCache}
                   onOpenWorkspaceAttachment={notesState.openWorkspaceAttachment}
                   onOpenGeneratedPage={notesState.openGeneratedPage}
                   onRemoveGeneratedPage={notesState.removeGeneratedPage}
                   onDuplicateGeneratedPage={notesState.duplicateGeneratedPage}
                   onMoveGeneratedPage={notesState.moveGeneratedPage}
+                  onDuplicatePdfPage={notesState.duplicatePdfPage}
+                  onRemovePdfPage={notesState.removePdfPage}
+                  onMovePdfPage={notesState.movePdfPage}
                   onCreateMemoPage={notesState.createMemoPage}
                   onQuery={notesState.setQuery}
                   onSort={notesState.toggleSort}

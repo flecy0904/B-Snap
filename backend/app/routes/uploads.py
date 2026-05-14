@@ -215,6 +215,12 @@ async def upload_pdf_note(
         _cleanup_stored_upload(upload, settings)
         raise HTTPException(status_code=415, detail="PDF 파일만 노트로 업로드할 수 있습니다.")
 
+    page_image_urls = (
+        upload.page_image_urls
+        if len(upload.page_image_urls) == len(upload.page_numbers)
+        else [upload.url if index == 0 else "" for index, _ in enumerate(upload.page_numbers)]
+    )
+
     try:
         with connection.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
@@ -239,11 +245,16 @@ async def upload_pdf_note(
             cursor.execute(
                 """
                 INSERT INTO note_pages (note_id, page_number, content, image_url)
-                SELECT %s, pages.page_number, %s, %s
-                FROM unnest(%s::int[]) AS pages(page_number)
+                SELECT %s, pages.page_number, %s, NULLIF(pages.image_url, '')
+                FROM unnest(%s::int[], %s::text[]) AS pages(page_number, image_url)
                 RETURNING id, note_id, page_number, content, image_url, created_at, updated_at
                 """,
-                (note["id"], EMPTY_PAGE_CONTENT, upload.url, upload.page_numbers),
+                (
+                    note["id"],
+                    EMPTY_PAGE_CONTENT,
+                    upload.page_numbers,
+                    page_image_urls,
+                ),
             )
             pages = sorted(cursor.fetchall(), key=lambda page: page["page_number"])
         connection.commit()

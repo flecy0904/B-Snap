@@ -29,7 +29,7 @@ import {
   Subject,
   WorkspaceAttachment,
 } from '../../../types';
-import { InkBrush, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
+import { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 
 export type DesktopNotesViewProps = {
   compact: boolean;
@@ -48,6 +48,7 @@ export type DesktopNotesViewProps = {
   penWidth: number;
   brushType: InkBrush;
   linePattern: InkLinePattern;
+  brushSettings: InkBrushSettings;
   inkStrokes: InkStroke[];
   textAnnotations: InkTextAnnotation[];
   inkByDocument: Record<number, InkStroke[]>;
@@ -96,6 +97,7 @@ export type DesktopNotesViewProps = {
   onChangePenWidth: (width: number) => void;
   onChangeBrushType: (brush: InkBrush) => void;
   onChangeLinePattern: (pattern: InkLinePattern) => void;
+  onChangeBrushSettings: (settings: Partial<InkBrushSettings>) => void;
   onToggleAiPanel: () => void;
   onChangeAiPanelMode: (mode: 'floating' | 'sidebar') => void;
   onChangeAiQuestion: (value: string) => void;
@@ -118,6 +120,7 @@ export type DesktopNotesViewProps = {
   changeSelectedStrokesColor: (color: string) => void;
   duplicateSelectedStrokes: () => void;
   resizeSelectedStrokes: (scale: number) => void;
+  resizeSelectedStrokesToRect: (rect: SelectionRect) => void;
   nudgeSelectedStrokes: (dx: number, dy: number) => void;
   onCommitInkStroke: (stroke: InkStroke) => void;
   onRemoveInkStroke: (strokeId: string) => void;
@@ -134,11 +137,15 @@ export type DesktopNotesViewProps = {
   onOpenBookmarkedPage: (bookmarkId: string) => void;
   onRemoveBookmark: (bookmarkId: string) => void;
   onExportCurrentDocument: () => void;
+  onRegeneratePdfCache: () => void;
   onOpenWorkspaceAttachment: (attachmentId: string) => void;
   onOpenGeneratedPage: (pageId: string) => void;
   onRemoveGeneratedPage: (pageId: string) => void;
   onDuplicateGeneratedPage: (pageId: string) => void;
   onMoveGeneratedPage: (pageId: string, delta: -1 | 1) => void;
+  onDuplicatePdfPage: (pageNumber?: number) => void;
+  onRemovePdfPage: (pageNumber?: number) => void;
+  onMovePdfPage: (pageNumber: number | undefined, delta: -1 | 1) => void;
   onCreateMemoPage: (insertAfterPage?: number) => void;
   onQuery: (value: string) => void;
   onSort: () => void;
@@ -269,6 +276,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           penWidth: props.penWidth,
           brushType: props.brushType,
           linePattern: props.linePattern,
+          brushSettings: props.brushSettings,
           inkStrokes: props.inkStrokes,
           textAnnotations: props.textAnnotations,
           currentPageLabel: workspace.currentPageLabel,
@@ -317,6 +325,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           onChangePenWidth: props.onChangePenWidth,
           onChangeBrushType: props.onChangeBrushType,
           onChangeLinePattern: props.onChangeLinePattern,
+          onChangeBrushSettings: props.onChangeBrushSettings,
           onUndoInk: props.onUndoInk,
           onRedoInk: props.onRedoInk,
           onClearInk: props.onClearInk,
@@ -332,9 +341,13 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           onOpenBookmarkedPage: props.onOpenBookmarkedPage,
           onRemoveBookmark: props.onRemoveBookmark,
           onExportCurrentDocument: props.onExportCurrentDocument,
+          onRegeneratePdfCache: props.onRegeneratePdfCache,
           onRemoveGeneratedPage: props.onRemoveGeneratedPage,
           onDuplicateGeneratedPage: props.onDuplicateGeneratedPage,
           onMoveGeneratedPage: props.onMoveGeneratedPage,
+          onDuplicatePdfPage: props.onDuplicatePdfPage,
+          onRemovePdfPage: props.onRemovePdfPage,
+          onMovePdfPage: props.onMovePdfPage,
           onCreateMemoPage: props.onCreateMemoPage,
           onInsertInboxAsset: props.onInsertInboxAsset,
           onRemoveInboxAsset: props.onRemoveInboxAsset,
@@ -355,6 +368,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           changeSelectedStrokesColor: props.changeSelectedStrokesColor,
           duplicateSelectedStrokes: props.duplicateSelectedStrokes,
           resizeSelectedStrokes: props.resizeSelectedStrokes,
+          resizeSelectedStrokesToRect: props.resizeSelectedStrokesToRect,
           nudgeSelectedStrokes: props.nudgeSelectedStrokes,
           onSetCurrentPdfPage: props.onSetCurrentPdfPage,
           onUpdateStudyDocumentPageCount: props.onUpdateStudyDocumentPageCount,

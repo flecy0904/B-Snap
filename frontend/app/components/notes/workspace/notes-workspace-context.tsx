@@ -2,7 +2,7 @@ import React from 'react';
 import type { BackendChatMessage, BackendChatSession } from '../../../services/backend-api';
 import type { UseAiCanvasNotesResult } from '../../../hooks/notes/ai-canvas/use-ai-canvas-notes';
 import { AiAnswer, NoteSummarySection, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NotebookPage, StudyDocumentEntry, WorkspaceAttachment } from '../../../types';
-import { InkBrush, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
+import { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 
 export type DesktopNotesWorkspaceContextValue = {
   styles: any;
@@ -32,6 +32,7 @@ export type DesktopNotesWorkspaceContextValue = {
   penWidth: number;
   brushType: InkBrush;
   linePattern: InkLinePattern;
+  brushSettings: InkBrushSettings;
   inkStrokes: InkStroke[];
   textAnnotations: InkTextAnnotation[];
   currentPageLabel: string;
@@ -80,6 +81,7 @@ export type DesktopNotesWorkspaceContextValue = {
   onChangePenWidth: (width: number) => void;
   onChangeBrushType: (brush: InkBrush) => void;
   onChangeLinePattern: (pattern: InkLinePattern) => void;
+  onChangeBrushSettings: (settings: Partial<InkBrushSettings>) => void;
   onUndoInk: () => void;
   onRedoInk: () => void;
   onClearInk: () => void;
@@ -95,9 +97,13 @@ export type DesktopNotesWorkspaceContextValue = {
   onOpenBookmarkedPage: (bookmarkId: string) => void;
   onRemoveBookmark: (bookmarkId: string) => void;
   onExportCurrentDocument: () => void;
+  onRegeneratePdfCache: () => void;
   onRemoveGeneratedPage: (pageId: string) => void;
   onDuplicateGeneratedPage: (pageId: string) => void;
   onMoveGeneratedPage: (pageId: string, delta: -1 | 1) => void;
+  onDuplicatePdfPage: (pageNumber?: number) => void;
+  onRemovePdfPage: (pageNumber?: number) => void;
+  onMovePdfPage: (pageNumber: number | undefined, delta: -1 | 1) => void;
   onCreateMemoPage: (insertAfterPage?: number) => void;
   onInsertInboxAsset: (assetId: string) => void;
   onRemoveInboxAsset: (assetId: string) => void;
@@ -115,6 +121,7 @@ export type DesktopNotesWorkspaceContextValue = {
   changeSelectedStrokesColor: (color: string) => void;
   duplicateSelectedStrokes: () => void;
   resizeSelectedStrokes: (scale: number) => void;
+  resizeSelectedStrokesToRect: (rect: SelectionRect) => void;
   nudgeSelectedStrokes: (dx: number, dy: number) => void;
   onSetCurrentPdfPage: (pageNumber: number) => void;
   onUpdateStudyDocumentPageCount: (pageCount: number) => void;

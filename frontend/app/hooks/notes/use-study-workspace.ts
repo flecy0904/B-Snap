@@ -15,6 +15,7 @@ import {
   listBackendFolders,
   listBackendNotePages,
   listBackendNotes,
+  regenerateBackendPdfCache,
   resolveBackendAssetUrl,
   updateBackendNote,
   updateBackendNotePage,
@@ -43,12 +44,13 @@ import { useAiCanvasNotes } from './ai-canvas/use-ai-canvas-notes';
 import { addUniqueId, removeId, upsertStudyDocument } from './document/collection-helpers';
 import { useDocumentPageActions } from './document/use-document-page-actions';
 import { confirmDeleteAction } from './ui/confirm-delete-action';
-import { useInkActions } from './ink/use-ink-actions';
+import { useInkActions, type WorkspaceEditSnapshot } from './ink/use-ink-actions';
 import { parseNotePageContent, serializeNotePageContent } from './document/note-page-content';
 import { useIncomingAssetSubscription } from './workspace/use-incoming-asset-subscription';
 import { useStudyWorkspaceDerivedState } from './workspace/use-study-workspace-derived-state';
 import { useStudyWorkspacePersistence } from './workspace/use-study-workspace-persistence';
-import type { InkBrush, InkLinePattern, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../ui-types';
+import { isShapeTool } from '../../ui-helpers';
+import type { InkBrush, InkBrushSettings, InkLinePattern, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../ui-types';
 import type { AiAnswer, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NoteWorkspaceMode, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../types';
 
 type PendingPageSave = {
@@ -91,10 +93,16 @@ export function useStudyWorkspace(props: {
   const [penWidth, setPenWidth] = useState(3);
   const [brushType, setBrushType] = useState<InkBrush>('ballpoint');
   const [linePattern, setLinePattern] = useState<InkLinePattern>('solid');
+  const [brushSettings, setBrushSettings] = useState<InkBrushSettings>({
+    stability: 60,
+    sharpness: 50,
+    density: 100,
+    pressure: 55,
+  });
   const [inkByDocument, setInkByDocument] = useState<Record<number, InkStroke[]>>({});
   const [redoInkByDocument, setRedoInkByDocument] = useState<Record<number, InkStroke[]>>({});
-  const [inkHistoryByDocument, setInkHistoryByDocument] = useState<Record<number, InkStroke[][]>>({});
-  const [redoInkHistoryByDocument, setRedoInkHistoryByDocument] = useState<Record<number, InkStroke[][]>>({});
+  const [inkHistoryByDocument, setInkHistoryByDocument] = useState<Record<number, WorkspaceEditSnapshot[]>>({});
+  const [redoInkHistoryByDocument, setRedoInkHistoryByDocument] = useState<Record<number, WorkspaceEditSnapshot[]>>({});
   const [textAnnotationsByDocument, setTextAnnotationsByDocument] = useState<Record<number, InkTextAnnotation[]>>({});
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
   const [aiPanelMode, setAiPanelMode] = useState<'floating' | 'sidebar'>('floating');
@@ -341,11 +349,11 @@ export function useStudyWorkspace(props: {
               );
             });
 
+            const firstPageUrl = firstPage?.image_url ?? null;
             const pageImageUrls = pages.reduce<Record<number, string>>((next, page) => {
-              if (page.image_url) next[page.page_number] = page.image_url;
+              if (page.image_url && !isPdfAssetUrl(page.image_url)) next[page.page_number] = page.image_url;
               return next;
             }, {});
-            const firstPageUrl = firstPage?.image_url ?? null;
             const pdfLikeBackendNote = /\.pdf$/i.test(backendNote.title.trim()) || pages.length > 1 || isPdfAssetUrl(firstPageUrl);
             const documentType = pdfLikeBackendNote ? 'pdf' as const : firstPageUrl ? 'image' as const : 'blank' as const;
 
@@ -1140,12 +1148,12 @@ export function useStudyWorkspace(props: {
 
   const changePenColor = (color: string) => {
     setPenColor(color);
-    setInkTool((current) => (current !== 'pen' && current !== 'highlight' ? 'pen' : current));
+    setInkTool((current) => (current !== 'pen' && current !== 'highlight' && !isShapeTool(current) ? 'pen' : current));
   };
 
   const changePenWidth = (width: number) => {
     setPenWidth(width);
-    setInkTool((current) => (current !== 'pen' && current !== 'highlight' ? 'pen' : current));
+    setInkTool((current) => (current !== 'pen' && current !== 'highlight' && !isShapeTool(current) ? 'pen' : current));
   };
 
   const changeBrushType = (brush: InkBrush) => {
@@ -1157,7 +1165,16 @@ export function useStudyWorkspace(props: {
 
   const changeLinePattern = (pattern: InkLinePattern) => {
     setLinePattern(pattern);
-    setInkTool((current) => (current !== 'pen' && current !== 'highlight' ? 'pen' : current));
+    setInkTool((current) => (current !== 'pen' && current !== 'highlight' && !isShapeTool(current) ? 'pen' : current));
+  };
+
+  const changeBrushSettings = (nextSettings: Partial<InkBrushSettings>) => {
+    setBrushSettings((current) => ({
+      stability: Math.max(0, Math.min(100, nextSettings.stability ?? current.stability)),
+      sharpness: Math.max(0, Math.min(100, nextSettings.sharpness ?? current.sharpness)),
+      density: Math.max(0, Math.min(100, nextSettings.density ?? current.density)),
+      pressure: Math.max(0, Math.min(100, nextSettings.pressure ?? current.pressure)),
+    }));
   };
 
   const changeSelection = (rect: SelectionRect | null) => {
@@ -1461,6 +1478,7 @@ export function useStudyWorkspace(props: {
   };
 
   const {
+    pushWorkspaceHistorySnapshot,
     clearCurrentSelection,
     clearInk,
     undoInk,
@@ -1474,6 +1492,7 @@ export function useStudyWorkspace(props: {
     changeSelectedStrokesColor,
     duplicateSelectedStrokes,
     resizeSelectedStrokes,
+    resizeSelectedStrokesToRect,
     nudgeSelectedStrokes,
   } = useInkActions({
     studyDocumentId,
@@ -1483,6 +1502,9 @@ export function useStudyWorkspace(props: {
     selectionRect,
     selectionByDocument,
     inkByDocument,
+    textAnnotationsByDocument,
+    generatedPagesByDocument,
+    activePageByDocument,
     inkHistoryByDocument,
     redoInkHistoryByDocument,
     setInkByDocument,
@@ -1490,6 +1512,8 @@ export function useStudyWorkspace(props: {
     setInkHistoryByDocument,
     setRedoInkHistoryByDocument,
     setTextAnnotationsByDocument,
+    setGeneratedPagesByDocument,
+    setActivePageByDocument,
     setSelectionByDocument,
     setInkTool,
     setWorkspaceFeedback,
@@ -1504,6 +1528,54 @@ export function useStudyWorkspace(props: {
       [studyDocumentId]: { kind: 'generated', pageId: target.generatedPageId! },
     }));
   };
+
+  const regeneratePdfPageCache = useCallback(async () => {
+    if (!studyDocumentId || studyDocument?.type !== 'pdf') {
+      setWorkspaceFeedback('PDF 문서를 연 뒤 캐시를 다시 만들 수 있습니다.');
+      return;
+    }
+    if (!isBackendApiEnabled() || !currentDocumentHasBackendPages) {
+      setWorkspaceFeedback('백엔드에 저장된 PDF만 캐시 재생성을 지원합니다.');
+      return;
+    }
+
+    setWorkspaceFeedback('PDF 페이지 캐시를 다시 만드는 중...');
+    try {
+      const result = await regenerateBackendPdfCache(studyDocumentId);
+      const pageImageUrls = result.pages.reduce<Record<number, string>>((next, page) => {
+        if (page.image_url && !isPdfAssetUrl(page.image_url)) next[page.page_number] = page.image_url;
+        return next;
+      }, {});
+      const backendPageIds = result.pages.reduce<Record<number, number>>((next, page) => {
+        next[page.page_number] = page.id;
+        return next;
+      }, {});
+
+      setBackendPageIdsByDocument((current) => ({
+        ...current,
+        [studyDocumentId]: {
+          ...(current[studyDocumentId] ?? {}),
+          ...backendPageIds,
+        },
+      }));
+      setUserStudyDocuments((current) => current.map((document) => (
+        document.id === studyDocumentId
+          ? {
+              ...document,
+              pageCount: Math.max(document.pageCount, result.pages.length),
+              pageImageUrls: Object.keys(pageImageUrls).length ? pageImageUrls : document.pageImageUrls,
+              updatedAt: '방금 캐시 재생성',
+            }
+          : document
+      )));
+      setWorkspaceFeedback('PDF 페이지 캐시를 다시 만들었습니다.');
+    } catch (error) {
+      const message = error instanceof BackendApiError && error.detail
+        ? error.detail
+        : 'PDF 페이지 캐시 재생성에 실패했습니다.';
+      setWorkspaceFeedback(message);
+    }
+  }, [currentDocumentHasBackendPages, studyDocument, studyDocumentId]);
 
   const dismissIncomingBanner = () => {
     setIncomingBannerQueue((current) => current.slice(1));
@@ -1528,6 +1600,9 @@ export function useStudyWorkspace(props: {
     removeGeneratedPage,
     duplicateGeneratedPage,
     moveGeneratedPage,
+    duplicatePdfPage,
+    removePdfPage,
+    movePdfPage,
     updateStudyDocumentPageCount,
     setCurrentPdfPage,
     moveDocumentPage,
@@ -1566,6 +1641,7 @@ export function useStudyWorkspace(props: {
     setTextAnnotationsByDocument,
     setBookmarksByDocument,
     clearCurrentSelection,
+    pushWorkspaceHistorySnapshot,
   });
   const failedPageSaveCount = Object.keys(failedPageSaveKeys).length;
   const pendingPageSaveCount = Object.keys(pendingPageSaves).length;
@@ -1594,6 +1670,7 @@ export function useStudyWorkspace(props: {
     penWidth,
     brushType,
     linePattern,
+    brushSettings,
     inkStrokes,
     textAnnotations,
     inkByDocument,
@@ -1654,6 +1731,7 @@ export function useStudyWorkspace(props: {
     restoreStudyDocument,
     renameStudyDocument,
     uploadPdfDocument,
+    regeneratePdfPageCache,
     resetNotes,
     resetLocalWorkspaceData,
     setNoteDetailTab,
@@ -1663,6 +1741,7 @@ export function useStudyWorkspace(props: {
     changePenWidth,
     changeBrushType,
     changeLinePattern,
+    changeBrushSettings,
     toggleAiPanel: () => setAiPanelOpen((current) => {
       const next = !current;
       if (next) setViewingAiChatSessionId(null);
@@ -1696,6 +1775,7 @@ export function useStudyWorkspace(props: {
     changeSelectedStrokesColor,
     duplicateSelectedStrokes,
     resizeSelectedStrokes,
+    resizeSelectedStrokesToRect,
     nudgeSelectedStrokes,
     acceptIncomingAsset,
     archiveIncomingAsset,
@@ -1715,6 +1795,9 @@ export function useStudyWorkspace(props: {
     removeGeneratedPage,
     duplicateGeneratedPage,
     moveGeneratedPage,
+    duplicatePdfPage,
+    removePdfPage,
+    movePdfPage,
     updateStudyDocumentPageCount,
     setCurrentPdfPage,
     goToPreviousDocumentPage: () => moveDocumentPage(-1),

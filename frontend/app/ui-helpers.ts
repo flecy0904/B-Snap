@@ -1,5 +1,5 @@
 import getStroke, { StrokeOptions } from 'perfect-freehand';
-import { InkBrush, InkPoint, InkShape, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from './ui-types';
+import { InkBrush, InkBrushSettings, InkPoint, InkShape, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from './ui-types';
 import { DocumentPageView, GeneratedWorkspacePage, TimetableEntry } from './types';
 
 export const DAYS = ['MON', 'TUE', 'WED', 'THU', 'FRI'] as const;
@@ -283,48 +283,81 @@ function getSvgPathFromOutline(points: number[][], closed = true) {
   return result;
 }
 
-function getStrokeOptions(style: InkStroke['style'], width: number, complete: boolean, brush: InkBrush = 'ballpoint'): StrokeOptions {
-  if (style === 'highlight') {
+function clampRatio(value: number | undefined, fallback: number) {
+  if (typeof value !== 'number' || Number.isNaN(value)) return fallback;
+  return Math.max(0, Math.min(1, value / 100));
+}
+
+function applyBrushSettings(options: StrokeOptions, settings?: InkBrushSettings): StrokeOptions {
+  if (!settings) return options;
+
+  const stability = clampRatio(settings.stability, 0.58);
+  const sharpness = clampRatio(settings.sharpness, 0.5);
+  const density = clampRatio(settings.density, 1);
+  const pressure = clampRatio(settings.pressure, 0.55);
+  const taperRatio = 1.25 - sharpness * 0.7;
+
+  const applyTaper = (cap: StrokeOptions['start']) => {
+    if (!cap || typeof cap !== 'object') return cap;
     return {
+      ...cap,
+      taper: typeof cap.taper === 'number' ? cap.taper * taperRatio : cap.taper,
+    };
+  };
+
+  return {
+    ...options,
+    size: (options.size ?? 1) * (0.85 + density * 0.28),
+    thinning: (options.thinning ?? 0) * (0.35 + pressure * 0.95),
+    smoothing: Math.max(0.2, Math.min(0.98, 0.24 + stability * 0.7)),
+    streamline: Math.max(0.08, Math.min(0.9, 0.14 + stability * 0.72)),
+    start: applyTaper(options.start),
+    end: applyTaper(options.end),
+  };
+}
+
+function getStrokeOptions(style: InkStroke['style'], width: number, complete: boolean, brush: InkBrush = 'ballpoint', settings?: InkBrushSettings): StrokeOptions {
+  if (style === 'highlight') {
+    return applyBrushSettings({
       size: Math.max(16, width),
       thinning: -0.2,
-      smoothing: 0.8,
-      streamline: 0.6,
+      smoothing: 0.9,
+      streamline: 0.72,
       simulatePressure: false,
       start: { cap: true, taper: 0 },
       end: { cap: true, taper: 0 },
       last: complete,
-    };
+    }, settings);
   }
 
   if (brush === 'fountain') {
-    return {
+    return applyBrushSettings({
       size: Math.max(2, width),
-      thinning: 0.72,
-      smoothing: 0.54,
-      streamline: 0.55,
+      thinning: 0.82,
+      smoothing: 0.62,
+      streamline: 0.48,
       simulatePressure: true,
       start: { cap: true, taper: 16, easing: (t) => t },
       end: { cap: true, taper: 18, easing: (t) => t },
       last: complete,
-    };
+    }, settings);
   }
 
   if (brush === 'pencil') {
-    return {
+    return applyBrushSettings({
       size: Math.max(2, width),
-      thinning: 0.58,
-      smoothing: 0.34,
-      streamline: 0.34,
+      thinning: 0.66,
+      smoothing: 0.42,
+      streamline: 0.3,
       simulatePressure: true,
       start: { cap: true, taper: 8, easing: (t) => t },
       end: { cap: true, taper: 12, easing: (t) => t },
       last: complete,
-    };
+    }, settings);
   }
 
   if (brush === 'marker') {
-    return {
+    return applyBrushSettings({
       size: Math.max(5, width * 1.25),
       thinning: 0.05,
       smoothing: 0.74,
@@ -333,19 +366,19 @@ function getStrokeOptions(style: InkStroke['style'], width: number, complete: bo
       start: { cap: true, taper: 0 },
       end: { cap: true, taper: 0 },
       last: complete,
-    };
+    }, settings);
   }
 
-  return {
+  return applyBrushSettings({
     size: Math.max(2, width),
-    thinning: 0.4,
-    smoothing: 0.5,
-    streamline: 0.6,
+    thinning: 0.48,
+    smoothing: 0.58,
+    streamline: 0.58,
     simulatePressure: true,
     start: { cap: true, taper: 10, easing: (t) => t },
     end: { cap: true, taper: 10, easing: (t) => t },
     last: complete,
-  };
+  }, settings);
 }
 
 export function getInkCenterlinePath(points: InkPoint[]) {
@@ -422,7 +455,7 @@ export function getInkStrokeSvgPath(stroke: InkStroke, complete = true) {
   const style = stroke.style ?? 'pen';
   const outline = getStroke(
     stroke.points.map((point) => [point.x, point.y]),
-    getStrokeOptions(style, stroke.width, complete, stroke.brush),
+    getStrokeOptions(style, stroke.width, complete, stroke.brush, stroke.brushSettings),
   );
 
   return getSvgPathFromOutline(outline as number[][]);
