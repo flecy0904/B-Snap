@@ -1,37 +1,114 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { GestureResponderEvent, Image, PanResponder, Text, useWindowDimensions, View } from 'react-native';
+import { GestureResponderEvent, Image, ScrollView, Text, useWindowDimensions, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { TextAnnotationLayer } from '../canvas/text-annotation-layer';
-import { findHitInkStrokeId, getInkStrokeSvgPath, resolveInkStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize } from '../../../ui-helpers';
-import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
+import { findHitInkStrokeId, getInkCenterlinePath, getInkStrokeSvgPath, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize } from '../../../ui-helpers';
+import { InkBrush, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
+import { NotebookPage } from '../../../types';
+
+function InkPath({ stroke, draft = false }: { stroke: InkStroke; draft?: boolean }) {
+  if (stroke.linePattern && stroke.linePattern !== 'solid' && stroke.style !== 'highlight' && stroke.style !== 'shape') {
+    const centerlinePath = getInkCenterlinePath(stroke.points);
+    if (!centerlinePath) return null;
+    const dashArray = stroke.linePattern === 'dotted' ? `${Math.max(1, stroke.width * 0.45)} ${Math.max(6, stroke.width * 2)}` : `${Math.max(8, stroke.width * 3)} ${Math.max(5, stroke.width * 1.8)}`;
+    return (
+      <Path
+        key={stroke.id}
+        d={centerlinePath}
+        fill="none"
+        stroke={stroke.color}
+        strokeWidth={stroke.width}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeDasharray={dashArray}
+      />
+    );
+  }
+
+  const path = getInkStrokeSvgPath(stroke, !draft);
+  if (!path) return null;
+
+  if (stroke.style === 'shape') {
+    const dashArray = stroke.linePattern && stroke.linePattern !== 'solid'
+      ? stroke.linePattern === 'dotted'
+        ? `${Math.max(1, stroke.width * 0.45)} ${Math.max(6, stroke.width * 2)}`
+        : `${Math.max(8, stroke.width * 3)} ${Math.max(5, stroke.width * 1.8)}`
+      : undefined;
+    return (
+      <Path
+        key={stroke.id}
+        d={path}
+        fill="none"
+        stroke={stroke.color}
+        strokeWidth={stroke.width}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeDasharray={dashArray}
+      />
+    );
+  }
+
+  if (stroke.style === 'highlight') {
+    return <Path key={stroke.id} d={path} fill={stroke.color} opacity={0.72} />;
+  }
+
+  return <Path key={stroke.id} d={path} fill={stroke.color} />;
+}
+
+function NotebookPaperBackground({ page }: { page: NotebookPage }) {
+  const isSummary = page.kind === 'summary';
+
+  if (!isSummary) {
+    return (
+      <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#FFFFFF' }}>
+        <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 1, backgroundColor: '#F2F5FA' }} />
+      </View>
+    );
+  }
+
+  const lines = Array.from({ length: 28 }, (_, index) => index);
+
+  return (
+    <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#FFFDF8' }}>
+      <View style={{ position: 'absolute', top: 0, left: 0, bottom: 0, width: 42, backgroundColor: '#FFF4E0', borderRightWidth: 1, borderRightColor: '#F0E5D2' }} />
+      {lines.map((line) => (
+        <View
+          key={line}
+          style={{
+            position: 'absolute',
+            left: 58,
+            right: 40,
+            top: 82 + line * 34,
+            height: 1,
+            backgroundColor: '#F0E5D2',
+          }}
+        />
+      ))}
+      <Text style={{ position: 'absolute', top: 30, left: 58, fontSize: 13, fontWeight: '900', color: '#B7791F' }}>
+        AI 정리 페이지
+      </Text>
+    </View>
+  );
+}
 
 type PdfJsViewport = { width: number; height: number };
-
-type PdfJsRenderTask = {
-  promise: Promise<void>;
-  cancel?: () => void;
-};
-
+type PdfJsRenderTask = { promise: Promise<void>; cancel?: () => void };
 type PdfJsPage = {
   getViewport: (options: { scale: number }) => PdfJsViewport;
   render: (params: { canvasContext: CanvasRenderingContext2D; viewport: PdfJsViewport }) => PdfJsRenderTask;
 };
-
 type PdfJsDocument = {
   numPages: number;
   getPage: (pageNumber: number) => Promise<PdfJsPage>;
   destroy?: () => void;
 };
-
 type PdfJsDocumentSource = string | { url: string; withCredentials?: boolean; disableWorker?: boolean } | { data: Uint8Array; disableWorker?: boolean };
-
 type PdfJsLib = {
   version: string;
   GlobalWorkerOptions: { workerSrc: string };
   getDocument: (source: PdfJsDocumentSource) => { promise: Promise<PdfJsDocument>; destroy?: () => void };
 };
-
-type PageFrame = { x: number; y: number; width: number; height: number };
+type PageFrame = { width: number; height: number };
 type WebGestureNativeEvent = GestureResponderEvent['nativeEvent'] & { buttons?: number };
 
 declare global {
@@ -119,12 +196,45 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string)
   });
 }
 
+function drawPath(context: CanvasRenderingContext2D, stroke: InkStroke, opacity = 1) {
+  const path = getInkStrokeSvgPath(stroke);
+  if (!path || typeof Path2D === 'undefined') return;
+  context.save();
+  context.globalAlpha = opacity;
+  if (stroke.style === 'shape') {
+    context.strokeStyle = stroke.color;
+    context.lineWidth = stroke.width;
+    context.lineCap = 'round';
+    context.lineJoin = 'round';
+    if (stroke.linePattern && stroke.linePattern !== 'solid') {
+      context.setLineDash(stroke.linePattern === 'dotted' ? [Math.max(1, stroke.width * 0.45), Math.max(6, stroke.width * 2)] : [Math.max(8, stroke.width * 3), Math.max(5, stroke.width * 1.8)]);
+    }
+    context.stroke(new Path2D(path));
+  } else if (stroke.linePattern && stroke.linePattern !== 'solid' && stroke.style !== 'highlight') {
+    const centerlinePath = getInkCenterlinePath(stroke.points);
+    if (centerlinePath) {
+      context.strokeStyle = stroke.color;
+      context.lineWidth = stroke.width;
+      context.lineCap = 'round';
+      context.lineJoin = 'round';
+      context.setLineDash(stroke.linePattern === 'dotted' ? [Math.max(1, stroke.width * 0.45), Math.max(6, stroke.width * 2)] : [Math.max(8, stroke.width * 3), Math.max(5, stroke.width * 1.8)]);
+      context.stroke(new Path2D(centerlinePath));
+    }
+  } else {
+    context.fillStyle = stroke.color;
+    context.fill(new Path2D(path));
+  }
+  context.restore();
+}
+
 export function PdfPreview(props: {
   file: number | string | { uri: string };
   page: number;
   inkTool: InkTool;
   penColor: string;
   penWidth: number;
+  brushType: InkBrush;
+  linePattern: InkLinePattern;
   inkStrokes: InkStroke[];
   textAnnotations: InkTextAnnotation[];
   textAnnotationVariant?: 'floating' | 'marker';
@@ -135,86 +245,163 @@ export function PdfPreview(props: {
   onUpdateTextAnnotation: (id: string, text: string) => void;
   onRemoveTextAnnotation: (id: string) => void;
   onSelectionChange: (rect: SelectionRect | null) => void;
+  onMoveSelection?: (dx: number, dy: number) => void;
   onSelectionPreviewChange?: (uri: string | null) => void;
   onPageChanged?: (page: number) => void;
+  onOpenGeneratedPage?: (pageId: string) => void;
   onDocumentLoaded?: (pageCount: number) => void;
+  notebookPages?: NotebookPage[];
+  activeGeneratedPageId?: string | null;
+  pageImageUrls?: Record<number, string>;
   styles: any;
 }) {
   const { width, height } = useWindowDimensions();
-  const viewerWidth = Math.min(1240, Math.max(860, width - 150));
-  const viewerHeight = Math.max(700, height - 130);
-  const [currentStroke, setCurrentStroke] = useState<InkStroke | null>(null);
-  const [draftSelection, setDraftSelection] = useState<SelectionRect | null>(null);
+  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
+  const availableWidth = Math.max(320, containerSize.width || width);
+  const availableHeight = Math.max(520, containerSize.height || height);
+  const viewerWidth = Math.min(1240, Math.max(320, availableWidth - 28));
+  const viewerHeight = Math.max(520, availableHeight - 20);
+  const pageGap = 22;
   const [pdfDocument, setPdfDocument] = useState<PdfJsDocument | null>(null);
-  const [pageFrame, setPageFrame] = useState<PageFrame | null>(null);
+  const [pageFrames, setPageFrames] = useState<Record<number, PageFrame>>({});
+  const [cachedImageFrames, setCachedImageFrames] = useState<Record<number, PageFrame>>({});
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  const [currentStroke, setCurrentStroke] = useState<InkStroke | null>(null);
+  const [draftSelection, setDraftSelection] = useState<SelectionRect | null>(null);
   const currentStrokeRef = useRef<InkStroke | null>(null);
   const selectionOriginRef = useRef<InkPoint | null>(null);
+  const selectionMoveOriginRef = useRef<InkPoint | null>(null);
+  const selectionMoveStartRectRef = useRef<SelectionRect | null>(null);
   const draftSelectionRef = useRef<SelectionRect | null>(null);
   const textTapRef = useRef<InkPoint | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const canvasRefs = useRef<Record<number, HTMLCanvasElement | null>>({});
+  const scrollingProgrammaticallyRef = useRef(false);
 
   const pdfUri = useMemo(() => {
-    if (typeof props.file === 'string') {
-      return props.file;
-    }
-    if (typeof props.file === 'number') {
-      return Image.resolveAssetSource(props.file)?.uri ?? null;
-    }
+    if (typeof props.file === 'string') return props.file;
+    if (typeof props.file === 'number') return Image.resolveAssetSource(props.file)?.uri ?? null;
     return props.file.uri ?? null;
   }, [props.file]);
-
-  const pageInkStrokes = useMemo(
-    () => props.inkStrokes.filter((stroke) => !stroke.pageNumber || stroke.pageNumber === props.page),
-    [props.inkStrokes, props.page],
+  const pageCount = pdfDocument?.numPages ?? 0;
+  const hasCachedPageImages = Object.keys(props.pageImageUrls ?? {}).length > 0;
+  const pageItems = useMemo<NotebookPage[]>(
+    () => props.notebookPages?.length
+      ? props.notebookPages
+      : Array.from({ length: Math.max(1, pageCount || props.page) }, (_, index) => ({
+          id: `pdf:${index + 1}`,
+          documentId: 0,
+          kind: 'pdf' as const,
+          label: `${index + 1} 페이지`,
+          pageNumber: index + 1,
+        })),
+    [pageCount, props.notebookPages, props.page],
   );
-  const pageInkStrokesForView = useMemo(
-    () => (pageFrame ? pageInkStrokes.map((stroke) => scaleInkStrokeToPageSize(stroke, pageFrame.width, pageFrame.height)) : pageInkStrokes),
-    [pageFrame, pageInkStrokes],
-  );
-  const pageTextAnnotationsForView = useMemo(
-    () => (pageFrame ? props.textAnnotations.map((annotation) => scaleTextAnnotationToPageSize(annotation, pageFrame.width, pageFrame.height)) : props.textAnnotations),
-    [pageFrame, props.textAnnotations],
-  );
 
-  const pageTransform = pageFrame ? `translate(${pageFrame.x} ${pageFrame.y})` : undefined;
+  const fitPageFrame = (naturalWidth?: number, naturalHeight?: number): PageFrame => {
+    const aspectRatio = naturalWidth && naturalHeight
+      ? Math.max(0.45, Math.min(3.2, naturalWidth / naturalHeight))
+      : 16 / 9;
+    const width = Math.min(1180, Math.max(320, viewerWidth - 64));
+    return { width, height: Math.round(width / aspectRatio) };
+  };
 
-  const clampPointToPage = (x: number, y: number) => {
-    if (!pageFrame) return null;
-    const localX = x - pageFrame.x;
-    const localY = y - pageFrame.y;
-
-    if (localX < 0 || localY < 0 || localX > pageFrame.width || localY > pageFrame.height) {
-      return null;
+  useEffect(() => {
+    const entries = Object.entries(props.pageImageUrls ?? {});
+    if (!entries.length) {
+      setCachedImageFrames({});
+      return;
     }
 
-    return {
-      x: Math.max(0, Math.min(pageFrame.width, localX)),
-      y: Math.max(0, Math.min(pageFrame.height, localY)),
-      pageWidth: pageFrame.width,
-      pageHeight: pageFrame.height,
+    let cancelled = false;
+    const [firstPageNumberText, firstImageUri] = entries[0];
+    const firstPageNumber = Number(firstPageNumberText);
+
+    Image.getSize(
+      firstImageUri,
+      (naturalWidth, naturalHeight) => {
+        if (cancelled) return;
+        const firstFrame = fitPageFrame(naturalWidth, naturalHeight);
+        setCachedImageFrames((current) => {
+          const next: Record<number, PageFrame> = { ...current, [firstPageNumber]: firstFrame };
+          entries.forEach(([pageNumberText]) => {
+            const pageNumber = Number(pageNumberText);
+            if (!next[pageNumber]) next[pageNumber] = firstFrame;
+          });
+          return next;
+        });
+      },
+      () => {
+        if (!cancelled) setCachedImageFrames({});
+      },
+    );
+
+    entries.slice(1).forEach(([pageNumberText, uri]) => {
+      const pageNumber = Number(pageNumberText);
+      Image.getSize(
+        uri,
+        (naturalWidth, naturalHeight) => {
+          if (!cancelled) setCachedImageFrames((current) => ({ ...current, [pageNumber]: fitPageFrame(naturalWidth, naturalHeight) }));
+        },
+        () => undefined,
+      );
+    });
+
+    return () => {
+      cancelled = true;
     };
+  }, [props.pageImageUrls, viewerWidth]);
+
+  const getFrameForPage = (page: NotebookPage): PageFrame => {
+    const sourcePageNumber = page.pageNumber ?? page.insertAfterPage;
+    if (sourcePageNumber && cachedImageFrames[sourcePageNumber]) return cachedImageFrames[sourcePageNumber];
+    if (sourcePageNumber && pageFrames[sourcePageNumber]) return pageFrames[sourcePageNumber];
+    return fitPageFrame();
   };
 
-  const toStageRect = (rect: SelectionRect | null) => {
-    if (!rect || !pageFrame) return null;
-    return {
-      left: pageFrame.x + rect.x,
-      top: pageFrame.y + rect.y,
-      width: rect.width,
-      height: rect.height,
-    };
+  const getPageStrokesForView = (page: NotebookPage) => {
+    const frame = getFrameForPage(page);
+    const pageStrokes = props.inkStrokes.filter((stroke) => (
+      page.generatedPageId
+        ? stroke.generatedPageId === page.generatedPageId
+        : !stroke.generatedPageId && (!stroke.pageNumber || stroke.pageNumber === page.pageNumber)
+    ));
+    return pageStrokes.map((stroke) => scaleInkStrokeToPageSize(stroke, frame.width, frame.height));
   };
 
-  const drawPath = (context: CanvasRenderingContext2D, stroke: InkStroke, opacity = 1) => {
-    const path = getInkStrokeSvgPath(stroke);
-    if (!path || typeof Path2D === 'undefined') return;
-    context.save();
-    context.globalAlpha = opacity;
-    context.fillStyle = stroke.color;
-    context.fill(new Path2D(path));
-    context.restore();
+  const getPageTextAnnotationsForView = (page: NotebookPage) => {
+    const frame = getFrameForPage(page);
+    const pageAnnotations = props.textAnnotations.filter((annotation) => (
+      page.generatedPageId
+        ? annotation.generatedPageId === page.generatedPageId
+        : !annotation.generatedPageId && annotation.pageNumber === page.pageNumber
+    ));
+    return pageAnnotations.map((annotation) => scaleTextAnnotationToPageSize(annotation, frame.width, frame.height));
+  };
+
+  const getPdfPageStrokesForView = (pageNumber: number) => {
+    const frame = pageFrames[pageNumber];
+    const pageStrokes = props.inkStrokes.filter((stroke) => !stroke.generatedPageId && (!stroke.pageNumber || stroke.pageNumber === pageNumber));
+    return frame ? pageStrokes.map((stroke) => scaleInkStrokeToPageSize(stroke, frame.width, frame.height)) : pageStrokes;
+  };
+
+  const getPdfPageTextAnnotationsForView = (pageNumber: number) => {
+    const frame = pageFrames[pageNumber];
+    const pageAnnotations = props.textAnnotations.filter((annotation) => !annotation.generatedPageId && annotation.pageNumber === pageNumber);
+    return frame ? pageAnnotations.map((annotation) => scaleTextAnnotationToPageSize(annotation, frame.width, frame.height)) : pageAnnotations;
+  };
+
+  const clampPointToPage = (page: NotebookPage, x: number, y: number, mode: 'draw' | 'annotate' = 'draw'): InkPoint | null => {
+    const frame = getFrameForPage(page);
+    if (!frame) return null;
+    return {
+      x: Math.max(0, Math.min(frame.width - (mode === 'annotate' ? 180 : 0), x)),
+      y: Math.max(0, Math.min(frame.height - (mode === 'annotate' ? 110 : 0), y)),
+      pageNumber: page.pageNumber,
+      generatedPageId: page.generatedPageId,
+      pageWidth: frame.width,
+      pageHeight: frame.height,
+    };
   };
 
   const drawTextAnnotation = (context: CanvasRenderingContext2D, annotation: InkTextAnnotation) => {
@@ -227,7 +414,6 @@ export function PdfPreview(props: {
       context.lineWidth = 1;
       context.setLineDash([5, 4]);
       context.strokeRect(annotation.anchorRect.x, annotation.anchorRect.y, annotation.anchorRect.width, annotation.anchorRect.height);
-
       const markerX = annotation.anchorRect.x + annotation.anchorRect.width - 12;
       const markerY = Math.max(12, annotation.anchorRect.y - 12);
       context.setLineDash([]);
@@ -241,36 +427,29 @@ export function PdfPreview(props: {
       return;
     }
 
-    const width = annotation.width || 180;
-    const height = Math.max(48, 30 + Math.ceil((annotation.text.length || 1) / 18) * 18);
+    const annotationWidth = annotation.width || 180;
+    const annotationHeight = Math.max(48, 30 + Math.ceil((annotation.text.length || 1) / 18) * 18);
     context.fillStyle = '#FFFFFF';
     context.strokeStyle = '#DDE3EC';
     context.lineWidth = 1;
     context.beginPath();
-    context.roundRect(annotation.x, annotation.y, width, height, 12);
+    context.roundRect(annotation.x, annotation.y, annotationWidth, annotationHeight, 12);
     context.fill();
     context.stroke();
     context.fillStyle = '#303744';
-    const lines = (annotation.text || '텍스트 메모 입력').split(/\s+/).reduce<string[]>((rows, word) => {
-      const current = rows[rows.length - 1] ?? '';
-      const next = current ? `${current} ${word}` : word;
-      if (context.measureText(next).width > width - 24 && current) {
-        rows.push(word);
-      } else if (rows.length) {
-        rows[rows.length - 1] = next;
-      } else {
-        rows.push(next);
-      }
-      return rows;
-    }, []);
-    lines.slice(0, 4).forEach((line, index) => context.fillText(line, annotation.x + 12, annotation.y + 12 + index * 17));
+    (annotation.text || '텍스트 메모 입력').split(/\s+/).slice(0, 4).forEach((line, index) => {
+      context.fillText(line, annotation.x + 12, annotation.y + 12 + index * 17);
+    });
     context.restore();
   };
 
-  const buildSelectionPreview = (rect: SelectionRect | null) => {
-    const sourceCanvas = canvasRef.current;
-    if (!rect || !sourceCanvas || !pageFrame) return null;
-    const deviceScale = sourceCanvas.width / pageFrame.width;
+  const buildSelectionPreview = (page: NotebookPage, rect: SelectionRect | null) => {
+    const pageNumber = page.pageNumber;
+    if (!pageNumber) return null;
+    const sourceCanvas = canvasRefs.current[pageNumber];
+    const frame = pageFrames[pageNumber];
+    if (!rect || !sourceCanvas || !frame) return null;
+    const deviceScale = sourceCanvas.width / frame.width;
     const cropCanvas = document.createElement('canvas');
     cropCanvas.width = Math.max(1, Math.floor(rect.width * deviceScale));
     cropCanvas.height = Math.max(1, Math.floor(rect.height * deviceScale));
@@ -290,9 +469,9 @@ export function PdfPreview(props: {
     context.save();
     context.scale(deviceScale, deviceScale);
     context.translate(-rect.x, -rect.y);
-    pageInkStrokesForView.filter((stroke) => stroke.style === 'highlight').forEach((stroke) => drawPath(context, stroke, 0.72));
-    pageTextAnnotationsForView.forEach((annotation) => drawTextAnnotation(context, annotation));
-    pageInkStrokesForView.filter((stroke) => stroke.style !== 'highlight').forEach((stroke) => drawPath(context, stroke));
+    getPdfPageStrokesForView(pageNumber).filter((stroke) => stroke.style === 'highlight').forEach((stroke) => drawPath(context, stroke, 0.72));
+    getPdfPageTextAnnotationsForView(pageNumber).forEach((annotation) => drawTextAnnotation(context, annotation));
+    getPdfPageStrokesForView(pageNumber).filter((stroke) => stroke.style !== 'highlight').forEach((stroke) => drawPath(context, stroke));
     context.restore();
     return cropCanvas.toDataURL('image/png');
   };
@@ -301,9 +480,17 @@ export function PdfPreview(props: {
     let cancelled = false;
     let task: { promise: Promise<PdfJsDocument>; destroy?: () => void } | null = null;
 
+    if (hasCachedPageImages) {
+      setPdfDocument(null);
+      setPageFrames({});
+      setIsLoading(false);
+      setLoadError(null);
+      return;
+    }
+
     if (!pdfUri) {
       setPdfDocument(null);
-      setPageFrame(null);
+      setPageFrames({});
       setLoadError('웹에서 현재 선택한 PDF를 미리보기할 수 없습니다.');
       return;
     }
@@ -321,16 +508,13 @@ export function PdfPreview(props: {
       .then((document) => {
         if (!document || cancelled) return;
         setPdfDocument(document);
-        setIsLoading(false);
         props.onDocumentLoaded?.(document.numPages);
-        if (document.numPages > 0 && props.page > document.numPages) {
-          props.onPageChanged?.(document.numPages);
-        }
+        if (document.numPages > 0 && props.page > document.numPages) props.onPageChanged?.(document.numPages);
       })
       .catch(() => {
         if (cancelled) return;
         setPdfDocument(null);
-        setPageFrame(null);
+        setPageFrames({});
         setIsLoading(false);
         setLoadError('PDF를 불러오지 못했습니다. 브라우저에서 파일 접근 권한과 네트워크 상태를 확인해 주세요.');
       });
@@ -339,35 +523,33 @@ export function PdfPreview(props: {
       cancelled = true;
       task?.destroy?.();
     };
-  }, [pdfUri, props.page]);
+  }, [hasCachedPageImages, pdfUri]);
 
   useEffect(() => {
     let cancelled = false;
-    let renderTask: PdfJsRenderTask | null = null;
+    const renderTasks: PdfJsRenderTask[] = [];
 
-    if (!pdfDocument || !canvasRef.current) {
-      setPageFrame(null);
-      props.onSelectionPreviewChange?.(null);
+    if (!pdfDocument) {
       setIsLoading(false);
       return;
     }
 
     setIsLoading(true);
 
-    pdfDocument
-      .getPage(props.page)
-      .then((page) => {
-        if (cancelled || !canvasRef.current) return;
-
+    const renderPages = async () => {
+      const nextFrames: Record<number, PageFrame> = {};
+      for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
+        if (props.pageImageUrls?.[pageNumber]) continue;
+        if (Math.abs(pageNumber - props.page) > 1) continue;
+        const canvas = canvasRefs.current[pageNumber];
+        if (!canvas || cancelled) continue;
+        const page = await pdfDocument.getPage(pageNumber);
+        if (cancelled) return;
         const naturalViewport = page.getViewport({ scale: 1 });
-        const scale = Math.min((viewerWidth - 48) / naturalViewport.width, (viewerHeight - 40) / naturalViewport.height);
-        const viewport = page.getViewport({ scale: Math.max(scale, 0.1) });
-        const canvas = canvasRef.current;
+        const scale = Math.max(0.1, Math.min((viewerWidth - 80) / naturalViewport.width, 1.6));
+        const viewport = page.getViewport({ scale });
         const context = canvas.getContext('2d');
-
-        if (!context) {
-          throw new Error('Canvas context unavailable');
-        }
+        if (!context) continue;
 
         const deviceScale = window.devicePixelRatio || 1;
         canvas.width = Math.floor(viewport.width * deviceScale);
@@ -376,149 +558,90 @@ export function PdfPreview(props: {
         canvas.style.height = `${viewport.height}px`;
         context.setTransform(deviceScale, 0, 0, deviceScale, 0, 0);
         context.clearRect(0, 0, viewport.width, viewport.height);
+        nextFrames[pageNumber] = { width: viewport.width, height: viewport.height };
+        setPageFrames((current) => ({ ...current, [pageNumber]: nextFrames[pageNumber] }));
 
-        setPageFrame({
-          x: Math.max(0, (viewerWidth - viewport.width) / 2),
-          y: 16,
-          width: viewport.width,
-          height: viewport.height,
-        });
+        const renderTask = page.render({ canvasContext: context, viewport });
+        renderTasks.push(renderTask);
+        await withTimeout(renderTask.promise, 12000, 'PDF page render timed out.');
+      }
+    };
 
-        renderTask = page.render({ canvasContext: context, viewport });
-        return withTimeout(renderTask.promise, 12000, 'PDF page render timed out.');
-      })
+    renderPages()
       .then(() => {
-        if (cancelled) return;
-        setIsLoading(false);
+        if (!cancelled) setIsLoading(false);
       })
       .catch(() => {
-        renderTask?.cancel?.();
-        if (cancelled) return;
-        setIsLoading(false);
-        setLoadError('PDF 페이지를 렌더링하지 못했습니다.');
+        renderTasks.forEach((task) => task.cancel?.());
+        if (!cancelled) {
+          setIsLoading(false);
+          setLoadError('PDF 페이지를 렌더링하지 못했습니다.');
+        }
       });
 
     return () => {
       cancelled = true;
-      renderTask?.cancel?.();
+      renderTasks.forEach((task) => task.cancel?.());
     };
-  }, [pdfDocument, props.page, viewerHeight, viewerWidth]);
+  }, [pdfDocument, props.page, props.pageImageUrls, viewerWidth]);
 
-  const panResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: (e) => {
-          if (e.nativeEvent.touches && e.nativeEvent.touches.length > 1) return false;
-          if (!isPrimaryPointerEvent(e)) return false;
-          return !!pageFrame && (props.inkTool === 'pen' || props.inkTool === 'highlight');
-        },
-        onMoveShouldSetPanResponder: (e) => {
-          if (e.nativeEvent.touches && e.nativeEvent.touches.length > 1) return false;
-          if (!isPrimaryPointerEvent(e)) return false;
-          return !!pageFrame && (props.inkTool === 'pen' || props.inkTool === 'highlight');
-        },
-        onPanResponderGrant: (event) => {
-          const point = clampPointToPage(event.nativeEvent.locationX, event.nativeEvent.locationY);
-          if (!point) return;
-          if (props.inkTool === 'pen' || props.inkTool === 'highlight') {
-            const appearance = resolveInkStrokeAppearance(props.inkTool, props.penColor, props.penWidth);
-            const stroke: InkStroke = {
-              id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-              color: appearance.color,
-              width: appearance.width,
-              style: props.inkTool === 'highlight' ? 'highlight' : 'pen',
-              pageNumber: props.page,
-              pageWidth: point.pageWidth,
-              pageHeight: point.pageHeight,
-              points: [point],
-            };
-            currentStrokeRef.current = stroke;
-            setCurrentStroke(stroke);
-          }
-        },
-        onPanResponderMove: (event) => {
-          const point = clampPointToPage(event.nativeEvent.locationX, event.nativeEvent.locationY);
-          if (!point) return;
-          if (props.inkTool === 'pen' || props.inkTool === 'highlight') {
-            const stroke = currentStrokeRef.current;
-            if (stroke) {
-              const lastPoint = stroke.points[stroke.points.length - 1];
-              if (Math.hypot(point.x - lastPoint.x, point.y - lastPoint.y) < 1.2) {
-                return;
-              }
-              const nextStroke = { ...stroke, points: [...stroke.points, point] };
-              currentStrokeRef.current = nextStroke;
-              setCurrentStroke(nextStroke);
-            }
-          }
-        },
-        onPanResponderRelease: () => {
-          const stroke = currentStrokeRef.current;
-          if (stroke && stroke.points.length > 1) props.onCommitInkStroke(stroke);
-          currentStrokeRef.current = null;
-          setCurrentStroke(null);
-        },
-        onPanResponderTerminate: () => {
-          const stroke = currentStrokeRef.current;
-          if (stroke && stroke.points.length > 1) props.onCommitInkStroke(stroke);
-          currentStrokeRef.current = null;
-          setCurrentStroke(null);
-        },
-      }),
-    [pageFrame, props],
-  );
+  useEffect(() => {
+    if (!pageFrames[props.page] && !cachedImageFrames[props.page]) return;
+    scrollingProgrammaticallyRef.current = true;
+    const element = document.getElementById(`bsnap-pdf-page-${props.page}`);
+    element?.scrollIntoView({ block: 'nearest' });
+    window.setTimeout(() => {
+      scrollingProgrammaticallyRef.current = false;
+    }, 120);
+  }, [cachedImageFrames, props.page, pageFrames]);
 
-  const handleOverlayStart = (x: number, y: number) => {
-    const point = clampPointToPage(x, y);
-    if (!point) return;
-
-    if (props.inkTool === 'select') {
-      props.onSelectionChange(null);
-      props.onSelectionPreviewChange?.(null);
-      selectionOriginRef.current = point;
-      const rect = { x: point.x, y: point.y, width: 0, height: 0, pageWidth: point.pageWidth, pageHeight: point.pageHeight };
-      draftSelectionRef.current = rect;
-      setDraftSelection(rect);
-      return;
-    }
-
-    if (props.inkTool === 'text') {
-      textTapRef.current = point;
-      return;
-    }
-
-    if (props.inkTool === 'erase') {
-      const hitStrokeId = findHitInkStrokeId(pageInkStrokesForView, point);
-      if (hitStrokeId) {
-        props.onRemoveInkStroke(hitStrokeId);
+  const handleScroll = (event: any) => {
+    if (scrollingProgrammaticallyRef.current || props.inkTool !== 'view') return;
+    const offsetY = event.nativeEvent?.contentOffset?.y ?? event.target?.scrollTop ?? 0;
+    let cursor = 0;
+    let bestPage = props.page;
+    let bestDistance = Number.POSITIVE_INFINITY;
+    let bestNotebookPage: NotebookPage | null = null;
+    pageItems.forEach((page) => {
+      const height = getFrameForPage(page).height;
+      const pageMid = cursor + height / 2;
+      const distance = Math.abs(pageMid - (offsetY + viewerHeight * 0.38));
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        bestPage = page.pageNumber ?? bestPage;
+        bestNotebookPage = page;
       }
-    }
+      cursor += height + pageGap;
+    });
+    const activePage = bestNotebookPage as NotebookPage | null;
+    if (activePage?.generatedPageId) props.onOpenGeneratedPage?.(activePage.generatedPageId);
+    if (bestPage !== props.page) props.onPageChanged?.(bestPage);
   };
 
-  const handleSelectionMove = (x: number, y: number) => {
-    if (props.inkTool !== 'select') return;
-    const origin = selectionOriginRef.current;
-    if (!origin) return;
-    const point = clampPointToPage(x, y);
-    if (!point) return;
-    const nextRect = {
-      x: Math.min(origin.x, point.x),
-      y: Math.min(origin.y, point.y),
-      width: Math.abs(point.x - origin.x),
-      height: Math.abs(point.y - origin.y),
-      pageWidth: point.pageWidth,
-      pageHeight: point.pageHeight,
-    };
-    draftSelectionRef.current = nextRect;
-    setDraftSelection(nextRect);
+  const beginInteraction = (page: NotebookPage) => {
+    if (page.generatedPageId) props.onOpenGeneratedPage?.(page.generatedPageId);
+    if (page.pageNumber) props.onPageChanged?.(page.pageNumber);
   };
 
-  const finishSelection = () => {
+  const finishSelection = (page: NotebookPage) => {
     if (props.inkTool === 'select') {
       const rect = draftSelectionRef.current;
+      const moveOrigin = selectionMoveOriginRef.current;
+      const moveStartRect = selectionMoveStartRectRef.current;
+      if (rect && moveOrigin && moveStartRect) {
+        const dx = rect.x - moveStartRect.x;
+        const dy = rect.y - moveStartRect.y;
+        if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) props.onMoveSelection?.(dx, dy);
+        selectionMoveOriginRef.current = null;
+        selectionMoveStartRectRef.current = null;
+        draftSelectionRef.current = null;
+        selectionOriginRef.current = null;
+        setDraftSelection(null);
+        return;
+      }
       if (rect && rect.width > 24 && rect.height > 24) {
         props.onSelectionChange(rect);
-        props.onSelectionPreviewChange?.(buildSelectionPreview(rect));
+        props.onSelectionPreviewChange?.(buildSelectionPreview(page, rect));
       }
       draftSelectionRef.current = null;
       selectionOriginRef.current = null;
@@ -530,102 +653,237 @@ export function PdfPreview(props: {
     }
   };
 
-  const currentPenPath = currentStroke?.style === 'pen' ? getInkStrokeSvgPath(currentStroke, false) : '';
-  const currentHighlightPath = currentStroke?.style === 'highlight' ? getInkStrokeSvgPath(currentStroke, false) : '';
-  const selectionRectStyle = toStageRect(pageFrame ? scaleSelectionRectToPageSize(props.selectionRect, pageFrame.width, pageFrame.height) : props.selectionRect);
-  const draftSelectionStyle = toStageRect(draftSelection);
+  const renderPage = (page: NotebookPage) => {
+    const frame = getFrameForPage(page);
+    const pageStrokesForView = getPageStrokesForView(page);
+    const pageTextAnnotationsForView = getPageTextAnnotationsForView(page);
+    const active = page.generatedPageId ? page.generatedPageId === props.activeGeneratedPageId : page.pageNumber === props.page;
+    const selectionRectStyle = active ? scaleSelectionRectToPageSize(props.selectionRect, frame.width, frame.height) : null;
+    const draftSelectionStyle = (page.generatedPageId ? currentStroke?.generatedPageId === page.generatedPageId : currentStroke?.pageNumber === page.pageNumber) ? draftSelection : null;
+    const cachedPageImageUri = page.pageNumber ? props.pageImageUrls?.[page.pageNumber] : undefined;
 
-  return (
-    <View style={props.styles.pdfViewerCard}>
-      <View style={[props.styles.pdfStage, { width: viewerWidth, height: viewerHeight, overflow: 'hidden' }]}> 
-        {pdfUri ? (
-          <View style={[props.styles.pdfViewer, { alignItems: 'center', justifyContent: 'flex-start' }]}>
-            <canvas
-              ref={canvasRef}
-              style={{
-                display: pageFrame ? 'block' : 'none',
-                position: 'absolute',
-                left: pageFrame?.x ?? 0,
-                top: pageFrame?.y ?? 0,
-                backgroundColor: '#FFFFFF',
-                boxShadow: '0 18px 42px rgba(24, 36, 54, 0.08)',
-              }}
-            />
-            {isLoading ? <Text style={{ color: '#6B7280', fontWeight: '700' }}>PDF 페이지를 렌더링하는 중...</Text> : null}
-            {!isLoading && loadError ? (
-              <Text style={{ color: '#6B7280', textAlign: 'center', paddingHorizontal: 24 }}>{loadError}</Text>
-            ) : null}
-          </View>
+    return (
+      <View
+        key={page.id}
+        nativeID={page.pageNumber ? `bsnap-pdf-page-${page.pageNumber}` : `bsnap-page-${page.id}`}
+        style={{ width: frame.width, height: frame.height, marginBottom: pageGap, backgroundColor: '#FFFFFF', shadowColor: '#182436', shadowOpacity: 0.08, shadowRadius: 18, shadowOffset: { width: 0, height: 10 }, position: 'relative' }}
+      >
+        {page.kind === 'pdf' && cachedPageImageUri ? (
+          <Image
+            source={{ uri: cachedPageImageUri }}
+            style={{ position: 'absolute', left: 0, top: 0, width: frame.width, height: frame.height, backgroundColor: '#FFFFFF' }}
+            resizeMode="contain"
+          />
+        ) : page.kind === 'pdf' && page.pageNumber ? (
+          <canvas
+            ref={(node) => {
+              canvasRefs.current[page.pageNumber!] = node;
+            }}
+            style={{
+              display: 'block',
+              position: 'absolute',
+              left: 0,
+              top: 0,
+              backgroundColor: '#FFFFFF',
+            }}
+          />
         ) : (
-          <View style={[props.styles.pdfViewer, { alignItems: 'center', justifyContent: 'flex-start', paddingHorizontal: 24 }]}>
-            <Text style={{ color: '#6B7280', textAlign: 'center' }}>
-              웹에서는 현재 선택한 PDF를 미리보기할 수 없습니다.
-            </Text>
-          </View>
+          <NotebookPaperBackground page={page} />
         )}
 
         <Svg width="100%" height="100%" pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0 }}>
-          {pageInkStrokesForView
-            .filter((stroke) => stroke.style === 'highlight')
-            .map((stroke) => {
-              const path = getInkStrokeSvgPath(stroke);
-              if (!path) return null;
-              return (
-                <Path
-                  key={stroke.id}
-                  d={path}
-                  transform={pageTransform}
-                  fill={stroke.color}
-                  opacity={0.72}
-                />
-              );
-            })}
-          {currentHighlightPath ? (
-            <Path
-              d={currentHighlightPath}
-              transform={pageTransform}
-              fill={currentStroke?.color}
-              opacity={0.72}
-            />
-          ) : null}
+          {pageStrokesForView.filter((stroke) => stroke.style === 'highlight').map((stroke) => <InkPath key={stroke.id} stroke={stroke} />)}
+          {(page.generatedPageId ? currentStroke?.generatedPageId === page.generatedPageId : currentStroke?.pageNumber === page.pageNumber) && currentStroke?.style === 'highlight' ? <InkPath stroke={currentStroke} draft /> : null}
         </Svg>
 
-        {pageFrame ? (
-          <View style={{ position: 'absolute', left: pageFrame.x, top: pageFrame.y, width: pageFrame.width, height: pageFrame.height, pointerEvents: 'box-none' }}>
-            <TextAnnotationLayer
-              annotations={pageTextAnnotationsForView}
-              styles={props.styles}
-              onChangeText={props.onUpdateTextAnnotation}
-              onRemove={props.onRemoveTextAnnotation}
-              variant={props.textAnnotationVariant}
-            />
-          </View>
-        ) : null}
+        <TextAnnotationLayer
+          annotations={pageTextAnnotationsForView}
+          styles={props.styles}
+          onChangeText={props.onUpdateTextAnnotation}
+          onRemove={props.onRemoveTextAnnotation}
+          variant={props.textAnnotationVariant}
+        />
 
         <View
           style={[props.styles.inkOverlay, { pointerEvents: props.inkTool === 'view' ? 'none' : 'auto' }]}
-          onStartShouldSetResponder={() => !!pageFrame && (props.inkTool === 'select' || props.inkTool === 'text' || props.inkTool === 'erase')}
-          onMoveShouldSetResponder={() => !!pageFrame && props.inkTool === 'select'}
-          onResponderGrant={(event) => handleOverlayStart(event.nativeEvent.locationX, event.nativeEvent.locationY)}
-          onResponderMove={(event) => handleSelectionMove(event.nativeEvent.locationX, event.nativeEvent.locationY)}
-          onResponderRelease={finishSelection}
-          onResponderTerminate={finishSelection}
-          {...(props.inkTool === 'pen' || props.inkTool === 'highlight' ? panResponder.panHandlers : {})}
+          onStartShouldSetResponder={(event) => {
+            if (event.nativeEvent.touches && event.nativeEvent.touches.length > 1) return false;
+            if (!isPrimaryPointerEvent(event)) return false;
+            return props.inkTool !== 'view';
+          }}
+          onMoveShouldSetResponder={(event) => {
+            if (event.nativeEvent.touches && event.nativeEvent.touches.length > 1) return false;
+            if (!isPrimaryPointerEvent(event)) return false;
+            return isDrawingTool(props.inkTool) || props.inkTool === 'select';
+          }}
+          onResponderGrant={(event) => {
+            beginInteraction(page);
+            const point = clampPointToPage(page, event.nativeEvent.locationX, event.nativeEvent.locationY, props.inkTool === 'text' ? 'annotate' : 'draw');
+            if (!point) return;
+
+            if (isDrawingTool(props.inkTool)) {
+              const appearance = isShapeTool(props.inkTool)
+                ? resolveShapeStrokeAppearance(props.penColor, props.penWidth)
+                : resolveInkStrokeAppearance(props.inkTool, props.penColor, props.penWidth, props.brushType);
+              const stroke: InkStroke = {
+                id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                color: appearance.color,
+                width: appearance.width,
+                style: isShapeTool(props.inkTool) ? 'shape' : props.inkTool === 'highlight' ? 'highlight' : 'pen',
+                brush: isShapeTool(props.inkTool) ? undefined : props.brushType,
+                linePattern: props.linePattern,
+                shape: isShapeTool(props.inkTool) ? props.inkTool : undefined,
+                pageNumber: page.pageNumber,
+                generatedPageId: page.generatedPageId,
+                pageWidth: point.pageWidth,
+                pageHeight: point.pageHeight,
+                points: [point],
+              };
+              currentStrokeRef.current = stroke;
+              setCurrentStroke(stroke);
+              return;
+            }
+
+            if (props.inkTool === 'select') {
+              const currentSelection = active ? scaleSelectionRectToPageSize(props.selectionRect, frame.width, frame.height) : null;
+              if (
+                currentSelection &&
+                point.x >= currentSelection.x &&
+                point.x <= currentSelection.x + currentSelection.width &&
+                point.y >= currentSelection.y &&
+                point.y <= currentSelection.y + currentSelection.height
+              ) {
+                selectionMoveOriginRef.current = point;
+                selectionMoveStartRectRef.current = currentSelection;
+                draftSelectionRef.current = currentSelection;
+                setDraftSelection(currentSelection);
+                return;
+              }
+              props.onSelectionChange(null);
+              props.onSelectionPreviewChange?.(null);
+              selectionOriginRef.current = point;
+              const rect = { x: point.x, y: point.y, width: 0, height: 0, pageWidth: point.pageWidth, pageHeight: point.pageHeight };
+              draftSelectionRef.current = rect;
+              setDraftSelection(rect);
+              return;
+            }
+
+            if (props.inkTool === 'text') {
+              textTapRef.current = point;
+              return;
+            }
+
+            if (props.inkTool === 'erase') {
+              const hitStrokeId = findHitInkStrokeId(pageStrokesForView, point);
+              if (hitStrokeId) props.onRemoveInkStroke(hitStrokeId);
+            }
+          }}
+          onResponderMove={(event) => {
+            const point = clampPointToPage(page, event.nativeEvent.locationX, event.nativeEvent.locationY);
+            if (!point) return;
+
+            if (isDrawingTool(props.inkTool)) {
+              const stroke = currentStrokeRef.current;
+              if (!stroke) return;
+              if (stroke.style === 'shape') {
+                const nextStroke = { ...stroke, points: [stroke.points[0], point] };
+                currentStrokeRef.current = nextStroke;
+                setCurrentStroke(nextStroke);
+                return;
+              }
+              const lastPoint = stroke.points[stroke.points.length - 1];
+              if (Math.hypot(point.x - lastPoint.x, point.y - lastPoint.y) < 1.2) return;
+              const nextStroke = { ...stroke, points: [...stroke.points, point] };
+              currentStrokeRef.current = nextStroke;
+              setCurrentStroke(nextStroke);
+              return;
+            }
+
+            if (props.inkTool === 'select') {
+              const moveOrigin = selectionMoveOriginRef.current;
+              const moveStartRect = selectionMoveStartRectRef.current;
+              if (moveOrigin && moveStartRect) {
+                const rect = {
+                  ...moveStartRect,
+                  x: moveStartRect.x + point.x - moveOrigin.x,
+                  y: moveStartRect.y + point.y - moveOrigin.y,
+                  pageWidth: point.pageWidth,
+                  pageHeight: point.pageHeight,
+                };
+                draftSelectionRef.current = rect;
+                setDraftSelection(rect);
+                return;
+              }
+              const origin = selectionOriginRef.current;
+              if (!origin) return;
+              const rect = {
+                x: Math.min(origin.x, point.x),
+                y: Math.min(origin.y, point.y),
+                width: Math.abs(point.x - origin.x),
+                height: Math.abs(point.y - origin.y),
+                pageWidth: point.pageWidth,
+                pageHeight: point.pageHeight,
+              };
+              draftSelectionRef.current = rect;
+              setDraftSelection(rect);
+            }
+          }}
+          onResponderRelease={() => {
+            const stroke = currentStrokeRef.current;
+            if (stroke && stroke.points.length > 1) props.onCommitInkStroke(stroke);
+            finishSelection(page);
+            currentStrokeRef.current = null;
+            setCurrentStroke(null);
+          }}
+          onResponderTerminate={() => {
+            const stroke = currentStrokeRef.current;
+            if (stroke && stroke.points.length > 1) props.onCommitInkStroke(stroke);
+            currentStrokeRef.current = null;
+            draftSelectionRef.current = null;
+            selectionOriginRef.current = null;
+            selectionMoveOriginRef.current = null;
+            selectionMoveStartRectRef.current = null;
+            textTapRef.current = null;
+            setDraftSelection(null);
+            setCurrentStroke(null);
+          }}
         >
           <Svg width="100%" height="100%" pointerEvents="none">
-            {pageInkStrokesForView
-              .filter((stroke) => stroke.style !== 'highlight')
-              .map((stroke) => {
-                const path = getInkStrokeSvgPath(stroke);
-                if (!path) return null;
-                return <Path key={stroke.id} d={path} transform={pageTransform} fill={stroke.color} />;
-              })}
-            {currentPenPath ? <Path d={currentPenPath} transform={pageTransform} fill={currentStroke?.color} /> : null}
+            {pageStrokesForView.filter((stroke) => stroke.style !== 'highlight').map((stroke) => <InkPath key={stroke.id} stroke={stroke} />)}
+            {(page.generatedPageId ? currentStroke?.generatedPageId === page.generatedPageId : currentStroke?.pageNumber === page.pageNumber) && currentStroke?.style !== 'highlight' && currentStroke ? <InkPath stroke={currentStroke} draft /> : null}
           </Svg>
-          {!draftSelection && selectionRectStyle ? <View style={[props.styles.selectionOverlayRect, selectionRectStyle, { pointerEvents: 'none' }]} /> : null}
-          {draftSelectionStyle ? <View style={[props.styles.selectionOverlayRect, props.styles.selectionOverlayDraft, draftSelectionStyle, { pointerEvents: 'none' }]} /> : null}
+          {!draftSelectionStyle && selectionRectStyle ? <View style={[props.styles.selectionOverlayRect, { left: selectionRectStyle.x, top: selectionRectStyle.y, width: selectionRectStyle.width, height: selectionRectStyle.height, pointerEvents: 'none' }]} /> : null}
+          {draftSelectionStyle ? <View style={[props.styles.selectionOverlayRect, props.styles.selectionOverlayDraft, { left: draftSelectionStyle.x, top: draftSelectionStyle.y, width: draftSelectionStyle.width, height: draftSelectionStyle.height, pointerEvents: 'none' }]} /> : null}
         </View>
       </View>
+    );
+  };
+
+  return (
+    <View
+      style={props.styles.pdfViewerCard}
+      onLayout={(event) => {
+        const nextWidth = Math.floor(event.nativeEvent.layout.width);
+        const nextHeight = Math.floor(event.nativeEvent.layout.height);
+        if (nextWidth !== containerSize.width || nextHeight !== containerSize.height) {
+          setContainerSize({ width: nextWidth, height: nextHeight });
+        }
+      }}
+    >
+      <ScrollView
+        style={{ width: '100%', maxHeight: viewerHeight }}
+        contentContainerStyle={{ alignItems: 'center', paddingTop: 18, paddingBottom: 36 }}
+        scrollEnabled={props.inkTool === 'view'}
+        scrollEventThrottle={80}
+        onScroll={handleScroll}
+        showsVerticalScrollIndicator
+      >
+        {pageItems.map(renderPage)}
+        {isLoading ? <Text style={{ color: '#6B7280', fontWeight: '700', marginTop: 12 }}>PDF 페이지를 렌더링하는 중...</Text> : null}
+        {!isLoading && loadError ? (
+          <Text style={{ color: '#6B7280', textAlign: 'center', paddingHorizontal: 24 }}>{loadError}</Text>
+        ) : null}
+      </ScrollView>
     </View>
   );
 }

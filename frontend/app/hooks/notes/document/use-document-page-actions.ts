@@ -1,9 +1,8 @@
 import type { Dispatch, SetStateAction } from 'react';
 import { Share } from 'react-native';
 import { createBackendNotePage, isBackendApiEnabled } from '../../../services/backend-api';
-import type { MockAiAnswer } from '../../../services/mock-ai-service';
 import type { InkStroke, InkTextAnnotation, InkTool } from '../../../ui-types';
-import type { BookmarkedPage, DocumentPageView, GeneratedWorkspacePage, StudyDocumentEntry } from '../../../types';
+import type { AiAnswer, BookmarkedPage, DocumentPageView, GeneratedWorkspacePage, StudyDocumentEntry } from '../../../types';
 import { getDocumentPageLabel, isSameDocumentPage } from '../../../ui-helpers';
 import { upsertStudyDocument } from './collection-helpers';
 import { serializeNotePageContent } from './note-page-content';
@@ -13,7 +12,7 @@ type SetState<T> = Dispatch<SetStateAction<T>>;
 export function useDocumentPageActions(params: {
   studyDocumentId: number | null;
   studyDocument: StudyDocumentEntry | null;
-  aiAnswer: MockAiAnswer | null;
+  aiAnswer: AiAnswer | null;
   currentPdfPage: number;
   currentDocumentPage: DocumentPageView | null;
   currentDocumentPages: DocumentPageView[];
@@ -42,7 +41,10 @@ export function useDocumentPageActions(params: {
   setBookmarksByDocument: SetState<Record<number, BookmarkedPage[]>>;
   clearCurrentSelection: () => void;
 }) {
-  const getInsertAfterPage = () => {
+  const getInsertAfterPage = (preferredPage?: number) => {
+    if (preferredPage && Number.isFinite(preferredPage)) {
+      return Math.max(1, Math.min(params.studyDocument?.pageCount ?? preferredPage, Math.floor(preferredPage)));
+    }
     const page = params.currentDocumentPage;
     if (page?.kind !== 'generated') return params.currentPdfPage;
     return (
@@ -90,7 +92,7 @@ export function useDocumentPageActions(params: {
     params.setWorkspaceFeedback('AI 응답을 정리 페이지로 추가했습니다.');
   };
 
-  const createMemoPage = () => {
+  const createMemoPage = (insertAfterPageOverride?: number) => {
     if (!params.studyDocumentId || !params.studyDocument) return;
 
     if (params.studyDocument.type === 'blank') {
@@ -134,7 +136,7 @@ export function useDocumentPageActions(params: {
       return;
     }
 
-    const insertAfterPage = getInsertAfterPage();
+    const insertAfterPage = getInsertAfterPage(insertAfterPageOverride);
     const generatedPageId = `memo-page-${params.studyDocumentId}-${Date.now()}`;
     const nextMemoCount =
       (params.generatedPagesByDocument[params.studyDocumentId] ?? []).filter((value) => value.pageKind === 'memo' && value.insertAfterPage === insertAfterPage).length + 1;
@@ -206,6 +208,83 @@ export function useDocumentPageActions(params: {
       }));
     }
     params.setWorkspaceFeedback('메모 페이지를 삭제했습니다.');
+  };
+
+  const duplicateGeneratedPage = (pageId: string) => {
+    if (!params.studyDocumentId) return;
+    const target = (params.generatedPagesByDocument[params.studyDocumentId] ?? []).find((page) => page.id === pageId);
+    if (!target) return;
+
+    const nextPageId = `${target.pageKind}-page-${params.studyDocumentId}-${Date.now()}`;
+    const copiedPage: GeneratedWorkspacePage = {
+      ...target,
+      id: nextPageId,
+      sourceAssetId: `${target.sourceAssetId}-copy-${Date.now()}`,
+      title: `${target.title} 복사본`,
+      createdAt: new Date().toISOString(),
+    };
+
+    params.setGeneratedPagesByDocument((current) => ({
+      ...current,
+      [params.studyDocumentId!]: [...(current[params.studyDocumentId!] ?? []), copiedPage],
+    }));
+    params.setInkByDocument((current) => {
+      const copiedStrokes = (current[params.studyDocumentId!] ?? [])
+        .filter((stroke) => stroke.generatedPageId === pageId)
+        .map((stroke, index) => ({
+          ...stroke,
+          id: `${stroke.id}-page-copy-${Date.now()}-${index}`,
+          generatedPageId: nextPageId,
+        }));
+      return {
+        ...current,
+        [params.studyDocumentId!]: [...(current[params.studyDocumentId!] ?? []), ...copiedStrokes],
+      };
+    });
+    params.setTextAnnotationsByDocument((current) => {
+      const copiedAnnotations = (current[params.studyDocumentId!] ?? [])
+        .filter((annotation) => annotation.generatedPageId === pageId)
+        .map((annotation, index) => ({
+          ...annotation,
+          id: `${annotation.id}-page-copy-${Date.now()}-${index}`,
+          generatedPageId: nextPageId,
+        }));
+      return {
+        ...current,
+        [params.studyDocumentId!]: [...(current[params.studyDocumentId!] ?? []), ...copiedAnnotations],
+      };
+    });
+    params.clearCurrentSelection();
+    params.setActivePageByDocument((current) => ({
+      ...current,
+      [params.studyDocumentId!]: { kind: 'generated', pageId: nextPageId },
+    }));
+    params.setWorkspaceFeedback('페이지를 복제했습니다.');
+  };
+
+  const moveGeneratedPage = (pageId: string, delta: -1 | 1) => {
+    if (!params.studyDocumentId || !params.studyDocument) return;
+    const target = (params.generatedPagesByDocument[params.studyDocumentId] ?? []).find((page) => page.id === pageId);
+    if (!target) return;
+
+    const nextInsertAfterPage = Math.max(1, Math.min(params.studyDocument.pageCount, target.insertAfterPage + delta));
+    if (nextInsertAfterPage === target.insertAfterPage) return;
+
+    params.setGeneratedPagesByDocument((current) => ({
+      ...current,
+      [params.studyDocumentId!]: (current[params.studyDocumentId!] ?? []).map((page) =>
+        page.id === pageId
+          ? {
+              ...page,
+              insertAfterPage: nextInsertAfterPage,
+              title: page.pageKind === 'memo' ? `${nextInsertAfterPage}페이지 메모` : page.title,
+              createdAt: new Date(Date.now() + delta).toISOString(),
+            }
+          : page,
+      ),
+    }));
+    params.clearCurrentSelection();
+    params.setWorkspaceFeedback(delta < 0 ? '페이지를 위로 이동했습니다.' : '페이지를 아래로 이동했습니다.');
   };
 
   const updateStudyDocumentPageCount = (pageCount: number) => {
@@ -370,6 +449,8 @@ export function useDocumentPageActions(params: {
     createMemoPage,
     openGeneratedPage,
     removeGeneratedPage,
+    duplicateGeneratedPage,
+    moveGeneratedPage,
     updateStudyDocumentPageCount,
     setCurrentPdfPage,
     moveDocumentPage,

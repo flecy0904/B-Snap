@@ -1,18 +1,26 @@
 import { useEffect, useMemo, useState } from 'react';
 import * as DocumentPicker from 'expo-document-picker';
 import * as ImagePicker from 'expo-image-picker';
-import { subjects as fallbackSubjects } from '../../data';
-import { createCaptureAsset, createMockCaptureAsset, useSyncBridge } from '../use-sync-bridge';
-import type { CaptureAsset, CaptureAssetType, Subject } from '../../types';
+import { subjects as fallbackSubjects } from '../../app-defaults';
+import { createCaptureAsset, useSyncBridge, useSyncBridgeStatus } from '../use-sync-bridge';
+import { BackendApiError, isBackendApiEnabled, uploadBackendFile } from '../../services/backend-api';
+import type { CaptureAsset, Subject } from '../../types';
 import { buildEmptyStudyWorkspaceState, loadStudyWorkspaceState, saveStudyWorkspaceState } from '../../storage/local-workspace-store';
+
+function getCaptureErrorMessage(error: unknown, fallback: string) {
+  if (error instanceof BackendApiError && error.detail) return error.detail;
+  return fallback;
+}
 
 export function useCaptureWorkspace(props: {
   subjectId: number;
   subjects?: Subject[];
 }) {
   const syncBridge = useSyncBridge();
+  const syncStatus = useSyncBridgeStatus();
   const [recentUploads, setRecentUploads] = useState<CaptureAsset[]>([]);
   const [pendingAction, setPendingAction] = useState<'camera' | 'library' | 'pdf' | null>(null);
+  const [lastFailedAction, setLastFailedAction] = useState<'camera' | 'library' | 'pdf' | null>(null);
   const [captureFeedback, setCaptureFeedback] = useState<string | null>(null);
   const [captureError, setCaptureError] = useState<string | null>(null);
   const subjectOptions = props.subjects?.length ? props.subjects : fallbackSubjects;
@@ -29,26 +37,21 @@ export function useCaptureWorkspace(props: {
     return () => { mounted = false; };
   }, []);
 
-  const buildFeedbackMessage = (asset: CaptureAsset, localOnly: boolean, cameraFallback: boolean) => {
+  const buildFeedbackMessage = (asset: CaptureAsset, localOnly: boolean) => {
     const assetLabel = asset.type === 'image' ? '이미지' : 'PDF';
-    if (cameraFallback && localOnly) {
-      return `실기기 카메라를 사용할 수 없어 mock 업로드로 전환했고, 이 기기에서만 ${assetLabel}를 저장했습니다.`;
-    }
-    if (cameraFallback) {
-      return '실기기 카메라를 사용할 수 없어 mock 업로드로 전환했습니다.';
-    }
     if (localOnly) {
       return `실시간 업로드 서버 없이 이 기기에서만 ${assetLabel}를 저장했습니다.`;
     }
     return `${assetLabel}를 업로드했습니다.`;
   };
 
-  const pushAsset = async (asset: CaptureAsset, options?: { cameraFallback?: boolean }) => {
+  const pushAsset = async (asset: CaptureAsset) => {
     try {
       const result = await syncBridge.publishAsset(asset);
-      setRecentUploads((current) => [asset, ...current].slice(0, 5));
+      setRecentUploads((current) => [asset, ...current.filter((item) => item.id !== asset.id)].slice(0, 5));
       setCaptureError(null);
-      setCaptureFeedback(buildFeedbackMessage(asset, result.delivery === 'local', options?.cameraFallback ?? false));
+      setLastFailedAction(null);
+      setCaptureFeedback(buildFeedbackMessage(asset, result.delivery === 'local'));
       
       const state = await loadStudyWorkspaceState() || buildEmptyStudyWorkspaceState();
 
@@ -61,22 +64,11 @@ export function useCaptureWorkspace(props: {
     }
   };
 
-  const createMockUpload = async (type: CaptureAssetType, options?: { cameraFallback?: boolean }) => {
-    if (!subject) return;
-
-    const asset = createMockCaptureAsset({
-      subjectId: subject.id,
-      subjectName: subject.name,
-      type,
-    });
-
-    await pushAsset(asset, options);
-  };
-
   const captureFromCamera = async () => {
-    if (!subject) return;
+    if (!subject || pendingAction) return;
     setCaptureFeedback(null);
     setCaptureError(null);
+    setLastFailedAction(null);
     setPendingAction('camera');
     try {
       const permission = await ImagePicker.requestCameraPermissionsAsync();
@@ -98,6 +90,15 @@ export function useCaptureWorkspace(props: {
       }
 
       const picked = result.assets[0];
+      let previewUri = picked.uri;
+      if (isBackendApiEnabled()) {
+        const upload = await uploadBackendFile({
+          uri: picked.uri,
+          name: picked.fileName || `${subject.name} 카메라 캡처.jpg`,
+          type: picked.mimeType || 'image/jpeg',
+        });
+        previewUri = upload.url;
+      }
       const newAsset = createCaptureAsset({
         subjectId: subject.id,
         subjectName: subject.name,
@@ -106,20 +107,23 @@ export function useCaptureWorkspace(props: {
         fileName: picked.fileName || `${subject.name} 카메라 캡처`,
       });
       
-      newAsset.previewImageKey = picked.uri;
+      newAsset.fileUrl = previewUri;
+      newAsset.thumbnailUrl = previewUri;
       
       await pushAsset(newAsset);
-    } catch {
-      await createMockUpload('image', { cameraFallback: true });
+    } catch (error) {
+      setLastFailedAction('camera');
+      setCaptureError(getCaptureErrorMessage(error, '카메라를 실행하지 못했습니다.'));
     } finally {
       setPendingAction(null);
     }
   };
 
   const pickImageFromLibrary = async () => {
-    if (!subject) return;
+    if (!subject || pendingAction) return;
     setCaptureFeedback(null);
     setCaptureError(null);
+    setLastFailedAction(null);
     setPendingAction('library');
     try {
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -142,6 +146,15 @@ export function useCaptureWorkspace(props: {
       }
 
       const picked = result.assets[0];
+      let previewUri = picked.uri;
+      if (isBackendApiEnabled()) {
+        const upload = await uploadBackendFile({
+          uri: picked.uri,
+          name: picked.fileName || `${subject.name} 갤러리 이미지.jpg`,
+          type: picked.mimeType || 'image/jpeg',
+        });
+        previewUri = upload.url;
+      }
       const newAsset = createCaptureAsset({
         subjectId: subject.id,
         subjectName: subject.name,
@@ -150,20 +163,23 @@ export function useCaptureWorkspace(props: {
         fileName: picked.fileName || `${subject.name} 갤러리 이미지`,
       });
       
-      newAsset.previewImageKey = picked.uri;
+      newAsset.fileUrl = previewUri;
+      newAsset.thumbnailUrl = previewUri;
       
       await pushAsset(newAsset);
-    } catch {
-      setCaptureError('사진첩에서 이미지를 가져오지 못했습니다.');
+    } catch (error) {
+      setLastFailedAction('library');
+      setCaptureError(getCaptureErrorMessage(error, '사진첩에서 이미지를 가져오지 못했습니다.'));
     } finally {
       setPendingAction(null);
     }
   };
 
   const pickPdfDocument = async () => {
-    if (!subject) return;
+    if (!subject || pendingAction) return;
     setCaptureFeedback(null);
     setCaptureError(null);
+    setLastFailedAction(null);
     setPendingAction('pdf');
     try {
       const result = await DocumentPicker.getDocumentAsync({
@@ -179,6 +195,15 @@ export function useCaptureWorkspace(props: {
       }
 
       const picked = result.assets[0];
+      let previewUri = picked.uri;
+      if (isBackendApiEnabled()) {
+        const upload = await uploadBackendFile({
+          uri: picked.uri,
+          name: picked.name || `${subject.name} 참고 PDF.pdf`,
+          type: picked.mimeType || 'application/pdf',
+        });
+        previewUri = upload.url;
+      }
       const newAsset = createCaptureAsset({
         subjectId: subject.id,
         subjectName: subject.name,
@@ -187,23 +212,39 @@ export function useCaptureWorkspace(props: {
         fileName: picked.name || `${subject.name} 참고 PDF`,
       });
       
-      newAsset.previewImageKey = picked.uri;
+      newAsset.fileUrl = previewUri;
       
       await pushAsset(newAsset);
-    } catch {
-      setCaptureError('PDF를 가져오지 못했습니다.');
+    } catch (error) {
+      setLastFailedAction('pdf');
+      setCaptureError(getCaptureErrorMessage(error, 'PDF를 가져오지 못했습니다.'));
     } finally {
       setPendingAction(null);
     }
   };
 
+  const retryLastFailedAction = async () => {
+    if (!lastFailedAction || pendingAction) return;
+    if (lastFailedAction === 'camera') {
+      await captureFromCamera();
+      return;
+    }
+    if (lastFailedAction === 'library') {
+      await pickImageFromLibrary();
+      return;
+    }
+    await pickPdfDocument();
+  };
+
   return {
     selectedSubject: subject,
     recentUploads,
+    syncStatus,
     pendingAction,
+    lastFailedAction,
     captureFeedback,
     captureError,
-    createMockUpload,
+    retryLastFailedAction,
     captureFromCamera,
     pickImageFromLibrary,
     pickPdfDocument,

@@ -1,6 +1,5 @@
 import type { Dispatch, SetStateAction } from 'react';
-import { File } from 'expo-file-system';
-import { requestMockAiAnswer, type MockAiAnswer } from '../../../services/mock-ai-service';
+import * as FileSystem from 'expo-file-system/legacy';
 import {
   createBackendChatSession,
   deleteBackendChatSession,
@@ -11,38 +10,46 @@ import {
   type BackendChatMessage,
   type BackendChatSession,
 } from '../../../services/backend-api';
+import type { AiAnswer, StudyDocumentEntry } from '../../../types';
 import type { SelectionRect } from '../../../ui-types';
-import type { StudyDocumentEntry } from '../../../types';
 import { buildAiChatTitle } from './ai-chat-title';
 import { getAiBackendErrorMessage } from './ai-errors';
 
 type SetState<T> = Dispatch<SetStateAction<T>>;
 
-async function buildAiImageInputUri(uri: string | null) {
-  if (!uri) return null;
-  if (uri.startsWith('data:') || uri.startsWith('http://') || uri.startsWith('https://')) {
-    return uri;
-  }
+function isCanvasEditIntent(question: string) {
+  const lowerQuestion = question.toLowerCase();
+  const mentionsCanvas = lowerQuestion.includes('canvas') || question.includes('캔버스');
+  if (!mentionsCanvas) return false;
 
-  const base64 = await new File(uri).base64();
-  return `data:image/png;base64,${base64}`;
+  return [
+    '적어',
+    '써',
+    '정리',
+    '요약',
+    '추가',
+    '수정',
+    '반영',
+    '넣어',
+    '만들',
+    '작성',
+  ].some((keyword) => question.includes(keyword));
 }
 
 export function useAiChatActions(params: {
   studyDocumentId: number | null;
   studyDocument: StudyDocumentEntry | null;
+  currentDocumentHasBackendPages: boolean;
   selectionRect: SelectionRect | null;
   selectionPreviewUri: string | null;
-  currentAiPageLabel: string;
-  currentAiPageNumber: number | null;
-  currentDocumentHasBackendPages: boolean;
+  currentPageNumber: number | null;
   activeAiChatSessionId: number | null;
   aiChatReadOnly: boolean;
   aiQuestion: string;
   chatSessionByDocument: Record<number, number>;
   chatSessionsByDocument: Record<number, BackendChatSession[]>;
   allChatSessions: BackendChatSession[];
-  setAiAnswer: SetState<MockAiAnswer | null>;
+  setAiAnswer: SetState<AiAnswer | null>;
   setAiQuestion: SetState<string>;
   setAiError: SetState<string | null>;
   setAiLoading: SetState<boolean>;
@@ -53,7 +60,35 @@ export function useAiChatActions(params: {
   setChatSessionsByDocument: SetState<Record<number, BackendChatSession[]>>;
   setAllChatSessions: SetState<BackendChatSession[]>;
   setAiMessagesBySession: SetState<Record<number, BackendChatMessage[]>>;
+  onRequestCanvasEditFromChat?: (payload: { question: string; answer: string }) => Promise<void>;
 }) {
+  const buildSelectionImagePayload = async () => {
+    const uri = params.selectionPreviewUri;
+    if (!uri) return null;
+    if (/^data:image\//i.test(uri) || /^https?:\/\//i.test(uri)) return uri;
+
+    try {
+      const base64 = await FileSystem.readAsStringAsync(uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      return `data:image/png;base64,${base64}`;
+    } catch {
+      params.setAiError('선택 이미지를 첨부하지 못했습니다. 텍스트 질문만으로 답변을 요청합니다.');
+      return null;
+    }
+  };
+
+  const upsertSession = (session: BackendChatSession) => {
+    params.setAllChatSessions((current) => [session, ...current.filter((item) => item.id !== session.id)]);
+    params.setChatSessionsByDocument((current) => ({
+      ...current,
+      [session.note_id]: [
+        session,
+        ...(current[session.note_id] ?? []).filter((item) => item.id !== session.id),
+      ],
+    }));
+  };
+
   const selectAiChatSession = async (sessionId: number) => {
     if (!isBackendApiEnabled()) {
       params.setAiAnswer(null);
@@ -200,10 +235,24 @@ export function useAiChatActions(params: {
   };
 
   const createAiChatSession = async () => {
-    if (!params.studyDocumentId || !isBackendApiEnabled() || !params.currentDocumentHasBackendPages) {
+    if (!params.studyDocumentId) {
       params.setAiAnswer(null);
       params.setAiQuestion('');
-      params.setAiError(isBackendApiEnabled() ? null : '백엔드 서버에 연결할 수 없습니다. 백엔드가 실행 중인지 확인해 주세요.');
+      params.setAiError('AI 채팅을 시작할 노트를 먼저 선택해 주세요.');
+      return;
+    }
+
+    if (!isBackendApiEnabled()) {
+      params.setAiAnswer(null);
+      params.setAiQuestion('');
+      params.setAiError('백엔드 서버에 연결할 수 없습니다. 백엔드가 실행 중인지 확인해 주세요.');
+      return;
+    }
+
+    if (!params.currentDocumentHasBackendPages) {
+      params.setAiAnswer(null);
+      params.setAiQuestion('');
+      params.setAiError('AI 채팅은 백엔드에 저장된 노트에서 사용할 수 있습니다. 새 빈 노트나 PDF 업로드로 만든 노트에서 다시 시도해 주세요.');
       return;
     }
 
@@ -214,11 +263,7 @@ export function useAiChatActions(params: {
         noteId: params.studyDocumentId,
         title: params.studyDocument?.title ? `${params.studyDocument.title} AI 채팅` : 'AI 채팅',
       });
-      params.setChatSessionsByDocument((current) => ({
-        ...current,
-        [params.studyDocumentId!]: [session, ...(current[params.studyDocumentId!] ?? [])],
-      }));
-      params.setAllChatSessions((current) => [session, ...current.filter((item) => item.id !== session.id)]);
+      upsertSession(session);
       params.setChatSessionByDocument((current) => ({ ...current, [params.studyDocumentId!]: session.id }));
       params.setViewingAiChatSessionId(null);
       params.setAiMessagesBySession((current) => ({ ...current, [session.id]: [] }));
@@ -252,125 +297,120 @@ export function useAiChatActions(params: {
       return;
     }
 
-    const question = params.aiQuestion.trim() || '현재 페이지를 요약해줘';
+    const hasSelection = Boolean(params.selectionRect || params.selectionPreviewUri);
     const selectionPreviewUri = params.selectionPreviewUri;
+    const question = params.aiQuestion.trim() || (hasSelection ? '선택한 영역을 설명해줘' : '현재 페이지를 요약해줘');
     params.setAiLoading(true);
     params.setAiError(null);
     params.setAiQuestion('');
-    if (selectionPreviewUri && params.studyDocumentId) {
+    if (selectionPreviewUri) {
       params.setSelectionPreviewByDocument((current) => ({ ...current, [params.studyDocumentId!]: null }));
     }
     let aiRequestStage: 'chat-session' | 'ai-answer' = 'ai-answer';
 
     try {
-      let sessionId = params.chatSessionByDocument[params.studyDocumentId];
-      const canUseBackendChat = isBackendApiEnabled() && (
-        params.currentDocumentHasBackendPages || Boolean(sessionId)
-      );
-
-      if (canUseBackendChat) {
-        if (!sessionId) {
-          aiRequestStage = 'chat-session';
-          const session = await createBackendChatSession({
-            noteId: params.studyDocumentId,
-            title: buildAiChatTitle(question, params.studyDocument?.title),
-          });
-          sessionId = session.id;
-          params.setChatSessionByDocument((current) => ({
-            ...current,
-            [params.studyDocumentId!]: session.id,
-          }));
-          params.setViewingAiChatSessionId(null);
-          params.setLastChatSessionByDocument((current) => ({
-            ...current,
-            [params.studyDocumentId!]: session.id,
-          }));
-          params.setChatSessionsByDocument((current) => ({
-            ...current,
-            [params.studyDocumentId!]: [session, ...(current[params.studyDocumentId!] ?? [])],
-          }));
-          params.setAllChatSessions((current) => [session, ...current.filter((item) => item.id !== session.id)]);
-        }
-
-        aiRequestStage = 'ai-answer';
-        const pendingUserMessage: BackendChatMessage = {
-          id: -Date.now(),
-          session_id: sessionId,
-          role: 'user',
-          content: question,
-          selection_image_url: selectionPreviewUri,
-          model: null,
-          created_at: new Date().toISOString(),
-        };
-        params.setAiMessagesBySession((current) => ({
-          ...current,
-          [sessionId]: [...(current[sessionId] ?? []), pendingUserMessage],
-        }));
-
-        const selectionImageUri = await buildAiImageInputUri(selectionPreviewUri);
-        const response = await sendBackendAiMessage({
-          sessionId,
-          content: question,
-          pageNumber: params.currentAiPageNumber,
-          selectionImageUri,
-        });
-        const userMessageWithAttachment = {
-          ...response.user_message,
-          selection_image_url: selectionPreviewUri,
-        };
-        params.setLastChatSessionByDocument((current) => ({
-          ...current,
-          [params.studyDocumentId!]: sessionId,
-        }));
-        const content = response.assistant_message.content;
-        params.setAiMessagesBySession((current) => ({
-          ...current,
-          [sessionId]: (current[sessionId] ?? []).some((message) => message.id === pendingUserMessage.id)
-            ? (current[sessionId] ?? []).flatMap((message) => (
-              message.id === pendingUserMessage.id
-                ? [userMessageWithAttachment, response.assistant_message]
-                : [message]
-            ))
-            : [
-              ...(current[sessionId] ?? []),
-              userMessageWithAttachment,
-              response.assistant_message,
-            ],
-        }));
-        params.setAllChatSessions((current) => {
-          const target = response.chat_session ?? current.find((session) => session.id === sessionId);
-          if (!target) return current;
-          return [target, ...current.filter((session) => session.id !== sessionId)];
-        });
-        if (response.chat_session) {
-          params.setChatSessionsByDocument((current) => ({
-            ...current,
-            [response.chat_session!.note_id]: (current[response.chat_session!.note_id] ?? []).map((session) => (
-              session.id === response.chat_session!.id ? response.chat_session! : session
-            )),
-          }));
-        }
-        params.setAiAnswer({
-          question,
-          response: content,
-          sections: [
-            {
-              title: 'AI 답변',
-              body: content,
-              tone: 'highlight',
-            },
-          ],
-          createdAt: response.assistant_message.created_at,
-        });
+      if (!isBackendApiEnabled()) {
+        params.setAiAnswer(null);
+        params.setAiError('백엔드 서버에 연결할 수 없습니다. 백엔드가 실행 중인지 확인해 주세요.');
         return;
       }
 
-      const answer = await requestMockAiAnswer({
-        question,
+      if (!params.currentDocumentHasBackendPages) {
+        params.setAiAnswer(null);
+        params.setAiError('AI 채팅은 백엔드에 저장된 노트에서 사용할 수 있습니다. 새 빈 노트나 PDF 업로드로 만든 노트에서 다시 시도해 주세요.');
+        return;
+      }
+
+      let sessionId = params.chatSessionByDocument[params.studyDocumentId];
+      if (!sessionId) {
+        aiRequestStage = 'chat-session';
+        const session = await createBackendChatSession({
+          noteId: params.studyDocumentId,
+          title: buildAiChatTitle(question, params.studyDocument?.title),
+        });
+        sessionId = session.id;
+        params.setChatSessionByDocument((current) => ({
+          ...current,
+          [params.studyDocumentId!]: session.id,
+        }));
+        params.setLastChatSessionByDocument((current) => ({
+          ...current,
+          [params.studyDocumentId!]: session.id,
+        }));
+        upsertSession(session);
+      }
+
+      aiRequestStage = 'ai-answer';
+      const pendingUserMessage: BackendChatMessage = {
+        id: -Date.now(),
+        session_id: sessionId,
+        role: 'user',
+        content: question,
+        selection_image_url: selectionPreviewUri,
+        model: null,
+        created_at: new Date().toISOString(),
+      };
+      params.setAiMessagesBySession((current) => ({
+        ...current,
+        [sessionId]: [...(current[sessionId] ?? []), pendingUserMessage],
+      }));
+
+      const selectionImage = await buildSelectionImagePayload();
+      const response = await sendBackendAiMessage({
+        sessionId,
+        content: question,
+        selectionImage,
+        selectionImageUri: selectionPreviewUri,
         selectionRect: params.selectionRect,
-        currentPageLabel: params.currentAiPageLabel,
+        pageNumber: params.currentPageNumber,
       });
-      params.setAiAnswer(answer);
+      const userMessageWithAttachment = {
+        ...response.user_message,
+        selection_image_url: selectionPreviewUri,
+      };
+      params.setLastChatSessionByDocument((current) => ({
+        ...current,
+        [params.studyDocumentId!]: sessionId,
+      }));
+      const content = response.assistant_message.content;
+      params.setAiMessagesBySession((current) => ({
+        ...current,
+        [sessionId]: (current[sessionId] ?? []).some((message) => message.id === pendingUserMessage.id)
+          ? (current[sessionId] ?? []).flatMap((message) => (
+            message.id === pendingUserMessage.id
+              ? [userMessageWithAttachment, response.assistant_message]
+              : [message]
+          ))
+          : [
+            ...(current[sessionId] ?? []),
+            userMessageWithAttachment,
+            response.assistant_message,
+          ],
+      }));
+      if (response.chat_session) {
+        upsertSession(response.chat_session);
+      } else {
+        params.setAllChatSessions((current) => {
+          const target = current.find((session) => session.id === sessionId);
+          if (!target) return current;
+          return [target, ...current.filter((session) => session.id !== sessionId)];
+        });
+      }
+      params.setAiAnswer({
+        question,
+        response: content,
+        sections: [
+          {
+            title: 'AI 답변',
+            body: content,
+            tone: 'highlight',
+          },
+        ],
+        createdAt: response.assistant_message.created_at,
+      });
+      if (params.onRequestCanvasEditFromChat && isCanvasEditIntent(question)) {
+        void params.onRequestCanvasEditFromChat({ question, answer: content });
+      }
     } catch (error) {
       params.setAiError(getAiBackendErrorMessage(
         error,

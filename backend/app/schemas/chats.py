@@ -30,6 +30,15 @@ class ChatMessageCreate(BaseModel):
     model: str | None = None
 
 
+class SelectionRectPayload(BaseModel):
+    x: float
+    y: float
+    width: float
+    height: float
+    pageWidth: float | None = None
+    pageHeight: float | None = None
+
+
 class ChatAiMessageCreate(BaseModel):
     content: str
     model: str | None = None
@@ -37,6 +46,8 @@ class ChatAiMessageCreate(BaseModel):
     selection_image_url: str | None = None
     use_rag: bool = False
     top_k: int = Field(default=5, ge=1, le=20)
+    selection_image: str | None = None
+    selection_rect: SelectionRectPayload | None = None
 
 
 class ChatMessageRead(BaseModel):

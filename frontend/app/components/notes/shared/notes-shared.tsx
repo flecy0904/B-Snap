@@ -45,27 +45,11 @@ export const StaticStrokes = memo(({ strokes }: { strokes: InkStroke[] }) => {
 
 export function buildAiResponse(question: string, selectionRect: SelectionRect | null, desktop: boolean) {
   const normalizedQuestion = question.trim();
-  const isGraphMeaningQuestion =
-    normalizedQuestion.includes('그래프') && (normalizedQuestion.includes('의미') || normalizedQuestion.includes('뭐야'));
-  const isExamQuestion = normalizedQuestion.includes('시험');
-  const isConceptQuestion = normalizedQuestion.includes('개념') || normalizedQuestion.includes('3개');
   const aiResponse = !selectionRect
     ? '먼저 선택 모드로 문서 영역을 드래그해 주세요.'
-    : isGraphMeaningQuestion
-      ? desktop
-        ? '이 그래프는 트래픽 강도 La/R가 증가할수록 평균 큐잉 지연이 어떻게 변하는지를 보여줍니다. La/R가 작은 구간에서는 지연이 거의 없지만, 값이 커질수록 대기열이 쌓이며 지연도 함께 증가합니다. 특히 1에 가까워질수록 그래프가 급격히 치솟는데, 이는 네트워크가 한계 용량에 가까워질수록 작은 부하 증가만으로도 혼잡이 크게 심해질 수 있음을 의미합니다.'
-        : '이 그래프는 트래픽 강도 La/R가 증가할수록 평균 큐잉 지연이 어떻게 변하는지를 보여줍니다. La/R가 작을 때는 지연이 거의 없지만, 1에 가까워질수록 평균 지연은 급격히 증가합니다.'
-      : isExamQuestion
-        ? desktop
-          ? '시험 대비 관점에서는 La/R와 큐잉 지연의 관계를 이해하는 것이 핵심입니다. La/R가 1에 가까워질수록 평균 지연이 급격히 증가하고, 1을 넘으면 처리량보다 더 많은 패킷이 들어와 큐가 계속 누적됩니다. 즉 이 그래프는 네트워크 혼잡이 임계점 근처에서 왜 빠르게 악화되는지를 설명합니다.'
-          : '시험 대비 관점에서는 La/R와 큐잉 지연의 관계를 이해하는 것이 핵심입니다. La/R가 1에 가까워질수록 지연이 급격히 커지고, 1을 넘으면 큐는 계속 누적됩니다.'
-        : isConceptQuestion
-          ? desktop
-            ? '이 영역의 핵심 개념은 세 가지입니다. 첫째, La/R는 네트워크 부하를 나타내는 트래픽 강도입니다. 둘째, 트래픽 강도가 증가할수록 평균 큐잉 지연도 함께 증가합니다. 셋째, La/R가 1에 가까워지거나 이를 넘으면 큐가 빠르게 누적되어 혼잡이 급격히 심해집니다.'
-            : '핵심 개념은 세 가지입니다. La/R는 트래픽 강도이고, 값이 커질수록 평균 큐잉 지연도 함께 증가합니다. 특히 1에 가까워지거나 이를 넘으면 혼잡이 빠르게 심해집니다.'
-          : desktop
-            ? '그래프 해석\n이 그래프는 트래픽 강도 La/R가 증가할수록 평균 큐잉 지연이 어떻게 변하는지를 보여준다. La/R가 작은 구간에서는 지연이 매우 작지만, 값이 커질수록 대기열이 쌓이기 시작하고 1에 가까워지면 평균 지연은 급격히 증가한다. La/R > 1이 되면 처리량보다 더 많은 패킷이 들어와 큐는 계속 누적된다.\n\n핵심 포인트\n중요한 점은 그래프가 직선이 아니라 오른쪽으로 갈수록 빠르게 상승하는 곡선이라는 것이다. 즉 네트워크는 한계 용량에 가까워질수록 작은 부하 증가만으로도 지연이 크게 늘어날 수 있으므로, La/R를 1보다 충분히 낮게 유지하는 것이 중요하다.'
-            : '그래프 해석\n이 그래프는 트래픽 강도 La/R가 증가할수록 평균 큐잉 지연이 어떻게 변하는지를 보여준다. La/R가 작은 구간에서는 지연이 매우 작지만, 값이 커질수록 대기열이 쌓이기 시작하고 1에 가까워지면 평균 지연은 급격히 증가한다.\n\n핵심 포인트\n중요한 점은 그래프가 직선이 아니라 오른쪽으로 갈수록 빠르게 상승하는 곡선이라는 것이다. 즉 네트워크는 한계 용량에 가까워질수록 작은 부하 증가만으로도 지연이 크게 늘어날 수 있다.';
+    : desktop
+      ? '메시지를 보내면 선택 영역이나 현재 페이지를 바탕으로 백엔드 AI가 답변합니다.'
+      : '응답 생성을 누르면 백엔드 AI가 답변합니다.';
 
   const aiResponseSections = aiResponse.includes('\n\n')
     ? aiResponse.split('\n\n').map((section) => {

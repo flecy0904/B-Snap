@@ -1,5 +1,11 @@
 export interface AuthUser {
-  id: string;
+  id: number;
   email: string;
-  provider: 'email' | 'google' | 'naver' | 'kakao';
+  name: string;
+  provider: 'email';
+}
+
+export interface AuthSession {
+  accessToken: string;
+  user: AuthUser;
 }

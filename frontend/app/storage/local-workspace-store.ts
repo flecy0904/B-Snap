@@ -6,6 +6,7 @@ const DATABASE_NAME = 'bsnap-local-workspace.db';
 const TABLE_NAME = 'kv_store';
 const STUDY_WORKSPACE_KEY = 'study-workspace-state';
 const SCHEDULE_WORKSPACE_KEY = 'schedule-workspace-state';
+let workspaceOwnerKey = 'anonymous';
 
 export type PersistedStudyWorkspaceState = {
   version: 1;
@@ -21,6 +22,7 @@ export type PersistedStudyWorkspaceState = {
   activePageByDocument: Record<number, DocumentPageView>;
   bookmarksByDocument: Record<number, BookmarkedPage[]>;
   lastChatSessionByDocument?: Record<number, number>;
+  aiPanelMode?: 'floating' | 'sidebar';
 };
 
 export type PersistedScheduleWorkspaceState = {
@@ -31,6 +33,14 @@ export type PersistedScheduleWorkspaceState = {
 
 let db: ReturnType<typeof SQLite.openDatabaseSync> | null | undefined;
 const memoryStore = new Map<string, string>();
+
+function scopedKey(key: string) {
+  return `${key}:${workspaceOwnerKey}`;
+}
+
+export function setLocalWorkspaceOwner(ownerId: string | number | null) {
+  workspaceOwnerKey = ownerId === null ? 'anonymous' : String(ownerId);
+}
 
 function getDatabase() {
   if (db !== undefined) return db;
@@ -66,6 +76,7 @@ export function buildEmptyStudyWorkspaceState(): PersistedStudyWorkspaceState {
     activePageByDocument: {},
     bookmarksByDocument: {},
     lastChatSessionByDocument: {},
+    aiPanelMode: 'floating',
   };
 }
 
@@ -73,13 +84,13 @@ export async function loadStudyWorkspaceState() {
   const database = getDatabase();
 
   if (!database) {
-    const value = memoryStore.get(STUDY_WORKSPACE_KEY);
+    const value = memoryStore.get(scopedKey(STUDY_WORKSPACE_KEY));
     return value ? (JSON.parse(value) as PersistedStudyWorkspaceState) : null;
   }
 
   const row = await database.getFirstAsync<{ value: string }>(
     `SELECT value FROM ${TABLE_NAME} WHERE key = ?`,
-    STUDY_WORKSPACE_KEY,
+    scopedKey(STUDY_WORKSPACE_KEY),
   );
 
   return row?.value ? (JSON.parse(row.value) as PersistedStudyWorkspaceState) : null;
@@ -90,13 +101,13 @@ export async function saveStudyWorkspaceState(state: PersistedStudyWorkspaceStat
   const database = getDatabase();
 
   if (!database) {
-    memoryStore.set(STUDY_WORKSPACE_KEY, value);
+    memoryStore.set(scopedKey(STUDY_WORKSPACE_KEY), value);
     return;
   }
 
   await database.runAsync(
     `INSERT OR REPLACE INTO ${TABLE_NAME} (key, value, updated_at) VALUES (?, ?, ?)`,
-    STUDY_WORKSPACE_KEY,
+    scopedKey(STUDY_WORKSPACE_KEY),
     value,
     new Date().toISOString(),
   );
@@ -104,24 +115,24 @@ export async function saveStudyWorkspaceState(state: PersistedStudyWorkspaceStat
 
 export async function clearStudyWorkspaceState() {
   const database = getDatabase();
-  memoryStore.delete(STUDY_WORKSPACE_KEY);
+  memoryStore.delete(scopedKey(STUDY_WORKSPACE_KEY));
 
   if (!database) return;
 
-  await database.runAsync(`DELETE FROM ${TABLE_NAME} WHERE key = ?`, STUDY_WORKSPACE_KEY);
+  await database.runAsync(`DELETE FROM ${TABLE_NAME} WHERE key = ?`, scopedKey(STUDY_WORKSPACE_KEY));
 }
 
 export async function loadScheduleWorkspaceState() {
   const database = getDatabase();
 
   if (!database) {
-    const value = memoryStore.get(SCHEDULE_WORKSPACE_KEY);
+    const value = memoryStore.get(scopedKey(SCHEDULE_WORKSPACE_KEY));
     return value ? (JSON.parse(value) as PersistedScheduleWorkspaceState) : null;
   }
 
   const row = await database.getFirstAsync<{ value: string }>(
     `SELECT value FROM ${TABLE_NAME} WHERE key = ?`,
-    SCHEDULE_WORKSPACE_KEY,
+    scopedKey(SCHEDULE_WORKSPACE_KEY),
   );
 
   return row?.value ? (JSON.parse(row.value) as PersistedScheduleWorkspaceState) : null;
@@ -132,13 +143,13 @@ export async function saveScheduleWorkspaceState(state: PersistedScheduleWorkspa
   const database = getDatabase();
 
   if (!database) {
-    memoryStore.set(SCHEDULE_WORKSPACE_KEY, value);
+    memoryStore.set(scopedKey(SCHEDULE_WORKSPACE_KEY), value);
     return;
   }
 
   await database.runAsync(
     `INSERT OR REPLACE INTO ${TABLE_NAME} (key, value, updated_at) VALUES (?, ?, ?)`,
-    SCHEDULE_WORKSPACE_KEY,
+    scopedKey(SCHEDULE_WORKSPACE_KEY),
     value,
     new Date().toISOString(),
   );
@@ -146,9 +157,9 @@ export async function saveScheduleWorkspaceState(state: PersistedScheduleWorkspa
 
 export async function clearScheduleWorkspaceState() {
   const database = getDatabase();
-  memoryStore.delete(SCHEDULE_WORKSPACE_KEY);
+  memoryStore.delete(scopedKey(SCHEDULE_WORKSPACE_KEY));
 
   if (!database) return;
 
-  await database.runAsync(`DELETE FROM ${TABLE_NAME} WHERE key = ?`, SCHEDULE_WORKSPACE_KEY);
+  await database.runAsync(`DELETE FROM ${TABLE_NAME} WHERE key = ?`, scopedKey(SCHEDULE_WORKSPACE_KEY));
 }

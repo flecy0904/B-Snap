@@ -19,7 +19,8 @@
           "cameraPermission": "B-SNAP이 판서를 촬영해 현재 수업 노트에 바로 연결할 수 있도록 카메라 권한이 필요합니다."
         }
       ],
-      "expo-document-picker"
+      "expo-document-picker",
+      "expo-secure-store"
     ],
     "ios": {
       "supportsTablet": true,

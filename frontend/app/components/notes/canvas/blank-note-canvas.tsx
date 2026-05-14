@@ -1,11 +1,12 @@
 import React, { useCallback, useMemo, useRef, useState, memo } from 'react';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
-import { GestureResponderEvent, View } from 'react-native';
+import { GestureResponderEvent, Image, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { captureRef } from 'react-native-view-shot';
 import { TextAnnotationLayer } from './text-annotation-layer';
-import { findHitInkStrokeId, getInkStrokeSvgPath, resolveInkStrokeAppearance } from '../../../ui-helpers';
+import { findHitInkStrokeId, getInkStrokeSvgPath, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance } from '../../../ui-helpers';
 import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
+import { useCanvasContext } from './canvas-context';
 
 type ResponderNativeEvent = GestureResponderEvent['nativeEvent'] & {
   buttons?: number;
@@ -19,7 +20,32 @@ function shouldUsePrimaryPointer(event: GestureResponderEvent) {
   return true;
 }
 
-const StaticStrokes = memo(({ strokes, type }: { strokes: InkStroke[]; type: 'highlight' | 'pen' }) => {
+function InkPath({ stroke, draft = false }: { stroke: InkStroke; draft?: boolean }) {
+  const path = getInkStrokeSvgPath(stroke, !draft);
+  if (!path) return null;
+
+  if (stroke.style === 'shape') {
+    return (
+      <Path
+        key={stroke.id}
+        d={path}
+        fill="none"
+        stroke={stroke.color}
+        strokeWidth={stroke.width}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    );
+  }
+
+  if (stroke.style === 'highlight') {
+    return <Path key={stroke.id} d={path} fill={stroke.color} opacity={0.72} />;
+  }
+
+  return <Path key={stroke.id} d={path} fill={stroke.color} />;
+}
+
+const StaticStrokes = memo(({ strokes, type }: { strokes: InkStroke[]; type: 'highlight' | 'ink' }) => {
   const filteredStrokes = useMemo(
     () => strokes.filter((stroke) => (type === 'highlight' ? stroke.style === 'highlight' : stroke.style !== 'highlight')),
     [strokes, type],
@@ -28,42 +54,33 @@ const StaticStrokes = memo(({ strokes, type }: { strokes: InkStroke[]; type: 'hi
   return (
     <>
       {filteredStrokes.map((stroke) => {
-        const path = getInkStrokeSvgPath(stroke);
-        if (!path) return null;
-        
-        if (type === 'highlight') {
-          return (
-            <Path
-              key={stroke.id}
-              d={path}
-              fill={stroke.color}
-              opacity={0.72}
-            />
-          );
-        }
-
-        return <Path key={stroke.id} d={path} fill={stroke.color} />;
+        return <InkPath key={stroke.id} stroke={stroke} />;
       })}
     </>
   );
 });
 
 export function BlankNoteCanvas(props: {
-  inkTool: InkTool;
-  penColor: string;
-  penWidth: number;
-  inkStrokes: InkStroke[];
-  textAnnotations: InkTextAnnotation[];
-  selectionRect?: SelectionRect | null;
-  onCommitInkStroke: (stroke: InkStroke) => void;
-  onRemoveInkStroke: (strokeId: string) => void;
-  onAddTextAnnotation: (point: InkPoint) => void;
-  onUpdateTextAnnotation: (id: string, text: string) => void;
-  onRemoveTextAnnotation: (id: string) => void;
-  onSelectionChange?: (rect: SelectionRect | null) => void;
-  onSelectionPreviewChange?: (uri: string | null) => void;
+  backgroundImageUri?: string | null;
   styles: any;
 }) {
+  const canvasCtx = useCanvasContext();
+  const {
+    inkTool,
+    penColor,
+    penWidth,
+    inkStrokes,
+    textAnnotations,
+    selectionRect,
+    commitInkStroke: onCommitInkStroke,
+    removeInkStroke: onRemoveInkStroke,
+    addTextAnnotation: onAddTextAnnotation,
+    updateTextAnnotation: onUpdateTextAnnotation,
+    removeTextAnnotation: onRemoveTextAnnotation,
+    setSelectionRect: onSelectionChange,
+    setSelectionPreviewUri: onSelectionPreviewChange,
+  } = canvasCtx;
+
   const [pageSize, setPageSize] = useState({ width: 0, height: 0 });
   const [currentStroke, setCurrentStroke] = useState<InkStroke | null>(null);
   const [draftSelection, setDraftSelection] = useState<SelectionRect | null>(null);
@@ -118,21 +135,24 @@ export function BlankNoteCanvas(props: {
     () => ({
       onStartShouldSetResponder: (event: GestureResponderEvent) => {
         if (!shouldUsePrimaryPointer(event)) return false;
-        return props.inkTool === 'pen' || props.inkTool === 'highlight' || props.inkTool === 'text' || props.inkTool === 'erase' || props.inkTool === 'select';
+        return isDrawingTool(inkTool) || inkTool === 'text' || inkTool === 'erase' || inkTool === 'select';
       },
       onMoveShouldSetResponder: (event: GestureResponderEvent) => {
         if (!shouldUsePrimaryPointer(event)) return false;
-        return props.inkTool === 'pen' || props.inkTool === 'highlight' || props.inkTool === 'select';
+        return isDrawingTool(inkTool) || inkTool === 'select';
       },
       onResponderGrant: (event: GestureResponderEvent) => {
         const point = clampPointToPage(event.nativeEvent.locationX, event.nativeEvent.locationY);
-        if (props.inkTool === 'pen' || props.inkTool === 'highlight') {
-          const appearance = resolveInkStrokeAppearance(props.inkTool, props.penColor, props.penWidth);
+        if (isDrawingTool(inkTool)) {
+          const appearance = isShapeTool(inkTool)
+            ? resolveShapeStrokeAppearance(penColor, penWidth)
+            : resolveInkStrokeAppearance(inkTool, penColor, penWidth);
           const stroke: InkStroke = {
             id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
             color: appearance.color,
             width: appearance.width,
-            style: props.inkTool === 'highlight' ? 'highlight' : 'pen',
+            style: isShapeTool(inkTool) ? 'shape' : inkTool === 'highlight' ? 'highlight' : 'pen',
+            shape: isShapeTool(inkTool) ? inkTool : undefined,
             pageWidth: pageSize.width || 1000,
             pageHeight: pageSize.height || 1000,
             points: [point],
@@ -142,9 +162,9 @@ export function BlankNoteCanvas(props: {
           return;
         }
 
-        if (props.inkTool === 'select') {
-          props.onSelectionChange?.(null);
-          props.onSelectionPreviewChange?.(null);
+        if (inkTool === 'select') {
+          onSelectionChange?.(null);
+          onSelectionPreviewChange?.(null);
           selectionOriginRef.current = point;
           const rect = { x: point.x, y: point.y, width: 0, height: 0, pageWidth: point.pageWidth, pageHeight: point.pageHeight };
           draftSelectionRef.current = rect;
@@ -152,23 +172,29 @@ export function BlankNoteCanvas(props: {
           return;
         }
 
-        if (props.inkTool === 'text') {
+        if (inkTool === 'text') {
           textTapRef.current = point;
         }
-        if (props.inkTool === 'erase') {
-          const hitStrokeId = findHitInkStrokeId(props.inkStrokes, point);
+        if (inkTool === 'erase') {
+          const hitStrokeId = findHitInkStrokeId(inkStrokes, point);
           if (hitStrokeId) {
-            props.onRemoveInkStroke(hitStrokeId);
+            onRemoveInkStroke(hitStrokeId);
           }
         }
       },
       onResponderMove: (event: GestureResponderEvent) => {
-        if (props.inkTool !== 'pen' && props.inkTool !== 'highlight' && props.inkTool !== 'select') return;
+        if (!isDrawingTool(inkTool) && inkTool !== 'select') return;
         const point = clampPointToPage(event.nativeEvent.locationX, event.nativeEvent.locationY);
         
-        if (props.inkTool === 'pen' || props.inkTool === 'highlight') {
+        if (isDrawingTool(inkTool)) {
           const stroke = currentStrokeRef.current;
           if (!stroke) return;
+          if (stroke.style === 'shape') {
+            const nextStroke = { ...stroke, points: [stroke.points[0], point] };
+            currentStrokeRef.current = nextStroke;
+            setCurrentStroke(nextStroke);
+            return;
+          }
           const lastPoint = stroke.points[stroke.points.length - 1];
           const dist = Math.hypot(point.x - lastPoint.x, point.y - lastPoint.y);
           if (dist < 1.2) return;
@@ -179,7 +205,7 @@ export function BlankNoteCanvas(props: {
           return;
         }
 
-        if (props.inkTool === 'select') {
+        if (inkTool === 'select') {
           const origin = selectionOriginRef.current;
           if (!origin) return;
           const nextRect = {
@@ -196,27 +222,27 @@ export function BlankNoteCanvas(props: {
       },
       onResponderRelease: () => {
         const stroke = currentStrokeRef.current;
-        if (stroke && stroke.points.length > 1) props.onCommitInkStroke(stroke);
-        if (props.inkTool === 'select') {
+        if (stroke && stroke.points.length > 1) onCommitInkStroke(stroke);
+        if (inkTool === 'select') {
           const rect = draftSelectionRef.current;
           draftSelectionRef.current = null;
           selectionOriginRef.current = null;
           setDraftSelection(null);
           if (rect && rect.width > 24 && rect.height > 24) {
             void buildSelectionPreview(rect).then((uri) => {
-              props.onSelectionChange?.(rect);
-              props.onSelectionPreviewChange?.(uri);
+              onSelectionChange?.(rect);
+              onSelectionPreviewChange?.(uri);
             });
           }
         }
-        if (props.inkTool === 'text' && textTapRef.current) props.onAddTextAnnotation(textTapRef.current);
+        if (inkTool === 'text' && textTapRef.current) onAddTextAnnotation(textTapRef.current);
         currentStrokeRef.current = null;
         textTapRef.current = null;
         setCurrentStroke(null);
       },
       onResponderTerminate: () => {
         const stroke = currentStrokeRef.current;
-        if (stroke && stroke.points.length > 1) props.onCommitInkStroke(stroke);
+        if (stroke && stroke.points.length > 1) onCommitInkStroke(stroke);
         currentStrokeRef.current = null;
         draftSelectionRef.current = null;
         selectionOriginRef.current = null;
@@ -228,9 +254,6 @@ export function BlankNoteCanvas(props: {
     [buildSelectionPreview, props, pageSize],
   );
 
-  const currentPenPath = currentStroke?.style === 'pen' ? getInkStrokeSvgPath(currentStroke, false) : '';
-  const currentHighlightPath = currentStroke?.style === 'highlight' ? getInkStrokeSvgPath(currentStroke, false) : '';
-
   return (
     <View style={[props.styles.blankNoteCanvasCard, { paddingVertical: 0, borderWidth: 0 }]}>
       <View 
@@ -240,32 +263,33 @@ export function BlankNoteCanvas(props: {
         onLayout={(e) => setPageSize({ width: e.nativeEvent.layout.width, height: e.nativeEvent.layout.height })}
         {...panResponder}
       >
+        {props.backgroundImageUri ? (
+          <Image
+            source={{ uri: props.backgroundImageUri }}
+            style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, width: '100%', height: '100%' }}
+            resizeMode="contain"
+          />
+        ) : null}
         <View pointerEvents="none" style={props.styles.blankNoteRuleLayer} />
 
         <Svg width="100%" height="100%" pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0 }}>
-          <StaticStrokes strokes={props.inkStrokes} type="highlight" />
-          {currentHighlightPath ? (
-            <Path
-              d={currentHighlightPath}
-              fill={currentStroke?.color}
-              opacity={0.72}
-            />
-          ) : null}
+          <StaticStrokes strokes={inkStrokes} type="highlight" />
+          {currentStroke?.style === 'highlight' ? <InkPath stroke={currentStroke} draft /> : null}
         </Svg>
 
         <TextAnnotationLayer
-          annotations={props.textAnnotations}
+          annotations={textAnnotations}
           styles={props.styles}
-          onChangeText={props.onUpdateTextAnnotation}
-          onRemove={props.onRemoveTextAnnotation}
+          onChangeText={onUpdateTextAnnotation}
+          onRemove={onRemoveTextAnnotation}
         />
 
         <Svg width="100%" height="100%" pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0 }}>
-          <StaticStrokes strokes={props.inkStrokes} type="pen" />
-          {currentPenPath ? <Path d={currentPenPath} fill={currentStroke?.color} /> : null}
+          <StaticStrokes strokes={inkStrokes} type="ink" />
+          {currentStroke?.style !== 'highlight' && currentStroke ? <InkPath stroke={currentStroke} draft /> : null}
         </Svg>
         
-        {!capturingSelection && !draftSelection && props.selectionRect ? <View pointerEvents="none" style={[props.styles.selectionOverlayRect, { left: props.selectionRect.x, top: props.selectionRect.y, width: props.selectionRect.width, height: props.selectionRect.height }]} /> : null}
+        {!capturingSelection && !draftSelection && selectionRect ? <View pointerEvents="none" style={[props.styles.selectionOverlayRect, { left: selectionRect.x, top: selectionRect.y, width: selectionRect.width, height: selectionRect.height }]} /> : null}
         {!capturingSelection && draftSelection ? <View pointerEvents="none" style={[props.styles.selectionOverlayRect, props.styles.selectionOverlayDraft, { left: draftSelection.x, top: draftSelection.y, width: draftSelection.width, height: draftSelection.height }]} /> : null}
       </View>
     </View>

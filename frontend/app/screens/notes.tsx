@@ -1,233 +1,40 @@
 import React from 'react';
 import { MobileNotesView } from '../components/notes/layout/mobile-notes-view';
 import { DesktopNotesView } from '../components/notes/layout/desktop-notes-view';
-import { BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NoteEntry, NoteWorkspaceMode, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../types';
-import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../ui-types';
-import { AppStyles } from '../styles';
-import type { MockAiAnswer } from '../services/mock-ai-service';
-import type { BackendChatMessage, BackendChatSession } from '../services/backend-api';
+import { NotesGlobalProvider } from '../components/notes/workspace/notes-global-context';
+import { AiChatProvider } from '../components/notes/ai/ai-chat-context';
+import { CanvasProvider } from '../components/notes/canvas/canvas-context';
+import { NavigationProvider } from '../components/notes/workspace/navigation-context';
+import { DocumentProvider } from '../components/notes/workspace/document-context';
 
-export function MobileNotes(props: {
-  subject: Subject | null;
-  note: NoteEntry | null;
-  studyDocument: StudyDocumentEntry | null;
-  notes: NoteEntry[];
-  allNotes: NoteEntry[];
-  deletedNotes: NoteEntry[];
-  studyDocuments: StudyDocumentEntry[];
-  allStudyDocuments: StudyDocumentEntry[];
-  deletedStudyDocuments: StudyDocumentEntry[];
-  subjects: Subject[];
-  query: string;
-  noteTab: 'original' | 'summary';
-  noteMode: NoteWorkspaceMode;
-  inkTool: InkTool;
-  penColor: string;
-  penWidth: number;
-  inkStrokes: InkStroke[];
-  textAnnotations: InkTextAnnotation[];
-  currentPdfPage: number;
-  currentDocumentPages: DocumentPageView[];
-  currentDocumentPage: DocumentPageView | null;
-  memoPages: GeneratedWorkspacePage[];
-  activeGeneratedPage: GeneratedWorkspacePage | null;
-  aiPanelOpen: boolean;
-  selectionRect: SelectionRect | null;
-  selectionPreviewUri: string | null;
-  aiQuestion: string;
-  aiAnswer: MockAiAnswer | null;
-  aiMessages: BackendChatMessage[];
-  aiChatSessions: BackendChatSession[];
-  noteAiChatSessions: BackendChatSession[];
-  allAiChatSessions: BackendChatSession[];
-  aiChatScope: 'note' | 'all';
-  aiChatSearchQuery: string;
-  activeAiChatSessionId: number | null;
-  aiChatReadOnly: boolean;
-  aiLoading: boolean;
-  aiError: string | null;
-  incomingAssetSuggestion: CaptureAsset | null;
-  inboxHint: string | null;
-  inboxPendingCount: number;
-  workspaceFeedback: string | null;
-  captureInbox: CaptureAsset[];
-  workspaceAttachments: WorkspaceAttachment[];
-  bookmarks: BookmarkedPage[];
-  currentPageBookmarked: boolean;
-  onChangeNoteTab: (tab: 'original' | 'summary') => void;
-  onChangeMode: (mode: NoteWorkspaceMode) => void;
-  onChangeInkTool: (tool: InkTool) => void;
-  onChangePenColor: (color: string) => void;
-  onChangePenWidth: (width: number) => void;
-  onToggleAiPanel: () => void;
-  onChangeAiQuestion: (value: string) => void;
-  onChangeAiChatScope: (scope: 'note' | 'all') => void;
-  onChangeAiChatSearchQuery: (value: string) => void;
-  onSelectAiChatSession: (sessionId: number) => void;
-  onRenameAiChatSession: (sessionId: number, title: string) => Promise<boolean>;
-  onRemoveAiChatSession: (sessionId: number) => void;
-  onStartNewAiChatSession: () => void;
-  onCreateAiChatSession: () => void;
-  onRequestAiAnswer: () => void;
-  onInsertAiAnswerPage: () => void;
-  onSelectionChange: (rect: SelectionRect | null) => void;
-  onSelectionPreviewChange: (uri: string | null) => void;
-  onClearSelection: () => void;
-  onUndoInk: () => void;
-  onRedoInk: () => void;
-  onClearInk: () => void;
-  deleteSelectedStrokes: () => void;
-  changeSelectedStrokesColor: (color: string) => void;
-  onCommitInkStroke: (stroke: InkStroke) => void;
-  onRemoveInkStroke: (strokeId: string) => void;
-  onAddTextAnnotation: (point: InkPoint) => void;
-  onUpdateTextAnnotation: (id: string, text: string) => void;
-  onRemoveTextAnnotation: (id: string) => void;
-  onAcceptIncomingAsset: () => void;
-  onArchiveIncomingAsset: () => void;
-  onDismissIncomingAsset: () => void;
-  onInsertInboxAsset: (assetId: string) => void;
-  onRemoveInboxAsset: (assetId: string) => void;
-  onRemoveWorkspaceAttachment: (attachmentId: string) => void;
-  onToggleBookmarkCurrentPage: () => void;
-  onOpenBookmarkedPage: (bookmarkId: string) => void;
-  onRemoveBookmark: (bookmarkId: string) => void;
-  onExportCurrentDocument: () => void;
-  onOpenGeneratedPage?: (pageId: string) => void;
-  onQuery: (value: string) => void;
-  onOpenNote: (id: number) => void;
-  onOpenStudyDocument: (id: number | null) => void;
-  onOpenSubject: (id: number) => void;
-  onDeleteNote: (id: number) => void;
-  onDeleteStudyDocument: (id: number) => void;
-  onRestoreNote: (id: number) => void;
-  onRestoreStudyDocument: (id: number) => void;
-  onRenameStudyDocument: (id: number, title: string) => boolean;
-  onCreateBlankNote: () => void;
-  onUploadPdf: () => void;
-  onUpdateStudyDocumentPageCount: (pageCount: number) => void;
-  onSetCurrentPdfPage: (pageNumber: number) => void;
-  onBackToSubjectList: () => void;
-  onBackToNoteList: () => void;
-  styles: AppStyles;
-  blueColor: string;
-}) {
-  return <MobileNotesView {...props} />;
+export function MobileNotes(props: any) {
+  return (
+    <NotesGlobalProvider value={props}>
+      <NavigationProvider>
+        <DocumentProvider>
+          <AiChatProvider>
+            <CanvasProvider>
+              <MobileNotesView {...props} />
+            </CanvasProvider>
+          </AiChatProvider>
+        </DocumentProvider>
+      </NavigationProvider>
+    </NotesGlobalProvider>
+  );
 }
 
-export function DesktopNotes(props: {
-  compact: boolean;
-  subject: Subject | null;
-  note: NoteEntry | null;
-  studyDocument: StudyDocumentEntry | null;
-  notes: NoteEntry[];
-  allNotes: NoteEntry[];
-  deletedNotes: NoteEntry[];
-  noteMode: NoteWorkspaceMode;
-  studyDocuments: StudyDocumentEntry[];
-  allStudyDocuments: StudyDocumentEntry[];
-  deletedStudyDocuments: StudyDocumentEntry[];
-  inkTool: InkTool;
-  penColor: string;
-  penWidth: number;
-  inkStrokes: InkStroke[];
-  textAnnotations: InkTextAnnotation[];
-  aiPanelOpen: boolean;
-  selectionRect: SelectionRect | null;
-  selectionPreviewUri: string | null;
-  aiQuestion: string;
-  aiAnswer: MockAiAnswer | null;
-  aiMessages: BackendChatMessage[];
-  aiChatSessions: BackendChatSession[];
-  noteAiChatSessions: BackendChatSession[];
-  allAiChatSessions: BackendChatSession[];
-  aiChatScope: 'note' | 'all';
-  aiChatSearchQuery: string;
-  activeAiChatSessionId: number | null;
-  aiChatReadOnly: boolean;
-  aiLoading: boolean;
-  aiError: string | null;
-  incomingAssetSuggestion: CaptureAsset | null;
-  inboxHint: string | null;
-  inboxPendingCount: number;
-  workspaceFeedback: string | null;
-  captureInbox: CaptureAsset[];
-  workspaceAttachments: WorkspaceAttachment[];
-  bookmarks: BookmarkedPage[];
-  currentPageBookmarked: boolean;
-  generatedWorkspacePages: GeneratedWorkspacePage[];
-  memoPages: GeneratedWorkspacePage[];
-  activeGeneratedPage: GeneratedWorkspacePage | null;
-  currentDocumentPages: DocumentPageView[];
-  currentDocumentPage: DocumentPageView | null;
-  currentPdfPage: number;
-  currentDocumentPageIndex: number;
-  totalDocumentPageCount: number;
-  subjects: Subject[];
-  query: string;
-  sort: 'latest' | 'oldest';
-  onChangeMode: (mode: NoteWorkspaceMode) => void;
-  onChangeInkTool: (tool: InkTool) => void;
-  onChangePenColor: (color: string) => void;
-  onChangePenWidth: (width: number) => void;
-  onToggleAiPanel: () => void;
-  onChangeAiQuestion: (value: string) => void;
-  onChangeAiChatScope: (scope: 'note' | 'all') => void;
-  onChangeAiChatSearchQuery: (value: string) => void;
-  onSelectAiChatSession: (sessionId: number) => void;
-  onRenameAiChatSession: (sessionId: number, title: string) => Promise<boolean>;
-  onRemoveAiChatSession: (sessionId: number) => void;
-  onStartNewAiChatSession: () => void;
-  onCreateAiChatSession: () => void;
-  onRequestAiAnswer: () => void;
-  onInsertAiAnswerPage: () => void;
-  onSelectionChange: (rect: SelectionRect | null) => void;
-  onSelectionPreviewChange: (uri: string | null) => void;
-  onClearSelection: () => void;
-  onUndoInk: () => void;
-  onRedoInk: () => void;
-  onClearInk: () => void;
-  deleteSelectedStrokes: () => void;
-  changeSelectedStrokesColor: (color: string) => void;
-  onCommitInkStroke: (stroke: InkStroke) => void;
-  onRemoveInkStroke: (strokeId: string) => void;
-  onAddTextAnnotation: (point: InkPoint) => void;
-  onUpdateTextAnnotation: (id: string, text: string) => void;
-  onRemoveTextAnnotation: (id: string) => void;
-  onAcceptIncomingAsset: () => void;
-  onArchiveIncomingAsset: () => void;
-  onDismissIncomingAsset: () => void;
-  onInsertInboxAsset: (assetId: string) => void;
-  onRemoveInboxAsset: (assetId: string) => void;
-  onRemoveWorkspaceAttachment: (attachmentId: string) => void;
-  onToggleBookmarkCurrentPage: () => void;
-  onOpenBookmarkedPage: (bookmarkId: string) => void;
-  onRemoveBookmark: (bookmarkId: string) => void;
-  onExportCurrentDocument: () => void;
-  onOpenWorkspaceAttachment: (attachmentId: string) => void;
-  onOpenGeneratedPage: (pageId: string) => void;
-  onRemoveGeneratedPage: (pageId: string) => void;
-  onCreateMemoPage: () => void;
-  onQuery: (value: string) => void;
-  onSort: () => void;
-  onOpenStudyDocument: (id: number | null) => void;
-  onOpenNote: (id: number) => void;
-  onOpenSubject: (id: number) => void;
-  onDeleteNote: (id: number) => void;
-  onDeleteStudyDocument: (id: number) => void;
-  onRestoreNote: (id: number) => void;
-  onRestoreStudyDocument: (id: number) => void;
-  onRenameStudyDocument: (id: number, title: string) => boolean;
-  onCreateBlankNote: () => void;
-  onUploadPdf: () => void;
-  onUpdateStudyDocumentPageCount: (pageCount: number) => void;
-  onReset: () => void;
-  onSetCurrentPdfPage: (pageNumber: number) => void;
-  onGoToPreviousDocumentPage: () => void;
-  onGoToNextDocumentPage: () => void;
-  styles: AppStyles;
-  blueColor: string;
-  isWeb?: boolean;
-}) {
-  return <DesktopNotesView {...props} />;
+export function DesktopNotes(props: any) {
+  return (
+    <NotesGlobalProvider value={props}>
+      <NavigationProvider>
+        <DocumentProvider>
+          <AiChatProvider>
+            <CanvasProvider>
+              <DesktopNotesView {...props} />
+            </CanvasProvider>
+          </AiChatProvider>
+        </DocumentProvider>
+      </NavigationProvider>
+    </NotesGlobalProvider>
+  );
 }

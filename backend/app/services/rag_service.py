@@ -36,9 +36,10 @@ def load_note_documents(
     note_ids: list[int] | None = None,
     folder_id: int | None = None,
     subject_id: int | None = None,
+    user_id: int | None = None,
 ) -> list[Document]:
     current_folder_id = folder_id if folder_id is not None else subject_id
-    where_clause, params = _build_note_filters(note_ids=note_ids, folder_id=current_folder_id)
+    where_clause, params = _build_note_filters(note_ids=note_ids, folder_id=current_folder_id, user_id=user_id)
 
     notes = fetch_all(
         connection,
@@ -97,7 +98,7 @@ def ask_with_rag(
 ) -> RAGAnswer:
     contexts = _retrieve_or_mock(question, documents, top_k)
     prompt = build_rag_prompt(question, contexts)
-    selected_model = model or get_settings().openai_default_model
+    selected_model = model or get_settings().default_ai_model
     mock_response = _mock_answer(question, contexts)
     answer = generate_text_response(
         model=selected_model,
@@ -125,7 +126,7 @@ def summarize_note_with_prompt(
 ) -> RAGAnswer:
     query = "시험 대비 핵심 개념 예상 문제" if mode == "exam" else "노트 핵심 요약 중요 개념"
     contexts = _retrieve_or_mock(query, documents, top_k, fallback_to_documents=True)
-    selected_model = model or get_settings().openai_default_model
+    selected_model = model or get_settings().default_ai_model
     instructions = EXAM_SUMMARY_PROMPT if mode == "exam" else NOTE_SUMMARY_PROMPT
     mock_response = _mock_summary(contexts, mode)
     answer = generate_text_response(
@@ -154,7 +155,7 @@ def generate_quiz_from_context(
     model: str | None = None,
 ) -> RAGQuizResponse:
     contexts = _retrieve_or_mock("퀴즈 문제 정답 설명 핵심 개념", documents, top_k, fallback_to_documents=True)
-    selected_model = model or get_settings().openai_default_model
+    selected_model = model or get_settings().default_ai_model
     mock_questions = _mock_quiz_questions(contexts, count)
     mock_response = json.dumps(
         {"questions": [question.model_dump() for question in mock_questions]},
@@ -177,6 +178,7 @@ def _build_note_filters(
     *,
     note_ids: list[int] | None,
     folder_id: int | None,
+    user_id: int | None,
 ) -> tuple[str, tuple[Any, ...]]:
     filters = []
     params: list[Any] = []
@@ -189,6 +191,10 @@ def _build_note_filters(
     if folder_id is not None:
         filters.append("n.folder_id = %s")
         params.append(folder_id)
+
+    if user_id is not None:
+        filters.append("n.user_id = %s")
+        params.append(user_id)
 
     if not filters:
         return "", ()

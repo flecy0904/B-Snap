@@ -1,14 +1,21 @@
-export type InkTool = 'view' | 'pen' | 'highlight' | 'erase' | 'select' | 'text';
+export type InkShape = 'line' | 'arrow' | 'rect' | 'ellipse';
+export type InkTool = 'view' | 'pen' | 'highlight' | 'erase' | 'select' | 'text' | InkShape;
+export type InkBrush = 'ballpoint' | 'fountain' | 'pencil' | 'marker' | 'highlighter';
+export type InkLinePattern = 'solid' | 'dotted' | 'dashed';
 export type InkPageSize = { pageWidth?: number; pageHeight?: number };
-export type InkPoint = { x: number; y: number } & InkPageSize;
+export type InkPoint = { x: number; y: number; pageNumber?: number; generatedPageId?: string } & InkPageSize;
 export type InkStroke = {
   id: string;
   points: InkPoint[];
   color: string;
   width: number;
-  style?: 'pen' | 'highlight';
+  style?: 'pen' | 'highlight' | 'shape';
+  brush?: InkBrush;
+  linePattern?: InkLinePattern;
+  shape?: InkShape;
   pageNumber?: number;
   generatedPageId?: string;
+  historyGroupId?: string;
 } & InkPageSize;
 export type InkTextAnnotation = {
   id: string;

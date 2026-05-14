@@ -1,5 +1,5 @@
 import React from 'react';
-import { resolvePreviewImage } from '../../mock-preview-images';
+import { resolvePreviewImage } from '../../preview-images';
 import { CaptureAsset, DocumentPageView, GeneratedWorkspacePage, StudyDocumentEntry, WorkspaceAttachment } from '../../types';
 import { InkTextAnnotation } from '../../ui-types';
 
@@ -38,10 +38,11 @@ export function useDesktopNotesWorkspaceViewModel(params: DesktopNotesWorkspaceV
     : [];
   const activeGeneratedOrdinal =
     params.activeGeneratedPage ? generatedPagesAfterActiveInsertPage.findIndex((value) => value.id === params.activeGeneratedPage?.id) + 1 : 0;
+  const totalPageCount = Math.max(params.totalDocumentPageCount, params.studyDocument?.pageCount ?? 0, 1);
   const currentPageLabel =
     params.currentDocumentPage?.kind === 'generated'
       ? `${params.activeGeneratedPage?.insertAfterPage ?? params.currentPdfPage}-${activeGeneratedOrdinal} ${params.activeGeneratedPage?.pageKind === 'memo' ? '메모' : '정리'}`
-      : `${params.currentPdfPage} / ${params.totalDocumentPageCount} · ${params.studyDocument?.type === 'pdf' ? '원본 PDF' : '빈 노트'}`;
+      : `${params.currentPdfPage} / ${totalPageCount} · ${params.studyDocument?.type === 'pdf' ? '원본 PDF' : params.studyDocument?.type === 'image' ? '이미지 노트' : '빈 노트'}`;
 
   const previewedIncoming =
     selectedPreview?.source === 'incoming' && params.incomingAssetSuggestion?.id === selectedPreview.assetId
@@ -61,7 +62,15 @@ export function useDesktopNotesWorkspaceViewModel(params: DesktopNotesWorkspaceV
     previewedIncoming?.sourceDeviceLabel ??
     previewedInbox?.sourceDeviceLabel ??
     (previewedAttachment ? '판서+LLM 정리본' : null);
+  const previewUri =
+    previewedIncoming?.thumbnailUrl ??
+    (previewedIncoming?.type === 'image' ? previewedIncoming.fileUrl : undefined) ??
+    previewedAttachment?.thumbnailUrl ??
+    (previewedAttachment?.type === 'image' ? previewedAttachment.fileUrl : undefined) ??
+    previewedInbox?.thumbnailUrl ??
+    (previewedInbox?.type === 'image' ? previewedInbox.fileUrl : undefined);
   const previewImage =
+    (previewUri ? { uri: previewUri } : null) ??
     resolvePreviewImage(previewedIncoming?.previewImageKey) ??
     resolvePreviewImage(previewedAttachment?.previewImageKey) ??
     resolvePreviewImage(previewedInbox?.previewImageKey) ??
@@ -73,6 +82,8 @@ export function useDesktopNotesWorkspaceViewModel(params: DesktopNotesWorkspaceV
     ? params.workspaceAttachments.find((value) => value.generatedPageId === params.activeGeneratedPage?.id) ?? null
     : null;
   const activeGeneratedPreviewImage =
+    (activeGeneratedAttachment?.thumbnailUrl ? { uri: activeGeneratedAttachment.thumbnailUrl } : null) ??
+    (activeGeneratedAttachment?.type === 'image' && activeGeneratedAttachment.fileUrl ? { uri: activeGeneratedAttachment.fileUrl } : null) ??
     resolvePreviewImage(params.activeGeneratedPage?.previewImageKey) ??
     resolvePreviewImage(activeGeneratedAttachment?.previewImageKey) ??
     params.activeGeneratedPage?.previewImage ??

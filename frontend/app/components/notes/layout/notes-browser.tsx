@@ -1,7 +1,7 @@
 import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Image, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
-import { subjects as allSubjects } from '../../../data';
+import { subjects as allSubjects } from '../../../app-defaults';
 import { NoteEntry, NoteWorkspaceMode, StudyDocumentEntry, Subject } from '../../../types';
 import { darkenHex } from '../../../ui-helpers';
 
@@ -111,7 +111,7 @@ export function NotesBrowser(props: NotesBrowserProps) {
               <View key={item.id} style={props.styles.recoveryRow}>
                 <View style={props.styles.recoveryRowMeta}>
                   <Text style={props.styles.recoveryRowTitle} numberOfLines={1}>{item.title}</Text>
-                  <Text style={props.styles.recoveryRowBody} numberOfLines={1}>{subject?.name ?? '과목 없음'} · {item.type === 'pdf' ? 'PDF' : '빈 노트'} · {item.pageCount}페이지</Text>
+                  <Text style={props.styles.recoveryRowBody} numberOfLines={1}>{subject?.name ?? '과목 없음'} · {item.type === 'pdf' ? 'PDF' : item.type === 'image' ? '이미지' : '빈 노트'} · {item.pageCount}페이지</Text>
                 </View>
                 <Pressable style={props.styles.recoveryRestoreButton} onPress={() => props.onRestoreStudyDocument(item.id)}>
                   <Text style={props.styles.recoveryRestoreButtonText}>복구</Text>
@@ -168,17 +168,23 @@ export function NotesBrowser(props: NotesBrowserProps) {
                 const subject = findSubject(item.subjectId);
                 const subjectColor = subject?.color ?? '#D6DCE8';
                 const isPdf = item.type === 'pdf';
+                const isImage = item.type === 'image';
+                const documentPreviewUri = item.pageImageUrls?.[1] ?? (typeof item.file === 'object' && item.file && 'uri' in item.file ? item.file.uri : null);
                 return (
                   <Pressable key={item.id} style={props.styles.documentListCard} onPress={() => props.onOpenStudyDocument(item.id)}>
                     <View style={[props.styles.documentListRail, { backgroundColor: subjectColor }]} />
-                    <View style={[props.styles.documentThumb, { backgroundColor: isPdf ? '#F6F8FE' : '#EEF1F6' }]}>
-                      <Text style={[props.styles.documentThumbText, { color: isPdf ? props.blueColor : '#6B7280' }]}>{isPdf ? 'PDF' : 'NOTE'}</Text>
+                    <View style={[props.styles.documentThumb, { backgroundColor: isPdf ? '#F6F8FE' : isImage ? '#F3FAF7' : '#EEF1F6' }]}>
+                      {documentPreviewUri ? (
+                        <Image source={{ uri: documentPreviewUri }} style={props.styles.documentThumbImage} resizeMode="cover" />
+                      ) : (
+                        <Text style={[props.styles.documentThumbText, { color: isPdf ? props.blueColor : isImage ? '#23845F' : '#6B7280' }]}>{isPdf ? 'PDF' : isImage ? 'IMG' : 'NOTE'}</Text>
+                      )}
                     </View>
                     <View style={props.styles.fill}>
                       <View style={props.styles.documentTitleRow}>
                         <Text style={props.styles.documentTitle} numberOfLines={1}>{item.title}</Text>
-                        <View style={[props.styles.documentTypePill, { backgroundColor: isPdf ? '#EEF1FF' : '#F1F3F6' }]}>
-                          <Text style={[props.styles.documentTypeText, { color: isPdf ? props.blueColor : '#6B7280' }]}>{isPdf ? 'PDF' : '빈 노트'}</Text>
+                        <View style={[props.styles.documentTypePill, { backgroundColor: isPdf ? '#EEF1FF' : isImage ? '#EAF8F2' : '#F1F3F6' }]}>
+                          <Text style={[props.styles.documentTypeText, { color: isPdf ? props.blueColor : isImage ? '#23845F' : '#6B7280' }]}>{isPdf ? 'PDF' : isImage ? '이미지' : '빈 노트'}</Text>
                         </View>
                       </View>
                       <Text style={props.styles.documentMeta}>{item.updatedAt} · {item.pageCount}페이지</Text>

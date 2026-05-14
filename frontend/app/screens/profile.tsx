@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
-import { notes, profile, semesterSchedules } from '../data';
+import type { SemesterSchedule } from '../types';
+import type { AuthUser } from '../root/types';
 
 type SettingsItem = {
   label: string;
@@ -36,6 +37,7 @@ function SettingsSection(props: { title: string; items: SettingsItem[]; styles: 
 function ProfileContent(props: {
   styles: any;
   onLogout: () => void;
+  authUser: AuthUser;
   isWeb?: boolean;
   currentSemesterLabel: string;
   notificationsEnabled: boolean;
@@ -43,6 +45,8 @@ function ProfileContent(props: {
   localSaveStatus: string;
   helpOpen: boolean;
   currentSubjectCount: number;
+  currentDocumentCount: number;
+  semesterSchedules: SemesterSchedule[];
   onSelectSemester: (id: string) => void;
   onOpenTimetableManager: () => void;
   onOpenSubjectManager: () => void;
@@ -60,11 +64,11 @@ function ProfileContent(props: {
           <Text style={props.styles.profileAvatarText}>⌂</Text>
         </View>
         <View style={props.styles.fill}>
-          <Text style={props.styles.profileName}>{profile.name}</Text>
-          <Text style={props.styles.profileDept}>{profile.department}</Text>
+          <Text style={props.styles.profileName}>{props.authUser.name}</Text>
+          <Text style={props.styles.profileDept}>{props.authUser.email}</Text>
           <View style={props.styles.profileStats}>
-            <Text style={props.styles.profileStat}>◫ {semesterSchedules.length}개 학기</Text>
-            <Text style={props.styles.profileStat}>▣ {notes.length}개 노트</Text>
+            <Text style={props.styles.profileStat}>◫ {props.semesterSchedules.length}개 학기</Text>
+            <Text style={props.styles.profileStat}>▣ {props.currentDocumentCount}개 문서</Text>
           </View>
         </View>
         {props.isWeb ? (
@@ -116,7 +120,7 @@ function ProfileContent(props: {
 
               {semesterDropdownOpen ? (
                 <View style={{ backgroundColor: '#f9f9f9', paddingHorizontal: 16, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#eee' }}>
-                  {semesterSchedules.map(sem => (
+                  {props.semesterSchedules.map(sem => (
                     <Pressable 
                       key={sem.id} 
                       onPress={() => {
@@ -184,12 +188,15 @@ function ProfileContent(props: {
 export function MobileProfile(props: {
   styles: any;
   onLogout: () => void;
+  authUser: AuthUser;
   currentSemesterLabel: string;
   notificationsEnabled: boolean;
   feedbackMessage: string | null;
   localSaveStatus: string;
   helpOpen: boolean;
   currentSubjectCount: number;
+  currentDocumentCount: number;
+  semesterSchedules: SemesterSchedule[];
   onSelectSemester: (id: string) => void;
   onOpenTimetableManager: () => void;
   onOpenSubjectManager: () => void;
@@ -210,6 +217,7 @@ export function DesktopProfile(props: {
   compact: boolean;
   styles: any;
   onLogout: () => void;
+  authUser: AuthUser;
   isWeb?: boolean;
   currentSemesterLabel: string;
   notificationsEnabled: boolean;
@@ -217,6 +225,8 @@ export function DesktopProfile(props: {
   localSaveStatus: string;
   helpOpen: boolean;
   currentSubjectCount: number;
+  currentDocumentCount: number;
+  semesterSchedules: SemesterSchedule[];
   onSelectSemester: (id: string) => void;
   onOpenTimetableManager: () => void;
   onOpenSubjectManager: () => void;
@@ -237,7 +247,7 @@ export function DesktopProfile(props: {
             </View>
             <View style={props.styles.webHeaderBadgeRow}>
               <View style={props.styles.webHeaderBadge}>
-                <Text style={props.styles.webHeaderBadgeText}>{profile.studentId}</Text>
+                <Text style={props.styles.webHeaderBadgeText}>{props.authUser.email}</Text>
               </View>
             </View>
           </>

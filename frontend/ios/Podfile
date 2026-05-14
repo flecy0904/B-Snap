@@ -1,6 +1,7 @@
 require File.join(File.dirname(`node --print "require.resolve('expo/package.json')"`), "scripts/autolinking")
 require File.join(File.dirname(`node --print "require.resolve('react-native/package.json')"`), "scripts/react_native_pods")
 
+require 'fileutils'
 require 'json'
 podfile_properties = JSON.parse(File.read(File.join(__dir__, 'Podfile.properties.json'))) rescue {}
 
@@ -59,5 +60,20 @@ target 'BSNAP' do
       :mac_catalyst_enabled => false,
       :ccache_enabled => ccache_enabled?(podfile_properties),
     )
+
+    installer.pods_project.targets.each do |target|
+      next unless target.name == 'ExpoSQLite'
+
+      target.build_configurations.each do |build_configuration|
+        header_search_paths = build_configuration.build_settings['HEADER_SEARCH_PATHS'] || ['$(inherited)']
+        header_search_paths = [header_search_paths] unless header_search_paths.is_a?(Array)
+        header_search_paths << '$(PODS_TARGET_SRCROOT)'
+        build_configuration.build_settings['HEADER_SEARCH_PATHS'] = header_search_paths.uniq
+      end
+
+      sqlite_header = File.join(__dir__, '..', 'node_modules', 'expo-sqlite', 'ios', 'sqlite3.h')
+      support_header = File.join(__dir__, 'Pods', 'Target Support Files', 'ExpoSQLite', 'sqlite3.h')
+      FileUtils.cp(sqlite_header, support_header) if File.exist?(sqlite_header)
+    end
   end
 end

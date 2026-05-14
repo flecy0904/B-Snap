@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { semesterSchedules as fallbackSchedules, subjects as fallbackSubjects } from '../../data';
+import { semesterSchedules as fallbackSchedules, subjects as fallbackSubjects } from '../../app-defaults';
 import { currentSubjectId } from '../../ui-helpers';
 import { loadScheduleWorkspaceState, saveScheduleWorkspaceState } from '../../storage/local-workspace-store';
 import { Subject, SemesterSchedule, TimetableDay, TimetableEntry, TimetableSlotInput } from '../../types';

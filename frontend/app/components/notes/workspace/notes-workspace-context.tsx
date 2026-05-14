@@ -1,20 +1,21 @@
 import React from 'react';
-import type { MockAiAnswer } from '../../../services/mock-ai-service';
 import type { BackendChatMessage, BackendChatSession } from '../../../services/backend-api';
-import { NoteSummarySection, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, StudyDocumentEntry, WorkspaceAttachment } from '../../../types';
-import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
+import type { UseAiCanvasNotesResult } from '../../../hooks/notes/ai-canvas/use-ai-canvas-notes';
+import { AiAnswer, NoteSummarySection, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NotebookPage, StudyDocumentEntry, WorkspaceAttachment } from '../../../types';
+import { InkBrush, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 
 export type DesktopNotesWorkspaceContextValue = {
   styles: any;
   blueColor: string;
   aiPanelOpen: boolean;
+  aiPanelMode: 'floating' | 'sidebar';
   selectionRect: SelectionRect | null;
   selectionPreviewUri: string | null;
   aiQuestion: string;
   normalizedQuestion: string;
   aiResponse: string;
   aiResponseSections?: NoteSummarySection[] | null;
-  aiAnswer: MockAiAnswer | null;
+  aiAnswer: AiAnswer | null;
   aiMessages: BackendChatMessage[];
   aiChatSessions: BackendChatSession[];
   noteAiChatSessions: BackendChatSession[];
@@ -25,9 +26,12 @@ export type DesktopNotesWorkspaceContextValue = {
   aiChatReadOnly: boolean;
   aiLoading: boolean;
   aiError: string | null;
+  aiCanvas: UseAiCanvasNotesResult;
   inkTool: InkTool;
   penColor: string;
   penWidth: number;
+  brushType: InkBrush;
+  linePattern: InkLinePattern;
   inkStrokes: InkStroke[];
   textAnnotations: InkTextAnnotation[];
   currentPageLabel: string;
@@ -47,14 +51,18 @@ export type DesktopNotesWorkspaceContextValue = {
   captureInbox: CaptureAsset[];
   studyDocument: StudyDocumentEntry;
   currentDocumentPages: DocumentPageView[];
+  notebookPages: NotebookPage[];
   currentPdfPage: number;
   currentDocumentPage: DocumentPageView | null;
   activeGeneratedPage: GeneratedWorkspacePage | null;
   pageListOpen: boolean;
   setPageListOpen: (open: boolean) => void;
+  focusMode: boolean;
+  onToggleFocusMode: () => void;
   activeGeneratedAttachment: WorkspaceAttachment | null;
   activeGeneratedPreviewImage?: number;
   onToggleAiPanel: () => void;
+  onChangeAiPanelMode: (mode: 'floating' | 'sidebar') => void;
   onChangeAiQuestion: (value: string) => void;
   onChangeAiChatScope: (scope: 'note' | 'all') => void;
   onChangeAiChatSearchQuery: (value: string) => void;
@@ -70,6 +78,8 @@ export type DesktopNotesWorkspaceContextValue = {
   onChangeInkTool: (tool: InkTool) => void;
   onChangePenColor: (color: string) => void;
   onChangePenWidth: (width: number) => void;
+  onChangeBrushType: (brush: InkBrush) => void;
+  onChangeLinePattern: (pattern: InkLinePattern) => void;
   onUndoInk: () => void;
   onRedoInk: () => void;
   onClearInk: () => void;
@@ -86,7 +96,9 @@ export type DesktopNotesWorkspaceContextValue = {
   onRemoveBookmark: (bookmarkId: string) => void;
   onExportCurrentDocument: () => void;
   onRemoveGeneratedPage: (pageId: string) => void;
-  onCreateMemoPage: () => void;
+  onDuplicateGeneratedPage: (pageId: string) => void;
+  onMoveGeneratedPage: (pageId: string, delta: -1 | 1) => void;
+  onCreateMemoPage: (insertAfterPage?: number) => void;
   onInsertInboxAsset: (assetId: string) => void;
   onRemoveInboxAsset: (assetId: string) => void;
   onPreviewAttachment: (assetId: string, attachmentId: string) => void;
@@ -101,6 +113,9 @@ export type DesktopNotesWorkspaceContextValue = {
   onClearSelection: () => void;
   deleteSelectedStrokes: () => void;
   changeSelectedStrokesColor: (color: string) => void;
+  duplicateSelectedStrokes: () => void;
+  resizeSelectedStrokes: (scale: number) => void;
+  nudgeSelectedStrokes: (dx: number, dy: number) => void;
   onSetCurrentPdfPage: (pageNumber: number) => void;
   onUpdateStudyDocumentPageCount: (pageCount: number) => void;
 };

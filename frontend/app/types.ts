@@ -27,18 +27,40 @@ export interface NoteSummarySection {
   tone?: 'default' | 'highlight' | 'formula';
 }
 
+export interface AiAnswer {
+  question: string;
+  response: string;
+  sections: NoteSummarySection[];
+  createdAt: string;
+}
+
 export type NoteWorkspaceMode = 'photo' | 'note';
-export type StudyDocumentType = 'pdf' | 'blank';
+export type StudyDocumentType = 'pdf' | 'blank' | 'image';
 export type CaptureAssetType = 'image' | 'pdf';
 export type CaptureAssetStatus = 'uploaded' | 'suggested' | 'accepted' | 'archived' | 'dismissed';
-export type CaptureSource = 'camera' | 'library' | 'document' | 'mock';
+export type CaptureSource = 'camera' | 'library' | 'document';
 export type WorkspaceAttachmentPlacement = 'next_page_insert' | 'side_reference' | 'library_only';
-export type SyncBridgeMode = 'mock' | 'websocket';
+export type SyncBridgeMode = 'local' | 'websocket';
+export type SyncBridgeStatus = 'local' | 'connecting' | 'connected' | 'reconnecting' | 'offline';
 export type GeneratedPageStatus = 'generating' | 'ready';
 export type GeneratedPageKind = 'summary' | 'memo';
 export type DocumentPageView =
   | { kind: 'pdf'; pageNumber: number }
   | { kind: 'generated'; pageId: string };
+export type NotebookPageKind = 'pdf' | 'blank' | 'summary';
+export type NotebookPageTemplate = 'plain' | 'ruled' | 'grid';
+
+export interface NotebookPage {
+  id: string;
+  documentId: number;
+  kind: NotebookPageKind;
+  label: string;
+  sourcePage?: DocumentPageView;
+  pageNumber?: number;
+  generatedPageId?: string;
+  insertAfterPage?: number;
+  template?: NotebookPageTemplate;
+}
 
 export interface BookmarkedPage {
   id: string;
@@ -57,6 +79,7 @@ export interface StudyDocumentEntry {
   pageCount: number;
   preview: string;
   file?: number | string | { uri: string };
+  pageImageUrls?: Record<number, string>;
 }
 
 export interface CaptureAsset {
@@ -70,6 +93,8 @@ export interface CaptureAsset {
   sourceDeviceLabel: string;
   previewImageKey?: string;
   previewImage?: number;
+  fileUrl?: string;
+  thumbnailUrl?: string;
   pageCount?: number;
 }
 
@@ -85,6 +110,8 @@ export interface PublishAssetResult {
 
 export interface CaptureSyncBridge {
   mode: SyncBridgeMode;
+  getStatus: () => SyncBridgeStatus;
+  subscribeToStatus: (listener: (status: SyncBridgeStatus) => void) => () => void;
   publishAsset: (asset: CaptureAsset) => PublishAssetResult | Promise<PublishAssetResult>;
   subscribeToAssets: (listener: (event: CaptureAssetEvent) => void) => () => void;
 }
@@ -100,6 +127,8 @@ export interface WorkspaceAttachment {
   placementType: WorkspaceAttachmentPlacement;
   previewImageKey?: string;
   previewImage?: number;
+  fileUrl?: string;
+  thumbnailUrl?: string;
   pageCount?: number;
 }
 
@@ -118,6 +147,8 @@ export interface GeneratedWorkspacePage {
   formulaText?: string;
   previewImageKey?: string;
   previewImage?: number;
+  fileUrl?: string;
+  thumbnailUrl?: string;
 }
 
 export type TimetableDay = 'MON' | 'TUE' | 'WED' | 'THU' | 'FRI';
