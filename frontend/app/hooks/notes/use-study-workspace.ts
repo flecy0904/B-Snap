@@ -203,6 +203,10 @@ export function useStudyWorkspace(props: {
     if (!studyDocumentId) return [];
     return pageCaptureReferencesByDocument[studyDocumentId] ?? [];
   }, [pageCaptureReferencesByDocument, studyDocumentId]);
+  const allPageCaptureReferences = useMemo(
+    () => Object.values(pageCaptureReferencesByDocument).flat(),
+    [pageCaptureReferencesByDocument],
+  );
   const currentPageCaptureReferences = useMemo(() => {
     if (!currentDocumentPage) return [];
     return pageCaptureReferences.filter((reference) => isSameDocumentPage(reference.page, currentDocumentPage));
@@ -1798,6 +1802,7 @@ export function useStudyWorkspace(props: {
     captureInbox,
     workspaceAttachments,
     pageCaptureReferences,
+    allPageCaptureReferences,
     currentPageCaptureReferences,
     generatedWorkspacePages,
     memoPages,

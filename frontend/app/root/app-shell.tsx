@@ -239,6 +239,7 @@ export function AppShell(props: {
                   captureInbox={notesState.captureInbox}
                   workspaceAttachments={notesState.workspaceAttachments}
                   pageCaptureReferences={notesState.pageCaptureReferences}
+                  allPageCaptureReferences={notesState.allPageCaptureReferences}
                   currentPageCaptureReferences={notesState.currentPageCaptureReferences}
                   bookmarks={notesState.currentDocumentBookmarks}
                   currentPageBookmarked={notesState.currentPageBookmarked}
@@ -462,6 +463,7 @@ export function AppShell(props: {
                   captureInbox={notesState.captureInbox}
                   workspaceAttachments={notesState.workspaceAttachments}
                   pageCaptureReferences={notesState.pageCaptureReferences}
+                  allPageCaptureReferences={notesState.allPageCaptureReferences}
                   currentPageCaptureReferences={notesState.currentPageCaptureReferences}
                   bookmarks={notesState.currentDocumentBookmarks}
                   currentPageBookmarked={notesState.currentPageBookmarked}

@@ -2,7 +2,7 @@ import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Image, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { subjects as allSubjects } from '../../../app-defaults';
-import { CaptureAsset, NoteEntry, NoteWorkspaceMode, StudyDocumentEntry, Subject } from '../../../types';
+import { CaptureAsset, NoteEntry, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject } from '../../../types';
 import { darkenHex } from '../../../ui-helpers';
 
 function getCaptureImageSource(asset: CaptureAsset) {
@@ -24,6 +24,13 @@ function formatCaptureDate(value: string) {
   });
 }
 
+function getCapturePlacementLabel(asset: CaptureAsset, references: PageCaptureReference[]) {
+  const matches = references.filter((reference) => reference.assetId === asset.id);
+  if (!matches.length) return '미연결';
+  const firstLabel = matches[0]?.pageLabel || '연결됨';
+  return matches.length > 1 ? `${firstLabel} 외 ${matches.length - 1}` : firstLabel;
+}
+
 export type NotesBrowserProps = {
   styles: any;
   compact: boolean;
@@ -39,6 +46,7 @@ export type NotesBrowserProps = {
   allStudyDocuments: StudyDocumentEntry[];
   deletedStudyDocuments: StudyDocumentEntry[];
   captureAssetsBySubject: Record<number, CaptureAsset[]>;
+  pageCaptureReferences: PageCaptureReference[];
   blueColor: string;
   onChangeMode: (mode: NoteWorkspaceMode) => void;
   onQuery: (value: string) => void;
@@ -199,29 +207,32 @@ export function NotesBrowser(props: NotesBrowserProps) {
                 <View style={props.styles.photoGalleryGrid}>
                   {selectedPhotoAssets.map((asset) => {
                     const imageSource = getCaptureImageSource(asset);
-                    const keywords = (asset.analysisKeywords ?? []).slice(0, 3);
+                    const placementLabel = getCapturePlacementLabel(asset, props.pageCaptureReferences);
+                    const linked = placementLabel !== '미연결';
                     return (
                       <View key={asset.id} style={props.styles.photoGalleryCard}>
-                        {imageSource ? (
-                          <Image source={imageSource} style={props.styles.photoGalleryImage} resizeMode="cover" />
-                        ) : (
-                          <View style={props.styles.photoGalleryFallback}>
-                            <MaterialCommunityIcons name="image-outline" size={28} color="#9AA6B8" />
-                          </View>
-                        )}
-                        <View style={props.styles.photoGalleryCardBody}>
-                          <Text style={props.styles.photoGalleryCardTitle} numberOfLines={2}>{asset.title}</Text>
-                          <Text style={props.styles.photoGalleryCardMeta} numberOfLines={1}>{formatCaptureDate(asset.createdAt)} · {asset.sourceDeviceLabel}</Text>
-                          <Text style={props.styles.photoGalleryCardSummary} numberOfLines={2}>{asset.analysisSummary ?? asset.summary}</Text>
-                          {keywords.length ? (
-                            <View style={props.styles.photoGalleryKeywordRow}>
-                              {keywords.map((keyword) => (
-                                <View key={`${asset.id}-${keyword}`} style={props.styles.photoGalleryKeyword}>
-                                  <Text style={props.styles.photoGalleryKeywordText}>{keyword}</Text>
-                                </View>
-                              ))}
+                        <View style={props.styles.photoGalleryImageWrap}>
+                          {imageSource ? (
+                            <Image source={imageSource} style={props.styles.photoGalleryImage} resizeMode="cover" />
+                          ) : (
+                            <View style={props.styles.photoGalleryFallback}>
+                              <MaterialCommunityIcons name="image-outline" size={28} color="#9AA6B8" />
                             </View>
-                          ) : null}
+                          )}
+                          <View style={[props.styles.photoGalleryStatusBadge, linked && props.styles.photoGalleryStatusBadgeLinked]}>
+                            <Text style={[props.styles.photoGalleryStatusBadgeText, linked && props.styles.photoGalleryStatusBadgeTextLinked]}>
+                              {linked ? '연결됨' : '미연결'}
+                            </Text>
+                          </View>
+                        </View>
+                        <View style={props.styles.photoGalleryCardBody}>
+                          <Text style={props.styles.photoGalleryCardMeta} numberOfLines={1}>{formatCaptureDate(asset.createdAt)}</Text>
+                          <View style={props.styles.photoGalleryPlacementRow}>
+                            <MaterialCommunityIcons name={linked ? 'file-link-outline' : 'link-off'} size={14} color={linked ? '#4F68D2' : '#9AA3B2'} />
+                            <Text style={[props.styles.photoGalleryPlacementText, linked && props.styles.photoGalleryPlacementTextLinked]} numberOfLines={1}>
+                              {placementLabel}
+                            </Text>
+                          </View>
                         </View>
                       </View>
                     );

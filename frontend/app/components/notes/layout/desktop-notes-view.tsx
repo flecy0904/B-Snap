@@ -80,6 +80,7 @@ export type DesktopNotesViewProps = {
   captureInbox: CaptureAsset[];
   workspaceAttachments: WorkspaceAttachment[];
   pageCaptureReferences: PageCaptureReference[];
+  allPageCaptureReferences: PageCaptureReference[];
   currentPageCaptureReferences: PageCaptureReference[];
   bookmarks: BookmarkedPage[];
   currentPageBookmarked: boolean;
@@ -504,6 +505,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
       allStudyDocuments={props.allStudyDocuments}
       deletedStudyDocuments={props.deletedStudyDocuments}
       captureAssetsBySubject={props.captureAssetsBySubject}
+      pageCaptureReferences={props.allPageCaptureReferences}
       blueColor={props.blueColor}
       onChangeMode={props.onChangeMode}
       onQuery={props.onQuery}
