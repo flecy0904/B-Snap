@@ -1,28 +1,63 @@
 import type { BookmarkedPage, GeneratedWorkspacePage, PageCaptureReference, StudyDocumentEntry, Subject } from '../../types';
 import type { InkStroke, InkTextAnnotation } from '../../ui-types';
 
-const CLASS_INSIGHT_SUBJECT_TERMS = ['컴퓨터네트워크', 'computer network', 'computer-networks', 'network'];
-const CLASS_INSIGHT_QUERY_TERMS = [
+const CLASS_INSIGHT_SUBJECT_TERMS = [
+  '컴퓨터네트워크',
+  '컴퓨터 네트워크',
+  'computer networks',
+  'computer network',
+  'computer-networks',
+];
+const CLASS_INSIGHT_DIRECT_PHRASES = [
+  '중요 페이지',
+  '페이지 추천',
+  '먼저 복습',
+  '우선 복습',
+  '시험에 나올',
+  '시험 나올',
+  '나올만한',
+  '나올 만한',
+  '어디 봐야',
+  '어느 페이지',
+  'which page',
+  'important page',
+  'exam page',
+  'review first',
+];
+const CLASS_INSIGHT_INTENT_TERMS = [
   '시험',
   '중요',
   '복습',
   '핵심',
-  '페이지',
-  '어디',
-  '봐야',
   '나올',
   '암기',
   '중간',
   '기말',
   '퀴즈',
-  '공부',
-  '요약',
   'exam',
   'important',
   'review',
   'midterm',
   'final',
   'quiz',
+];
+const CLASS_INSIGHT_SCOPE_TERMS = [
+  '페이지',
+  '부분',
+  '구간',
+  '어디',
+  '어느',
+  '먼저',
+  '우선',
+  '추천',
+  '봐야',
+  'pdf',
+  '자료',
+  'page',
+  'where',
+  'which',
+  'section',
+  'part',
 ];
 const IMPORTANT_NOTE_KEYWORDS = ['시험', '중요', '암기', '별표', '나온다', '나올', '퀴즈', '중간', '기말', '외우', '필수'];
 
@@ -94,7 +129,7 @@ function normalize(value: string | null | undefined) {
   return (value ?? '').trim().toLowerCase();
 }
 
-function isTargetClassDocument(document: StudyDocumentEntry | null, subject: Subject | null) {
+export function isClassInsightTargetDocument(document: StudyDocumentEntry | null, subject: Subject | null) {
   if (!document || document.type !== 'pdf') return false;
 
   const subjectText = normalize(subject?.name);
@@ -113,7 +148,12 @@ function isTargetClassDocument(document: StudyDocumentEntry | null, subject: Sub
 
 function isClassInsightQuestion(question: string) {
   const normalized = normalize(question);
-  return CLASS_INSIGHT_QUERY_TERMS.some((term) => normalized.includes(normalize(term)));
+  if (!normalized) return false;
+  if (CLASS_INSIGHT_DIRECT_PHRASES.some((phrase) => normalized.includes(normalize(phrase)))) return true;
+
+  const hasInsightIntent = CLASS_INSIGHT_INTENT_TERMS.some((term) => normalized.includes(normalize(term)));
+  const asksForScope = CLASS_INSIGHT_SCOPE_TERMS.some((term) => normalized.includes(normalize(term)));
+  return hasInsightIntent && asksForScope;
 }
 
 function createEmptySignal(pageNumber: number): PageSignal {
@@ -294,7 +334,7 @@ export function buildClassInsightContext(params: {
   generatedPages: GeneratedWorkspacePage[];
 }) {
   if (!isClassInsightQuestion(params.question)) return null;
-  if (!isTargetClassDocument(params.studyDocument, params.subject)) return null;
+  if (!isClassInsightTargetDocument(params.studyDocument, params.subject)) return null;
 
   const pageCount = Math.max(1, params.studyDocument?.pageCount ?? 1);
   const liveSignals = buildLiveSignals({

@@ -2,6 +2,7 @@ import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import BottomSheet, { BottomSheetBackdrop, BottomSheetScrollView, type BottomSheetBackdropProps } from '@gorhom/bottom-sheet';
 import { ActivityIndicator, Image, Modal, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import { isClassInsightTargetDocument } from '../../../hooks/notes/class-insight';
 import { PdfPreview } from '../pdf/pdf-preview';
 import { BlankNoteCanvas } from '../canvas/blank-note-canvas';
 import { NoteSummaryContent } from '../shared/notes-shared';
@@ -286,6 +287,12 @@ export function MobileNotesView(props: {
   const previewImageSource = previewAsset ? getCaptureImageSource(previewAsset) : null;
   const previewReferences = previewAsset ? getCaptureReferences(previewAsset, props.allPageCaptureReferences) : [];
   const previewPrimaryReference = previewReferences[0] ?? null;
+  const aiSuggestionPrompts = React.useMemo(() => {
+    const basePrompts = ['여기서 중요한 개념 3개만 알려줘', '시험 대비 관점으로 설명해줘'];
+    return isClassInsightTargetDocument(props.studyDocument, props.subject)
+      ? ['시험에 나올만한 중요 페이지 추천해줘', ...basePrompts]
+      : ['이 그래프 의미 뭐야?', ...basePrompts];
+  }, [props.studyDocument, props.subject]);
 
   React.useEffect(() => {
     if (recoverableCount === 0) setRecoveryOpen(false);
@@ -789,7 +796,7 @@ export function MobileNotesView(props: {
                 <Text style={props.styles.aiStateTitle}>선택 영역</Text>
                 <Text style={props.styles.aiStateBody}>{props.selectionRect ? `${Math.round(props.selectionRect.width)} × ${Math.round(props.selectionRect.height)} 영역 선택됨` : '아직 선택된 영역이 없습니다'}</Text>
               </View>
-              {['시험에 나올만한 중요 페이지 추천해줘', '여기서 중요한 개념 3개만 알려줘', '시험 대비 관점으로 설명해줘'].map((prompt) => (
+              {aiSuggestionPrompts.map((prompt) => (
                 <Pressable key={prompt} style={props.styles.aiSuggestionChip} onPress={() => props.onChangeAiQuestion(prompt)}><Text style={props.styles.aiSuggestionText}>{prompt}</Text></Pressable>
               ))}
               {props.aiChatReadOnly ? (

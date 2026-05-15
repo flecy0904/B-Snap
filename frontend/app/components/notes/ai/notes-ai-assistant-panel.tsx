@@ -1,6 +1,7 @@
 import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { ActivityIndicator, Animated, Image, PanResponder, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import { isClassInsightTargetDocument } from '../../../hooks/notes/class-insight';
 import { useNotesGlobalContext } from '../workspace/notes-global-context';
 
 const FLOATING_PANEL_WIDTH = 300;
@@ -35,10 +36,11 @@ export function NotesAiAssistantPanel() {
   const [deleteTarget, setDeleteTarget] = React.useState<{ id: number; title: string } | null>(null);
   const messagesScrollRef = React.useRef<ScrollView | null>(null);
   const hasChatHistory = workspace.aiMessages.length > 0;
-  const quickPrompts = React.useMemo(() => [
-    '시험에 나올만한 중요 페이지 추천해줘',
-    '이 PDF에서 먼저 복습할 부분 알려줘',
-  ], []);
+  const quickPrompts = React.useMemo(() => (
+    isClassInsightTargetDocument(workspace.studyDocument, workspace.subject)
+      ? ['시험에 나올만한 중요 페이지 추천해줘', '이 PDF에서 먼저 복습할 부분 알려줘']
+      : []
+  ), [workspace.studyDocument, workspace.subject]);
   const activeSession = workspace.activeAiChatSessionId
     ? workspace.allAiChatSessions.find((session: any) => session.id === workspace.activeAiChatSessionId)
       ?? workspace.noteAiChatSessions.find((session: any) => session.id === workspace.activeAiChatSessionId)
@@ -523,7 +525,7 @@ export function NotesAiAssistantPanel() {
             </View>
           ) : null}
           {workspace.aiError ? <Text style={workspace.styles.aiErrorText}>{workspace.aiError}</Text> : null}
-          {!workspace.aiChatReadOnly ? (
+          {!workspace.aiChatReadOnly && quickPrompts.length ? (
             <View style={workspace.styles.aiComposerQuickRow}>
               {quickPrompts.map((prompt) => (
                 <Pressable
