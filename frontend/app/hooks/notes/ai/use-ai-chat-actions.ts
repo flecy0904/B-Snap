@@ -62,8 +62,8 @@ export function useAiChatActions(params: {
   setAiMessagesBySession: SetState<Record<number, BackendChatMessage[]>>;
   onRequestCanvasEditFromChat?: (payload: { question: string; answer: string }) => Promise<void>;
 }) {
-  const buildSelectionImagePayload = async () => {
-    const uri = params.selectionPreviewUri;
+  const buildSelectionImagePayload = async (overrideUri?: string | null) => {
+    const uri = overrideUri ?? params.selectionPreviewUri;
     if (!uri) return null;
     if (/^data:image\//i.test(uri) || /^https?:\/\//i.test(uri)) return uri;
 
@@ -290,7 +290,11 @@ export function useAiChatActions(params: {
     params.setAiError(null);
   };
 
-  const requestAiAnswer = async () => {
+  const requestAiAnswerInternal = async (override?: {
+    question?: string;
+    selectionImageUri?: string | null;
+    pageNumber?: number | null;
+  }) => {
     if (!params.studyDocumentId) return;
     if (params.aiChatReadOnly) {
       params.setAiError('보고 있는 노트와 연결된 대화방이 아니라서 읽기만 가능합니다.');
@@ -298,8 +302,8 @@ export function useAiChatActions(params: {
     }
 
     const hasSelection = Boolean(params.selectionRect || params.selectionPreviewUri);
-    const selectionPreviewUri = params.selectionPreviewUri;
-    const question = params.aiQuestion.trim() || (hasSelection ? '선택한 영역을 설명해줘' : '현재 페이지를 요약해줘');
+    const selectionPreviewUri = override?.selectionImageUri ?? params.selectionPreviewUri;
+    const question = override?.question?.trim() || params.aiQuestion.trim() || (hasSelection ? '선택한 영역을 설명해줘' : '현재 페이지를 요약해줘');
     params.setAiLoading(true);
     params.setAiError(null);
     params.setAiQuestion('');
@@ -355,14 +359,14 @@ export function useAiChatActions(params: {
         [sessionId]: [...(current[sessionId] ?? []), pendingUserMessage],
       }));
 
-      const selectionImage = await buildSelectionImagePayload();
+      const selectionImage = await buildSelectionImagePayload(selectionPreviewUri);
       const response = await sendBackendAiMessage({
         sessionId,
         content: question,
         selectionImage,
         selectionImageUri: selectionPreviewUri,
         selectionRect: params.selectionRect,
-        pageNumber: params.currentPageNumber,
+        pageNumber: override?.pageNumber ?? params.currentPageNumber,
       });
       const userMessageWithAttachment = {
         ...response.user_message,
@@ -423,6 +427,17 @@ export function useAiChatActions(params: {
     }
   };
 
+  const requestAiAnswer = async () => requestAiAnswerInternal();
+
+  const requestAiAnswerForQuestion = async (question: string, options?: {
+    selectionImageUri?: string | null;
+    pageNumber?: number | null;
+  }) => requestAiAnswerInternal({
+    question,
+    selectionImageUri: options?.selectionImageUri ?? null,
+    pageNumber: options?.pageNumber ?? params.currentPageNumber,
+  });
+
   return {
     selectAiChatSession,
     renameAiChatSession,
@@ -430,5 +445,6 @@ export function useAiChatActions(params: {
     createAiChatSession,
     startNewAiChatSession,
     requestAiAnswer,
+    requestAiAnswerForQuestion,
   };
 }

@@ -1,4 +1,5 @@
 import base64
+import json
 from typing import Any
 
 from fastapi import HTTPException
@@ -9,6 +10,7 @@ from backend.app.services.note_page_content import extract_ai_page_text
 from backend.app.services.prompts.ai_canvas import AI_CANVAS_EDIT_INSTRUCTIONS
 from backend.app.services.prompts.chat_title import CHAT_TITLE_INSTRUCTIONS
 from backend.app.services.prompts.note_assistant import NOTE_CHAT_INSTRUCTIONS
+from backend.app.services.prompts.vision import CAPTURE_IMAGE_ANALYSIS_INSTRUCTIONS
 
 
 def build_note_context(note: dict, pages: list[dict], current_page_number: int | None = None) -> str:
@@ -187,6 +189,61 @@ def generate_ai_canvas_edit(
             ]),
         }],
     )
+
+
+def generate_capture_image_analysis(
+    *,
+    model: str,
+    image_data_uri: str,
+    filename: str,
+) -> dict[str, Any]:
+    mock_response = json.dumps({
+        "summary": f"{filename} 원본 사진입니다. 칠판, 슬라이드, 수업 중 추가 설명을 PDF 페이지와 연결해 복습할 수 있습니다.",
+        "keywords": ["수업사진", "판서", "복습자료"],
+        "confidence": 0.35,
+    }, ensure_ascii=False)
+    raw = generate_text_response(
+        model=model,
+        instructions=CAPTURE_IMAGE_ANALYSIS_INSTRUCTIONS,
+        input_items=[{
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": (
+                        f"Filename: {filename}\n"
+                        "Analyze this classroom capture image and return the JSON shape exactly."
+                    ),
+                },
+                {"type": "input_image", "image_url": image_data_uri},
+            ],
+        }],
+        allow_mock=True,
+        mock_response=mock_response,
+    )
+
+    try:
+        parsed = json.loads(raw)
+    except Exception:
+        parsed = json.loads(mock_response)
+
+    summary = str(parsed.get("summary") or "").strip() or json.loads(mock_response)["summary"]
+    keywords = parsed.get("keywords")
+    if not isinstance(keywords, list):
+        keywords = json.loads(mock_response)["keywords"]
+    normalized_keywords = [str(keyword).strip() for keyword in keywords if str(keyword).strip()][:5]
+    confidence = parsed.get("confidence", 0.35)
+    try:
+        confidence_value = max(0.0, min(1.0, float(confidence)))
+    except Exception:
+        confidence_value = 0.35
+
+    return {
+        "status": "ready",
+        "summary": summary[:500],
+        "keywords": normalized_keywords,
+        "confidence": confidence_value,
+    }
 
 
 def generate_text_response(

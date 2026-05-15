@@ -96,6 +96,9 @@ export interface CaptureAsset {
   fileUrl?: string;
   thumbnailUrl?: string;
   pageCount?: number;
+  analysisStatus?: 'pending' | 'ready' | 'failed';
+  analysisSummary?: string;
+  analysisKeywords?: string[];
 }
 
 export interface CaptureAssetEvent {
@@ -125,6 +128,27 @@ export interface WorkspaceAttachment {
   summary: string;
   createdAt: string;
   placementType: WorkspaceAttachmentPlacement;
+  previewImageKey?: string;
+  previewImage?: number;
+  fileUrl?: string;
+  thumbnailUrl?: string;
+  pageCount?: number;
+}
+
+export interface PageCaptureReference {
+  id: string;
+  documentId: number;
+  assetId: string;
+  subjectId: number;
+  page: DocumentPageView;
+  pageLabel: string;
+  type: CaptureAssetType;
+  title: string;
+  summary: string;
+  aiSummary: string;
+  keywords: string[];
+  createdAt: string;
+  sourceDeviceLabel: string;
   previewImageKey?: string;
   previewImage?: number;
   fileUrl?: string;

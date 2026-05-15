@@ -34,6 +34,8 @@ const ADVANCED_CONTROLS: Array<{ key: keyof InkBrushSettings; label: string }> =
   { key: 'pressure', label: '압력 민감도' },
   { key: 'density', label: '농도' },
 ];
+const TOP_DOCK_Y = 12;
+const TOP_DOCK_THRESHOLD = 72;
 
 export function FloatingToolPalette() {
   const workspaceContext = useDesktopNotesWorkspaceContext();
@@ -45,15 +47,21 @@ export function FloatingToolPalette() {
   const [advancedOpen, setAdvancedOpen] = React.useState(false);
   const [position, setPosition] = React.useState(() => ({
     x: Math.max(10, Math.min(Math.max(10, width - 420), Math.round(width * 0.47))),
-    y: 10,
+    y: TOP_DOCK_Y,
   }));
   const startPositionRef = React.useRef(position);
-  const topDocked = position.y <= 72;
+  const topDocked = position.y <= TOP_DOCK_THRESHOLD;
   const sideDocked = !topDocked && (position.x <= 24 || position.x >= width - 84);
 
   React.useEffect(() => {
     startPositionRef.current = position;
   }, [position]);
+
+  React.useEffect(() => {
+    setPosition((current) => (
+      current.y <= 140 ? { ...current, y: TOP_DOCK_Y } : current
+    ));
+  }, []);
 
   const panResponder = React.useMemo(() => PanResponder.create({
     onStartShouldSetPanResponder: () => true,
@@ -69,8 +77,8 @@ export function FloatingToolPalette() {
     onPanResponderRelease: (_, gesture) => {
       const releasedX = startPositionRef.current.x + gesture.dx;
       const releasedY = startPositionRef.current.y + gesture.dy;
-      if (releasedY < 80) {
-        setPosition({ x: Math.max(10, Math.min(Math.max(10, width - 420), releasedX)), y: 10 });
+      if (releasedY < TOP_DOCK_THRESHOLD) {
+        setPosition({ x: Math.max(10, Math.min(Math.max(10, width - 420), releasedX)), y: TOP_DOCK_Y });
         return;
       }
       if (releasedX < width * 0.16) {

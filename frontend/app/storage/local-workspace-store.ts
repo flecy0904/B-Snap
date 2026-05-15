@@ -1,5 +1,5 @@
 import * as SQLite from 'expo-sqlite';
-import type { BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, SemesterSchedule, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../types';
+import type { BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, PageCaptureReference, SemesterSchedule, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../types';
 import type { InkStroke, InkTextAnnotation } from '../ui-types';
 
 const DATABASE_NAME = 'bsnap-local-workspace.db';
@@ -15,6 +15,7 @@ export type PersistedStudyWorkspaceState = {
   deletedStudyDocumentIds: number[];
   captureAssetsBySubject: Record<number, CaptureAsset[]>;
   attachmentsByDocument: Record<number, WorkspaceAttachment[]>;
+  pageCaptureReferencesByDocument: Record<number, PageCaptureReference[]>;
   generatedPagesByDocument: Record<number, GeneratedWorkspacePage[]>;
   inkByDocument: Record<number, InkStroke[]>;
   textAnnotationsByDocument: Record<number, InkTextAnnotation[]>;
@@ -69,6 +70,7 @@ export function buildEmptyStudyWorkspaceState(): PersistedStudyWorkspaceState {
     deletedStudyDocumentIds: [],
     captureAssetsBySubject: {},
     attachmentsByDocument: {},
+    pageCaptureReferencesByDocument: {},
     generatedPagesByDocument: {},
     inkByDocument: {},
     textAnnotationsByDocument: {},

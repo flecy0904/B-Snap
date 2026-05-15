@@ -34,6 +34,7 @@ import {
   DEFAULT_PEN_COLOR,
   HIGHLIGHT_BRUSH_COLORS,
   PEN_BRUSH_COLORS,
+  buildPageCaptureReference,
   buildGeneratedSummary,
   buildWorkspaceAttachment,
 } from './workspace/helpers';
@@ -49,9 +50,9 @@ import { parseNotePageContent, serializeNotePageContent } from './document/note-
 import { useIncomingAssetSubscription } from './workspace/use-incoming-asset-subscription';
 import { useStudyWorkspaceDerivedState } from './workspace/use-study-workspace-derived-state';
 import { useStudyWorkspacePersistence } from './workspace/use-study-workspace-persistence';
-import { isShapeTool } from '../../ui-helpers';
+import { getDocumentPageLabel, isSameDocumentPage, isShapeTool } from '../../ui-helpers';
 import type { InkBrush, InkBrushSettings, InkLinePattern, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../ui-types';
-import type { AiAnswer, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NoteWorkspaceMode, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../types';
+import type { AiAnswer, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../types';
 
 type PendingPageSave = {
   pageId: number;
@@ -86,7 +87,7 @@ export function useStudyWorkspace(props: {
   const [query, setQuery] = useState('');
   const [sort, setSort] = useState<'latest' | 'oldest'>('latest');
   const [noteDetailTab, setNoteDetailTab] = useState<'original' | 'summary'>('original');
-  const [noteWorkspaceMode, setNoteWorkspaceMode] = useState<NoteWorkspaceMode>('photo');
+  const [noteWorkspaceMode, setNoteWorkspaceMode] = useState<NoteWorkspaceMode>('note');
   const [studyDocumentId, setStudyDocumentId] = useState<number | null>(null);
   const [inkTool, setInkTool] = useState<InkTool>('view');
   const [penColor, setPenColor] = useState<string>(DEFAULT_PEN_COLOR);
@@ -111,6 +112,7 @@ export function useStudyWorkspace(props: {
   const [incomingAssetSuggestion, setIncomingAssetSuggestion] = useState<CaptureAsset | null>(null);
   const [captureAssetsBySubject, setCaptureAssetsBySubject] = useState<Record<number, CaptureAsset[]>>({});
   const [attachmentsByDocument, setAttachmentsByDocument] = useState<Record<number, WorkspaceAttachment[]>>({});
+  const [pageCaptureReferencesByDocument, setPageCaptureReferencesByDocument] = useState<Record<number, PageCaptureReference[]>>({});
   const [generatedPagesByDocument, setGeneratedPagesByDocument] = useState<Record<number, GeneratedWorkspacePage[]>>({});
   const [userStudyDocuments, setUserStudyDocuments] = useState<StudyDocumentEntry[]>([]);
   const [deletedNoteIds, setDeletedNoteIds] = useState<number[]>([]);
@@ -198,6 +200,14 @@ export function useStudyWorkspace(props: {
     incomingAssetSuggestion,
   });
   const activeIncomingBanner = incomingBannerQueue[0] ?? null;
+  const pageCaptureReferences = useMemo(() => {
+    if (!studyDocumentId) return [];
+    return pageCaptureReferencesByDocument[studyDocumentId] ?? [];
+  }, [pageCaptureReferencesByDocument, studyDocumentId]);
+  const currentPageCaptureReferences = useMemo(() => {
+    if (!currentDocumentPage) return [];
+    return pageCaptureReferences.filter((reference) => isSameDocumentPage(reference.page, currentDocumentPage));
+  }, [currentDocumentPage, pageCaptureReferences]);
   const hydrateWorkspaceState = useCallback((snapshot: PersistedStudyWorkspaceState | null) => {
     if (!snapshot) return;
     setUserStudyDocuments(snapshot.userStudyDocuments);
@@ -205,6 +215,7 @@ export function useStudyWorkspace(props: {
     setDeletedStudyDocumentIds(snapshot.deletedStudyDocumentIds ?? []);
     setCaptureAssetsBySubject(snapshot.captureAssetsBySubject);
     setAttachmentsByDocument(snapshot.attachmentsByDocument);
+    setPageCaptureReferencesByDocument(snapshot.pageCaptureReferencesByDocument ?? {});
     setGeneratedPagesByDocument(snapshot.generatedPagesByDocument);
     setInkByDocument(snapshot.inkByDocument);
     setTextAnnotationsByDocument(snapshot.textAnnotationsByDocument);
@@ -221,6 +232,7 @@ export function useStudyWorkspace(props: {
     deletedStudyDocumentIds,
     captureAssetsBySubject,
     attachmentsByDocument,
+    pageCaptureReferencesByDocument,
     generatedPagesByDocument,
     inkByDocument,
     textAnnotationsByDocument,
@@ -241,6 +253,7 @@ export function useStudyWorkspace(props: {
     generatedPagesByDocument,
     inkByDocument,
     lastChatSessionByDocument,
+    pageCaptureReferencesByDocument,
     textAnnotationsByDocument,
     userStudyDocuments,
   ]);
@@ -1369,6 +1382,119 @@ export function useStudyWorkspace(props: {
     }, 1600);
   };
 
+  const getReferencePageLabel = (page: DocumentPageView) => getDocumentPageLabel({
+    page,
+    pages: currentDocumentPages,
+    memoPages,
+    pdfSuffix: '페이지',
+  });
+
+  const linkCaptureAssetToCurrentPage = async (asset: CaptureAsset) => {
+    if (!studyDocumentId || !studyDocument) {
+      await createImageNoteFromAsset(asset);
+      return;
+    }
+
+    const page = currentDocumentPage ?? { kind: 'pdf' as const, pageNumber: currentPdfPage };
+    const pageLabel = getReferencePageLabel(page);
+    const existingReferences = pageCaptureReferencesByDocument[studyDocumentId] ?? [];
+    const alreadyLinked = existingReferences.some((reference) => reference.assetId === asset.id && isSameDocumentPage(reference.page, page));
+
+    if (alreadyLinked) {
+      updateAssetStatus(asset.id, 'accepted');
+      setIncomingAssetSuggestion((current) => (current?.id === asset.id ? null : current));
+      setIncomingBannerQueue((current) => current.filter((value) => value.id !== asset.id));
+      setWorkspaceFeedback(`${pageLabel}에 이미 연결된 자료입니다.`);
+      return;
+    }
+
+    const reference = buildPageCaptureReference({
+      asset,
+      documentId: studyDocumentId,
+      page,
+      pageLabel,
+      subjects: availableSubjects,
+    });
+
+    setPageCaptureReferencesByDocument((current) => ({
+      ...current,
+      [studyDocumentId]: [reference, ...(current[studyDocumentId] ?? [])],
+    }));
+    updateAssetStatus(asset.id, 'accepted');
+    setIncomingAssetSuggestion((current) => (current?.id === asset.id ? null : current));
+    setIncomingBannerQueue((current) => current.filter((value) => value.id !== asset.id));
+    setWorkspaceFeedback(`${pageLabel}에 ${asset.type === 'image' ? '사진' : 'PDF'} 자료를 연결했습니다.`);
+  };
+
+  const openPageCaptureReference = (referenceId: string) => {
+    if (!studyDocumentId) return;
+    const reference = (pageCaptureReferencesByDocument[studyDocumentId] ?? []).find((value) => value.id === referenceId);
+    if (!reference) return;
+
+    setActivePageByDocument((current) => ({
+      ...current,
+      [studyDocumentId]: reference.page,
+    }));
+    if (reference.page.kind === 'pdf') {
+      const pageNumber = reference.page.pageNumber;
+      setCurrentPdfPageByDocument((current) => ({
+        ...current,
+        [studyDocumentId]: pageNumber,
+      }));
+    }
+    setWorkspaceFeedback(`${reference.pageLabel}로 이동했습니다.`);
+  };
+
+  const movePageCaptureReference = (referenceId: string, delta: -1 | 1) => {
+    if (!studyDocumentId || !studyDocument) return;
+    const maxPage = Math.max(1, studyDocument.pageCount);
+
+    setPageCaptureReferencesByDocument((current) => ({
+      ...current,
+      [studyDocumentId]: (current[studyDocumentId] ?? []).map((reference) => {
+        if (reference.id !== referenceId) return reference;
+        const basePage = reference.page.kind === 'pdf' ? reference.page.pageNumber : currentPdfPage;
+        const nextPageNumber = Math.min(maxPage, Math.max(1, basePage + delta));
+        const nextPage: DocumentPageView = { kind: 'pdf', pageNumber: nextPageNumber };
+        return {
+          ...reference,
+          page: nextPage,
+          pageLabel: getReferencePageLabel(nextPage),
+        };
+      }),
+    }));
+    setWorkspaceFeedback('자료 연결 위치를 이동했습니다.');
+  };
+
+  const removePageCaptureReference = (referenceId: string) => {
+    if (!studyDocumentId) return;
+    setPageCaptureReferencesByDocument((current) => ({
+      ...current,
+      [studyDocumentId]: (current[studyDocumentId] ?? []).filter((reference) => reference.id !== referenceId),
+    }));
+    setWorkspaceFeedback('페이지에서 사진 자료 연결을 제거했습니다.');
+  };
+
+  const buildPageCaptureReferenceQuestion = (reference: PageCaptureReference) => (
+    [
+      `${reference.pageLabel}에 연결한 자료 "${reference.title}"를 수업 맥락에 맞춰 설명해줘.`,
+      `자료 설명: ${reference.aiSummary || reference.summary}`,
+      reference.keywords.length ? `키워드: ${reference.keywords.join(', ')}` : '',
+      '핵심 개념, 시험 포인트, 원본 PDF 페이지와 연결해서 볼 부분을 정리해줘.',
+    ].filter(Boolean).join('\n')
+  );
+
+  const prepareAiQuestionForPageCaptureReference = (referenceId: string) => {
+    if (!studyDocumentId) return;
+    const reference = (pageCaptureReferencesByDocument[studyDocumentId] ?? []).find((value) => value.id === referenceId);
+    if (!reference) return;
+
+    setAiQuestion(buildPageCaptureReferenceQuestion(reference));
+    setAiPanelOpen(true);
+    setViewingAiChatSessionId(null);
+    setWorkspaceFeedback('AI 질문창에 연결 자료 맥락을 넣었습니다.');
+  };
+
   const {
     selectAiChatSession,
     renameAiChatSession,
@@ -1376,6 +1502,7 @@ export function useStudyWorkspace(props: {
     createAiChatSession,
     startNewAiChatSession,
     requestAiAnswer,
+    requestAiAnswerForQuestion,
   } = useAiChatActions({
     studyDocumentId,
     studyDocument,
@@ -1403,11 +1530,28 @@ export function useStudyWorkspace(props: {
     onRequestCanvasEditFromChat: aiCanvas.requestAiEditFromChat,
   });
 
+  const askAiAboutPageCaptureReference = (referenceId: string) => {
+    if (!studyDocumentId) return;
+    const reference = (pageCaptureReferencesByDocument[studyDocumentId] ?? []).find((value) => value.id === referenceId);
+    if (!reference) return;
+    if (!isBackendApiEnabled() || !currentDocumentHasBackendPages) {
+      prepareAiQuestionForPageCaptureReference(referenceId);
+      return;
+    }
+
+    const question = buildPageCaptureReferenceQuestion(reference);
+    setAiPanelOpen(true);
+    setViewingAiChatSessionId(null);
+    void requestAiAnswerForQuestion(question, {
+      pageNumber: reference.page.kind === 'pdf' ? reference.page.pageNumber : currentPdfPage,
+      selectionImageUri: null,
+    });
+    setWorkspaceFeedback('연결 자료로 AI 채팅을 시작했습니다.');
+  };
+
   const acceptIncomingAsset = () => {
     if (!incomingAssetSuggestion) return;
-    void insertAssetIntoWorkspace(incomingAssetSuggestion);
-    setWorkspaceFeedback(`${incomingAssetSuggestion.type === 'image' ? '이미지' : 'PDF'}를 작업공간에 저장했습니다.`);
-    setIncomingAssetSuggestion(null);
+    void linkCaptureAssetToCurrentPage(incomingAssetSuggestion);
   };
 
   const archiveIncomingAsset = () => {
@@ -1427,8 +1571,7 @@ export function useStudyWorkspace(props: {
   const insertInboxAsset = (assetId: string) => {
     const asset = captureInbox.find((value) => value.id === assetId);
     if (!asset) return;
-    void insertAssetIntoWorkspace(asset);
-    setWorkspaceFeedback(`${asset.type === 'image' ? '이미지' : 'PDF'}를 inbox에서 작업공간에 저장했습니다.`);
+    void linkCaptureAssetToCurrentPage(asset);
   };
 
   const removeInboxAsset = (assetId: string) => {
@@ -1587,9 +1730,10 @@ export function useStudyWorkspace(props: {
 
     props.onOpenNotesTab();
     setSubjectId(asset.subjectId);
+    setNoteWorkspaceMode(asset.type === 'image' ? 'photo' : 'note');
     setNoteId(null);
     setStudyDocumentId(null);
-    setWorkspaceFeedback(`${asset.type === 'image' ? '이미지' : 'PDF'}를 inbox에서 확인할 수 있습니다.`);
+    setWorkspaceFeedback(asset.type === 'image' ? 'Photo 라이브러리에서 원본 사진을 확인할 수 있습니다.' : 'PDF 자료를 inbox에서 확인할 수 있습니다.');
     setIncomingBannerQueue((current) => current.slice(1));
   };
 
@@ -1702,8 +1846,11 @@ export function useStudyWorkspace(props: {
     workspaceHydrated,
     localPersistenceError,
     activeIncomingBanner,
+    captureAssetsBySubject,
     captureInbox,
     workspaceAttachments,
+    pageCaptureReferences,
+    currentPageCaptureReferences,
     generatedWorkspacePages,
     memoPages,
     currentDocumentBookmarks,
@@ -1783,6 +1930,10 @@ export function useStudyWorkspace(props: {
     dismissIncomingBanner,
     insertInboxAsset,
     removeInboxAsset,
+    openPageCaptureReference,
+    movePageCaptureReference,
+    removePageCaptureReference,
+    askAiAboutPageCaptureReference,
     openIncomingBanner,
     removeWorkspaceAttachment,
     createMemoPage,

@@ -235,8 +235,11 @@ export function AppShell(props: {
                   inboxPendingCount={notesState.inboxPendingCount}
                   workspaceFeedback={notesState.workspaceFeedback}
                   documentSaveStatus={notesState.documentSaveStatus}
+                  captureAssetsBySubject={notesState.captureAssetsBySubject}
                   captureInbox={notesState.captureInbox}
                   workspaceAttachments={notesState.workspaceAttachments}
+                  pageCaptureReferences={notesState.pageCaptureReferences}
+                  currentPageCaptureReferences={notesState.currentPageCaptureReferences}
                   bookmarks={notesState.currentDocumentBookmarks}
                   currentPageBookmarked={notesState.currentPageBookmarked}
                   generatedWorkspacePages={notesState.generatedWorkspacePages}
@@ -292,6 +295,10 @@ export function AppShell(props: {
                   onDismissIncomingAsset={notesState.dismissIncomingAsset}
                   onInsertInboxAsset={notesState.insertInboxAsset}
                   onRemoveInboxAsset={notesState.removeInboxAsset}
+                  onOpenPageCaptureReference={notesState.openPageCaptureReference}
+                  onMovePageCaptureReference={notesState.movePageCaptureReference}
+                  onRemovePageCaptureReference={notesState.removePageCaptureReference}
+                  onAskAiAboutPageCaptureReference={notesState.askAiAboutPageCaptureReference}
                   onRemoveWorkspaceAttachment={notesState.removeWorkspaceAttachment}
                   onToggleBookmarkCurrentPage={notesState.toggleBookmarkCurrentPage}
                   onOpenBookmarkedPage={notesState.openBookmarkedPage}
@@ -452,8 +459,11 @@ export function AppShell(props: {
                   inboxPendingCount={notesState.inboxPendingCount}
                   workspaceFeedback={notesState.workspaceFeedback}
                   documentSaveStatus={notesState.documentSaveStatus}
+                  captureAssetsBySubject={notesState.captureAssetsBySubject}
                   captureInbox={notesState.captureInbox}
                   workspaceAttachments={notesState.workspaceAttachments}
+                  pageCaptureReferences={notesState.pageCaptureReferences}
+                  currentPageCaptureReferences={notesState.currentPageCaptureReferences}
                   bookmarks={notesState.currentDocumentBookmarks}
                   currentPageBookmarked={notesState.currentPageBookmarked}
                   onChangeNoteTab={notesState.setNoteDetailTab}
@@ -492,6 +502,10 @@ export function AppShell(props: {
                   onDismissIncomingAsset={notesState.dismissIncomingAsset}
                   onInsertInboxAsset={notesState.insertInboxAsset}
                   onRemoveInboxAsset={notesState.removeInboxAsset}
+                  onOpenPageCaptureReference={notesState.openPageCaptureReference}
+                  onMovePageCaptureReference={notesState.movePageCaptureReference}
+                  onRemovePageCaptureReference={notesState.removePageCaptureReference}
+                  onAskAiAboutPageCaptureReference={notesState.askAiAboutPageCaptureReference}
                   onRemoveWorkspaceAttachment={notesState.removeWorkspaceAttachment}
                   onToggleBookmarkCurrentPage={notesState.toggleBookmarkCurrentPage}
                   onOpenBookmarkedPage={notesState.openBookmarkedPage}

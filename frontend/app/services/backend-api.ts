@@ -138,6 +138,13 @@ export type BackendUpload = {
   page_numbers: number[];
   page_image_urls?: string[];
   url: string;
+  processed_url?: string | null;
+  analysis?: {
+    status?: 'pending' | 'ready' | 'failed' | string;
+    summary?: string | null;
+    keywords?: string[] | null;
+    confidence?: number | null;
+  } | null;
 };
 
 export type BackendAuthUser = {
@@ -284,6 +291,7 @@ export async function uploadBackendFile(file: {
   return {
     ...upload,
     url: resolveBackendAssetUrl(upload.url) ?? upload.url,
+    processed_url: resolveBackendAssetUrl(upload.processed_url) ?? upload.processed_url,
     page_image_urls: upload.page_image_urls?.map((url) => resolveBackendAssetUrl(url) ?? url) ?? [],
   };
 }
@@ -339,6 +347,7 @@ export async function uploadBackendPdfNote(payload: {
     upload: {
       ...result.upload,
       url: resolveBackendAssetUrl(result.upload.url) ?? result.upload.url,
+      processed_url: resolveBackendAssetUrl(result.upload.processed_url) ?? result.upload.processed_url,
       page_image_urls: result.upload.page_image_urls?.map((url) => resolveBackendAssetUrl(url) ?? url) ?? [],
     },
     pages: result.pages.map((page) => ({

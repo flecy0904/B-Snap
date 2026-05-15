@@ -6,7 +6,7 @@ import { PdfPreview } from '../pdf/pdf-preview';
 import { BlankNoteCanvas } from '../canvas/blank-note-canvas';
 import { NoteSummaryContent } from '../shared/notes-shared';
 import type { BackendChatMessage, BackendChatSession } from '../../../services/backend-api';
-import { AiAnswer, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NotebookPage, NoteEntry, NoteWorkspaceMode, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../../types';
+import { AiAnswer, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NotebookPage, NoteEntry, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../../types';
 import { InkBrush, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { darkenHex, getDocumentPageLabel, isSameDocumentPage } from '../../../ui-helpers';
 
@@ -40,6 +40,25 @@ const MOBILE_HANDWRITING_TOOLS: Array<{ value: InkTool; icon: React.ComponentPro
   { value: 'rect', icon: 'rectangle-outline' },
   { value: 'ellipse', icon: 'circle-outline' },
 ];
+
+function getCaptureImageSource(asset: CaptureAsset) {
+  const uri = asset.thumbnailUrl ?? asset.fileUrl ?? asset.previewImageKey;
+  if (uri && (uri.startsWith('http://') || uri.startsWith('https://') || uri.startsWith('file://') || uri.startsWith('data:image/'))) {
+    return { uri };
+  }
+  return asset.previewImage ?? null;
+}
+
+function formatCaptureDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString('ko-KR', {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
 
 export function MobileNotesView(props: {
   subject: Subject | null;
@@ -88,8 +107,11 @@ export function MobileNotesView(props: {
   inboxPendingCount: number;
   workspaceFeedback: string | null;
   documentSaveStatus: string;
+  captureAssetsBySubject: Record<number, CaptureAsset[]>;
   captureInbox: CaptureAsset[];
   workspaceAttachments: WorkspaceAttachment[];
+  pageCaptureReferences: PageCaptureReference[];
+  currentPageCaptureReferences: PageCaptureReference[];
   bookmarks: BookmarkedPage[];
   currentPageBookmarked: boolean;
   onChangeNoteTab: (tab: 'original' | 'summary') => void;
@@ -123,6 +145,10 @@ export function MobileNotesView(props: {
   onDismissIncomingAsset: () => void;
   onInsertInboxAsset: (assetId: string) => void;
   onRemoveInboxAsset: (assetId: string) => void;
+  onOpenPageCaptureReference: (referenceId: string) => void;
+  onMovePageCaptureReference: (referenceId: string, delta: -1 | 1) => void;
+  onRemovePageCaptureReference: (referenceId: string) => void;
+  onAskAiAboutPageCaptureReference: (referenceId: string) => void;
   onRemoveWorkspaceAttachment: (attachmentId: string) => void;
   onToggleBookmarkCurrentPage: () => void;
   onOpenBookmarkedPage: (bookmarkId: string) => void;
@@ -187,6 +213,13 @@ export function MobileNotesView(props: {
     }
     setPageListOpen(false);
   };
+  const getReferencePreview = (reference: PageCaptureReference) => (
+    reference.thumbnailUrl
+      ? { uri: reference.thumbnailUrl }
+      : reference.type === 'image' && reference.fileUrl
+        ? { uri: reference.fileUrl }
+        : reference.previewImage ?? null
+  );
   const toggleSelectionMode = () => {
     props.onChangeInkTool(props.inkTool === 'select' ? 'view' : 'select');
   };
@@ -203,6 +236,35 @@ export function MobileNotesView(props: {
     [props.deletedStudyDocuments, props.subject],
   );
   const recoverableCount = props.noteMode === 'photo' ? activeDeletedNotes.length : activeDeletedStudyDocuments.length;
+  const getSubjectPhotoAssets = React.useCallback((subjectId: number) => {
+    const normalizedQuery = props.query.trim().toLowerCase();
+    let assets = (props.captureAssetsBySubject[subjectId] ?? []).filter((asset) => asset.type === 'image' && asset.status !== 'dismissed');
+
+    if (normalizedQuery) {
+      assets = assets.filter((asset) => {
+        const subjectName = props.subjects.find((item) => item.id === asset.subjectId)?.name ?? '';
+        const keywords = asset.analysisKeywords ?? [];
+        return (
+          asset.title.toLowerCase().includes(normalizedQuery) ||
+          asset.summary.toLowerCase().includes(normalizedQuery) ||
+          (asset.analysisSummary ?? '').toLowerCase().includes(normalizedQuery) ||
+          asset.sourceDeviceLabel.toLowerCase().includes(normalizedQuery) ||
+          subjectName.toLowerCase().includes(normalizedQuery) ||
+          keywords.some((keyword) => keyword.toLowerCase().includes(normalizedQuery))
+        );
+      });
+    }
+
+    return [...assets].sort((left, right) => {
+      const leftTime = new Date(left.createdAt).getTime();
+      const rightTime = new Date(right.createdAt).getTime();
+      return rightTime - leftTime;
+    });
+  }, [props.captureAssetsBySubject, props.query, props.subjects]);
+  const currentSubjectPhotoAssets = React.useMemo(
+    () => props.subject ? getSubjectPhotoAssets(props.subject.id) : [],
+    [getSubjectPhotoAssets, props.subject],
+  );
 
   React.useEffect(() => {
     if (recoverableCount === 0) setRecoveryOpen(false);
@@ -447,7 +509,7 @@ export function MobileNotesView(props: {
             <Text style={props.styles.workspaceBannerBody}>{props.incomingAssetSuggestion.summary}</Text>
             <View style={props.styles.workspaceBannerActions}>
               <Pressable style={props.styles.workspacePrimaryAction} onPress={props.onAcceptIncomingAsset}>
-                <Text style={props.styles.workspacePrimaryActionText}>삽입</Text>
+                <Text style={props.styles.workspacePrimaryActionText}>현재 페이지에 연결</Text>
               </Pressable>
               <Pressable style={props.styles.workspaceSecondaryAction} onPress={props.onArchiveIncomingAsset}>
                 <Text style={props.styles.workspaceSecondaryActionText}>보관</Text>
@@ -458,6 +520,43 @@ export function MobileNotesView(props: {
             </View>
           </View>
         ) : null}
+        <View style={props.styles.workspaceSection}>
+          <View style={props.styles.workspaceSectionHeader}>
+            <Text style={props.styles.workspaceSectionTitle}>현재 페이지 자료</Text>
+            <Text style={props.styles.workspaceSectionMeta}>{props.currentPageCaptureReferences.length}건</Text>
+          </View>
+          {props.currentPageCaptureReferences.length ? (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={props.styles.workspaceCardsRow}>
+              {props.currentPageCaptureReferences.map((reference) => {
+                const preview = getReferencePreview(reference);
+                return (
+                  <View key={reference.id} style={[props.styles.workspaceCard, props.styles.workspaceInboxCard]}>
+                    {preview ? (
+                      <Image source={preview} style={props.styles.mobilePageReferenceImage} resizeMode="cover" />
+                    ) : (
+                      <View style={props.styles.mobilePageReferenceFallback}>
+                        <MaterialCommunityIcons name={reference.type === 'pdf' ? 'file-pdf-box' : 'image-outline'} size={22} color="#6D7BD9" />
+                      </View>
+                    )}
+                    <Text style={props.styles.workspaceCardType}>{reference.pageLabel}</Text>
+                    <Text style={props.styles.workspaceCardTitle} numberOfLines={1}>{reference.title}</Text>
+                    <Text style={props.styles.workspaceCardBody} numberOfLines={2}>{reference.aiSummary}</Text>
+                    <View style={props.styles.workspaceInboxRowButtons}>
+                      <Pressable style={props.styles.workspaceInlineAction} onPress={() => props.onAskAiAboutPageCaptureReference(reference.id)}>
+                        <Text style={props.styles.workspaceInlineActionText}>AI 질문</Text>
+                      </Pressable>
+                      <Pressable style={props.styles.workspaceDeleteAction} onPress={() => props.onRemovePageCaptureReference(reference.id)}>
+                        <Text style={props.styles.workspaceDeleteActionText}>삭제</Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                );
+              })}
+            </ScrollView>
+          ) : (
+            <Text style={props.styles.workspaceCardBody}>사진을 찍으면 현재 PDF 페이지에 자료 카드로 연결됩니다.</Text>
+          )}
+        </View>
         {props.workspaceAttachments.length ? (
           <View style={props.styles.workspaceSection}>
             <View style={props.styles.workspaceSectionHeader}>
@@ -511,7 +610,7 @@ export function MobileNotesView(props: {
                       <View style={props.styles.workspaceInboxRowButtons}>
                         {asset.status !== 'accepted' ? (
                           <Pressable style={props.styles.workspaceInlineAction} onPress={() => props.onInsertInboxAsset(asset.id)}>
-                            <Text style={props.styles.workspaceInlineActionText}>다음 페이지 삽입</Text>
+                            <Text style={props.styles.workspaceInlineActionText}>현재 페이지 연결</Text>
                           </Pressable>
                         ) : null}
                         <Pressable style={props.styles.workspaceDeleteAction} onPress={() => props.onRemoveInboxAsset(asset.id)}>
@@ -552,6 +651,13 @@ export function MobileNotesView(props: {
               notebookPages={props.notebookPages}
               activeGeneratedPageId={props.currentDocumentPage?.kind === 'generated' ? props.currentDocumentPage.pageId : null}
               pageImageUrls={props.studyDocument.pageImageUrls}
+              pageCaptureReferences={props.pageCaptureReferences}
+              incomingAssetSuggestion={props.incomingAssetSuggestion}
+              onAcceptIncomingAsset={props.onAcceptIncomingAsset}
+              onArchiveIncomingAsset={props.onArchiveIncomingAsset}
+              onDismissIncomingAsset={props.onDismissIncomingAsset}
+              onOpenPageCaptureReference={props.onOpenPageCaptureReference}
+              onAskAiAboutPageCaptureReference={props.onAskAiAboutPageCaptureReference}
               styles={props.styles}
             />
           ) : props.activeGeneratedPage?.pageKind === 'memo' && phoneViewerOnly ? (
@@ -790,7 +896,7 @@ export function MobileNotesView(props: {
 
   if (props.subject) {
     const currentSubject = props.subject;
-    const latestNote = props.notes[0] ?? null;
+    const latestPhoto = currentSubjectPhotoAssets[0] ?? null;
     return (
       <ScrollView style={props.styles.main} contentContainerStyle={props.styles.mobilePage}>
         <View style={props.styles.centerTopBar}>
@@ -821,43 +927,65 @@ export function MobileNotesView(props: {
           </View>
         ) : null}
         <View style={props.styles.segment}>
-          <Pressable style={[props.styles.segmentButton, props.noteMode === 'photo' && props.styles.segmentButtonActive]} onPress={() => props.onChangeMode('photo')}><Text style={[props.styles.segmentText, props.noteMode === 'photo' && props.styles.segmentTextActive]}>Photo</Text></Pressable>
           <Pressable style={[props.styles.segmentButton, props.noteMode === 'note' && props.styles.segmentButtonActive]} onPress={() => props.onChangeMode('note')}><Text style={[props.styles.segmentText, props.noteMode === 'note' && props.styles.segmentTextActive]}>Note</Text></Pressable>
+          <Pressable style={[props.styles.segmentButton, props.noteMode === 'photo' && props.styles.segmentButtonActive]} onPress={() => props.onChangeMode('photo')}><Text style={[props.styles.segmentText, props.noteMode === 'photo' && props.styles.segmentTextActive]}>Photo</Text></Pressable>
         </View>
         {renderRecoveryPanel()}
         <View style={[props.styles.subjectHeroCard, { backgroundColor: currentSubject.bgColor, borderColor: currentSubject.color }]}>
           <View style={[props.styles.subjectHeroDot, { backgroundColor: currentSubject.color }]} />
           <View style={props.styles.fill}>
             <Text style={[props.styles.subjectHeroMeta, { color: currentSubject.textColor }]}>
-              {props.noteMode === 'photo' ? latestNote ? `최근 업데이트 · ${latestNote.preview}` : '최근 업데이트가 아직 없습니다' : props.studyDocuments[0] ? `최근 문서 · ${props.studyDocuments[0].title}` : '아직 등록된 문서가 없습니다'}
+              {props.noteMode === 'photo' ? latestPhoto ? `최근 사진 · ${latestPhoto.title}` : '촬영하거나 가져온 원본 사진이 아직 없습니다' : props.studyDocuments[0] ? `최근 문서 · ${props.studyDocuments[0].title}` : '아직 등록된 문서가 없습니다'}
             </Text>
           </View>
         </View>
         {props.noteMode === 'photo'
-          ? props.notes.length
-            ? props.notes.map((item) => (
-                <Pressable key={item.id} style={[props.styles.noteListCard, { borderColor: currentSubject.bgColor }]} onPress={() => props.onOpenNote(item.id)}>
-                  <View style={[props.styles.noteListRail, { backgroundColor: currentSubject.color }]} />
-                  <Image source={item.image} style={props.styles.noteListThumb} resizeMode="cover" />
-                  <View style={props.styles.fill}>
-                    <Text style={props.styles.noteListDate}>{item.date}</Text>
-                    <Text style={props.styles.noteListTitle} numberOfLines={2}>{item.title}</Text>
+          ? currentSubjectPhotoAssets.length
+            ? (
+                <View style={props.styles.photoGalleryPanel}>
+                  <View style={props.styles.photoGalleryHeader}>
+                    <View>
+                      <Text style={props.styles.photoGalleryTitle}>{currentSubject.name} 원본 사진</Text>
+                      <Text style={props.styles.photoGalleryMeta}>{currentSubjectPhotoAssets.length}장 · Photo 라이브러리</Text>
+                    </View>
                   </View>
-                  <Pressable
-                    style={props.styles.libraryDeleteButton}
-                    onPress={(event) => {
-                      event.stopPropagation();
-                      props.onDeleteNote(item.id);
-                    }}
-                  >
-                    <MaterialCommunityIcons name="trash-can-outline" size={18} color="#C04B4B" />
-                  </Pressable>
-                </Pressable>
-              ))
+                  <View style={props.styles.photoGalleryGrid}>
+                    {currentSubjectPhotoAssets.map((asset) => {
+                      const imageSource = getCaptureImageSource(asset);
+                      const keywords = (asset.analysisKeywords ?? []).slice(0, 3);
+                      return (
+                        <View key={asset.id} style={props.styles.photoGalleryCard}>
+                          {imageSource ? (
+                            <Image source={imageSource} style={props.styles.photoGalleryImage} resizeMode="cover" />
+                          ) : (
+                            <View style={props.styles.photoGalleryFallback}>
+                              <MaterialCommunityIcons name="image-outline" size={28} color="#9AA6B8" />
+                            </View>
+                          )}
+                          <View style={props.styles.photoGalleryCardBody}>
+                            <Text style={props.styles.photoGalleryCardTitle} numberOfLines={2}>{asset.title}</Text>
+                            <Text style={props.styles.photoGalleryCardMeta} numberOfLines={1}>{formatCaptureDate(asset.createdAt)} · {asset.sourceDeviceLabel}</Text>
+                            <Text style={props.styles.photoGalleryCardSummary} numberOfLines={2}>{asset.analysisSummary ?? asset.summary}</Text>
+                            {keywords.length ? (
+                              <View style={props.styles.photoGalleryKeywordRow}>
+                                {keywords.map((keyword) => (
+                                  <View key={`${asset.id}-${keyword}`} style={props.styles.photoGalleryKeyword}>
+                                    <Text style={props.styles.photoGalleryKeywordText}>{keyword}</Text>
+                                  </View>
+                                ))}
+                              </View>
+                            ) : null}
+                          </View>
+                        </View>
+                      );
+                    })}
+                  </View>
+                </View>
+              )
             : (
                 <View style={[props.styles.emptyCard, { borderColor: currentSubject.color, backgroundColor: currentSubject.bgColor }]}>
-                  <Text style={[props.styles.emptyTitle, { color: currentSubject.textColor }]}>아직 등록된 노트가 없습니다</Text>
-                  <Text style={[props.styles.emptyBody, { color: currentSubject.textColor }]}>시간표에서 이 과목을 누르면 바로 여기로 이동합니다. 이후 과목별 노트만 연결하면 흐름이 완성됩니다.</Text>
+                  <Text style={[props.styles.emptyTitle, { color: currentSubject.textColor }]}>저장된 사진이 없습니다</Text>
+                  <Text style={[props.styles.emptyBody, { color: currentSubject.textColor }]}>카메라나 사진첩에서 가져온 원본 사진은 이 과목 Photo 라이브러리에 모입니다.</Text>
                 </View>
               )
           : props.studyDocuments.length
@@ -900,8 +1028,8 @@ export function MobileNotesView(props: {
     <ScrollView style={props.styles.main} contentContainerStyle={props.styles.mobilePage}>
       <Text style={props.styles.pageTitle}>노트</Text>
       <View style={props.styles.segment}>
-        <Pressable style={[props.styles.segmentButton, props.noteMode === 'photo' && props.styles.segmentButtonActive]} onPress={() => props.onChangeMode('photo')}><Text style={[props.styles.segmentText, props.noteMode === 'photo' && props.styles.segmentTextActive]}>Photo</Text></Pressable>
         <Pressable style={[props.styles.segmentButton, props.noteMode === 'note' && props.styles.segmentButtonActive]} onPress={() => props.onChangeMode('note')}><Text style={[props.styles.segmentText, props.noteMode === 'note' && props.styles.segmentTextActive]}>Note</Text></Pressable>
+        <Pressable style={[props.styles.segmentButton, props.noteMode === 'photo' && props.styles.segmentButtonActive]} onPress={() => props.onChangeMode('photo')}><Text style={[props.styles.segmentText, props.noteMode === 'photo' && props.styles.segmentTextActive]}>Photo</Text></Pressable>
       </View>
       <View style={props.styles.searchBox}>
         <Text style={props.styles.searchIcon}>⌕</Text>
@@ -915,7 +1043,7 @@ export function MobileNotesView(props: {
           </View>
           <View style={props.styles.fill}>
             <Text style={props.styles.subjectTitle}>{item.name}</Text>
-            <Text style={props.styles.subjectMeta}>{props.noteMode === 'photo' ? `${props.allNotes.filter((note) => note.subjectId === item.id).length}개 노트` : `${props.allStudyDocuments.filter((document) => document.subjectId === item.id).length}개 문서`}</Text>
+            <Text style={props.styles.subjectMeta}>{props.noteMode === 'photo' ? `${getSubjectPhotoAssets(item.id).length}장 사진` : `${props.allStudyDocuments.filter((document) => document.subjectId === item.id).length}개 문서`}</Text>
           </View>
         </Pressable>
       ))}

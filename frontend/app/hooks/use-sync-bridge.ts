@@ -28,6 +28,10 @@ export function createCaptureAsset(props: {
   const suffix = assetSequence;
   assetSequence += 1;
   const defaultTitle = props.type === 'image' ? `${props.subjectName} 판서 스냅 ${suffix}` : `${props.subjectName} 보조 PDF ${suffix}`;
+  const analysisSummary =
+    props.type === 'image'
+      ? `${props.subjectName} 수업 중 촬영한 원본 사진입니다. 백엔드 전처리 이미지는 AI 인식용으로만 활용하고, 앱에는 원본 사진과 페이지 연결 설명을 보여줍니다.`
+      : `${props.subjectName} 수업 보조 PDF입니다. 노트의 특정 페이지와 연결해 복습할 때 같이 확인할 수 있습니다.`;
   const sourceLabel =
     props.source === 'camera'
       ? 'iPhone camera import'
@@ -43,8 +47,13 @@ export function createCaptureAsset(props: {
     title: props.fileName || defaultTitle,
     summary:
       props.type === 'image'
-        ? `${props.source === 'camera' ? '카메라' : '사진첩'}에서 가져온 이미지입니다. 현재 PDF 위에 바로 붙이거나 보관함에만 저장할 수 있습니다.`
+        ? `${props.source === 'camera' ? '카메라' : '사진첩'}에서 가져온 이미지입니다. 현재 PDF 페이지에 자료 카드로 연결하거나 보관함에 저장할 수 있습니다.`
         : '파일 선택기에서 가져온 PDF입니다. 현재 문서에 참고자료로 연결하거나 보관함으로만 저장할 수 있습니다.',
+    analysisStatus: 'ready',
+    analysisSummary,
+    analysisKeywords: props.type === 'image'
+      ? [props.subjectName, '판서사진', '수업자료']
+      : [props.subjectName, 'PDF자료', '참고자료'],
     createdAt: '방금 전 · phone',
     sourceDeviceLabel: sourceLabel,
     previewImageKey: props.type === 'image' ? DEFAULT_CAPTURE_PREVIEW_IMAGE_KEY : undefined,
@@ -111,6 +120,8 @@ export function createWebSocketBridge(props: {
     : baseWsUrl;
   let socket: WebSocket | null = null;
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  let reconnectAttempt = 0;
   let closed = false;
   let status: SyncBridgeStatus = 'connecting';
 
@@ -126,13 +137,22 @@ export function createWebSocketBridge(props: {
     reconnectTimer = null;
   };
 
+  const clearHeartbeatTimer = () => {
+    if (!heartbeatTimer) return;
+    clearInterval(heartbeatTimer);
+    heartbeatTimer = null;
+  };
+
   const scheduleReconnect = () => {
     if (closed || reconnectTimer) return;
+    clearHeartbeatTimer();
     setStatus('reconnecting');
+    const delayMs = Math.min(8000, 900 + reconnectAttempt * 700);
+    reconnectAttempt += 1;
     reconnectTimer = setTimeout(() => {
       reconnectTimer = null;
       connect();
-    }, 1200);
+    }, delayMs);
   };
 
   const connect = () => {
@@ -141,11 +161,22 @@ export function createWebSocketBridge(props: {
     setStatus(status === 'reconnecting' ? 'reconnecting' : 'connecting');
     socket = new WebSocket(wsUrl);
     socket.onopen = () => {
+      reconnectAttempt = 0;
       setStatus('connected');
+      clearHeartbeatTimer();
+      heartbeatTimer = setInterval(() => {
+        if (socket?.readyState !== WebSocket.OPEN) return;
+        try {
+          socket.send(JSON.stringify({ event: 'ping', sentAt: new Date().toISOString() }));
+        } catch {
+          socket?.close();
+        }
+      }, 15000);
     };
     socket.onmessage = (event) => {
       try {
         const payload = JSON.parse(String(event.data)) as CaptureAssetEvent;
+        if ((payload as any)?.event === 'pong') return;
         if (payload?.event !== 'asset.created' || !payload.asset) return;
         emitToListeners(listeners, payload);
       } catch {
@@ -153,6 +184,7 @@ export function createWebSocketBridge(props: {
       }
     };
     socket.onclose = () => {
+      clearHeartbeatTimer();
       socket = null;
       scheduleReconnect();
     };
@@ -210,6 +242,7 @@ export function createWebSocketBridge(props: {
         listeners.delete(listener);
         if (listeners.size === 0) {
           clearReconnectTimer();
+          clearHeartbeatTimer();
         }
       };
     },

@@ -12,6 +12,14 @@ function getCaptureErrorMessage(error: unknown, fallback: string) {
   return fallback;
 }
 
+function applyUploadAnalysis(asset: CaptureAsset, upload: Awaited<ReturnType<typeof uploadBackendFile>>) {
+  if (!upload.analysis) return asset;
+  asset.analysisStatus = upload.analysis.status === 'failed' ? 'failed' : upload.analysis.status === 'pending' ? 'pending' : 'ready';
+  asset.analysisSummary = upload.analysis.summary ?? asset.summary;
+  asset.analysisKeywords = upload.analysis.keywords?.filter(Boolean) ?? asset.analysisKeywords;
+  return asset;
+}
+
 export function useCaptureWorkspace(props: {
   subjectId: number;
   subjects?: Subject[];
@@ -91,13 +99,14 @@ export function useCaptureWorkspace(props: {
 
       const picked = result.assets[0];
       let previewUri = picked.uri;
+      let backendUpload: Awaited<ReturnType<typeof uploadBackendFile>> | null = null;
       if (isBackendApiEnabled()) {
-        const upload = await uploadBackendFile({
+        backendUpload = await uploadBackendFile({
           uri: picked.uri,
           name: picked.fileName || `${subject.name} 카메라 캡처.jpg`,
           type: picked.mimeType || 'image/jpeg',
         });
-        previewUri = upload.url;
+        previewUri = backendUpload.url;
       }
       const newAsset = createCaptureAsset({
         subjectId: subject.id,
@@ -109,6 +118,7 @@ export function useCaptureWorkspace(props: {
       
       newAsset.fileUrl = previewUri;
       newAsset.thumbnailUrl = previewUri;
+      if (backendUpload) applyUploadAnalysis(newAsset, backendUpload);
       
       await pushAsset(newAsset);
     } catch (error) {
@@ -147,13 +157,14 @@ export function useCaptureWorkspace(props: {
 
       const picked = result.assets[0];
       let previewUri = picked.uri;
+      let backendUpload: Awaited<ReturnType<typeof uploadBackendFile>> | null = null;
       if (isBackendApiEnabled()) {
-        const upload = await uploadBackendFile({
+        backendUpload = await uploadBackendFile({
           uri: picked.uri,
           name: picked.fileName || `${subject.name} 갤러리 이미지.jpg`,
           type: picked.mimeType || 'image/jpeg',
         });
-        previewUri = upload.url;
+        previewUri = backendUpload.url;
       }
       const newAsset = createCaptureAsset({
         subjectId: subject.id,
@@ -165,6 +176,7 @@ export function useCaptureWorkspace(props: {
       
       newAsset.fileUrl = previewUri;
       newAsset.thumbnailUrl = previewUri;
+      if (backendUpload) applyUploadAnalysis(newAsset, backendUpload);
       
       await pushAsset(newAsset);
     } catch (error) {
@@ -196,13 +208,14 @@ export function useCaptureWorkspace(props: {
 
       const picked = result.assets[0];
       let previewUri = picked.uri;
+      let backendUpload: Awaited<ReturnType<typeof uploadBackendFile>> | null = null;
       if (isBackendApiEnabled()) {
-        const upload = await uploadBackendFile({
+        backendUpload = await uploadBackendFile({
           uri: picked.uri,
           name: picked.name || `${subject.name} 참고 PDF.pdf`,
           type: picked.mimeType || 'application/pdf',
         });
-        previewUri = upload.url;
+        previewUri = backendUpload.url;
       }
       const newAsset = createCaptureAsset({
         subjectId: subject.id,
@@ -213,6 +226,7 @@ export function useCaptureWorkspace(props: {
       });
       
       newAsset.fileUrl = previewUri;
+      if (backendUpload) applyUploadAnalysis(newAsset, backendUpload);
       
       await pushAsset(newAsset);
     } catch (error) {

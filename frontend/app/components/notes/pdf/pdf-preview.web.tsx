@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { GestureResponderEvent, Image, ScrollView, Text, useWindowDimensions, View } from 'react-native';
+import { GestureResponderEvent, Image, Pressable, ScrollView, Text, useWindowDimensions, View } from 'react-native';
+import { MaterialCommunityIcons } from '@expo/vector-icons';
 import Svg, { Path } from 'react-native-svg';
 import { TextAnnotationLayer } from '../canvas/text-annotation-layer';
 import { findHitInkStrokeId, getInkCenterlinePath, getInkStrokeSvgPath, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize } from '../../../ui-helpers';
 import { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
-import { NotebookPage } from '../../../types';
+import { CaptureAsset, NotebookPage, PageCaptureReference } from '../../../types';
 
 function InkPath({ stroke, draft = false }: { stroke: InkStroke; draft?: boolean }) {
   if (stroke.linePattern && stroke.linePattern !== 'solid' && stroke.style !== 'highlight' && stroke.style !== 'shape') {
@@ -111,6 +112,25 @@ type PdfJsLib = {
 type PageFrame = { width: number; height: number };
 type WebGestureNativeEvent = GestureResponderEvent['nativeEvent'] & { buttons?: number };
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
+type ResponderStartPoint = { x: number; y: number } | null;
+
+function getReferencePreviewImage(reference: PageCaptureReference) {
+  if (reference.thumbnailUrl) return { uri: reference.thumbnailUrl };
+  if (reference.type === 'image' && reference.fileUrl) return { uri: reference.fileUrl };
+  return reference.previewImage ?? null;
+}
+
+function getCaptureAssetPreviewImage(asset: CaptureAsset | null | undefined) {
+  if (!asset) return null;
+  if (asset.thumbnailUrl) return { uri: asset.thumbnailUrl };
+  if (asset.type === 'image' && asset.fileUrl) return { uri: asset.fileUrl };
+  return asset.previewImage ?? null;
+}
+
+function getCaptureAssetSummary(asset: CaptureAsset | null | undefined) {
+  if (!asset) return '';
+  return asset.analysisSummary || asset.summary;
+}
 
 declare global {
   interface Window {
@@ -123,6 +143,21 @@ let pdfJsLoaderPromise: Promise<PdfJsLib> | null = null;
 function isPrimaryPointerEvent(event: GestureResponderEvent) {
   const nativeEvent = event.nativeEvent as WebGestureNativeEvent;
   return nativeEvent.buttons === undefined || nativeEvent.buttons === 1;
+}
+
+function isLikelyStylusEvent(event: GestureResponderEvent) {
+  const nativeEvent = event.nativeEvent as any;
+  const pointerType = nativeEvent.pointerType ?? nativeEvent.touchType;
+  return pointerType === 'pen' || pointerType === 'stylus' || pointerType === 'pencil';
+}
+
+function shouldCaptureDrawingMove(event: GestureResponderEvent, startPoint: ResponderStartPoint) {
+  if (isLikelyStylusEvent(event)) return true;
+  if (!startPoint) return false;
+  const dx = event.nativeEvent.locationX - startPoint.x;
+  const dy = event.nativeEvent.locationY - startPoint.y;
+  if (Math.hypot(dx, dy) < 8) return false;
+  return Math.abs(dx) > Math.abs(dy) * 1.18;
 }
 
 function isPdfUri(uri: string | undefined) {
@@ -310,13 +345,20 @@ export function PdfPreview(props: {
   notebookPages?: NotebookPage[];
   activeGeneratedPageId?: string | null;
   pageImageUrls?: Record<number, string>;
+  pageCaptureReferences?: PageCaptureReference[];
+  incomingAssetSuggestion?: CaptureAsset | null;
+  onAcceptIncomingAsset?: () => void;
+  onArchiveIncomingAsset?: () => void;
+  onDismissIncomingAsset?: () => void;
+  onOpenPageCaptureReference?: (referenceId: string) => void;
+  onAskAiAboutPageCaptureReference?: (referenceId: string) => void;
   styles: any;
 }) {
   const { width, height } = useWindowDimensions();
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const availableWidth = Math.max(320, containerSize.width || width);
   const availableHeight = Math.max(520, containerSize.height || height);
-  const viewerWidth = Math.min(1240, Math.max(320, availableWidth - 28));
+  const viewerWidth = Math.min(1800, Math.max(320, availableWidth - 12));
   const viewerHeight = Math.max(520, availableHeight - 20);
   const pageGap = 22;
   const [pdfDocument, setPdfDocument] = useState<PdfJsDocument | null>(null);
@@ -326,6 +368,7 @@ export function PdfPreview(props: {
   const [isLoading, setIsLoading] = useState(false);
   const [currentStroke, setCurrentStroke] = useState<InkStroke | null>(null);
   const [draftSelection, setDraftSelection] = useState<SelectionRect | null>(null);
+  const [openReferenceId, setOpenReferenceId] = useState<string | null>(null);
   const currentStrokeRef = useRef<InkStroke | null>(null);
   const selectionOriginRef = useRef<InkPoint | null>(null);
   const selectionMoveOriginRef = useRef<InkPoint | null>(null);
@@ -334,9 +377,12 @@ export function PdfPreview(props: {
   const selectionResizeStartRectRef = useRef<SelectionRect | null>(null);
   const draftSelectionRef = useRef<SelectionRect | null>(null);
   const textTapRef = useRef<InkPoint | null>(null);
+  const responderStartPointRef = useRef<ResponderStartPoint>(null);
   const canvasRefs = useRef<Record<number, HTMLCanvasElement | null>>({});
   const scrollingProgrammaticallyRef = useRef(false);
   const suppressNextScrollSyncRef = useRef(false);
+  const interactionLocksScroll = props.inkTool !== 'view';
+  const scrollEnabled = !interactionLocksScroll;
 
   const pdfUri = useMemo(() => {
     if (typeof props.file === 'string') return props.file;
@@ -361,6 +407,19 @@ export function PdfPreview(props: {
         })),
     [pageCount, props.notebookPages, props.page],
   );
+  const getPageCaptureReferences = (page: NotebookPage) => (
+    (props.pageCaptureReferences ?? []).filter((reference) => {
+      if (page.generatedPageId) return reference.page.kind === 'generated' && reference.page.pageId === page.generatedPageId;
+      return reference.page.kind === 'pdf' && reference.page.pageNumber === page.pageNumber;
+    })
+  );
+
+  useEffect(() => {
+    if (!openReferenceId) return;
+    if (!(props.pageCaptureReferences ?? []).some((reference) => reference.id === openReferenceId)) {
+      setOpenReferenceId(null);
+    }
+  }, [openReferenceId, props.pageCaptureReferences]);
 
   const fitPageFrame = (naturalWidth?: number, naturalHeight?: number): PageFrame => {
     const aspectRatio = naturalWidth && naturalHeight
@@ -748,6 +807,15 @@ export function PdfPreview(props: {
     const selectionRectStyle = active ? scaleSelectionRectToPageSize(props.selectionRect, frame.width, frame.height) : null;
     const draftSelectionStyle = (page.generatedPageId ? currentStroke?.generatedPageId === page.generatedPageId : currentStroke?.pageNumber === page.pageNumber) ? draftSelection : null;
     const cachedPageImageUri = page.pageNumber ? pageImageUrls[page.pageNumber] : undefined;
+    const pageReferences = getPageCaptureReferences(page);
+    const activePageReference = pageReferences.find((reference) => reference.id === openReferenceId) ?? null;
+    const activeReferenceIndex = activePageReference ? pageReferences.findIndex((reference) => reference.id === activePageReference.id) : -1;
+    const activeReferenceImage = activePageReference ? getReferencePreviewImage(activePageReference) : null;
+    const imageReferenceCount = pageReferences.filter((reference) => reference.type === 'image').length;
+    const referenceButtonLabel = imageReferenceCount > 0 ? `사진 ${imageReferenceCount}` : `자료 ${pageReferences.length}`;
+    const incomingAsset = active ? props.incomingAssetSuggestion : null;
+    const incomingAssetImage = getCaptureAssetPreviewImage(incomingAsset);
+    const incomingAssetSummary = getCaptureAssetSummary(incomingAsset);
 
     return (
       <View
@@ -791,17 +859,135 @@ export function PdfPreview(props: {
           variant={props.textAnnotationVariant}
         />
 
+        {pageReferences.length ? (
+          <View pointerEvents="box-none" style={props.styles.pdfPageReferenceCluster}>
+            <Pressable
+              style={[props.styles.pdfPageReferenceSticker, activePageReference && props.styles.pdfPageReferenceStickerActive]}
+              onPress={() => setOpenReferenceId((current) => (current === pageReferences[0].id ? null : pageReferences[0].id))}
+            >
+              <MaterialCommunityIcons name="image-multiple-outline" size={14} color="#4F68D2" />
+              <Text style={props.styles.pdfPageReferenceStickerText}>{referenceButtonLabel}</Text>
+            </Pressable>
+          </View>
+        ) : null}
+
+        {activePageReference ? (
+          <View style={props.styles.pdfPageReferencePopover}>
+            <View style={props.styles.pdfPageReferencePopoverHeader}>
+              <View style={props.styles.pdfPageReferencePopoverTitleBox}>
+                <Text style={props.styles.pdfPageReferencePopoverLabel}>{activePageReference.pageLabel}</Text>
+                <Text style={props.styles.pdfPageReferencePopoverTitle} numberOfLines={1}>{activePageReference.title}</Text>
+              </View>
+              <Pressable style={props.styles.pdfPageReferencePopoverClose} onPress={() => setOpenReferenceId(null)}>
+                <MaterialCommunityIcons name="close" size={16} color="#6B7280" />
+              </Pressable>
+            </View>
+            {activeReferenceImage ? (
+              <View style={props.styles.pdfPageReferencePopoverImageFrame}>
+                <Image source={activeReferenceImage} style={props.styles.pdfPageReferencePopoverImage} resizeMode="contain" />
+              </View>
+            ) : (
+              <View style={props.styles.pdfPageReferencePopoverFallback}>
+                <MaterialCommunityIcons name={activePageReference.type === 'pdf' ? 'file-pdf-box' : 'image-outline'} size={24} color="#6D7BD9" />
+                <Text style={props.styles.pdfPageReferencePopoverFallbackText}>미리보기 없음</Text>
+              </View>
+            )}
+            <View style={props.styles.pdfPageReferencePopoverAnswer}>
+              <View style={props.styles.pdfPageReferencePopoverAnswerHeader}>
+                <MaterialCommunityIcons name="star-four-points" size={14} color="#5F79FF" />
+                <Text style={props.styles.pdfPageReferencePopoverAnswerTitle}>AI 설명</Text>
+              </View>
+              <Text style={props.styles.pdfPageReferencePopoverAnswerText} numberOfLines={5}>
+                {activePageReference.aiSummary || activePageReference.summary}
+              </Text>
+            </View>
+            <View style={props.styles.pdfPageReferencePopoverActions}>
+              {pageReferences.length > 1 ? (
+                <Pressable
+                  style={props.styles.pdfPageReferencePopoverIconAction}
+                  onPress={() => {
+                    const nextIndex = activeReferenceIndex <= 0 ? pageReferences.length - 1 : activeReferenceIndex - 1;
+                    setOpenReferenceId(pageReferences[nextIndex].id);
+                  }}
+                >
+                  <MaterialCommunityIcons name="chevron-left" size={17} color="#4F68D2" />
+                </Pressable>
+              ) : null}
+              <Pressable
+                style={props.styles.pdfPageReferencePopoverPrimaryAction}
+                onPress={() => props.onAskAiAboutPageCaptureReference?.(activePageReference.id)}
+              >
+                <Text style={props.styles.pdfPageReferencePopoverPrimaryText}>AI로 더 보기</Text>
+              </Pressable>
+              {pageReferences.length > 1 ? (
+                <Pressable
+                  style={props.styles.pdfPageReferencePopoverIconAction}
+                  onPress={() => {
+                    const nextIndex = activeReferenceIndex >= pageReferences.length - 1 ? 0 : activeReferenceIndex + 1;
+                    setOpenReferenceId(pageReferences[nextIndex].id);
+                  }}
+                >
+                  <MaterialCommunityIcons name="chevron-right" size={17} color="#4F68D2" />
+                </Pressable>
+              ) : null}
+            </View>
+          </View>
+        ) : null}
+
+        {incomingAsset ? (
+          <View style={props.styles.pdfIncomingCapturePopover}>
+            <View style={props.styles.pdfIncomingCaptureHeader}>
+              <View style={props.styles.pdfIncomingCaptureIcon}>
+                <MaterialCommunityIcons name={incomingAsset.type === 'image' ? 'camera-outline' : 'file-pdf-box'} size={17} color="#4F68D2" />
+              </View>
+              <View style={props.styles.pdfIncomingCaptureTitleBox}>
+                <Text style={props.styles.pdfIncomingCaptureLabel}>새 {incomingAsset.type === 'image' ? '사진' : '자료'} 도착</Text>
+                <Text style={props.styles.pdfIncomingCaptureTitle} numberOfLines={1}>{incomingAsset.title}</Text>
+              </View>
+              <Pressable style={props.styles.pdfIncomingCaptureClose} onPress={props.onDismissIncomingAsset}>
+                <MaterialCommunityIcons name="close" size={15} color="#6B7280" />
+              </Pressable>
+            </View>
+            {incomingAssetImage ? (
+              <View style={props.styles.pdfIncomingCaptureImageFrame}>
+                <Image source={incomingAssetImage} style={props.styles.pdfIncomingCaptureImage} resizeMode="cover" />
+              </View>
+            ) : null}
+            <View style={props.styles.pdfIncomingCaptureAnswer}>
+              <View style={props.styles.pdfIncomingCaptureAnswerHeader}>
+                <MaterialCommunityIcons name="star-four-points" size={13} color="#5F79FF" />
+                <Text style={props.styles.pdfIncomingCaptureAnswerTitle}>AI 설명</Text>
+              </View>
+              <Text style={props.styles.pdfIncomingCaptureAnswerText} numberOfLines={4}>{incomingAssetSummary}</Text>
+            </View>
+            <View style={props.styles.pdfIncomingCaptureActions}>
+              <Pressable style={props.styles.pdfIncomingCapturePrimaryAction} onPress={props.onAcceptIncomingAsset}>
+                <Text style={props.styles.pdfIncomingCapturePrimaryText}>현재 페이지 연결</Text>
+              </Pressable>
+              <Pressable style={props.styles.pdfIncomingCaptureSecondaryAction} onPress={props.onArchiveIncomingAsset}>
+                <Text style={props.styles.pdfIncomingCaptureSecondaryText}>나중에</Text>
+              </Pressable>
+            </View>
+          </View>
+        ) : null}
+
         <View
           style={[props.styles.inkOverlay, { pointerEvents: props.inkTool === 'view' ? 'none' : 'auto' }]}
           onStartShouldSetResponder={(event) => {
+            responderStartPointRef.current = { x: event.nativeEvent.locationX, y: event.nativeEvent.locationY };
             if (event.nativeEvent.touches && event.nativeEvent.touches.length > 1) return false;
             if (!isPrimaryPointerEvent(event)) return false;
-            return props.inkTool !== 'view';
+            if (interactionLocksScroll && (isDrawingTool(props.inkTool) || props.inkTool === 'select' || props.inkTool === 'erase')) return true;
+            if (isLikelyStylusEvent(event) && (isDrawingTool(props.inkTool) || props.inkTool === 'select')) return true;
+            return props.inkTool === 'text';
           }}
           onMoveShouldSetResponder={(event) => {
             if (event.nativeEvent.touches && event.nativeEvent.touches.length > 1) return false;
             if (!isPrimaryPointerEvent(event)) return false;
-            return isDrawingTool(props.inkTool) || props.inkTool === 'select';
+            if (interactionLocksScroll && (isDrawingTool(props.inkTool) || props.inkTool === 'select' || props.inkTool === 'erase')) return true;
+            if (props.inkTool === 'select') return shouldCaptureDrawingMove(event, responderStartPointRef.current);
+            if (isDrawingTool(props.inkTool)) return shouldCaptureDrawingMove(event, responderStartPointRef.current);
+            return false;
           }}
           onResponderGrant={(event) => {
             beginInteraction(page);
@@ -937,6 +1123,7 @@ export function PdfPreview(props: {
             if (stroke && stroke.points.length > 1) props.onCommitInkStroke(stroke);
             finishSelection(page);
             currentStrokeRef.current = null;
+            responderStartPointRef.current = null;
             setCurrentStroke(null);
           }}
           onResponderTerminate={() => {
@@ -950,6 +1137,7 @@ export function PdfPreview(props: {
             selectionResizeCornerRef.current = null;
             selectionResizeStartRectRef.current = null;
             textTapRef.current = null;
+            responderStartPointRef.current = null;
             setDraftSelection(null);
             setCurrentStroke(null);
           }}
@@ -979,7 +1167,7 @@ export function PdfPreview(props: {
       <ScrollView
         style={{ width: '100%', maxHeight: viewerHeight }}
         contentContainerStyle={{ alignItems: 'center', paddingTop: 18, paddingBottom: 36 }}
-        scrollEnabled={props.inkTool === 'view'}
+        scrollEnabled={scrollEnabled}
         scrollEventThrottle={80}
         onScroll={handleScroll}
         showsVerticalScrollIndicator
