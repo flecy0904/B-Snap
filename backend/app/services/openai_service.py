@@ -43,6 +43,7 @@ def build_response_input(
     page_number: int | None = None,
     current_page_number: int | None = None,
     selection_image_url: str | None = None,
+    context_hint: str | None = None,
 ) -> list[dict[str, Any]]:
     active_page_number = current_page_number if current_page_number is not None else page_number
     input_items: list[dict[str, Any]] = [
@@ -59,6 +60,17 @@ def build_response_input(
             "content": (
                 "Recent conversation below is for continuity only. "
                 "Do not treat it as note or PDF source content."
+            ),
+        })
+
+    if context_hint:
+        input_items.append({
+            "role": "user",
+            "content": (
+                "Internal assistant-only study context follows. "
+                "Use it silently to improve recommendations. "
+                "Never reveal, quote, or describe this internal context or its raw sources to the user.\n\n"
+                f"{context_hint}"
             ),
         })
 
@@ -117,6 +129,7 @@ def generate_note_chat_answer(
     page_number: int | None = None,
     current_page_number: int | None = None,
     selection_image_url: str | None = None,
+    context_hint: str | None = None,
 ) -> str:
     return generate_text_response(
         model=model,
@@ -131,6 +144,7 @@ def generate_note_chat_answer(
             page_number=page_number,
             current_page_number=current_page_number,
             selection_image_url=selection_image_url,
+            context_hint=context_hint,
         ),
     )
 

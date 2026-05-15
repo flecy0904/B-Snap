@@ -35,6 +35,10 @@ export function NotesAiAssistantPanel() {
   const [deleteTarget, setDeleteTarget] = React.useState<{ id: number; title: string } | null>(null);
   const messagesScrollRef = React.useRef<ScrollView | null>(null);
   const hasChatHistory = workspace.aiMessages.length > 0;
+  const quickPrompts = React.useMemo(() => [
+    '시험에 나올만한 중요 페이지 추천해줘',
+    '이 PDF에서 먼저 복습할 부분 알려줘',
+  ], []);
   const activeSession = workspace.activeAiChatSessionId
     ? workspace.allAiChatSessions.find((session: any) => session.id === workspace.activeAiChatSessionId)
       ?? workspace.noteAiChatSessions.find((session: any) => session.id === workspace.activeAiChatSessionId)
@@ -519,6 +523,20 @@ export function NotesAiAssistantPanel() {
             </View>
           ) : null}
           {workspace.aiError ? <Text style={workspace.styles.aiErrorText}>{workspace.aiError}</Text> : null}
+          {!workspace.aiChatReadOnly ? (
+            <View style={workspace.styles.aiComposerQuickRow}>
+              {quickPrompts.map((prompt) => (
+                <Pressable
+                  key={prompt}
+                  style={workspace.styles.aiComposerQuickChip}
+                  onPress={() => workspace.onChangeAiQuestion(prompt)}
+                  disabled={workspace.aiLoading}
+                >
+                  <Text style={workspace.styles.aiComposerQuickChipText}>{prompt}</Text>
+                </Pressable>
+              ))}
+            </View>
+          ) : null}
           <View style={workspace.styles.aiComposerInputShell}>
             <TextInput
               value={workspace.aiQuestion}

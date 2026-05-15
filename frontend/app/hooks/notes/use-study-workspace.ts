@@ -41,6 +41,7 @@ import { getAiBackendErrorMessage } from './ai/ai-errors';
 import { useAiChatActions } from './ai/use-ai-chat-actions';
 import { useAiChatDerivedState } from './ai/use-ai-chat-derived-state';
 import { useAiCanvasNotes } from './ai-canvas/use-ai-canvas-notes';
+import { buildClassInsightContext } from './class-insight';
 import { addUniqueId, removeId, upsertStudyDocument } from './document/collection-helpers';
 import { useDocumentPageActions } from './document/use-document-page-actions';
 import { confirmDeleteAction } from './ui/confirm-delete-action';
@@ -1549,6 +1550,16 @@ export function useStudyWorkspace(props: {
     setAllChatSessions,
     setAiMessagesBySession,
     onRequestCanvasEditFromChat: aiCanvas.requestAiEditFromChat,
+    buildContextHint: (question) => buildClassInsightContext({
+      question,
+      studyDocument,
+      subject,
+      inkStrokes: studyDocumentId ? inkByDocument[studyDocumentId] ?? [] : [],
+      textAnnotations: studyDocumentId ? textAnnotationsByDocument[studyDocumentId] ?? [] : [],
+      bookmarks: currentDocumentBookmarks,
+      pageCaptureReferences,
+      generatedPages: generatedWorkspacePages,
+    }),
   });
 
   const askAiAboutPageCaptureReference = (referenceId: string) => {

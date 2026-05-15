@@ -662,6 +662,7 @@ export async function sendBackendAiMessage(payload: {
   } | null;
   pageNumber?: number | null;
   selectionImageUri?: string | null;
+  contextHint?: string | null;
 }) {
   return request<BackendAiMessageResponse>(`/chat-sessions/${payload.sessionId}/ai-messages`, {
     method: 'POST',
@@ -672,6 +673,7 @@ export async function sendBackendAiMessage(payload: {
       selection_rect: payload.selectionRect ?? null,
       page_number: payload.pageNumber ?? null,
       selection_image_url: payload.selectionImageUri ?? null,
+      context_hint: payload.contextHint ?? null,
     },
   });
 }

@@ -789,7 +789,7 @@ export function MobileNotesView(props: {
                 <Text style={props.styles.aiStateTitle}>선택 영역</Text>
                 <Text style={props.styles.aiStateBody}>{props.selectionRect ? `${Math.round(props.selectionRect.width)} × ${Math.round(props.selectionRect.height)} 영역 선택됨` : '아직 선택된 영역이 없습니다'}</Text>
               </View>
-              {['이 그래프 의미 뭐야?', '여기서 중요한 개념 3개만 알려줘', '시험 대비 관점으로 설명해줘'].map((prompt) => (
+              {['시험에 나올만한 중요 페이지 추천해줘', '여기서 중요한 개념 3개만 알려줘', '시험 대비 관점으로 설명해줘'].map((prompt) => (
                 <Pressable key={prompt} style={props.styles.aiSuggestionChip} onPress={() => props.onChangeAiQuestion(prompt)}><Text style={props.styles.aiSuggestionText}>{prompt}</Text></Pressable>
               ))}
               {props.aiChatReadOnly ? (
