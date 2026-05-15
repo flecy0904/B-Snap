@@ -65,6 +65,9 @@ export type NotesBrowserProps = {
   onDeleteStudyDocument: (id: number) => void;
   onRestoreNote: (id: number) => void;
   onRestoreStudyDocument: (id: number) => void;
+  onInsertInboxAsset: (assetId: string) => void;
+  onOpenPageCaptureReference: (referenceId: string) => void;
+  onRemoveCaptureAsset: (assetId: string) => void;
 };
 
 export function NotesBrowser(props: NotesBrowserProps) {
@@ -121,6 +124,7 @@ export function NotesBrowser(props: NotesBrowserProps) {
   );
   const previewImageSource = previewAsset ? getCaptureImageSource(previewAsset) : null;
   const previewReferences = previewAsset ? getCaptureReferences(previewAsset, props.pageCaptureReferences) : [];
+  const previewPrimaryReference = previewReferences[0] ?? null;
 
   React.useEffect(() => {
     if (recoverableCount === 0) setRecoveryOpen(false);
@@ -340,6 +344,40 @@ export function NotesBrowser(props: NotesBrowserProps) {
                     {previewAsset.analysisSummary ?? previewAsset.summary}
                   </Text>
                 </View>
+              </View>
+              <View style={props.styles.photoViewerActionRow}>
+                {previewPrimaryReference ? (
+                  <Pressable
+                    style={[props.styles.photoViewerActionButton, props.styles.photoViewerActionButtonPrimary]}
+                    onPress={() => {
+                      props.onOpenPageCaptureReference(previewPrimaryReference.id);
+                      setPreviewAssetId(null);
+                    }}
+                  >
+                    <MaterialCommunityIcons name="notebook-outline" size={16} color="#FFFFFF" />
+                    <Text style={[props.styles.photoViewerActionText, props.styles.photoViewerActionTextPrimary]}>노트에서 열기</Text>
+                  </Pressable>
+                ) : null}
+                <Pressable
+                  style={props.styles.photoViewerActionButton}
+                  onPress={() => {
+                    props.onInsertInboxAsset(previewAsset.id);
+                    setPreviewAssetId(null);
+                  }}
+                >
+                  <MaterialCommunityIcons name="file-image-plus-outline" size={16} color="#4F68D2" />
+                  <Text style={props.styles.photoViewerActionText}>이미지 노트 만들기</Text>
+                </Pressable>
+                <Pressable
+                  style={[props.styles.photoViewerActionButton, props.styles.photoViewerActionButtonDanger]}
+                  onPress={() => {
+                    props.onRemoveCaptureAsset(previewAsset.id);
+                    setPreviewAssetId(null);
+                  }}
+                >
+                  <MaterialCommunityIcons name="trash-can-outline" size={16} color="#D64B4B" />
+                  <Text style={[props.styles.photoViewerActionText, props.styles.photoViewerActionTextDanger]}>삭제</Text>
+                </Pressable>
               </View>
             </View>
           ) : null}

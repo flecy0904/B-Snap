@@ -1216,6 +1216,12 @@ export function useStudyWorkspace(props: {
     });
   };
 
+  const findCaptureAssetById = (assetId: string) => (
+    Object.values(captureAssetsBySubject)
+      .flat()
+      .find((asset) => asset.id === assetId) ?? null
+  );
+
   const resolveAssetUri = (asset: CaptureAsset) => {
     const uri = asset.fileUrl ?? asset.thumbnailUrl ?? asset.previewImageKey;
     return (
@@ -1427,19 +1433,34 @@ export function useStudyWorkspace(props: {
   };
 
   const openPageCaptureReference = (referenceId: string) => {
-    if (!studyDocumentId) return;
-    const reference = (pageCaptureReferencesByDocument[studyDocumentId] ?? []).find((value) => value.id === referenceId);
-    if (!reference) return;
+    let targetDocumentId = studyDocumentId;
+    let reference = targetDocumentId
+      ? (pageCaptureReferencesByDocument[targetDocumentId] ?? []).find((value) => value.id === referenceId)
+      : null;
 
+    if (!reference) {
+      const matchedEntry = Object.entries(pageCaptureReferencesByDocument)
+        .find(([, references]) => references.some((value) => value.id === referenceId));
+      if (matchedEntry) {
+        targetDocumentId = Number(matchedEntry[0]);
+        reference = matchedEntry[1].find((value) => value.id === referenceId) ?? null;
+      }
+    }
+
+    if (!targetDocumentId || !reference) return;
+
+    if (studyDocumentId !== targetDocumentId) {
+      openStudyDocument(targetDocumentId);
+    }
     setActivePageByDocument((current) => ({
       ...current,
-      [studyDocumentId]: reference.page,
+      [targetDocumentId]: reference.page,
     }));
     if (reference.page.kind === 'pdf') {
       const pageNumber = reference.page.pageNumber;
       setCurrentPdfPageByDocument((current) => ({
         ...current,
-        [studyDocumentId]: pageNumber,
+        [targetDocumentId]: pageNumber,
       }));
     }
     setWorkspaceFeedback(`${reference.pageLabel}로 이동했습니다.`);
@@ -1569,7 +1590,7 @@ export function useStudyWorkspace(props: {
   };
 
   const insertInboxAsset = (assetId: string) => {
-    const asset = captureInbox.find((value) => value.id === assetId);
+    const asset = captureInbox.find((value) => value.id === assetId) ?? findCaptureAssetById(assetId);
     if (!asset) return;
     void linkCaptureAssetToCurrentPage(asset);
   };
@@ -1582,6 +1603,48 @@ export function useStudyWorkspace(props: {
       setIncomingAssetSuggestion(null);
     }
     setWorkspaceFeedback('inbox에서 자료를 삭제했습니다.');
+  };
+
+  const removeCaptureAsset = (assetId: string) => {
+    setCaptureAssetsBySubject((current) => {
+      const next: Record<number, CaptureAsset[]> = {};
+
+      Object.keys(current).forEach((key) => {
+        next[Number(key)] = (current[Number(key)] ?? []).filter((asset) => asset.id !== assetId);
+      });
+
+      return next;
+    });
+    setIncomingBannerQueue((current) => current.filter((asset) => asset.id !== assetId));
+    setIncomingAssetSuggestion((current) => (current?.id === assetId ? null : current));
+    setAttachmentsByDocument((current) => {
+      const next: Record<number, WorkspaceAttachment[]> = {};
+
+      Object.keys(current).forEach((key) => {
+        next[Number(key)] = (current[Number(key)] ?? []).filter((attachment) => attachment.assetId !== assetId);
+      });
+
+      return next;
+    });
+    setPageCaptureReferencesByDocument((current) => {
+      const next: Record<number, PageCaptureReference[]> = {};
+
+      Object.keys(current).forEach((key) => {
+        next[Number(key)] = (current[Number(key)] ?? []).filter((reference) => reference.assetId !== assetId);
+      });
+
+      return next;
+    });
+    setGeneratedPagesByDocument((current) => {
+      const next: Record<number, GeneratedWorkspacePage[]> = {};
+
+      Object.keys(current).forEach((key) => {
+        next[Number(key)] = (current[Number(key)] ?? []).filter((page) => page.sourceAssetId !== assetId);
+      });
+
+      return next;
+    });
+    setWorkspaceFeedback('Photo 라이브러리에서 원본 사진을 삭제했습니다.');
   };
 
   const removeWorkspaceAttachment = (attachmentId: string) => {
@@ -1882,6 +1945,7 @@ export function useStudyWorkspace(props: {
     dismissIncomingBanner,
     insertInboxAsset,
     removeInboxAsset,
+    removeCaptureAsset,
     openPageCaptureReference,
     movePageCaptureReference,
     removePageCaptureReference,

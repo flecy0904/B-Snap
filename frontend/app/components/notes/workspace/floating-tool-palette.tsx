@@ -36,6 +36,15 @@ const ADVANCED_CONTROLS: Array<{ key: keyof InkBrushSettings; label: string }> =
 ];
 const TOP_DOCK_Y = 12;
 const TOP_DOCK_THRESHOLD = 72;
+const TOP_DOCK_RIGHT_GAP = 470;
+
+function getDefaultPalettePosition(width: number) {
+  const maxDockedX = Math.max(10, width - TOP_DOCK_RIGHT_GAP);
+  return {
+    x: Math.max(10, Math.min(maxDockedX, Math.round(width * 0.62))),
+    y: TOP_DOCK_Y,
+  };
+}
 
 export function FloatingToolPalette() {
   const workspaceContext = useDesktopNotesWorkspaceContext();
@@ -45,10 +54,8 @@ export function FloatingToolPalette() {
   const [collapsed, setCollapsed] = React.useState(false);
   const [detailOpen, setDetailOpen] = React.useState(false);
   const [advancedOpen, setAdvancedOpen] = React.useState(false);
-  const [position, setPosition] = React.useState(() => ({
-    x: Math.max(10, Math.min(Math.max(10, width - 420), Math.round(width * 0.47))),
-    y: TOP_DOCK_Y,
-  }));
+  const defaultPosition = React.useMemo(() => getDefaultPalettePosition(width), [width]);
+  const [position, setPosition] = React.useState(defaultPosition);
   const startPositionRef = React.useRef(position);
   const topDocked = position.y <= TOP_DOCK_THRESHOLD;
   const sideDocked = !topDocked && (position.x <= 24 || position.x >= width - 84);
@@ -58,10 +65,12 @@ export function FloatingToolPalette() {
   }, [position]);
 
   React.useEffect(() => {
-    setPosition((current) => (
-      current.y <= 140 ? { ...current, y: TOP_DOCK_Y } : current
-    ));
-  }, []);
+    setPosition(defaultPosition);
+    setExpanded('pen');
+    setCollapsed(false);
+    setDetailOpen(false);
+    setAdvancedOpen(false);
+  }, [defaultPosition, workspaceContext.studyDocumentId]);
 
   const panResponder = React.useMemo(() => PanResponder.create({
     onStartShouldSetPanResponder: () => true,
@@ -78,7 +87,7 @@ export function FloatingToolPalette() {
       const releasedX = startPositionRef.current.x + gesture.dx;
       const releasedY = startPositionRef.current.y + gesture.dy;
       if (releasedY < TOP_DOCK_THRESHOLD) {
-        setPosition({ x: Math.max(10, Math.min(Math.max(10, width - 420), releasedX)), y: TOP_DOCK_Y });
+        setPosition({ x: Math.max(10, Math.min(Math.max(10, width - TOP_DOCK_RIGHT_GAP), releasedX)), y: TOP_DOCK_Y });
         return;
       }
       if (releasedX < width * 0.16) {
@@ -137,18 +146,26 @@ export function FloatingToolPalette() {
       : (collapsed ? 'chevron-right' : 'chevron-left');
 
   return (
-    <Animated.View
-      pointerEvents="box-none"
-      style={[
-        workspaceContext.styles.floatingToolPaletteWrap,
-        topDocked && workspaceContext.styles.floatingToolPaletteWrapTop,
-        sideDocked && workspaceContext.styles.floatingToolPaletteWrapSide,
-        {
-          left: position.x,
-          top: position.y,
-        },
-      ]}
-    >
+    <>
+      {detailOpen ? (
+        <Pressable
+          pointerEvents="auto"
+          style={workspaceContext.styles.floatingToolDismissLayer}
+          onPress={() => setDetailOpen(false)}
+        />
+      ) : null}
+      <Animated.View
+        pointerEvents="box-none"
+        style={[
+          workspaceContext.styles.floatingToolPaletteWrap,
+          topDocked && workspaceContext.styles.floatingToolPaletteWrapTop,
+          sideDocked && workspaceContext.styles.floatingToolPaletteWrapSide,
+          {
+            left: position.x,
+            top: position.y,
+          },
+        ]}
+      >
       <View style={[
         workspaceContext.styles.floatingToolPalette,
         topDocked && workspaceContext.styles.floatingToolPaletteTop,
@@ -357,6 +374,7 @@ export function FloatingToolPalette() {
           </Pressable>
         </View>
       ) : null}
-    </Animated.View>
+      </Animated.View>
+    </>
   );
 }

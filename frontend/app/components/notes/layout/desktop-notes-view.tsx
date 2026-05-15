@@ -137,6 +137,7 @@ export type DesktopNotesViewProps = {
   onDismissIncomingAsset: () => void;
   onInsertInboxAsset: (assetId: string) => void;
   onRemoveInboxAsset: (assetId: string) => void;
+  onRemoveCaptureAsset: (assetId: string) => void;
   onOpenPageCaptureReference: (referenceId: string) => void;
   onMovePageCaptureReference: (referenceId: string, delta: -1 | 1) => void;
   onRemovePageCaptureReference: (referenceId: string) => void;
@@ -520,6 +521,9 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
       onDeleteStudyDocument={props.onDeleteStudyDocument}
       onRestoreNote={props.onRestoreNote}
       onRestoreStudyDocument={props.onRestoreStudyDocument}
+      onInsertInboxAsset={props.onInsertInboxAsset}
+      onOpenPageCaptureReference={props.onOpenPageCaptureReference}
+      onRemoveCaptureAsset={props.onRemoveCaptureAsset}
     />
   );
 }

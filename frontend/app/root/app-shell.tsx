@@ -296,6 +296,7 @@ export function AppShell(props: {
                   onDismissIncomingAsset={notesState.dismissIncomingAsset}
                   onInsertInboxAsset={notesState.insertInboxAsset}
                   onRemoveInboxAsset={notesState.removeInboxAsset}
+                  onRemoveCaptureAsset={notesState.removeCaptureAsset}
                   onOpenPageCaptureReference={notesState.openPageCaptureReference}
                   onMovePageCaptureReference={notesState.movePageCaptureReference}
                   onRemovePageCaptureReference={notesState.removePageCaptureReference}
@@ -503,6 +504,7 @@ export function AppShell(props: {
                   onDismissIncomingAsset={notesState.dismissIncomingAsset}
                   onInsertInboxAsset={notesState.insertInboxAsset}
                   onRemoveInboxAsset={notesState.removeInboxAsset}
+                  onRemoveCaptureAsset={notesState.removeCaptureAsset}
                   onOpenPageCaptureReference={notesState.openPageCaptureReference}
                   onMovePageCaptureReference={notesState.movePageCaptureReference}
                   onRemovePageCaptureReference={notesState.removePageCaptureReference}
