@@ -1,7 +1,7 @@
 import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import BottomSheet, { BottomSheetBackdrop, BottomSheetScrollView, type BottomSheetBackdropProps } from '@gorhom/bottom-sheet';
-import { ActivityIndicator, Image, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Image, Modal, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { PdfPreview } from '../pdf/pdf-preview';
 import { BlankNoteCanvas } from '../canvas/blank-note-canvas';
 import { NoteSummaryContent } from '../shared/notes-shared';
@@ -65,6 +65,10 @@ function getCapturePlacementLabel(asset: CaptureAsset, references: PageCaptureRe
   if (!matches.length) return '미연결';
   const firstLabel = matches[0]?.pageLabel || '연결됨';
   return matches.length > 1 ? `${firstLabel} 외 ${matches.length - 1}` : firstLabel;
+}
+
+function getCaptureReferences(asset: CaptureAsset, references: PageCaptureReference[]) {
+  return references.filter((reference) => reference.assetId === asset.id);
 }
 
 export function MobileNotesView(props: {
@@ -187,6 +191,7 @@ export function MobileNotesView(props: {
   const [recoveryOpen, setRecoveryOpen] = React.useState(false);
   const [documentRenameOpen, setDocumentRenameOpen] = React.useState(false);
   const [documentTitleDraft, setDocumentTitleDraft] = React.useState('');
+  const [previewAssetId, setPreviewAssetId] = React.useState<string | null>(null);
   const [activeBrushPopover, setActiveBrushPopover] = React.useState<'pen' | 'highlight' | null>(null);
   const { width } = useWindowDimensions();
   const phoneViewerOnly = width < 700;
@@ -273,6 +278,12 @@ export function MobileNotesView(props: {
     () => props.subject ? getSubjectPhotoAssets(props.subject.id) : [],
     [getSubjectPhotoAssets, props.subject],
   );
+  const previewAsset = React.useMemo(
+    () => currentSubjectPhotoAssets.find((asset) => asset.id === previewAssetId) ?? null,
+    [currentSubjectPhotoAssets, previewAssetId],
+  );
+  const previewImageSource = previewAsset ? getCaptureImageSource(previewAsset) : null;
+  const previewReferences = previewAsset ? getCaptureReferences(previewAsset, props.allPageCaptureReferences) : [];
 
   React.useEffect(() => {
     if (recoverableCount === 0) setRecoveryOpen(false);
@@ -963,7 +974,7 @@ export function MobileNotesView(props: {
                       const placementLabel = getCapturePlacementLabel(asset, props.allPageCaptureReferences);
                       const linked = placementLabel !== '미연결';
                       return (
-                        <View key={asset.id} style={props.styles.photoGalleryCard}>
+                        <Pressable key={asset.id} style={props.styles.photoGalleryCard} onPress={() => setPreviewAssetId(asset.id)}>
                           <View style={props.styles.photoGalleryImageWrap}>
                             {imageSource ? (
                               <Image source={imageSource} style={props.styles.photoGalleryImage} resizeMode="cover" />
@@ -987,7 +998,7 @@ export function MobileNotesView(props: {
                               </Text>
                             </View>
                           </View>
-                        </View>
+                        </Pressable>
                       );
                     })}
                   </View>
@@ -1031,6 +1042,52 @@ export function MobileNotesView(props: {
                   <Text style={[props.styles.emptyBody, { color: currentSubject.textColor }]}>PDF 업로드와 빈 노트는 모바일에서도 같은 방식으로 열 수 있습니다.</Text>
                 </View>
               )}
+        <Modal
+          visible={!!previewAsset}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setPreviewAssetId(null)}
+        >
+          <View style={props.styles.photoViewerOverlay}>
+            <Pressable style={props.styles.photoViewerBackdrop} onPress={() => setPreviewAssetId(null)} />
+            {previewAsset ? (
+              <View style={props.styles.photoViewerCard}>
+                <View style={props.styles.photoViewerHeader}>
+                  <View style={props.styles.fill}>
+                    <Text style={props.styles.photoViewerTitle}>원본 사진</Text>
+                    <Text style={props.styles.photoViewerMeta}>{formatCaptureDate(previewAsset.createdAt)}</Text>
+                  </View>
+                  <Pressable style={props.styles.photoViewerCloseButton} onPress={() => setPreviewAssetId(null)}>
+                    <MaterialCommunityIcons name="close" size={20} color="#5F6876" />
+                  </Pressable>
+                </View>
+                <View style={props.styles.photoViewerImageFrame}>
+                  {previewImageSource ? (
+                    <Image source={previewImageSource} style={props.styles.photoViewerImage} resizeMode="contain" />
+                  ) : (
+                    <View style={props.styles.photoViewerFallback}>
+                      <MaterialCommunityIcons name="image-off-outline" size={36} color="#9AA6B8" />
+                    </View>
+                  )}
+                </View>
+                <View style={props.styles.photoViewerInfo}>
+                  <View style={props.styles.photoViewerInfoRow}>
+                    <Text style={props.styles.photoViewerInfoLabel}>연결 위치</Text>
+                    <Text style={props.styles.photoViewerInfoValue} numberOfLines={1}>
+                      {previewReferences.length ? previewReferences.map((reference) => reference.pageLabel).join(', ') : '미연결'}
+                    </Text>
+                  </View>
+                  <View style={props.styles.photoViewerInfoRow}>
+                    <Text style={props.styles.photoViewerInfoLabel}>AI 설명</Text>
+                    <Text style={props.styles.photoViewerInfoValue} numberOfLines={3}>
+                      {previewAsset.analysisSummary ?? previewAsset.summary}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+            ) : null}
+          </View>
+        </Modal>
       </ScrollView>
     );
   }

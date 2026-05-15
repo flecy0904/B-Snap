@@ -1,6 +1,6 @@
 import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { Image, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { Image, Modal, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { subjects as allSubjects } from '../../../app-defaults';
 import { CaptureAsset, NoteEntry, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject } from '../../../types';
 import { darkenHex } from '../../../ui-helpers';
@@ -29,6 +29,10 @@ function getCapturePlacementLabel(asset: CaptureAsset, references: PageCaptureRe
   if (!matches.length) return '미연결';
   const firstLabel = matches[0]?.pageLabel || '연결됨';
   return matches.length > 1 ? `${firstLabel} 외 ${matches.length - 1}` : firstLabel;
+}
+
+function getCaptureReferences(asset: CaptureAsset, references: PageCaptureReference[]) {
+  return references.filter((reference) => reference.assetId === asset.id);
 }
 
 export type NotesBrowserProps = {
@@ -65,6 +69,7 @@ export type NotesBrowserProps = {
 
 export function NotesBrowser(props: NotesBrowserProps) {
   const [recoveryOpen, setRecoveryOpen] = React.useState(false);
+  const [previewAssetId, setPreviewAssetId] = React.useState<string | null>(null);
   const subjectById = React.useMemo(() => {
     const map = new Map<number, Subject>();
     allSubjects.forEach((subject) => map.set(subject.id, subject));
@@ -110,6 +115,12 @@ export function NotesBrowser(props: NotesBrowserProps) {
     () => props.selectedSubject ? getSubjectPhotoAssets(props.selectedSubject.id) : [],
     [getSubjectPhotoAssets, props.selectedSubject],
   );
+  const previewAsset = React.useMemo(
+    () => selectedPhotoAssets.find((asset) => asset.id === previewAssetId) ?? null,
+    [previewAssetId, selectedPhotoAssets],
+  );
+  const previewImageSource = previewAsset ? getCaptureImageSource(previewAsset) : null;
+  const previewReferences = previewAsset ? getCaptureReferences(previewAsset, props.pageCaptureReferences) : [];
 
   React.useEffect(() => {
     if (recoverableCount === 0) setRecoveryOpen(false);
@@ -210,7 +221,7 @@ export function NotesBrowser(props: NotesBrowserProps) {
                     const placementLabel = getCapturePlacementLabel(asset, props.pageCaptureReferences);
                     const linked = placementLabel !== '미연결';
                     return (
-                      <View key={asset.id} style={props.styles.photoGalleryCard}>
+                      <Pressable key={asset.id} style={props.styles.photoGalleryCard} onPress={() => setPreviewAssetId(asset.id)}>
                         <View style={props.styles.photoGalleryImageWrap}>
                           {imageSource ? (
                             <Image source={imageSource} style={props.styles.photoGalleryImage} resizeMode="cover" />
@@ -234,7 +245,7 @@ export function NotesBrowser(props: NotesBrowserProps) {
                             </Text>
                           </View>
                         </View>
-                      </View>
+                      </Pressable>
                     );
                   })}
                 </View>
@@ -288,6 +299,52 @@ export function NotesBrowser(props: NotesBrowserProps) {
           )}
         </View>
       </View>
+      <Modal
+        visible={!!previewAsset}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setPreviewAssetId(null)}
+      >
+        <View style={props.styles.photoViewerOverlay}>
+          <Pressable style={props.styles.photoViewerBackdrop} onPress={() => setPreviewAssetId(null)} />
+          {previewAsset ? (
+            <View style={props.styles.photoViewerCard}>
+              <View style={props.styles.photoViewerHeader}>
+                <View style={props.styles.fill}>
+                  <Text style={props.styles.photoViewerTitle}>원본 사진</Text>
+                  <Text style={props.styles.photoViewerMeta}>{formatCaptureDate(previewAsset.createdAt)}</Text>
+                </View>
+                <Pressable style={props.styles.photoViewerCloseButton} onPress={() => setPreviewAssetId(null)}>
+                  <MaterialCommunityIcons name="close" size={20} color="#5F6876" />
+                </Pressable>
+              </View>
+              <View style={props.styles.photoViewerImageFrame}>
+                {previewImageSource ? (
+                  <Image source={previewImageSource} style={props.styles.photoViewerImage} resizeMode="contain" />
+                ) : (
+                  <View style={props.styles.photoViewerFallback}>
+                    <MaterialCommunityIcons name="image-off-outline" size={36} color="#9AA6B8" />
+                  </View>
+                )}
+              </View>
+              <View style={props.styles.photoViewerInfo}>
+                <View style={props.styles.photoViewerInfoRow}>
+                  <Text style={props.styles.photoViewerInfoLabel}>연결 위치</Text>
+                  <Text style={props.styles.photoViewerInfoValue} numberOfLines={1}>
+                    {previewReferences.length ? previewReferences.map((reference) => reference.pageLabel).join(', ') : '미연결'}
+                  </Text>
+                </View>
+                <View style={props.styles.photoViewerInfoRow}>
+                  <Text style={props.styles.photoViewerInfoLabel}>AI 설명</Text>
+                  <Text style={props.styles.photoViewerInfoValue} numberOfLines={3}>
+                    {previewAsset.analysisSummary ?? previewAsset.summary}
+                  </Text>
+                </View>
+              </View>
+            </View>
+          ) : null}
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
