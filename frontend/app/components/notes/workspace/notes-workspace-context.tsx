@@ -117,7 +117,6 @@ export type DesktopNotesWorkspaceContextValue = {
   onOpenBookmarkedPage: (bookmarkId: string) => void;
   onRemoveBookmark: (bookmarkId: string) => void;
   onExportCurrentDocument: () => void;
-  onRegeneratePdfCache: () => void;
   onRemoveGeneratedPage: (pageId: string) => void;
   onDuplicateGeneratedPage: (pageId: string) => void;
   onMoveGeneratedPage: (pageId: string, delta: -1 | 1) => void;

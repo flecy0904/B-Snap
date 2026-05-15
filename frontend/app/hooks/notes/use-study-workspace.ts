@@ -15,7 +15,6 @@ import {
   listBackendFolders,
   listBackendNotePages,
   listBackendNotes,
-  regenerateBackendPdfCache,
   resolveBackendAssetUrl,
   updateBackendNote,
   updateBackendNotePage,
@@ -966,7 +965,7 @@ export function useStudyWorkspace(props: {
       const targetSubject = availableSubjects.find((value) => value.id === targetSubjectId);
       if (!targetSubject) return;
       const localPdfFileUri = Platform.OS === 'web' && picked.base64 ? picked.base64 : picked.uri;
-      setWorkspaceFeedback('PDF를 노트 페이지로 변환하는 중입니다.');
+      setWorkspaceFeedback('PDF 원본과 첫 페이지 썸네일을 저장하는 중입니다.');
 
       if (isBackendApiEnabled()) {
         try {
@@ -983,9 +982,6 @@ export function useStudyWorkspace(props: {
           });
           const pagesByNumber = Object.fromEntries(
             result.pages.map((page) => [page.page_number, page.id]),
-          );
-          const pageImageUrls = Object.fromEntries(
-            (result.upload.page_image_urls ?? []).map((url, index) => [index + 1, url]),
           );
           setBackendPageIdsByDocument((current) => ({
             ...current,
@@ -1030,7 +1026,7 @@ export function useStudyWorkspace(props: {
             pageCount: Math.max(1, result.upload.page_count),
             preview: result.note.summary ?? '업로드한 PDF 문서입니다.',
             file: { uri: result.upload.url },
-            pageImageUrls,
+            thumbnailUrl: result.upload.thumbnail_url ?? undefined,
           };
           openCreatedStudyDocument(document, `${document.pageCount}페이지 PDF를 백엔드에 저장했습니다.`);
           return;
@@ -1672,54 +1668,6 @@ export function useStudyWorkspace(props: {
     }));
   };
 
-  const regeneratePdfPageCache = useCallback(async () => {
-    if (!studyDocumentId || studyDocument?.type !== 'pdf') {
-      setWorkspaceFeedback('PDF 문서를 연 뒤 캐시를 다시 만들 수 있습니다.');
-      return;
-    }
-    if (!isBackendApiEnabled() || !currentDocumentHasBackendPages) {
-      setWorkspaceFeedback('백엔드에 저장된 PDF만 캐시 재생성을 지원합니다.');
-      return;
-    }
-
-    setWorkspaceFeedback('PDF 페이지 캐시를 다시 만드는 중...');
-    try {
-      const result = await regenerateBackendPdfCache(studyDocumentId);
-      const pageImageUrls = result.pages.reduce<Record<number, string>>((next, page) => {
-        if (page.image_url && !isPdfAssetUrl(page.image_url)) next[page.page_number] = page.image_url;
-        return next;
-      }, {});
-      const backendPageIds = result.pages.reduce<Record<number, number>>((next, page) => {
-        next[page.page_number] = page.id;
-        return next;
-      }, {});
-
-      setBackendPageIdsByDocument((current) => ({
-        ...current,
-        [studyDocumentId]: {
-          ...(current[studyDocumentId] ?? {}),
-          ...backendPageIds,
-        },
-      }));
-      setUserStudyDocuments((current) => current.map((document) => (
-        document.id === studyDocumentId
-          ? {
-              ...document,
-              pageCount: Math.max(document.pageCount, result.pages.length),
-              pageImageUrls: Object.keys(pageImageUrls).length ? pageImageUrls : document.pageImageUrls,
-              updatedAt: '방금 캐시 재생성',
-            }
-          : document
-      )));
-      setWorkspaceFeedback('PDF 페이지 캐시를 다시 만들었습니다.');
-    } catch (error) {
-      const message = error instanceof BackendApiError && error.detail
-        ? error.detail
-        : 'PDF 페이지 캐시 재생성에 실패했습니다.';
-      setWorkspaceFeedback(message);
-    }
-  }, [currentDocumentHasBackendPages, studyDocument, studyDocumentId]);
-
   const dismissIncomingBanner = () => {
     setIncomingBannerQueue((current) => current.slice(1));
   };
@@ -1878,7 +1826,6 @@ export function useStudyWorkspace(props: {
     restoreStudyDocument,
     renameStudyDocument,
     uploadPdfDocument,
-    regeneratePdfPageCache,
     resetNotes,
     resetLocalWorkspaceData,
     setNoteDetailTab,

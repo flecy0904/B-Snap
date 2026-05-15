@@ -37,7 +37,6 @@ export type DocumentActions = {
   onOpenBookmarkedPage: (bookmarkId: string) => void;
   onRemoveBookmark: (bookmarkId: string) => void;
   onExportCurrentDocument: () => void;
-  onRegeneratePdfCache: () => void;
 };
 
 const DocumentContext = createContext<(DocumentState & DocumentActions) | null>(null);
@@ -78,7 +77,6 @@ export function DocumentProvider({ children }: { children: React.ReactNode }) {
     onOpenBookmarkedPage: global.onOpenBookmarkedPage,
     onRemoveBookmark: global.onRemoveBookmark,
     onExportCurrentDocument: global.onExportCurrentDocument,
-    onRegeneratePdfCache: global.onRegeneratePdfCache,
   };
 
   return <DocumentContext.Provider value={value}>{children}</DocumentContext.Provider>;

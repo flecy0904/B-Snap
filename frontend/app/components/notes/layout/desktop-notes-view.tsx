@@ -145,7 +145,6 @@ export type DesktopNotesViewProps = {
   onOpenBookmarkedPage: (bookmarkId: string) => void;
   onRemoveBookmark: (bookmarkId: string) => void;
   onExportCurrentDocument: () => void;
-  onRegeneratePdfCache: () => void;
   onOpenWorkspaceAttachment: (attachmentId: string) => void;
   onOpenGeneratedPage: (pageId: string) => void;
   onRemoveGeneratedPage: (pageId: string) => void;
@@ -367,7 +366,6 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           onOpenBookmarkedPage: props.onOpenBookmarkedPage,
           onRemoveBookmark: props.onRemoveBookmark,
           onExportCurrentDocument: props.onExportCurrentDocument,
-          onRegeneratePdfCache: props.onRegeneratePdfCache,
           onRemoveGeneratedPage: props.onRemoveGeneratedPage,
           onDuplicateGeneratedPage: props.onDuplicateGeneratedPage,
           onMoveGeneratedPage: props.onMoveGeneratedPage,

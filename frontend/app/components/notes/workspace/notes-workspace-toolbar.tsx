@@ -121,11 +121,6 @@ export const NotesWorkspaceToolbar = React.memo(function NotesWorkspaceToolbar()
           <Pressable style={workspaceContext.styles.inkActionButton} onPress={documentContext.onExportCurrentDocument}>
             <MaterialCommunityIcons name="share-variant-outline" size={18} color="#556070" />
           </Pressable>
-          {documentContext.studyDocument?.type === 'pdf' ? (
-            <Pressable style={workspaceContext.styles.inkActionButton} onPress={documentContext.onRegeneratePdfCache}>
-              <MaterialCommunityIcons name="cached" size={18} color="#556070" />
-            </Pressable>
-          ) : null}
           <Pressable
             style={[workspaceContext.styles.inkActionButton, workspaceContext.focusMode && workspaceContext.styles.inkToolButtonActive]}
             onPress={workspaceContext.onToggleFocusMode}

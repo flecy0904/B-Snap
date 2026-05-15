@@ -124,11 +124,6 @@ export type BackendPdfTextExtractionResponse = {
   pages: BackendNotePage[];
 };
 
-export type BackendPdfCacheRegenerationResponse = {
-  note_id: number;
-  pages: BackendNotePage[];
-};
-
 export type BackendUpload = {
   filename: string;
   stored_filename: string;
@@ -137,6 +132,7 @@ export type BackendUpload = {
   page_count: number;
   page_numbers: number[];
   page_image_urls?: string[];
+  thumbnail_url?: string | null;
   url: string;
   processed_url?: string | null;
   analysis?: {
@@ -292,6 +288,7 @@ export async function uploadBackendFile(file: {
     ...upload,
     url: resolveBackendAssetUrl(upload.url) ?? upload.url,
     processed_url: resolveBackendAssetUrl(upload.processed_url) ?? upload.processed_url,
+    thumbnail_url: resolveBackendAssetUrl(upload.thumbnail_url) ?? upload.thumbnail_url,
     page_image_urls: upload.page_image_urls?.map((url) => resolveBackendAssetUrl(url) ?? url) ?? [],
   };
 }
@@ -348,6 +345,7 @@ export async function uploadBackendPdfNote(payload: {
       ...result.upload,
       url: resolveBackendAssetUrl(result.upload.url) ?? result.upload.url,
       processed_url: resolveBackendAssetUrl(result.upload.processed_url) ?? result.upload.processed_url,
+      thumbnail_url: resolveBackendAssetUrl(result.upload.thumbnail_url) ?? result.upload.thumbnail_url,
       page_image_urls: result.upload.page_image_urls?.map((url) => resolveBackendAssetUrl(url) ?? url) ?? [],
     },
     pages: result.pages.map((page) => ({
@@ -537,20 +535,6 @@ export async function extractBackendPdfText(payload: {
       pdf_data: payload.pdfData,
     },
   });
-}
-
-export async function regenerateBackendPdfCache(noteId: number) {
-  const result = await request<BackendPdfCacheRegenerationResponse>(`/notes/${noteId}/pdf-cache/regenerate`, {
-    method: 'POST',
-    timeoutMs: 60000,
-  });
-  return {
-    ...result,
-    pages: result.pages.map((page) => ({
-      ...page,
-      image_url: resolveBackendAssetUrl(page.image_url) ?? page.image_url,
-    })),
-  };
 }
 
 export function listBackendAiCanvasNotes(noteId: number) {

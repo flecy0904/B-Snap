@@ -80,6 +80,7 @@ export interface StudyDocumentEntry {
   preview: string;
   file?: number | string | { uri: string };
   pageImageUrls?: Record<number, string>;
+  thumbnailUrl?: string;
 }
 
 export interface CaptureAsset {

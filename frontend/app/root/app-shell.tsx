@@ -304,7 +304,6 @@ export function AppShell(props: {
                   onOpenBookmarkedPage={notesState.openBookmarkedPage}
                   onRemoveBookmark={notesState.removeBookmark}
                   onExportCurrentDocument={notesState.exportCurrentDocumentSummary}
-                  onRegeneratePdfCache={notesState.regeneratePdfPageCache}
                   onOpenWorkspaceAttachment={notesState.openWorkspaceAttachment}
                   onOpenGeneratedPage={notesState.openGeneratedPage}
                   onRemoveGeneratedPage={notesState.removeGeneratedPage}
