@@ -143,6 +143,7 @@ export function useStudyWorkspace(props: {
   const [failedPageSaveKeys, setFailedPageSaveKeys] = useState<Record<string, true>>({});
   const lastQueuedPageContentRef = useRef<Record<string, string>>({});
   const lastSavedPageContentRef = useRef<Record<string, string>>({});
+  const backendPageLoadsInFlightRef = useRef<Record<number, true>>({});
 
   const isPdfAssetUrl = (url: string | null | undefined) => !!url && /\.pdf(?:$|[?#])/i.test(url);
   const normalizeDocumentFile = (file: StudyDocumentEntry['file']) => {
@@ -318,6 +319,74 @@ export function useStudyWorkspace(props: {
     setIncomingAssetSuggestion,
   });
 
+  const applyLoadedBackendPages = useCallback((documentId: number, pages: Awaited<ReturnType<typeof listBackendNotePages>>) => {
+    const pageIdsByNumber: Record<number, number> = {};
+    const documentInk: InkStroke[] = [];
+    const documentTextAnnotations: InkTextAnnotation[] = [];
+    const savedPageContentByKey: Record<string, string> = {};
+    let hasStoredPageContent = false;
+    const firstPageUrl = pages[0]?.image_url ?? null;
+
+    pages.forEach((page) => {
+      pageIdsByNumber[page.page_number] = page.id;
+      const storedPage = parseNotePageContent(page.content);
+      if (!storedPage) {
+        savedPageContentByKey[getPageSaveKey(documentId, page.page_number)] = EMPTY_PAGE_CONTENT;
+        return;
+      }
+
+      hasStoredPageContent = true;
+      const normalizedInkStrokes = storedPage.inkStrokes.map((stroke) => ({
+        ...stroke,
+        generatedPageId: undefined,
+        pageNumber: page.page_number,
+      }));
+      const normalizedTextAnnotations = storedPage.textAnnotations.map((annotation) => ({
+        ...annotation,
+        generatedPageId: undefined,
+        pageNumber: page.page_number,
+      }));
+
+      savedPageContentByKey[getPageSaveKey(documentId, page.page_number)] = serializeNotePageContent({
+        inkStrokes: normalizedInkStrokes,
+        textAnnotations: normalizedTextAnnotations,
+      });
+      documentInk.push(...normalizedInkStrokes);
+      documentTextAnnotations.push(...normalizedTextAnnotations);
+    });
+
+    setBackendPageIdsByDocument((current) => ({
+      ...current,
+      [documentId]: pageIdsByNumber,
+    }));
+    if (firstPageUrl || pages.length) {
+      setUserStudyDocuments((current) => current.map((document) => {
+        if (document.id !== documentId) return document;
+        const legacyFile = !document.file && firstPageUrl ? { uri: firstPageUrl } : document.file;
+        const legacyFileUri = legacyFile && typeof legacyFile === 'object' && 'uri' in legacyFile ? legacyFile.uri : null;
+        return {
+          ...document,
+          type: legacyFileUri ? (isPdfAssetUrl(legacyFileUri) ? 'pdf' : 'image') : document.type,
+          pageCount: Math.max(document.pageCount, pages.length || 1),
+          file: legacyFile,
+        };
+      }));
+    }
+    lastSavedPageContentRef.current = {
+      ...lastSavedPageContentRef.current,
+      ...savedPageContentByKey,
+    };
+    lastQueuedPageContentRef.current = {
+      ...lastQueuedPageContentRef.current,
+      ...savedPageContentByKey,
+    };
+
+    if (hasStoredPageContent) {
+      setInkByDocument((current) => ({ ...current, [documentId]: documentInk }));
+      setTextAnnotationsByDocument((current) => ({ ...current, [documentId]: documentTextAnnotations }));
+    }
+  }, []);
+
   useEffect(() => {
     if (!workspaceHydrated || !isBackendApiEnabled()) return;
 
@@ -329,55 +398,14 @@ export function useStudyWorkspace(props: {
           listBackendFolders(),
           listBackendNotes(),
         ]);
-        const pageIdsByDocument: Record<number, Record<number, number>> = {};
-        const inkByBackendDocument: Record<number, InkStroke[]> = {};
-        const textAnnotationsByBackendDocument: Record<number, InkTextAnnotation[]> = {};
-        const hasStoredPageContentByDocument: Record<number, boolean> = {};
-        const savedPageContentByKey: Record<string, string> = {};
         const documents = await Promise.all(
           backendNotes.map(async (backendNote) => {
             const folder = folders.find((item) => item.id === backendNote.folder_id);
             const subject = availableSubjects.find((item) => item.name === folder?.name) ?? availableSubjects[0] ?? null;
-            const pages = await listBackendNotePages(backendNote.id);
-            const firstPage = pages[0] ?? null;
-            pageIdsByDocument[backendNote.id] = {};
-            inkByBackendDocument[backendNote.id] = [];
-            textAnnotationsByBackendDocument[backendNote.id] = [];
-            hasStoredPageContentByDocument[backendNote.id] = false;
-
-            pages.forEach((page) => {
-              pageIdsByDocument[backendNote.id][page.page_number] = page.id;
-              const storedPage = parseNotePageContent(page.content);
-              if (!storedPage) {
-                savedPageContentByKey[getPageSaveKey(backendNote.id, page.page_number)] = EMPTY_PAGE_CONTENT;
-                return;
-              }
-              hasStoredPageContentByDocument[backendNote.id] = true;
-
-              const normalizedInkStrokes = storedPage.inkStrokes.map((stroke) => ({
-                ...stroke,
-                generatedPageId: undefined,
-                pageNumber: page.page_number,
-              }));
-              const normalizedTextAnnotations = storedPage.textAnnotations.map((annotation) => ({
-                ...annotation,
-                generatedPageId: undefined,
-                pageNumber: page.page_number,
-              }));
-
-              savedPageContentByKey[getPageSaveKey(backendNote.id, page.page_number)] = serializeNotePageContent({
-                inkStrokes: normalizedInkStrokes,
-                textAnnotations: normalizedTextAnnotations,
-              });
-              inkByBackendDocument[backendNote.id].push(...normalizedInkStrokes);
-              textAnnotationsByBackendDocument[backendNote.id].push(...normalizedTextAnnotations);
-            });
-
-            const firstPageUrl = firstPage?.image_url ?? null;
-            const fileUrl = backendNote.file_url ?? (isPdfAssetUrl(firstPageUrl) ? firstPageUrl : null);
-            const pdfLikeBackendNote = /\.pdf$/i.test(backendNote.title.trim()) || !!fileUrl || pages.length > 1;
-            const documentType = pdfLikeBackendNote ? 'pdf' as const : firstPageUrl ? 'image' as const : 'blank' as const;
-            const pageCount = Math.max(1, backendNote.page_count ?? pages.length);
+            const fileUrl = backendNote.file_url ?? null;
+            const pageCount = Math.max(1, backendNote.page_count ?? 1);
+            const pdfLikeBackendNote = /\.pdf$/i.test(backendNote.title.trim()) || !!fileUrl || pageCount > 1;
+            const documentType = pdfLikeBackendNote ? 'pdf' as const : 'blank' as const;
 
             return {
               id: backendNote.id,
@@ -386,8 +414,8 @@ export function useStudyWorkspace(props: {
               type: documentType,
               updatedAt: 'DB 저장됨',
               pageCount,
-              preview: backendNote.summary ?? firstPage?.content ?? '백엔드에 저장된 노트입니다.',
-              file: fileUrl ? { uri: fileUrl } : firstPageUrl ? { uri: firstPageUrl } : undefined,
+              preview: backendNote.summary ?? '백엔드에 저장된 노트입니다.',
+              file: fileUrl ? { uri: fileUrl } : undefined,
               thumbnailUrl: backendNote.thumbnail_url ?? undefined,
             } satisfies StudyDocumentEntry;
           }),
@@ -406,32 +434,6 @@ export function useStudyWorkspace(props: {
           return Array.from(nextById.values()).sort((left, right) => right.id - left.id);
         });
         setDeletedStudyDocumentIds((current) => current.filter((id) => !backendDocumentIds.has(id)));
-        setBackendPageIdsByDocument((current) => ({
-          ...current,
-          ...pageIdsByDocument,
-        }));
-        lastSavedPageContentRef.current = {
-          ...lastSavedPageContentRef.current,
-          ...savedPageContentByKey,
-        };
-        lastQueuedPageContentRef.current = {
-          ...lastQueuedPageContentRef.current,
-          ...savedPageContentByKey,
-        };
-        setInkByDocument((current) => {
-          const next = { ...current };
-          Object.entries(inkByBackendDocument).forEach(([documentId, strokes]) => {
-            if (hasStoredPageContentByDocument[Number(documentId)]) next[Number(documentId)] = strokes;
-          });
-          return next;
-        });
-        setTextAnnotationsByDocument((current) => {
-          const next = { ...current };
-          Object.entries(textAnnotationsByBackendDocument).forEach(([documentId, annotations]) => {
-            if (hasStoredPageContentByDocument[Number(documentId)]) next[Number(documentId)] = annotations;
-          });
-          return next;
-        });
       } catch {
         if (mounted) {
           setWorkspaceFeedback('백엔드 노트 목록을 불러오지 못했습니다.');
@@ -445,6 +447,34 @@ export function useStudyWorkspace(props: {
       mounted = false;
     };
   }, [availableSubjects, props.initialSubjectId, workspaceHydrated]);
+
+  useEffect(() => {
+    if (!workspaceHydrated || !isBackendApiEnabled() || !studyDocumentId) return;
+    if (backendPageIdsByDocument[studyDocumentId] || backendPageLoadsInFlightRef.current[studyDocumentId]) return;
+
+    let mounted = true;
+    backendPageLoadsInFlightRef.current[studyDocumentId] = true;
+
+    const loadDocumentPages = async () => {
+      try {
+        const pages = await listBackendNotePages(studyDocumentId);
+        if (!mounted) return;
+        applyLoadedBackendPages(studyDocumentId, pages);
+      } catch {
+        if (mounted) {
+          setWorkspaceFeedback('노트 페이지를 불러오지 못했습니다. backend 연결을 확인해주세요.');
+        }
+      } finally {
+        delete backendPageLoadsInFlightRef.current[studyDocumentId];
+      }
+    };
+
+    void loadDocumentPages();
+
+    return () => {
+      mounted = false;
+    };
+  }, [applyLoadedBackendPages, backendPageIdsByDocument, studyDocumentId, workspaceHydrated]);
 
   useEffect(() => {
     if (!workspaceHydrated || !isBackendApiEnabled()) return;
