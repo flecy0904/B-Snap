@@ -7,7 +7,7 @@ import { PageReferenceText } from '../ai/page-reference-text';
 import { PdfPreview } from '../pdf/pdf-preview';
 import { BlankNoteCanvas } from '../canvas/blank-note-canvas';
 import { NoteSummaryContent } from '../shared/notes-shared';
-import type { BackendChatMessage, BackendChatSession } from '../../../services/backend-api';
+import type { BackendChatMessage, BackendChatSession, BackendClassInsight } from '../../../services/backend-api';
 import { AiAnswer, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NotebookPage, NoteEntry, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../../types';
 import { InkBrush, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { darkenHex, getDocumentPageLabel, isSameDocumentPage } from '../../../ui-helpers';
@@ -42,6 +42,12 @@ const MOBILE_HANDWRITING_TOOLS: Array<{ value: InkTool; icon: React.ComponentPro
   { value: 'rect', icon: 'rectangle-outline' },
   { value: 'ellipse', icon: 'circle-outline' },
 ];
+
+function formatClassInsightPriority(priority: string) {
+  if (priority === 'very-high') return '매우 높음';
+  if (priority === 'high') return '높음';
+  return '중간';
+}
 
 function getCaptureImageSource(asset: CaptureAsset) {
   const uri = asset.thumbnailUrl ?? asset.fileUrl ?? asset.previewImageKey;
@@ -115,6 +121,7 @@ export function MobileNotesView(props: {
   aiChatReadOnly: boolean;
   aiLoading: boolean;
   aiError: string | null;
+  classInsight: BackendClassInsight | null;
   incomingAssetSuggestion: CaptureAsset | null;
   inboxHint: string | null;
   inboxPendingCount: number;
@@ -294,6 +301,10 @@ export function MobileNotesView(props: {
       ? ['시험에 나올만한 중요 페이지 추천해줘', ...basePrompts]
       : ['이 그래프 의미 뭐야?', ...basePrompts];
   }, [props.studyDocument, props.subject]);
+  const classInsightPages = React.useMemo(() => {
+    if (!isClassInsightTargetDocument(props.studyDocument, props.subject)) return [];
+    return (props.classInsight?.pages ?? []).slice(0, 3);
+  }, [props.classInsight?.pages, props.studyDocument, props.subject]);
 
   React.useEffect(() => {
     if (recoverableCount === 0) setRecoveryOpen(false);
@@ -800,6 +811,26 @@ export function MobileNotesView(props: {
               {aiSuggestionPrompts.map((prompt) => (
                 <Pressable key={prompt} style={props.styles.aiSuggestionChip} onPress={() => props.onChangeAiQuestion(prompt)}><Text style={props.styles.aiSuggestionText}>{prompt}</Text></Pressable>
               ))}
+              {classInsightPages.length ? (
+                <View style={props.styles.aiClassInsightStrip}>
+                  <View style={props.styles.aiClassInsightHeader}>
+                    <Text style={props.styles.aiClassInsightTitle}>추천 페이지</Text>
+                    <Text style={props.styles.aiClassInsightMeta}>수업 필기 흐름 기준</Text>
+                  </View>
+                  <View style={props.styles.aiClassInsightChipRow}>
+                    {classInsightPages.map((page) => (
+                      <Pressable
+                        key={page.page_number}
+                        style={props.styles.aiClassInsightChip}
+                        onPress={() => props.onSetCurrentPdfPage(page.page_number)}
+                      >
+                        <Text style={props.styles.aiClassInsightPage}>{page.page_number}p</Text>
+                        <Text style={props.styles.aiClassInsightPriority}>{formatClassInsightPriority(page.priority)}</Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                </View>
+              ) : null}
               {props.aiChatReadOnly ? (
                 <View style={props.styles.aiReadOnlyNotice}>
                   <MaterialCommunityIcons name="lock-outline" size={14} color="#5B6472" />

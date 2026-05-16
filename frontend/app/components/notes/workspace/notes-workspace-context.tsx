@@ -1,5 +1,5 @@
 import React from 'react';
-import type { BackendChatMessage, BackendChatSession } from '../../../services/backend-api';
+import type { BackendChatMessage, BackendChatSession, BackendClassInsight } from '../../../services/backend-api';
 import type { UseAiCanvasNotesResult } from '../../../hooks/notes/ai-canvas/use-ai-canvas-notes';
 import { AiAnswer, NoteSummarySection, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NotebookPage, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../../types';
 import { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
@@ -31,6 +31,7 @@ export type DesktopNotesWorkspaceContextValue = {
   aiLoading: boolean;
   aiError: string | null;
   aiCanvas: UseAiCanvasNotesResult;
+  classInsight: BackendClassInsight | null;
   inkTool: InkTool;
   penColor: string;
   penWidth: number;

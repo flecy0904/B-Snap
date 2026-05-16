@@ -14,7 +14,7 @@ import { NotebookThumbnailSidebar } from '../workspace/notebook-thumbnail-sideba
 import { NotesDetailHeader } from './notes-detail-header';
 import { NotesBrowser } from './notes-browser';
 import { DesktopNotesWorkspaceProvider } from '../workspace/notes-workspace-context';
-import type { BackendChatMessage, BackendChatSession } from '../../../services/backend-api';
+import type { BackendChatMessage, BackendChatSession, BackendClassInsight } from '../../../services/backend-api';
 import type { UseAiCanvasNotesResult } from '../../../hooks/notes/ai-canvas/use-ai-canvas-notes';
 import {
   AiAnswer,
@@ -71,6 +71,7 @@ export type DesktopNotesViewProps = {
   aiLoading: boolean;
   aiError: string | null;
   aiCanvas: UseAiCanvasNotesResult;
+  classInsight: BackendClassInsight | null;
   incomingAssetSuggestion: CaptureAsset | null;
   inboxHint: string | null;
   inboxPendingCount: number;
@@ -282,6 +283,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           aiLoading: props.aiLoading,
           aiError: props.aiError,
           aiCanvas: props.aiCanvas,
+          classInsight: props.classInsight,
           inkTool: props.inkTool,
           penColor: props.penColor,
           penWidth: props.penWidth,

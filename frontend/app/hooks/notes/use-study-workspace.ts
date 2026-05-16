@@ -1886,6 +1886,7 @@ export function useStudyWorkspace(props: {
     aiLoading,
     aiError,
     aiCanvas,
+    classInsight: currentClassInsight,
     query,
     sort,
     incomingAssetSuggestion,

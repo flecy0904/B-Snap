@@ -16,6 +16,12 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
+function formatPriorityLabel(priority: string) {
+  if (priority === 'very-high') return '매우 높음';
+  if (priority === 'high') return '높음';
+  return '중간';
+}
+
 export function NotesAiAssistantPanel() {
   const workspace = useNotesGlobalContext();
   const { width, height } = useWindowDimensions();
@@ -42,6 +48,10 @@ export function NotesAiAssistantPanel() {
       ? ['시험에 나올만한 중요 페이지 추천해줘', '이 PDF에서 먼저 복습할 부분 알려줘']
       : []
   ), [workspace.studyDocument, workspace.subject]);
+  const classInsightPages = React.useMemo(() => {
+    if (!isClassInsightTargetDocument(workspace.studyDocument, workspace.subject)) return [];
+    return (workspace.classInsight?.pages ?? []).slice(0, 3);
+  }, [workspace.classInsight?.pages, workspace.studyDocument, workspace.subject]);
   const activeSession = workspace.activeAiChatSessionId
     ? workspace.allAiChatSessions.find((session: any) => session.id === workspace.activeAiChatSessionId)
       ?? workspace.noteAiChatSessions.find((session: any) => session.id === workspace.activeAiChatSessionId)
@@ -51,7 +61,7 @@ export function NotesAiAssistantPanel() {
   const openLinkedPdfPage = React.useCallback((pageNumber: number) => {
     workspace.onSetCurrentPdfPage?.(pageNumber);
     workspace.onChangeInkTool?.('view');
-  }, [workspace]);
+  }, [workspace.onChangeInkTool, workspace.onSetCurrentPdfPage]);
   const chatSearchTerm = workspace.aiChatSearchQuery.trim().toLowerCase();
   const sidebarSessions = workspace.allAiChatSessions.filter((session: any) => {
     if (!chatSearchTerm) return true;
@@ -552,6 +562,27 @@ export function NotesAiAssistantPanel() {
                   <Text style={workspace.styles.aiComposerQuickChipText}>{prompt}</Text>
                 </Pressable>
               ))}
+            </View>
+          ) : null}
+          {classInsightPages.length ? (
+            <View style={workspace.styles.aiClassInsightStrip}>
+              <View style={workspace.styles.aiClassInsightHeader}>
+                <Text style={workspace.styles.aiClassInsightTitle}>추천 페이지</Text>
+                <Text style={workspace.styles.aiClassInsightMeta}>수업 필기 흐름 기준</Text>
+              </View>
+              <View style={workspace.styles.aiClassInsightChipRow}>
+                {classInsightPages.map((page: any) => (
+                  <Pressable
+                    key={page.page_number}
+                    style={workspace.styles.aiClassInsightChip}
+                    onPress={() => openLinkedPdfPage(page.page_number)}
+                    disabled={workspace.aiLoading}
+                  >
+                    <Text style={workspace.styles.aiClassInsightPage}>{page.page_number}p</Text>
+                    <Text style={workspace.styles.aiClassInsightPriority}>{formatPriorityLabel(page.priority)}</Text>
+                  </Pressable>
+                ))}
+              </View>
             </View>
           ) : null}
           <View style={workspace.styles.aiComposerInputShell}>
