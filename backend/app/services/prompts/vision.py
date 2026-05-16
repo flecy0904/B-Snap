@@ -16,4 +16,6 @@ Return Korean JSON only with this shape:
 
 Do not mention that you are an AI model. If the image is unclear, say that it is
 unclear but still identify likely study context.
+Do not repeat the raw filename or percent-encoded filename in the summary. Focus
+on what is visible in the image and how it helps review the related PDF page.
 """.strip()

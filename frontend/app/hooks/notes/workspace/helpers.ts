@@ -1,4 +1,5 @@
 import type { CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NotebookPage, NoteEntry, NoteSummarySection, PageCaptureReference, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../../types';
+import { cleanAiDisplayText } from '../../../ui-helpers';
 
 export const PEN_BRUSH_COLORS = ['#1F2937', '#2563EB', '#7C3AED', '#D9485F', '#F59E0B', '#16A34A'] as const;
 export const HIGHLIGHT_BRUSH_COLORS = ['#FDE047', '#FB7185', '#86EFAC', '#67E8F9', '#FDBA74'] as const;
@@ -125,9 +126,9 @@ export function buildPageCaptureReference(props: {
   const keywords = props.asset.analysisKeywords?.length
     ? props.asset.analysisKeywords
     : pickCaptureKeywords(props.asset, subjectName);
-  const summary = props.asset.analysisSummary ?? props.asset.summary;
+  const summary = cleanAiDisplayText(props.asset.analysisSummary ?? props.asset.summary);
   const aiSummary =
-    props.asset.analysisSummary ??
+    cleanAiDisplayText(props.asset.analysisSummary) ||
     `${props.pageLabel}에서 참고할 ${props.asset.type === 'image' ? '판서/사진 자료' : 'PDF 자료'}입니다. 원본은 사진 탭에 보관하고, 이 카드에는 복습할 때 바로 맥락을 찾을 수 있도록 자료 설명과 연결 위치만 남깁니다.`;
 
   return {

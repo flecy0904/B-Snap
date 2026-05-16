@@ -10,7 +10,7 @@ import { NoteSummaryContent } from '../shared/notes-shared';
 import type { BackendChatMessage, BackendChatSession, BackendClassInsight } from '../../../services/backend-api';
 import { AiAnswer, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NotebookPage, NoteEntry, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../../types';
 import { InkBrush, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
-import { darkenHex, getDocumentPageLabel, isSameDocumentPage } from '../../../ui-helpers';
+import { cleanAiDisplayText, darkenHex, getDocumentPageLabel, isSameDocumentPage } from '../../../ui-helpers';
 
 const PEN_COLORS = ['#1F2937', '#2563EB', '#7C3AED', '#D9485F', '#F59E0B', '#16A34A'];
 const HIGHLIGHT_COLORS = ['#FDE047', '#FB7185', '#86EFAC', '#67E8F9', '#FDBA74'];
@@ -580,7 +580,7 @@ export function MobileNotesView(props: {
                     )}
                     <Text style={props.styles.workspaceCardType}>{reference.pageLabel}</Text>
                     <Text style={props.styles.workspaceCardTitle} numberOfLines={1}>{reference.title}</Text>
-                    <Text style={props.styles.workspaceCardBody} numberOfLines={2}>{reference.aiSummary}</Text>
+                    <Text style={props.styles.workspaceCardBody} numberOfLines={2}>{cleanAiDisplayText(reference.aiSummary)}</Text>
                     <View style={props.styles.workspaceInboxRowButtons}>
                       <Pressable style={props.styles.workspaceInlineAction} onPress={() => props.onAskAiAboutPageCaptureReference(reference.id)}>
                         <Text style={props.styles.workspaceInlineActionText}>AI 질문</Text>
@@ -1145,7 +1145,7 @@ export function MobileNotesView(props: {
                   <View style={props.styles.photoViewerInfoRow}>
                     <Text style={props.styles.photoViewerInfoLabel}>AI 설명</Text>
                     <Text style={props.styles.photoViewerInfoValue} numberOfLines={3}>
-                      {previewAsset.analysisSummary ?? previewAsset.summary}
+                      {cleanAiDisplayText(previewAsset.analysisSummary ?? previewAsset.summary)}
                     </Text>
                   </View>
                 </View>

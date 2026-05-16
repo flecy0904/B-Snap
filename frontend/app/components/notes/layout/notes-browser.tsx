@@ -3,7 +3,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Image, Modal, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { subjects as allSubjects } from '../../../app-defaults';
 import { CaptureAsset, NoteEntry, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject } from '../../../types';
-import { darkenHex } from '../../../ui-helpers';
+import { cleanAiDisplayText, darkenHex } from '../../../ui-helpers';
 
 function getCaptureImageSource(asset: CaptureAsset) {
   const uri = asset.thumbnailUrl ?? asset.fileUrl ?? asset.previewImageKey;
@@ -341,7 +341,7 @@ export function NotesBrowser(props: NotesBrowserProps) {
                 <View style={props.styles.photoViewerInfoRow}>
                   <Text style={props.styles.photoViewerInfoLabel}>AI 설명</Text>
                   <Text style={props.styles.photoViewerInfoValue} numberOfLines={3}>
-                    {previewAsset.analysisSummary ?? previewAsset.summary}
+                    {cleanAiDisplayText(previewAsset.analysisSummary ?? previewAsset.summary)}
                   </Text>
                 </View>
               </View>

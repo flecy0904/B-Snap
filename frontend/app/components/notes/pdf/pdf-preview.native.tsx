@@ -6,7 +6,7 @@ import Pdf from 'react-native-pdf';
 import Svg, { Path } from 'react-native-svg';
 import { captureRef } from 'react-native-view-shot';
 import { TextAnnotationLayer } from '../canvas/text-annotation-layer';
-import { findHitInkStrokeId, getInkCenterlinePath, getInkStrokeSvgPath, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize } from '../../../ui-helpers';
+import { cleanAiDisplayText, findHitInkStrokeId, getInkCenterlinePath, getInkStrokeSvgPath, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize } from '../../../ui-helpers';
 import { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { CaptureAsset, NotebookPage, PageCaptureReference } from '../../../types';
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
@@ -51,7 +51,7 @@ function getCaptureAssetPreviewImage(asset: CaptureAsset | null | undefined) {
 
 function getCaptureAssetSummary(asset: CaptureAsset | null | undefined) {
   if (!asset) return '';
-  return asset.analysisSummary || asset.summary;
+  return cleanAiDisplayText(asset.analysisSummary || asset.summary);
 }
 
 function InkPath({ stroke, draft = false }: { stroke: InkStroke; draft?: boolean }) {
@@ -651,7 +651,7 @@ export function PdfPreview(props: {
                 <Text style={props.styles.pdfPageReferencePopoverAnswerTitle}>AI 설명</Text>
               </View>
               <Text style={props.styles.pdfPageReferencePopoverAnswerText} numberOfLines={5}>
-                {activePageReference.aiSummary || activePageReference.summary}
+                {cleanAiDisplayText(activePageReference.aiSummary || activePageReference.summary)}
               </Text>
             </View>
             <View style={props.styles.pdfPageReferencePopoverActions}>

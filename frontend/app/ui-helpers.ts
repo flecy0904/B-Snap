@@ -75,6 +75,20 @@ export function getDocumentPageLabel(props: {
   return props.generatedFallback ?? '생성된 페이지';
 }
 
+export function cleanAiDisplayText(value: string | null | undefined) {
+  const text = (value ?? '').trim();
+  if (!text) return '';
+
+  return text
+    .replace(/\b(?:[A-F0-9]{2}[-_]){6,}[A-F0-9]{2}(?:\.(?:jpe?g|png|heic|heif))?/gi, '이 사진')
+    .replace(/\b[a-f0-9]{24,}[-_][^\s]+?\.(?:jpe?g|png|heic|heif)\b/gi, '이 사진')
+    .replace(/이 사진\s+원본 사진입니다\.?/g, '수업 중 촬영한 원본 사진입니다.')
+    .replace(/\*\*/g, '')
+    .replace(/^\s*[*-]\s+/gm, '• ')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+}
+
 function distanceToSegment(point: InkPoint, start: InkPoint, end: InkPoint) {
   const dx = end.x - start.x;
   const dy = end.y - start.y;

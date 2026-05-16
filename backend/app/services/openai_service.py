@@ -212,7 +212,7 @@ def generate_capture_image_analysis(
     filename: str,
 ) -> dict[str, Any]:
     mock_response = json.dumps({
-        "summary": f"{filename} 원본 사진입니다. 칠판, 슬라이드, 수업 중 추가 설명을 PDF 페이지와 연결해 복습할 수 있습니다.",
+        "summary": "수업 중 촬영한 원본 사진입니다. 슬라이드나 판서 내용을 PDF 페이지와 연결해 복습 자료로 활용할 수 있습니다.",
         "keywords": ["수업사진", "판서", "복습자료"],
         "confidence": 0.35,
     }, ensure_ascii=False)
@@ -226,6 +226,7 @@ def generate_capture_image_analysis(
                     "type": "input_text",
                     "text": (
                         f"Filename: {filename}\n"
+                        "The filename is metadata only. Do not include it in the JSON summary.\n"
                         "Analyze this classroom capture image and return the JSON shape exactly."
                     ),
                 },

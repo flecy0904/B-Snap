@@ -3,6 +3,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Image, PanResponder, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { useNotesGlobalContext } from './notes-global-context';
 import { useDocumentContext } from './document-context';
+import { cleanAiDisplayText } from '../../../ui-helpers';
 
 export function NotesWorkspaceDock() {
   const globalContext = useNotesGlobalContext();
@@ -33,7 +34,7 @@ export function NotesWorkspaceDock() {
   const otherPageReferences = globalContext.pageCaptureReferences
     .filter((reference: any) => !globalContext.currentPageCaptureReferences.some((current: any) => current.id === reference.id))
     .filter(filterReference);
-  const previewBody =
+  const previewBody = cleanAiDisplayText(
     globalContext.previewedIncoming?.analysisSummary ??
     globalContext.previewedIncoming?.summary ??
     globalContext.previewedInbox?.analysisSummary ??
@@ -41,7 +42,8 @@ export function NotesWorkspaceDock() {
     globalContext.previewedPageReference?.aiSummary ??
     globalContext.previewedPageReference?.summary ??
     globalContext.previewedAttachment?.summary ??
-    null;
+    null
+  );
   const previewIsIncoming = Boolean(globalContext.previewedIncoming);
 
   React.useEffect(() => {

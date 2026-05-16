@@ -171,7 +171,7 @@ def _image_data_uri(path: Path, content_type: str) -> str | None:
 def _fallback_image_analysis(filename: str, status: str = "ready") -> dict:
     return {
         "status": status,
-        "summary": f"{filename} 원본 사진입니다. 수업 중 촬영한 자료로, PDF 페이지와 연결해 복습할 수 있습니다.",
+        "summary": "수업 중 촬영한 원본 사진입니다. PDF 페이지와 연결해 복습 자료로 활용할 수 있습니다.",
         "keywords": ["수업사진", "판서", "복습자료"],
         "confidence": 0.3,
     }

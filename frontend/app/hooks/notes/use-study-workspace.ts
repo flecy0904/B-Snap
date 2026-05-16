@@ -52,7 +52,7 @@ import { parseNotePageContent, serializeNotePageContent } from './document/note-
 import { useIncomingAssetSubscription } from './workspace/use-incoming-asset-subscription';
 import { useStudyWorkspaceDerivedState } from './workspace/use-study-workspace-derived-state';
 import { useStudyWorkspacePersistence } from './workspace/use-study-workspace-persistence';
-import { getDocumentPageLabel, isSameDocumentPage, isShapeTool } from '../../ui-helpers';
+import { cleanAiDisplayText, getDocumentPageLabel, isSameDocumentPage, isShapeTool } from '../../ui-helpers';
 import type { InkBrush, InkBrushSettings, InkLinePattern, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../ui-types';
 import type { AiAnswer, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../types';
 
@@ -1523,7 +1523,7 @@ export function useStudyWorkspace(props: {
   const buildPageCaptureReferenceQuestion = (reference: PageCaptureReference) => (
     [
       `${reference.pageLabel}에 연결한 자료 "${reference.title}"를 수업 맥락에 맞춰 설명해줘.`,
-      `자료 설명: ${reference.aiSummary || reference.summary}`,
+      `자료 설명: ${cleanAiDisplayText(reference.aiSummary || reference.summary)}`,
       reference.keywords.length ? `키워드: ${reference.keywords.join(', ')}` : '',
       '핵심 개념, 시험 포인트, 원본 PDF 페이지와 연결해서 볼 부분을 정리해줘.',
     ].filter(Boolean).join('\n')
