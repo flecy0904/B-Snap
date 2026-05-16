@@ -2,6 +2,7 @@ import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { ActivityIndicator, Animated, Image, PanResponder, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { isClassInsightTargetDocument } from '../../../hooks/notes/class-insight';
+import { PageReferenceText } from './page-reference-text';
 import { useNotesGlobalContext } from '../workspace/notes-global-context';
 
 const FLOATING_PANEL_WIDTH = 300;
@@ -47,6 +48,10 @@ export function NotesAiAssistantPanel() {
       ?? null
     : null;
   const canManageActiveSession = Boolean(activeSession && !workspace.aiChatReadOnly);
+  const openLinkedPdfPage = React.useCallback((pageNumber: number) => {
+    workspace.onSetCurrentPdfPage?.(pageNumber);
+    workspace.onChangeInkTool?.('view');
+  }, [workspace]);
   const chatSearchTerm = workspace.aiChatSearchQuery.trim().toLowerCase();
   const sidebarSessions = workspace.allAiChatSessions.filter((session: any) => {
     if (!chatSearchTerm) return true;
@@ -484,7 +489,17 @@ export function NotesAiAssistantPanel() {
                 {isUser && message.selection_image_url ? (
                   <Image source={{ uri: message.selection_image_url }} style={workspace.styles.aiMessageAttachmentImage} resizeMode="cover" />
                 ) : null}
-                <Text style={[workspace.styles.aiMessageText, isUser ? workspace.styles.aiMessageTextUser : workspace.styles.aiMessageTextAssistant]}>{message.content}</Text>
+                {isUser ? (
+                  <Text style={[workspace.styles.aiMessageText, workspace.styles.aiMessageTextUser]}>{message.content}</Text>
+                ) : (
+                  <PageReferenceText
+                    content={message.content}
+                    pageCount={workspace.studyDocument?.pageCount}
+                    textStyle={[workspace.styles.aiMessageText, workspace.styles.aiMessageTextAssistant]}
+                    linkStyle={workspace.styles.aiMessagePageLink}
+                    onOpenPage={openLinkedPdfPage}
+                  />
+                )}
               </View>
             );
           }) : (

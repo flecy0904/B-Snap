@@ -3,6 +3,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import BottomSheet, { BottomSheetBackdrop, BottomSheetScrollView, type BottomSheetBackdropProps } from '@gorhom/bottom-sheet';
 import { ActivityIndicator, Image, Modal, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { isClassInsightTargetDocument } from '../../../hooks/notes/class-insight';
+import { PageReferenceText } from '../ai/page-reference-text';
 import { PdfPreview } from '../pdf/pdf-preview';
 import { BlankNoteCanvas } from '../canvas/blank-note-canvas';
 import { NoteSummaryContent } from '../shared/notes-shared';
@@ -824,7 +825,17 @@ export function MobileNotesView(props: {
                     {props.aiMessages.map((message) => (
                       <View key={message.id} style={props.styles.aiResponseSection}>
                         <Text style={props.styles.aiResponseSectionTitle}>{message.role === 'user' ? '나' : 'AI'}</Text>
-                        <Text style={props.styles.aiResponseBody}>{message.content}</Text>
+                        {message.role === 'user' ? (
+                          <Text style={props.styles.aiResponseBody}>{message.content}</Text>
+                        ) : (
+                          <PageReferenceText
+                            content={message.content}
+                            pageCount={props.studyDocument?.pageCount}
+                            textStyle={props.styles.aiResponseBody}
+                            linkStyle={props.styles.aiResponsePageLink}
+                            onOpenPage={props.onSetCurrentPdfPage}
+                          />
+                        )}
                       </View>
                     ))}
                   </View>
@@ -836,9 +847,23 @@ export function MobileNotesView(props: {
                 {aiResponseSections ? aiResponseSections.map((section, index) => (
                   <View key={`${section.title}-${index}`} style={[props.styles.aiResponseSection, index === aiResponseSections.length - 1 && props.styles.aiResponseSectionLast]}>
                     <Text style={props.styles.aiResponseSectionTitle}>{section.title}</Text>
-                    <Text style={props.styles.aiResponseBody}>{section.body}</Text>
+                    <PageReferenceText
+                      content={section.body}
+                      pageCount={props.studyDocument?.pageCount}
+                      textStyle={props.styles.aiResponseBody}
+                      linkStyle={props.styles.aiResponsePageLink}
+                      onOpenPage={props.onSetCurrentPdfPage}
+                    />
                   </View>
-                )) : <Text style={props.styles.aiResponseBody}>{aiResponse}</Text>}
+                )) : (
+                  <PageReferenceText
+                    content={aiResponse}
+                    pageCount={props.studyDocument?.pageCount}
+                    textStyle={props.styles.aiResponseBody}
+                    linkStyle={props.styles.aiResponsePageLink}
+                    onOpenPage={props.onSetCurrentPdfPage}
+                  />
+                )}
               </View>
             </BottomSheetScrollView>
           </BottomSheet>
