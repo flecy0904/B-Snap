@@ -525,6 +525,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
       onRestoreStudyDocument={props.onRestoreStudyDocument}
       onInsertInboxAsset={props.onInsertInboxAsset}
       onOpenPageCaptureReference={props.onOpenPageCaptureReference}
+      onAskAiAboutPageCaptureReference={props.onAskAiAboutPageCaptureReference}
       onRemoveCaptureAsset={props.onRemoveCaptureAsset}
     />
   );

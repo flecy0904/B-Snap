@@ -67,6 +67,7 @@ export type NotesBrowserProps = {
   onRestoreStudyDocument: (id: number) => void;
   onInsertInboxAsset: (assetId: string) => void;
   onOpenPageCaptureReference: (referenceId: string) => void;
+  onAskAiAboutPageCaptureReference: (referenceId: string) => void;
   onRemoveCaptureAsset: (assetId: string) => void;
 };
 
@@ -380,6 +381,18 @@ export function NotesBrowser(props: NotesBrowserProps) {
                 </View>
               </ScrollView>
               <View style={props.styles.photoViewerActionRow}>
+                {previewPrimaryReference ? (
+                  <Pressable
+                    style={props.styles.photoViewerActionButton}
+                    onPress={() => {
+                      props.onAskAiAboutPageCaptureReference(previewPrimaryReference.id);
+                      setPreviewAssetId(null);
+                    }}
+                  >
+                    <MaterialCommunityIcons name="star-four-points" size={16} color="#4F68D2" />
+                    <Text style={props.styles.photoViewerActionText}>AI에게 질문</Text>
+                  </Pressable>
+                ) : null}
                 {previewPrimaryReference ? (
                   <Pressable
                     style={[props.styles.photoViewerActionButton, props.styles.photoViewerActionButtonPrimary]}
