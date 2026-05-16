@@ -113,6 +113,20 @@ type PageFrame = { width: number; height: number };
 type WebGestureNativeEvent = GestureResponderEvent['nativeEvent'] & { buttons?: number };
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
 type ResponderStartPoint = { x: number; y: number } | null;
+const PDF_RENDER_PAGE_RADIUS = 2;
+
+function getPriorityPageNumbers(currentPage: number, pageCount: number) {
+  const pageNumbers: number[] = [];
+  for (let offset = 0; offset <= PDF_RENDER_PAGE_RADIUS; offset += 1) {
+    const candidates = offset === 0 ? [currentPage] : [currentPage - offset, currentPage + offset];
+    candidates.forEach((pageNumber) => {
+      if (pageNumber >= 1 && pageNumber <= pageCount && !pageNumbers.includes(pageNumber)) {
+        pageNumbers.push(pageNumber);
+      }
+    });
+  }
+  return pageNumbers;
+}
 
 function getReferencePreviewImage(reference: PageCaptureReference) {
   if (reference.thumbnailUrl) return { uri: reference.thumbnailUrl };
@@ -595,8 +609,7 @@ export function PdfPreview(props: {
 
     const renderPages = async () => {
       const nextFrames: Record<number, PageFrame> = {};
-      for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
-        if (Math.abs(pageNumber - props.page) > 1) continue;
+      for (const pageNumber of getPriorityPageNumbers(props.page, pdfDocument.numPages)) {
         const canvas = canvasRefs.current[pageNumber];
         if (!canvas || cancelled) continue;
         const page = await pdfDocument.getPage(pageNumber);

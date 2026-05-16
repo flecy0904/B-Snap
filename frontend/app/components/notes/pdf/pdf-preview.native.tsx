@@ -11,6 +11,7 @@ import { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkStroke, InkTex
 import { CaptureAsset, NotebookPage, PageCaptureReference } from '../../../types';
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
 type ResponderStartPoint = { x: number; y: number } | null;
+const PDF_RENDER_PAGE_RADIUS = 2;
 
 function hasMultipleTouches(event: GestureResponderEvent) {
   return Boolean(event.nativeEvent.touches && event.nativeEvent.touches.length > 1);
@@ -524,7 +525,7 @@ export function PdfPreview(props: {
     const pageKey = getNotebookPageKey(page);
     const visiblePage = visiblePageKeys.has(pageKey);
     const nearCurrentPage = page.kind === 'pdf' && page.pageNumber
-      ? Math.abs(page.pageNumber - props.page) <= 1
+      ? Math.abs(page.pageNumber - props.page) <= PDF_RENDER_PAGE_RADIUS
       : page.generatedPageId === props.activeGeneratedPageId;
     const shouldRenderInteractiveLayers = currentPage || visiblePage || nearCurrentPage;
     const pageStrokesForView = shouldRenderInteractiveLayers ? getPageStrokesForView(page) : [];
