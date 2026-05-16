@@ -28,10 +28,18 @@ type RecommendationBlock = {
   items: RecommendationItem[];
 };
 
-type AiContentBlock = TextBlock | RecommendationBlock;
+type SectionBlock = {
+  type: 'section';
+  title: string;
+  lines: string[];
+};
+
+type AiContentBlock = TextBlock | RecommendationBlock | SectionBlock;
 
 const RECOMMENDATION_HEADING_PATTERN = /^\s*(추천\s*페이지|먼저\s*볼\s*페이지|중요\s*페이지)\s*[:：]?\s*$/i;
 const RECOMMENDATION_LINE_PATTERN = /^\s*(?:[•*-]\s*)?(\d{1,3})\s*(?:페이지|쪽|p(?:age)?\.?)\s*[:：-]\s*(.+)$/i;
+const SECTION_HEADING_PATTERN = /^\s*(추천\s*이유|이유|근거|복습\s*순서|공부\s*순서|시험\s*포인트|핵심\s*포인트|다음\s*단계|먼저\s*볼\s*내용|정리)\s*[:：]?\s*$/i;
+const INLINE_SECTION_PATTERN = /^\s*(추천\s*이유|이유|근거|복습\s*순서|공부\s*순서|시험\s*포인트|핵심\s*포인트|다음\s*단계|먼저\s*볼\s*내용|정리)\s*[:：]\s*(.+)$/i;
 
 function normalizeAiLine(line: string) {
   return line.replace(/^\s*[*-]\s+/, '• ').trimEnd();
@@ -45,6 +53,21 @@ function parseRecommendationLine(line: string): RecommendationItem | null {
   const body = match[2]?.trim();
   if (!Number.isFinite(pageNumber) || !body) return null;
   return { pageNumber, body };
+}
+
+function parseSectionHeading(line: string) {
+  const normalized = normalizeAiLine(line);
+  const inlineMatch = normalized.match(INLINE_SECTION_PATTERN);
+  if (inlineMatch) {
+    return { title: inlineMatch[1].replace(/\s+/g, ' '), firstLine: inlineMatch[2].trim() };
+  }
+
+  const headingMatch = normalized.match(SECTION_HEADING_PATTERN);
+  if (headingMatch) {
+    return { title: headingMatch[1].replace(/\s+/g, ' '), firstLine: null };
+  }
+
+  return null;
 }
 
 function pushTextBlock(blocks: AiContentBlock[], lines: string[]) {
@@ -63,6 +86,7 @@ function parseAiContent(content: string): AiContentBlock[] {
     const line = normalizeAiLine(lines[index]);
     const recommendation = parseRecommendationLine(line);
     const startsRecommendationSection = RECOMMENDATION_HEADING_PATTERN.test(line);
+    const sectionHeading = parseSectionHeading(line);
 
     if (startsRecommendationSection || recommendation) {
       pushTextBlock(blocks, textLines);
@@ -92,6 +116,26 @@ function parseAiContent(content: string): AiContentBlock[] {
       }
 
       if (startsRecommendationSection) textLines.push(line);
+      continue;
+    }
+
+    if (sectionHeading) {
+      pushTextBlock(blocks, textLines);
+      textLines = [];
+
+      const sectionLines = sectionHeading.firstLine ? [sectionHeading.firstLine] : [];
+      index += 1;
+
+      while (index < lines.length) {
+        const nextLine = normalizeAiLine(lines[index]);
+        if (parseRecommendationLine(nextLine) || RECOMMENDATION_HEADING_PATTERN.test(nextLine) || parseSectionHeading(nextLine)) break;
+        sectionLines.push(nextLine);
+        index += 1;
+      }
+
+      if (sectionLines.some((value) => value.trim())) {
+        blocks.push({ type: 'section', title: sectionHeading.title, lines: sectionLines });
+      }
       continue;
     }
 
@@ -130,6 +174,13 @@ function renderTextBlock(props: {
     ));
 }
 
+function getSectionIcon(title: string): React.ComponentProps<typeof MaterialCommunityIcons>['name'] {
+  if (title.includes('순서') || title.includes('단계')) return 'format-list-numbered';
+  if (title.includes('시험')) return 'school-outline';
+  if (title.includes('이유') || title.includes('근거')) return 'lightbulb-on-outline';
+  return 'text-box-check-outline';
+}
+
 export function AiResponseContent({
   content,
   pageCount,
@@ -154,6 +205,26 @@ export function AiResponseContent({
             linkStyle,
             onOpenPage,
           });
+        }
+
+        if (block.type === 'section') {
+          return (
+            <View key={`section-${blockIndex}-${block.title}`} style={styles.aiStructuredSectionCard}>
+              <View style={styles.aiStructuredSectionHeader}>
+                <View style={styles.aiStructuredSectionIcon}>
+                  <MaterialCommunityIcons name={getSectionIcon(block.title)} size={14} color="#4F68D2" />
+                </View>
+                <Text style={styles.aiStructuredSectionTitle}>{block.title}</Text>
+              </View>
+              <PageReferenceText
+                content={block.lines.join('\n').trim()}
+                pageCount={pageCount}
+                textStyle={textStyle}
+                linkStyle={linkStyle}
+                onOpenPage={onOpenPage}
+              />
+            </View>
+          );
         }
 
         return (

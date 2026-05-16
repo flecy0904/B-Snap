@@ -1122,36 +1122,70 @@ export function MobileNotesView(props: {
               <View style={props.styles.photoViewerCard}>
                 <View style={props.styles.photoViewerHeader}>
                   <View style={props.styles.fill}>
-                    <Text style={props.styles.photoViewerTitle}>원본 사진</Text>
-                    <Text style={props.styles.photoViewerMeta}>{formatCaptureDate(previewAsset.createdAt)}</Text>
+                    <Text style={props.styles.photoViewerTitle} numberOfLines={1}>{previewAsset.title || '원본 사진'}</Text>
+                    <View style={props.styles.photoViewerMetaRow}>
+                      <View style={props.styles.photoViewerMetaPill}>
+                        <MaterialCommunityIcons name="calendar-clock-outline" size={13} color="#7E8798" />
+                        <Text style={props.styles.photoViewerMetaPillText}>{formatCaptureDate(previewAsset.createdAt)}</Text>
+                      </View>
+                      <View style={[props.styles.photoViewerMetaPill, previewReferences.length && props.styles.photoViewerMetaPillLinked]}>
+                        <MaterialCommunityIcons name={previewReferences.length ? 'link-variant' : 'link-off'} size={13} color={previewReferences.length ? '#4F68D2' : '#7E8798'} />
+                        <Text style={[props.styles.photoViewerMetaPillText, previewReferences.length && props.styles.photoViewerMetaPillTextLinked]}>
+                          {previewReferences.length ? `${previewReferences.length}곳 연결` : '미연결'}
+                        </Text>
+                      </View>
+                    </View>
                   </View>
                   <Pressable style={props.styles.photoViewerCloseButton} onPress={() => setPreviewAssetId(null)}>
                     <MaterialCommunityIcons name="close" size={20} color="#5F6876" />
                   </Pressable>
                 </View>
-                <View style={props.styles.photoViewerImageFrame}>
-                  {previewImageSource ? (
-                    <Image source={previewImageSource} style={props.styles.photoViewerImage} resizeMode="contain" />
-                  ) : (
-                    <View style={props.styles.photoViewerFallback}>
-                      <MaterialCommunityIcons name="image-off-outline" size={36} color="#9AA6B8" />
+                <ScrollView contentContainerStyle={props.styles.photoViewerBody} showsVerticalScrollIndicator={false}>
+                  <View style={props.styles.photoViewerImageFrame}>
+                    {previewImageSource ? (
+                      <Image source={previewImageSource} style={props.styles.photoViewerImage} resizeMode="contain" />
+                    ) : (
+                      <View style={props.styles.photoViewerFallback}>
+                        <MaterialCommunityIcons name="image-off-outline" size={36} color="#9AA6B8" />
+                      </View>
+                    )}
+                  </View>
+                  <View style={props.styles.photoViewerInfo}>
+                    <View style={props.styles.photoViewerInfoCard}>
+                      <View style={props.styles.photoViewerInfoHeader}>
+                        <MaterialCommunityIcons name="file-link-outline" size={15} color="#5F79FF" />
+                        <Text style={props.styles.photoViewerInfoTitle}>연결 위치</Text>
+                      </View>
+                      {previewReferences.length ? (
+                        <View style={props.styles.photoViewerReferenceRow}>
+                          {previewReferences.map((reference) => (
+                            <Pressable
+                              key={reference.id}
+                              style={props.styles.photoViewerReferencePill}
+                              onPress={() => {
+                                props.onOpenPageCaptureReference(reference.id);
+                                setPreviewAssetId(null);
+                              }}
+                            >
+                              <Text style={props.styles.photoViewerReferencePillText}>{reference.pageLabel}</Text>
+                            </Pressable>
+                          ))}
+                        </View>
+                      ) : (
+                        <Text style={props.styles.photoViewerInfoValue}>아직 노트 페이지에 연결되지 않았습니다.</Text>
+                      )}
                     </View>
-                  )}
-                </View>
-                <View style={props.styles.photoViewerInfo}>
-                  <View style={props.styles.photoViewerInfoRow}>
-                    <Text style={props.styles.photoViewerInfoLabel}>연결 위치</Text>
-                    <Text style={props.styles.photoViewerInfoValue} numberOfLines={1}>
-                      {previewReferences.length ? previewReferences.map((reference) => reference.pageLabel).join(', ') : '미연결'}
-                    </Text>
+                    <View style={props.styles.photoViewerInfoCard}>
+                      <View style={props.styles.photoViewerInfoHeader}>
+                        <MaterialCommunityIcons name="star-four-points" size={15} color="#5F79FF" />
+                        <Text style={props.styles.photoViewerInfoTitle}>AI 설명</Text>
+                      </View>
+                      <Text style={props.styles.photoViewerInfoValue}>
+                        {cleanAiDisplayText(previewAsset.analysisSummary ?? previewAsset.summary)}
+                      </Text>
+                    </View>
                   </View>
-                  <View style={props.styles.photoViewerInfoRow}>
-                    <Text style={props.styles.photoViewerInfoLabel}>AI 설명</Text>
-                    <Text style={props.styles.photoViewerInfoValue} numberOfLines={3}>
-                      {cleanAiDisplayText(previewAsset.analysisSummary ?? previewAsset.summary)}
-                    </Text>
-                  </View>
-                </View>
+                </ScrollView>
                 <View style={props.styles.photoViewerActionRow}>
                   {previewPrimaryReference ? (
                     <Pressable
