@@ -62,6 +62,10 @@ type PendingPageSave = {
   updatedAt: number;
 };
 
+const EMPTY_PAGE_CONTENT = serializeNotePageContent({ inkStrokes: [], textAnnotations: [] });
+
+const getPageSaveKey = (documentId: number, pageNumber: number) => `${documentId}:${pageNumber}`;
+
 async function buildPdfDataUriForTextExtraction(picked: DocumentPicker.DocumentPickerAsset, pdfFileUri: string) {
   if (pdfFileUri.startsWith('data:application/pdf')) return pdfFileUri;
   if (Platform.OS === 'web' && picked.base64) {
@@ -138,6 +142,7 @@ export function useStudyWorkspace(props: {
   const [savingPageKeys, setSavingPageKeys] = useState<Record<string, true>>({});
   const [failedPageSaveKeys, setFailedPageSaveKeys] = useState<Record<string, true>>({});
   const lastQueuedPageContentRef = useRef<Record<string, string>>({});
+  const lastSavedPageContentRef = useRef<Record<string, string>>({});
 
   const isPdfAssetUrl = (url: string | null | undefined) => !!url && /\.pdf(?:$|[?#])/i.test(url);
   const normalizeDocumentFile = (file: StudyDocumentEntry['file']) => {
@@ -328,6 +333,7 @@ export function useStudyWorkspace(props: {
         const inkByBackendDocument: Record<number, InkStroke[]> = {};
         const textAnnotationsByBackendDocument: Record<number, InkTextAnnotation[]> = {};
         const hasStoredPageContentByDocument: Record<number, boolean> = {};
+        const savedPageContentByKey: Record<string, string> = {};
         const documents = await Promise.all(
           backendNotes.map(async (backendNote) => {
             const folder = folders.find((item) => item.id === backendNote.folder_id);
@@ -342,23 +348,29 @@ export function useStudyWorkspace(props: {
             pages.forEach((page) => {
               pageIdsByDocument[backendNote.id][page.page_number] = page.id;
               const storedPage = parseNotePageContent(page.content);
-              if (!storedPage) return;
+              if (!storedPage) {
+                savedPageContentByKey[getPageSaveKey(backendNote.id, page.page_number)] = EMPTY_PAGE_CONTENT;
+                return;
+              }
               hasStoredPageContentByDocument[backendNote.id] = true;
 
-              inkByBackendDocument[backendNote.id].push(
-                ...storedPage.inkStrokes.map((stroke) => ({
-                  ...stroke,
-                  generatedPageId: undefined,
-                  pageNumber: page.page_number,
-                })),
-              );
-              textAnnotationsByBackendDocument[backendNote.id].push(
-                ...storedPage.textAnnotations.map((annotation) => ({
-                  ...annotation,
-                  generatedPageId: undefined,
-                  pageNumber: page.page_number,
-                })),
-              );
+              const normalizedInkStrokes = storedPage.inkStrokes.map((stroke) => ({
+                ...stroke,
+                generatedPageId: undefined,
+                pageNumber: page.page_number,
+              }));
+              const normalizedTextAnnotations = storedPage.textAnnotations.map((annotation) => ({
+                ...annotation,
+                generatedPageId: undefined,
+                pageNumber: page.page_number,
+              }));
+
+              savedPageContentByKey[getPageSaveKey(backendNote.id, page.page_number)] = serializeNotePageContent({
+                inkStrokes: normalizedInkStrokes,
+                textAnnotations: normalizedTextAnnotations,
+              });
+              inkByBackendDocument[backendNote.id].push(...normalizedInkStrokes);
+              textAnnotationsByBackendDocument[backendNote.id].push(...normalizedTextAnnotations);
             });
 
             const firstPageUrl = firstPage?.image_url ?? null;
@@ -398,6 +410,14 @@ export function useStudyWorkspace(props: {
           ...current,
           ...pageIdsByDocument,
         }));
+        lastSavedPageContentRef.current = {
+          ...lastSavedPageContentRef.current,
+          ...savedPageContentByKey,
+        };
+        lastQueuedPageContentRef.current = {
+          ...lastQueuedPageContentRef.current,
+          ...savedPageContentByKey,
+        };
         setInkByDocument((current) => {
           const next = { ...current };
           Object.entries(inkByBackendDocument).forEach(([documentId, strokes]) => {
@@ -431,6 +451,7 @@ export function useStudyWorkspace(props: {
 
     const timer = setTimeout(() => {
       const nextPendingSaves: Record<string, PendingPageSave> = {};
+      const clearedSaveKeys = new Set<string>();
 
       Object.entries(backendPageIdsByDocument).forEach(([documentIdText, pagesByNumber]) => {
         const documentId = Number(documentIdText);
@@ -441,12 +462,23 @@ export function useStudyWorkspace(props: {
           const pageNumber = Number(pageNumberText);
           const pageInkStrokes = documentInk.filter((stroke) => !stroke.generatedPageId && (stroke.pageNumber ?? 1) === pageNumber);
           const pageTextAnnotations = documentTextAnnotations.filter((annotation) => !annotation.generatedPageId && annotation.pageNumber === pageNumber);
-          const key = `${documentId}:${pageNumber}`;
+          const key = getPageSaveKey(documentId, pageNumber);
 
           const content = serializeNotePageContent({
             inkStrokes: pageInkStrokes,
             textAnnotations: pageTextAnnotations,
           });
+          const savedContent = lastSavedPageContentRef.current[key];
+          if (savedContent === undefined && content === EMPTY_PAGE_CONTENT) {
+            lastSavedPageContentRef.current[key] = content;
+            lastQueuedPageContentRef.current[key] = content;
+            return;
+          }
+          if (savedContent === content) {
+            lastQueuedPageContentRef.current[key] = content;
+            clearedSaveKeys.add(key);
+            return;
+          }
           if (lastQueuedPageContentRef.current[key] === content) return;
           lastQueuedPageContentRef.current[key] = content;
 
@@ -461,10 +493,21 @@ export function useStudyWorkspace(props: {
         });
       });
 
-      setPendingPageSaves((current) => ({
-        ...current,
-        ...nextPendingSaves,
-      }));
+      if (!Object.keys(nextPendingSaves).length && !clearedSaveKeys.size) return;
+
+      setPendingPageSaves((current) => {
+        let next = current;
+        if (clearedSaveKeys.size) {
+          next = { ...next };
+          clearedSaveKeys.forEach((key) => {
+            delete next[key];
+          });
+        }
+        return {
+          ...next,
+          ...nextPendingSaves,
+        };
+      });
     }, 700);
 
     return () => clearTimeout(timer);
@@ -488,6 +531,8 @@ export function useStudyWorkspace(props: {
         content: pending.content,
       })
         .then(() => {
+          lastSavedPageContentRef.current[key] = pending.content;
+          lastQueuedPageContentRef.current[key] = pending.content;
           setPendingPageSaves((current) => {
             const currentPending = current[key];
             if (!currentPending || currentPending.content !== pending.content) return current;
