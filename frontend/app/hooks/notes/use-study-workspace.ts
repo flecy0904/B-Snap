@@ -363,10 +363,6 @@ export function useStudyWorkspace(props: {
 
             const firstPageUrl = firstPage?.image_url ?? null;
             const fileUrl = backendNote.file_url ?? (isPdfAssetUrl(firstPageUrl) ? firstPageUrl : null);
-            const pageImageUrls = pages.reduce<Record<number, string>>((next, page) => {
-              if (page.image_url && !isPdfAssetUrl(page.image_url)) next[page.page_number] = page.image_url;
-              return next;
-            }, {});
             const pdfLikeBackendNote = /\.pdf$/i.test(backendNote.title.trim()) || !!fileUrl || pages.length > 1;
             const documentType = pdfLikeBackendNote ? 'pdf' as const : firstPageUrl ? 'image' as const : 'blank' as const;
             const pageCount = Math.max(1, backendNote.page_count ?? pages.length);
@@ -380,7 +376,6 @@ export function useStudyWorkspace(props: {
               pageCount,
               preview: backendNote.summary ?? firstPage?.content ?? '백엔드에 저장된 노트입니다.',
               file: fileUrl ? { uri: fileUrl } : firstPageUrl ? { uri: firstPageUrl } : undefined,
-              pageImageUrls: Object.keys(pageImageUrls).length ? pageImageUrls : undefined,
               thumbnailUrl: backendNote.thumbnail_url ?? undefined,
             } satisfies StudyDocumentEntry;
           }),

@@ -79,7 +79,6 @@ export interface StudyDocumentEntry {
   pageCount: number;
   preview: string;
   file?: number | string | { uri: string };
-  pageImageUrls?: Record<number, string>;
   thumbnailUrl?: string;
 }
 

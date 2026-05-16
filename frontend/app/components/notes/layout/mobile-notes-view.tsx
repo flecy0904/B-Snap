@@ -650,7 +650,6 @@ export function MobileNotesView(props: {
               onOpenGeneratedPage={props.onOpenGeneratedPage}
               notebookPages={props.notebookPages}
               activeGeneratedPageId={props.currentDocumentPage?.kind === 'generated' ? props.currentDocumentPage.pageId : null}
-              pageImageUrls={props.studyDocument.pageImageUrls}
               pageCaptureReferences={props.pageCaptureReferences}
               incomingAssetSuggestion={props.incomingAssetSuggestion}
               onAcceptIncomingAsset={props.onAcceptIncomingAsset}

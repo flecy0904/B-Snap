@@ -71,14 +71,8 @@ export function useDocumentPageActions(params: {
     });
   };
 
-  const isPdfAssetUrl = (url: string | null | undefined) => !!url && /\.pdf(?:$|[?#])/i.test(url);
-
   const applyBackendPageList = (pages: BackendNotePage[], activePageNumber: number, feedback: string) => {
     if (!params.studyDocumentId || !params.studyDocument) return;
-    const pageImageUrls = pages.reduce<Record<number, string>>((next, page) => {
-      if (page.image_url && !isPdfAssetUrl(page.image_url)) next[page.page_number] = page.image_url;
-      return next;
-    }, {});
     const backendPageIds = pages.reduce<Record<number, number>>((next, page) => {
       next[page.page_number] = page.id;
       return next;
@@ -93,7 +87,6 @@ export function useDocumentPageActions(params: {
     params.setUserStudyDocuments((current) => upsertStudyDocument(current, {
       ...params.studyDocument!,
       pageCount: nextPageCount,
-      pageImageUrls: Object.keys(pageImageUrls).length ? pageImageUrls : undefined,
       updatedAt: '방금 전',
     }));
     params.setCurrentPdfPageByDocument((current) => ({

@@ -139,10 +139,6 @@ function NotebookPaperBackground({ page }: { page: NotebookPage }) {
   );
 }
 
-function isPdfUri(uri: string | undefined) {
-  return !!uri && /\.pdf(?:$|[?#])/i.test(uri);
-}
-
 function getResizeCorner(rect: SelectionRect | null, point: InkPoint): ResizeCorner | null {
   if (!rect) return null;
   const threshold = 24;
@@ -220,7 +216,6 @@ export function PdfPreview(props: {
   onDocumentLoaded?: (pageCount: number) => void;
   notebookPages?: NotebookPage[];
   activeGeneratedPageId?: string | null;
-  pageImageUrls?: Record<number, string>;
   pageCaptureReferences?: PageCaptureReference[];
   incomingAssetSuggestion?: CaptureAsset | null;
   onAcceptIncomingAsset?: () => void;
@@ -283,10 +278,6 @@ export function PdfPreview(props: {
         })),
     [documentPageCount, props.notebookPages],
   );
-  const pageImageUrls = useMemo(() => {
-    const entries = Object.entries(props.pageImageUrls ?? {}).filter(([, uri]) => !isPdfUri(uri));
-    return Object.fromEntries(entries) as Record<number, string>;
-  }, [props.pageImageUrls]);
   const strokeBuckets = useMemo(() => {
     const pdf = new Map<number, InkStroke[]>();
     const generated = new Map<string, InkStroke[]>();
@@ -348,10 +339,6 @@ export function PdfPreview(props: {
 
     return { pdf, generated };
   }, [props.pageCaptureReferences]);
-  const firstCachedPageImageUri = useMemo(() => {
-    const firstPdfPage = pageItems.find((item) => item.pageNumber);
-    return firstPdfPage?.pageNumber ? pageImageUrls[firstPdfPage.pageNumber] : undefined;
-  }, [pageImageUrls, pageItems]);
   const pdfSource = useMemo(() => {
     const source = typeof props.file === 'string' ? { uri: props.file } : props.file;
     if (typeof source === 'object' && source && 'uri' in source && typeof source.uri === 'string' && source.uri.startsWith('/')) {
@@ -372,17 +359,6 @@ export function PdfPreview(props: {
       scrollEnabled,
     };
   }, [props.activeGeneratedPageId, props.onOpenGeneratedPage, props.onPageChanged, props.page, scrollEnabled]);
-
-  useEffect(() => {
-    if (!firstCachedPageImageUri) return;
-    Image.getSize(
-      firstCachedPageImageUri,
-      (imageWidth, imageHeight) => {
-        if (imageWidth > 0 && imageHeight > 0) setPdfPageSize({ width: imageWidth, height: imageHeight });
-      },
-      () => undefined,
-    );
-  }, [firstCachedPageImageUri]);
 
   const clampPointToPage = (page: NotebookPage, x: number, y: number, mode: 'draw' | 'annotate' = 'draw'): InkPoint => ({
     x: Math.max(0, Math.min(viewerWidth - (mode === 'annotate' ? 180 : 0), x)),
@@ -551,7 +527,6 @@ export function PdfPreview(props: {
     const pageStrokesForView = shouldRenderInteractiveLayers ? getPageStrokesForView(page) : [];
     const pageTextAnnotationsForView = shouldRenderInteractiveLayers ? getPageTextAnnotationsForView(page) : [];
     const shouldRenderPdfPage = page.kind === 'pdf' && page.pageNumber ? nearCurrentPage || visiblePage : false;
-    const pageImageUri = page.pageNumber ? pageImageUrls[page.pageNumber] : undefined;
     const pageReferences = shouldRenderInteractiveLayers ? getPageCaptureReferences(page) : [];
     const activePageReference = pageReferences.find((reference) => reference.id === openReferenceId) ?? null;
     const activeReferenceIndex = activePageReference ? pageReferences.findIndex((reference) => reference.id === activePageReference.id) : -1;
@@ -571,9 +546,7 @@ export function PdfPreview(props: {
         collapsable={false}
         style={[props.styles.pdfStage, { width: viewerWidth, height: viewerHeight, marginBottom: pageGap, backgroundColor: '#FFFFFF' }]}
       >
-        {pageImageUri ? (
-          <Image source={{ uri: pageImageUri }} style={props.styles.pdfViewer} resizeMode="contain" fadeDuration={0} resizeMethod="resize" />
-        ) : shouldRenderPdfPage && page.pageNumber ? (
+        {shouldRenderPdfPage && page.pageNumber ? (
           <View pointerEvents="none" style={props.styles.pdfViewer}>
             <Pdf
               source={pdfSource}
