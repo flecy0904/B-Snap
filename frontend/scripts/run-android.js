@@ -8,6 +8,7 @@ const sdkDir = process.env.ANDROID_HOME
 const javaHome = process.env.JAVA_HOME || "C:\\Program Files\\Android\\Android Studio\\jbr";
 
 const env = { ...process.env };
+env.NODE_ENV = env.NODE_ENV || "development";
 if (sdkDir) {
   env.ANDROID_HOME = sdkDir;
   env.ANDROID_SDK_ROOT = sdkDir;

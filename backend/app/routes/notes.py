@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from psycopg import Connection
 
 from backend.app.core.auth import get_current_user
@@ -33,6 +33,19 @@ def get_note_for_user(note_id: int, user_id: int, connection: Connection):
             (note_id, user_id),
         ),
         "note not found",
+    )
+
+
+def _list_pages_for_note(connection: Connection, note_id: int) -> list[dict]:
+    return fetch_all(
+        connection,
+        """
+        SELECT id, note_id, page_number, content, image_url, created_at, updated_at
+        FROM note_pages
+        WHERE note_id = %s
+        ORDER BY page_number ASC, id ASC
+        """,
+        (note_id,),
     )
 
 
@@ -163,16 +176,132 @@ def list_note_pages(
     current_user: dict = Depends(get_current_user),
 ):
     get_note_for_user(note_id, current_user["id"], connection)
-    return fetch_all(
-        connection,
-        """
-        SELECT id, note_id, page_number, content, image_url, created_at, updated_at
-        FROM note_pages
-        WHERE note_id = %s
-        ORDER BY page_number ASC, id ASC
-        """,
-        (note_id,),
+    return _list_pages_for_note(connection, note_id)
+
+
+@router.post("/notes/{note_id}/pages/{page_number}/duplicate", response_model=list[NotePageRead])
+def duplicate_note_page(
+    note_id: int,
+    page_number: int,
+    connection: Connection = Depends(get_db_connection),
+    current_user: dict = Depends(get_current_user),
+):
+    get_note_for_user(note_id, current_user["id"], connection)
+    target = require_row(
+        fetch_one(
+            connection,
+            """
+            SELECT id, note_id, page_number, content, image_url
+            FROM note_pages
+            WHERE note_id = %s AND page_number = %s
+            ORDER BY id ASC
+            LIMIT 1
+            """,
+            (note_id, page_number),
+        ),
+        "note page not found",
     )
+
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE note_pages
+                SET page_number = page_number + 1, updated_at = now()
+                WHERE note_id = %s AND page_number > %s
+                """,
+                (note_id, page_number),
+            )
+            cursor.execute(
+                """
+                INSERT INTO note_pages (note_id, page_number, content, image_url)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (note_id, page_number + 1, target["content"], target["image_url"]),
+            )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+    return _list_pages_for_note(connection, note_id)
+
+
+@router.delete("/notes/{note_id}/pages/by-number/{page_number}", response_model=list[NotePageRead])
+def delete_note_page_by_number(
+    note_id: int,
+    page_number: int,
+    connection: Connection = Depends(get_db_connection),
+    current_user: dict = Depends(get_current_user),
+):
+    get_note_for_user(note_id, current_user["id"], connection)
+    pages = _list_pages_for_note(connection, note_id)
+    if len(pages) <= 1:
+        raise HTTPException(status_code=400, detail="마지막 페이지는 삭제할 수 없습니다.")
+    target = require_row(
+        next((page for page in pages if int(page["page_number"]) == page_number), None),
+        "note page not found",
+    )
+
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("DELETE FROM note_pages WHERE id = %s", (target["id"],))
+            cursor.execute(
+                """
+                UPDATE note_pages
+                SET page_number = page_number - 1, updated_at = now()
+                WHERE note_id = %s AND page_number > %s
+                """,
+                (note_id, page_number),
+            )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+    return _list_pages_for_note(connection, note_id)
+
+
+@router.post("/notes/{note_id}/pages/{page_number}/move", response_model=list[NotePageRead])
+def move_note_page_by_number(
+    note_id: int,
+    page_number: int,
+    delta: int = Query(..., ge=-1, le=1),
+    connection: Connection = Depends(get_db_connection),
+    current_user: dict = Depends(get_current_user),
+):
+    get_note_for_user(note_id, current_user["id"], connection)
+    if delta == 0:
+        return _list_pages_for_note(connection, note_id)
+
+    pages = _list_pages_for_note(connection, note_id)
+    target = require_row(
+        next((page for page in pages if int(page["page_number"]) == page_number), None),
+        "note page not found",
+    )
+    next_page_number = page_number + delta
+    swap_target = require_row(
+        next((page for page in pages if int(page["page_number"]) == next_page_number), None),
+        "target page not found",
+    )
+
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute("UPDATE note_pages SET page_number = -1 WHERE id = %s", (target["id"],))
+            cursor.execute(
+                "UPDATE note_pages SET page_number = %s, updated_at = now() WHERE id = %s",
+                (page_number, swap_target["id"]),
+            )
+            cursor.execute(
+                "UPDATE note_pages SET page_number = %s, updated_at = now() WHERE id = %s",
+                (next_page_number, target["id"]),
+            )
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+
+    return _list_pages_for_note(connection, note_id)
 
 
 @router.post("/notes/{note_id}/extract-pdf-text", response_model=PdfTextExtractionRead)

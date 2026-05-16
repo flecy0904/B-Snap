@@ -2,6 +2,12 @@ export type InkShape = 'line' | 'arrow' | 'rect' | 'ellipse';
 export type InkTool = 'view' | 'pen' | 'highlight' | 'erase' | 'select' | 'text' | InkShape;
 export type InkBrush = 'ballpoint' | 'fountain' | 'pencil' | 'marker' | 'highlighter';
 export type InkLinePattern = 'solid' | 'dotted' | 'dashed';
+export type InkBrushSettings = {
+  stability: number;
+  sharpness: number;
+  density: number;
+  pressure: number;
+};
 export type InkPageSize = { pageWidth?: number; pageHeight?: number };
 export type InkPoint = { x: number; y: number; pageNumber?: number; generatedPageId?: string } & InkPageSize;
 export type InkStroke = {
@@ -11,6 +17,7 @@ export type InkStroke = {
   width: number;
   style?: 'pen' | 'highlight' | 'shape';
   brush?: InkBrush;
+  brushSettings?: InkBrushSettings;
   linePattern?: InkLinePattern;
   shape?: InkShape;
   pageNumber?: number;

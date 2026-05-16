@@ -25,11 +25,12 @@ import {
   NotebookPage,
   NoteEntry,
   NoteWorkspaceMode,
+  PageCaptureReference,
   StudyDocumentEntry,
   Subject,
   WorkspaceAttachment,
 } from '../../../types';
-import { InkBrush, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
+import { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 
 export type DesktopNotesViewProps = {
   compact: boolean;
@@ -48,6 +49,7 @@ export type DesktopNotesViewProps = {
   penWidth: number;
   brushType: InkBrush;
   linePattern: InkLinePattern;
+  brushSettings: InkBrushSettings;
   inkStrokes: InkStroke[];
   textAnnotations: InkTextAnnotation[];
   inkByDocument: Record<number, InkStroke[]>;
@@ -74,8 +76,11 @@ export type DesktopNotesViewProps = {
   inboxPendingCount: number;
   workspaceFeedback: string | null;
   documentSaveStatus: string;
+  captureAssetsBySubject: Record<number, CaptureAsset[]>;
   captureInbox: CaptureAsset[];
   workspaceAttachments: WorkspaceAttachment[];
+  pageCaptureReferences: PageCaptureReference[];
+  currentPageCaptureReferences: PageCaptureReference[];
   bookmarks: BookmarkedPage[];
   currentPageBookmarked: boolean;
   generatedWorkspacePages: GeneratedWorkspacePage[];
@@ -96,6 +101,7 @@ export type DesktopNotesViewProps = {
   onChangePenWidth: (width: number) => void;
   onChangeBrushType: (brush: InkBrush) => void;
   onChangeLinePattern: (pattern: InkLinePattern) => void;
+  onChangeBrushSettings: (settings: Partial<InkBrushSettings>) => void;
   onToggleAiPanel: () => void;
   onChangeAiPanelMode: (mode: 'floating' | 'sidebar') => void;
   onChangeAiQuestion: (value: string) => void;
@@ -118,6 +124,7 @@ export type DesktopNotesViewProps = {
   changeSelectedStrokesColor: (color: string) => void;
   duplicateSelectedStrokes: () => void;
   resizeSelectedStrokes: (scale: number) => void;
+  resizeSelectedStrokesToRect: (rect: SelectionRect) => void;
   nudgeSelectedStrokes: (dx: number, dy: number) => void;
   onCommitInkStroke: (stroke: InkStroke) => void;
   onRemoveInkStroke: (strokeId: string) => void;
@@ -129,6 +136,10 @@ export type DesktopNotesViewProps = {
   onDismissIncomingAsset: () => void;
   onInsertInboxAsset: (assetId: string) => void;
   onRemoveInboxAsset: (assetId: string) => void;
+  onOpenPageCaptureReference: (referenceId: string) => void;
+  onMovePageCaptureReference: (referenceId: string, delta: -1 | 1) => void;
+  onRemovePageCaptureReference: (referenceId: string) => void;
+  onAskAiAboutPageCaptureReference: (referenceId: string) => void;
   onRemoveWorkspaceAttachment: (attachmentId: string) => void;
   onToggleBookmarkCurrentPage: () => void;
   onOpenBookmarkedPage: (bookmarkId: string) => void;
@@ -139,6 +150,9 @@ export type DesktopNotesViewProps = {
   onRemoveGeneratedPage: (pageId: string) => void;
   onDuplicateGeneratedPage: (pageId: string) => void;
   onMoveGeneratedPage: (pageId: string, delta: -1 | 1) => void;
+  onDuplicatePdfPage: (pageNumber?: number) => void;
+  onRemovePdfPage: (pageNumber?: number) => void;
+  onMovePdfPage: (pageNumber: number | undefined, delta: -1 | 1) => void;
   onCreateMemoPage: (insertAfterPage?: number) => void;
   onQuery: (value: string) => void;
   onSort: () => void;
@@ -171,6 +185,8 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
   const workspace = useDesktopNotesWorkspaceViewModel({
     incomingAssetSuggestion: props.incomingAssetSuggestion,
     workspaceAttachments: props.workspaceAttachments,
+    pageCaptureReferences: props.pageCaptureReferences,
+    currentPageCaptureReferences: props.currentPageCaptureReferences,
     captureInbox: props.captureInbox,
     generatedWorkspacePages: props.generatedWorkspacePages,
     activeGeneratedPage: props.activeGeneratedPage,
@@ -269,8 +285,11 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           penWidth: props.penWidth,
           brushType: props.brushType,
           linePattern: props.linePattern,
+          brushSettings: props.brushSettings,
           inkStrokes: props.inkStrokes,
           textAnnotations: props.textAnnotations,
+          inkByDocument: props.inkByDocument,
+          textAnnotationsByDocument: props.textAnnotationsByDocument,
           currentPageLabel: workspace.currentPageLabel,
           hasWorkspaceDockContent: workspace.hasWorkspaceDockContent,
           showWorkspaceDock: workspace.showWorkspaceDock,
@@ -281,16 +300,29 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           previewedIncoming: workspace.previewedIncoming,
           previewedAttachment: workspace.previewedAttachment,
           previewedInbox: workspace.previewedInbox,
+          previewedPageReference: workspace.previewedPageReference,
+          incomingAssetSuggestion: props.incomingAssetSuggestion,
           workspaceAttachments: props.workspaceAttachments,
+          pageCaptureReferences: props.pageCaptureReferences,
+          currentPageCaptureReferences: props.currentPageCaptureReferences,
           bookmarks: props.bookmarks,
           currentPageBookmarked: props.currentPageBookmarked,
           memoPages: props.memoPages,
           captureInbox: props.captureInbox,
+          subject: props.subject,
+          studyDocumentId: props.studyDocument.id,
           studyDocument: props.studyDocument,
+          noteWorkspaceMode: props.noteMode,
+          subjects: props.subjects,
+          query: props.query,
+          sort: props.sort,
           currentDocumentPages: props.currentDocumentPages,
           notebookPages: props.notebookPages,
           currentPdfPage: props.currentPdfPage,
           currentDocumentPage: props.currentDocumentPage,
+          currentDocumentPageIndex: props.currentDocumentPageIndex,
+          totalDocumentPageCount: props.totalDocumentPageCount,
+          generatedWorkspacePages: props.generatedWorkspacePages,
           activeGeneratedPage: props.activeGeneratedPage,
           pageListOpen,
           setPageListOpen,
@@ -317,6 +349,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           onChangePenWidth: props.onChangePenWidth,
           onChangeBrushType: props.onChangeBrushType,
           onChangeLinePattern: props.onChangeLinePattern,
+          onChangeBrushSettings: props.onChangeBrushSettings,
           onUndoInk: props.onUndoInk,
           onRedoInk: props.onRedoInk,
           onClearInk: props.onClearInk,
@@ -324,6 +357,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           onCloseWorkspaceDock: workspace.closeWorkspaceDock,
           onToggleInboxPanel: workspace.toggleInboxPanel,
           onAcceptIncomingAsset: props.onAcceptIncomingAsset,
+          onArchiveIncomingAsset: props.onArchiveIncomingAsset,
           onDismissIncomingAsset: props.onDismissIncomingAsset,
           onOpenWorkspaceAttachment: props.onOpenWorkspaceAttachment,
           onOpenGeneratedPage: props.onOpenGeneratedPage,
@@ -335,14 +369,22 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           onRemoveGeneratedPage: props.onRemoveGeneratedPage,
           onDuplicateGeneratedPage: props.onDuplicateGeneratedPage,
           onMoveGeneratedPage: props.onMoveGeneratedPage,
+          onDuplicatePdfPage: props.onDuplicatePdfPage,
+          onRemovePdfPage: props.onRemovePdfPage,
+          onMovePdfPage: props.onMovePdfPage,
           onCreateMemoPage: props.onCreateMemoPage,
           onInsertInboxAsset: props.onInsertInboxAsset,
           onRemoveInboxAsset: props.onRemoveInboxAsset,
+          onOpenPageCaptureReference: props.onOpenPageCaptureReference,
+          onMovePageCaptureReference: props.onMovePageCaptureReference,
+          onRemovePageCaptureReference: props.onRemovePageCaptureReference,
+          onAskAiAboutPageCaptureReference: props.onAskAiAboutPageCaptureReference,
           onPreviewAttachment: (assetId, attachmentId) => {
             workspace.previewAttachment(assetId);
             props.onOpenWorkspaceAttachment(attachmentId);
           },
           onPreviewInboxAsset: workspace.previewInboxAsset,
+          onPreviewPageReference: workspace.previewPageReference,
           onCommitInkStroke: props.onCommitInkStroke,
           onRemoveInkStroke: props.onRemoveInkStroke,
           onAddTextAnnotation: props.onAddTextAnnotation,
@@ -355,6 +397,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           changeSelectedStrokesColor: props.changeSelectedStrokesColor,
           duplicateSelectedStrokes: props.duplicateSelectedStrokes,
           resizeSelectedStrokes: props.resizeSelectedStrokes,
+          resizeSelectedStrokesToRect: props.resizeSelectedStrokesToRect,
           nudgeSelectedStrokes: props.nudgeSelectedStrokes,
           onSetCurrentPdfPage: props.onSetCurrentPdfPage,
           onUpdateStudyDocumentPageCount: props.onUpdateStudyDocumentPageCount,
@@ -460,6 +503,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
       studyDocuments={props.studyDocuments}
       allStudyDocuments={props.allStudyDocuments}
       deletedStudyDocuments={props.deletedStudyDocuments}
+      captureAssetsBySubject={props.captureAssetsBySubject}
       blueColor={props.blueColor}
       onChangeMode={props.onChangeMode}
       onQuery={props.onQuery}

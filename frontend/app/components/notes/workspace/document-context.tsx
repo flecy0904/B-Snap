@@ -26,6 +26,9 @@ export type DocumentActions = {
   onRemoveGeneratedPage: (pageId: string) => void;
   onDuplicateGeneratedPage: (pageId: string) => void;
   onMoveGeneratedPage: (pageId: string, delta: -1 | 1) => void;
+  onDuplicatePdfPage: (pageNumber?: number) => void;
+  onRemovePdfPage: (pageNumber?: number) => void;
+  onMovePdfPage: (pageNumber: number | undefined, delta: -1 | 1) => void;
   onUpdateStudyDocumentPageCount: (pageCount: number) => void;
   onSetCurrentPdfPage: (pageNumber: number) => void;
   onGoToPreviousDocumentPage: () => void;
@@ -63,6 +66,9 @@ export function DocumentProvider({ children }: { children: React.ReactNode }) {
     onRemoveGeneratedPage: global.onRemoveGeneratedPage,
     onDuplicateGeneratedPage: global.onDuplicateGeneratedPage,
     onMoveGeneratedPage: global.onMoveGeneratedPage,
+    onDuplicatePdfPage: global.onDuplicatePdfPage,
+    onRemovePdfPage: global.onRemovePdfPage,
+    onMovePdfPage: global.onMovePdfPage,
     onUpdateStudyDocumentPageCount: global.onUpdateStudyDocumentPageCount,
     onSetCurrentPdfPage: global.onSetCurrentPdfPage,
     onGoToPreviousDocumentPage: global.onGoToPreviousDocumentPage,

@@ -74,7 +74,7 @@ export function useStudyWorkspaceDerivedState(params: {
   const selectionRect = params.studyDocumentId ? params.selectionByDocument[params.studyDocumentId] ?? null : null;
   const captureInbox = useMemo(() => {
     if (!params.subjectId) return [];
-    return (params.captureAssetsBySubject[params.subjectId] ?? []).filter((asset) => asset.status !== 'dismissed');
+    return (params.captureAssetsBySubject[params.subjectId] ?? []).filter((asset) => asset.status !== 'dismissed' && asset.status !== 'accepted');
   }, [params.captureAssetsBySubject, params.subjectId]);
   const workspaceAttachments = useMemo(() => {
     if (!params.studyDocumentId) return [];

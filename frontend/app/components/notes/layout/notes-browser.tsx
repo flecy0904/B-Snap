@@ -2,8 +2,27 @@ import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Image, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { subjects as allSubjects } from '../../../app-defaults';
-import { NoteEntry, NoteWorkspaceMode, StudyDocumentEntry, Subject } from '../../../types';
+import { CaptureAsset, NoteEntry, NoteWorkspaceMode, StudyDocumentEntry, Subject } from '../../../types';
 import { darkenHex } from '../../../ui-helpers';
+
+function getCaptureImageSource(asset: CaptureAsset) {
+  const uri = asset.thumbnailUrl ?? asset.fileUrl ?? asset.previewImageKey;
+  if (uri && (uri.startsWith('http://') || uri.startsWith('https://') || uri.startsWith('file://') || uri.startsWith('data:image/'))) {
+    return { uri };
+  }
+  return asset.previewImage ?? null;
+}
+
+function formatCaptureDate(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString('ko-KR', {
+    month: 'numeric',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
 
 export type NotesBrowserProps = {
   styles: any;
@@ -19,6 +38,7 @@ export type NotesBrowserProps = {
   studyDocuments: StudyDocumentEntry[];
   allStudyDocuments: StudyDocumentEntry[];
   deletedStudyDocuments: StudyDocumentEntry[];
+  captureAssetsBySubject: Record<number, CaptureAsset[]>;
   blueColor: string;
   onChangeMode: (mode: NoteWorkspaceMode) => void;
   onQuery: (value: string) => void;
@@ -53,6 +73,35 @@ export function NotesBrowser(props: NotesBrowserProps) {
   );
   const recoverableCount = props.noteMode === 'photo' ? activeDeletedNotes.length : activeDeletedStudyDocuments.length;
   const findSubject = React.useCallback((subjectId: number) => subjectById.get(subjectId), [subjectById]);
+  const getSubjectPhotoAssets = React.useCallback((subjectId: number) => {
+    const normalizedQuery = props.query.trim().toLowerCase();
+    let assets = (props.captureAssetsBySubject[subjectId] ?? []).filter((asset) => asset.type === 'image' && asset.status !== 'dismissed');
+
+    if (normalizedQuery) {
+      assets = assets.filter((asset) => {
+        const subjectName = findSubject(asset.subjectId)?.name ?? '';
+        const keywords = asset.analysisKeywords ?? [];
+        return (
+          asset.title.toLowerCase().includes(normalizedQuery) ||
+          asset.summary.toLowerCase().includes(normalizedQuery) ||
+          (asset.analysisSummary ?? '').toLowerCase().includes(normalizedQuery) ||
+          asset.sourceDeviceLabel.toLowerCase().includes(normalizedQuery) ||
+          subjectName.toLowerCase().includes(normalizedQuery) ||
+          keywords.some((keyword) => keyword.toLowerCase().includes(normalizedQuery))
+        );
+      });
+    }
+
+    return [...assets].sort((left, right) => {
+      const leftTime = new Date(left.createdAt).getTime();
+      const rightTime = new Date(right.createdAt).getTime();
+      return props.sort === 'latest' ? rightTime - leftTime : leftTime - rightTime;
+    });
+  }, [findSubject, props.captureAssetsBySubject, props.query, props.sort]);
+  const selectedPhotoAssets = React.useMemo(
+    () => props.selectedSubject ? getSubjectPhotoAssets(props.selectedSubject.id) : [],
+    [getSubjectPhotoAssets, props.selectedSubject],
+  );
 
   React.useEffect(() => {
     if (recoverableCount === 0) setRecoveryOpen(false);
@@ -63,8 +112,8 @@ export function NotesBrowser(props: NotesBrowserProps) {
       <View style={props.styles.desktopNotesTopRow}>
         <View><Text style={[props.styles.desktopTitle, props.compact && props.styles.desktopTitleCompact]}>{props.noteMode === 'photo' ? 'Photo' : 'Note'}</Text></View>
         <View style={props.styles.desktopModeSegment}>
-          <Pressable style={[props.styles.desktopModeButton, props.noteMode === 'photo' && props.styles.desktopModeButtonActive]} onPress={() => props.onChangeMode('photo')}><Text style={[props.styles.desktopModeButtonText, props.noteMode === 'photo' && props.styles.desktopModeButtonTextActive]}>Photo</Text></Pressable>
           <Pressable style={[props.styles.desktopModeButton, props.noteMode === 'note' && props.styles.desktopModeButtonActive]} onPress={() => props.onChangeMode('note')}><Text style={[props.styles.desktopModeButtonText, props.noteMode === 'note' && props.styles.desktopModeButtonTextActive]}>Note</Text></Pressable>
+          <Pressable style={[props.styles.desktopModeButton, props.noteMode === 'photo' && props.styles.desktopModeButtonActive]} onPress={() => props.onChangeMode('photo')}><Text style={[props.styles.desktopModeButtonText, props.noteMode === 'photo' && props.styles.desktopModeButtonTextActive]}>Photo</Text></Pressable>
         </View>
       </View>
       <View style={props.styles.desktopFilters}>
@@ -131,7 +180,7 @@ export function NotesBrowser(props: NotesBrowserProps) {
               <View style={props.styles.fill}>
                 <Text style={[props.styles.subjectTitle, props.selectedSubject?.id === item.id && props.styles.subjectTitleActive]}>{item.name}</Text>
                 <Text style={[props.styles.subjectMeta, props.selectedSubject?.id === item.id && props.styles.subjectMetaActive]}>
-                  {props.noteMode === 'photo' ? `${props.allNotes.filter((note) => note.subjectId === item.id).length}개 노트` : `${props.allStudyDocuments.filter((document) => document.subjectId === item.id).length}개 문서`}
+                  {props.noteMode === 'photo' ? `${getSubjectPhotoAssets(item.id).length}장 사진` : `${props.allStudyDocuments.filter((document) => document.subjectId === item.id).length}개 문서`}
                 </Text>
               </View>
             </Pressable>
@@ -139,29 +188,52 @@ export function NotesBrowser(props: NotesBrowserProps) {
         </View>
         <View style={props.styles.fill}>
           {props.noteMode === 'photo' ? (
-            props.notes.length ? props.notes.map((item) => {
-              const subject = findSubject(item.subjectId);
-              const subjectColor = subject?.color ?? '#D6DCE8';
-              return (
-                <Pressable key={item.id} style={props.styles.noteListCard} onPress={() => props.onOpenNote(item.id)}>
-                  <View style={[props.styles.noteListRail, { backgroundColor: subjectColor }]} />
-                  <Image source={item.image} style={props.styles.noteListThumb} resizeMode="cover" />
-                  <View style={props.styles.fill}>
-                    <Text style={props.styles.noteListDate}>{item.date}</Text>
-                    <Text style={props.styles.noteListTitle} numberOfLines={2}>{item.title}</Text>
+            selectedPhotoAssets.length ? (
+              <View style={props.styles.photoGalleryPanel}>
+                <View style={props.styles.photoGalleryHeader}>
+                  <View>
+                    <Text style={props.styles.photoGalleryTitle}>{props.selectedSubject?.name ?? 'Photo'} 원본 사진</Text>
+                    <Text style={props.styles.photoGalleryMeta}>{selectedPhotoAssets.length}장 · 촬영/가져오기 원본 저장</Text>
                   </View>
-                  <Pressable
-                    style={props.styles.libraryDeleteButton}
-                    onPress={(event) => {
-                      event.stopPropagation();
-                      props.onDeleteNote(item.id);
-                    }}
-                  >
-                    <MaterialCommunityIcons name="trash-can-outline" size={18} color="#C04B4B" />
-                  </Pressable>
-                </Pressable>
-              );
-            }) : <View style={props.styles.emptyCard}><Text style={props.styles.emptyTitle}>표시할 노트가 없습니다</Text><Text style={props.styles.emptyBody}>현재는 시간표와 과목 정보만 실제 데이터로 교체한 상태입니다.</Text></View>
+                </View>
+                <View style={props.styles.photoGalleryGrid}>
+                  {selectedPhotoAssets.map((asset) => {
+                    const imageSource = getCaptureImageSource(asset);
+                    const keywords = (asset.analysisKeywords ?? []).slice(0, 3);
+                    return (
+                      <View key={asset.id} style={props.styles.photoGalleryCard}>
+                        {imageSource ? (
+                          <Image source={imageSource} style={props.styles.photoGalleryImage} resizeMode="cover" />
+                        ) : (
+                          <View style={props.styles.photoGalleryFallback}>
+                            <MaterialCommunityIcons name="image-outline" size={28} color="#9AA6B8" />
+                          </View>
+                        )}
+                        <View style={props.styles.photoGalleryCardBody}>
+                          <Text style={props.styles.photoGalleryCardTitle} numberOfLines={2}>{asset.title}</Text>
+                          <Text style={props.styles.photoGalleryCardMeta} numberOfLines={1}>{formatCaptureDate(asset.createdAt)} · {asset.sourceDeviceLabel}</Text>
+                          <Text style={props.styles.photoGalleryCardSummary} numberOfLines={2}>{asset.analysisSummary ?? asset.summary}</Text>
+                          {keywords.length ? (
+                            <View style={props.styles.photoGalleryKeywordRow}>
+                              {keywords.map((keyword) => (
+                                <View key={`${asset.id}-${keyword}`} style={props.styles.photoGalleryKeyword}>
+                                  <Text style={props.styles.photoGalleryKeywordText}>{keyword}</Text>
+                                </View>
+                              ))}
+                            </View>
+                          ) : null}
+                        </View>
+                      </View>
+                    );
+                  })}
+                </View>
+              </View>
+            ) : (
+              <View style={props.styles.emptyCard}>
+                <Text style={props.styles.emptyTitle}>저장된 사진이 없습니다</Text>
+                <Text style={props.styles.emptyBody}>카메라나 사진첩에서 가져온 원본 사진은 이 과목 Photo 라이브러리에 모입니다. 필기 중 페이지에 연결해도 여기에는 계속 남아 있어요.</Text>
+              </View>
+            )
           ) : (
             <View style={props.styles.desktopDocumentsPanel}>
               {props.studyDocuments.length ? props.studyDocuments.map((item) => {
@@ -169,7 +241,7 @@ export function NotesBrowser(props: NotesBrowserProps) {
                 const subjectColor = subject?.color ?? '#D6DCE8';
                 const isPdf = item.type === 'pdf';
                 const isImage = item.type === 'image';
-                const documentPreviewUri = item.pageImageUrls?.[1] ?? (typeof item.file === 'object' && item.file && 'uri' in item.file ? item.file.uri : null);
+                const documentPreviewUri = item.thumbnailUrl ?? item.pageImageUrls?.[1] ?? (!isPdf && typeof item.file === 'object' && item.file && 'uri' in item.file ? item.file.uri : null);
                 return (
                   <Pressable key={item.id} style={props.styles.documentListCard} onPress={() => props.onOpenStudyDocument(item.id)}>
                     <View style={[props.styles.documentListRail, { backgroundColor: subjectColor }]} />

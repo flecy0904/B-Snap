@@ -12,6 +12,7 @@ type ResponderNativeEvent = GestureResponderEvent['nativeEvent'] & {
   buttons?: number;
   touches?: unknown[];
 };
+type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
 
 function shouldUsePrimaryPointer(event: GestureResponderEvent) {
   const nativeEvent = event.nativeEvent as ResponderNativeEvent;
@@ -45,6 +46,56 @@ function InkPath({ stroke, draft = false }: { stroke: InkStroke; draft?: boolean
   return <Path key={stroke.id} d={path} fill={stroke.color} />;
 }
 
+function getResizeCorner(rect: SelectionRect | null, point: InkPoint): ResizeCorner | null {
+  if (!rect) return null;
+  const threshold = 24;
+  const corners: Array<{ corner: ResizeCorner; x: number; y: number }> = [
+    { corner: 'nw', x: rect.x, y: rect.y },
+    { corner: 'ne', x: rect.x + rect.width, y: rect.y },
+    { corner: 'sw', x: rect.x, y: rect.y + rect.height },
+    { corner: 'se', x: rect.x + rect.width, y: rect.y + rect.height },
+  ];
+  return corners.find((corner) => Math.hypot(point.x - corner.x, point.y - corner.y) <= threshold)?.corner ?? null;
+}
+
+function resizeRectFromCorner(source: SelectionRect, corner: ResizeCorner, point: InkPoint): SelectionRect {
+  const minSize = 24;
+  const right = source.x + source.width;
+  const bottom = source.y + source.height;
+  const nextLeft = corner === 'nw' || corner === 'sw' ? Math.min(point.x, right - minSize) : source.x;
+  const nextRight = corner === 'ne' || corner === 'se' ? Math.max(point.x, source.x + minSize) : right;
+  const nextTop = corner === 'nw' || corner === 'ne' ? Math.min(point.y, bottom - minSize) : source.y;
+  const nextBottom = corner === 'sw' || corner === 'se' ? Math.max(point.y, source.y + minSize) : bottom;
+  return {
+    x: Math.max(0, nextLeft),
+    y: Math.max(0, nextTop),
+    width: Math.max(minSize, nextRight - nextLeft),
+    height: Math.max(minSize, nextBottom - nextTop),
+    pageWidth: point.pageWidth,
+    pageHeight: point.pageHeight,
+  };
+}
+
+function SelectionOverlay(props: { rect: SelectionRect; styles: any; draft?: boolean }) {
+  const handleOffset = -7;
+  return (
+    <View pointerEvents="none" style={[props.styles.selectionOverlayRect, props.draft && props.styles.selectionOverlayDraft, { left: props.rect.x, top: props.rect.y, width: props.rect.width, height: props.rect.height }]}>
+      {(['nw', 'ne', 'sw', 'se'] as const).map((corner) => (
+        <View
+          key={corner}
+          style={[
+            props.styles.selectionResizeHandle,
+            {
+              left: corner === 'nw' || corner === 'sw' ? handleOffset : props.rect.width + handleOffset,
+              top: corner === 'nw' || corner === 'ne' ? handleOffset : props.rect.height + handleOffset,
+            },
+          ]}
+        />
+      ))}
+    </View>
+  );
+}
+
 const StaticStrokes = memo(({ strokes, type }: { strokes: InkStroke[]; type: 'highlight' | 'ink' }) => {
   const filteredStrokes = useMemo(
     () => strokes.filter((stroke) => (type === 'highlight' ? stroke.style === 'highlight' : stroke.style !== 'highlight')),
@@ -69,6 +120,9 @@ export function BlankNoteCanvas(props: {
     inkTool,
     penColor,
     penWidth,
+    brushType,
+    linePattern,
+    brushSettings,
     inkStrokes,
     textAnnotations,
     selectionRect,
@@ -87,6 +141,8 @@ export function BlankNoteCanvas(props: {
   const [capturingSelection, setCapturingSelection] = useState(false);
   const currentStrokeRef = useRef<InkStroke | null>(null);
   const selectionOriginRef = useRef<InkPoint | null>(null);
+  const selectionResizeCornerRef = useRef<ResizeCorner | null>(null);
+  const selectionResizeStartRectRef = useRef<SelectionRect | null>(null);
   const draftSelectionRef = useRef<SelectionRect | null>(null);
   const textTapRef = useRef<InkPoint | null>(null);
   const captureTargetRef = useRef<View | null>(null);
@@ -146,12 +202,15 @@ export function BlankNoteCanvas(props: {
         if (isDrawingTool(inkTool)) {
           const appearance = isShapeTool(inkTool)
             ? resolveShapeStrokeAppearance(penColor, penWidth)
-            : resolveInkStrokeAppearance(inkTool, penColor, penWidth);
+            : resolveInkStrokeAppearance(inkTool, penColor, penWidth, brushType);
           const stroke: InkStroke = {
             id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
             color: appearance.color,
             width: appearance.width,
             style: isShapeTool(inkTool) ? 'shape' : inkTool === 'highlight' ? 'highlight' : 'pen',
+            brush: isShapeTool(inkTool) ? undefined : brushType,
+            brushSettings: isShapeTool(inkTool) ? undefined : brushSettings,
+            linePattern,
             shape: isShapeTool(inkTool) ? inkTool : undefined,
             pageWidth: pageSize.width || 1000,
             pageHeight: pageSize.height || 1000,
@@ -163,6 +222,15 @@ export function BlankNoteCanvas(props: {
         }
 
         if (inkTool === 'select') {
+          const currentSelection = selectionRect;
+          const resizeCorner = getResizeCorner(currentSelection, point);
+          if (currentSelection && resizeCorner) {
+            selectionResizeCornerRef.current = resizeCorner;
+            selectionResizeStartRectRef.current = currentSelection;
+            draftSelectionRef.current = currentSelection;
+            setDraftSelection(currentSelection);
+            return;
+          }
           onSelectionChange?.(null);
           onSelectionPreviewChange?.(null);
           selectionOriginRef.current = point;
@@ -206,6 +274,14 @@ export function BlankNoteCanvas(props: {
         }
 
         if (inkTool === 'select') {
+          const resizeCorner = selectionResizeCornerRef.current;
+          const resizeStartRect = selectionResizeStartRectRef.current;
+          if (resizeCorner && resizeStartRect) {
+            const nextRect = resizeRectFromCorner(resizeStartRect, resizeCorner, point);
+            draftSelectionRef.current = nextRect;
+            setDraftSelection(nextRect);
+            return;
+          }
           const origin = selectionOriginRef.current;
           if (!origin) return;
           const nextRect = {
@@ -225,10 +301,15 @@ export function BlankNoteCanvas(props: {
         if (stroke && stroke.points.length > 1) onCommitInkStroke(stroke);
         if (inkTool === 'select') {
           const rect = draftSelectionRef.current;
+          const resized = Boolean(selectionResizeCornerRef.current && selectionResizeStartRectRef.current);
           draftSelectionRef.current = null;
           selectionOriginRef.current = null;
+          selectionResizeCornerRef.current = null;
+          selectionResizeStartRectRef.current = null;
           setDraftSelection(null);
-          if (rect && rect.width > 24 && rect.height > 24) {
+          if (resized && rect && rect.width > 24 && rect.height > 24) {
+            canvasCtx.resizeSelectedStrokesToRect(rect);
+          } else if (rect && rect.width > 24 && rect.height > 24) {
             void buildSelectionPreview(rect).then((uri) => {
               onSelectionChange?.(rect);
               onSelectionPreviewChange?.(uri);
@@ -246,6 +327,8 @@ export function BlankNoteCanvas(props: {
         currentStrokeRef.current = null;
         draftSelectionRef.current = null;
         selectionOriginRef.current = null;
+        selectionResizeCornerRef.current = null;
+        selectionResizeStartRectRef.current = null;
         textTapRef.current = null;
         setDraftSelection(null);
         setCurrentStroke(null);
@@ -289,8 +372,8 @@ export function BlankNoteCanvas(props: {
           {currentStroke?.style !== 'highlight' && currentStroke ? <InkPath stroke={currentStroke} draft /> : null}
         </Svg>
         
-        {!capturingSelection && !draftSelection && selectionRect ? <View pointerEvents="none" style={[props.styles.selectionOverlayRect, { left: selectionRect.x, top: selectionRect.y, width: selectionRect.width, height: selectionRect.height }]} /> : null}
-        {!capturingSelection && draftSelection ? <View pointerEvents="none" style={[props.styles.selectionOverlayRect, props.styles.selectionOverlayDraft, { left: draftSelection.x, top: draftSelection.y, width: draftSelection.width, height: draftSelection.height }]} /> : null}
+        {!capturingSelection && !draftSelection && selectionRect ? <SelectionOverlay rect={selectionRect} styles={props.styles} /> : null}
+        {!capturingSelection && draftSelection ? <SelectionOverlay rect={draftSelection} styles={props.styles} draft /> : null}
       </View>
     </View>
   );

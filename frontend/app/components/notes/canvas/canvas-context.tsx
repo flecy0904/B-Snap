@@ -1,5 +1,5 @@
 import React, { createContext, useContext } from 'react';
-import type { InkBrush, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
+import type { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { useNotesGlobalContext } from '../workspace/notes-global-context';
 
 export type CanvasState = {
@@ -8,6 +8,7 @@ export type CanvasState = {
   penWidth: number;
   brushType: InkBrush;
   linePattern: InkLinePattern;
+  brushSettings: InkBrushSettings;
   inkStrokes: InkStroke[];
   textAnnotations: InkTextAnnotation[];
   selectionRect: SelectionRect | null;
@@ -23,6 +24,7 @@ export type CanvasActions = {
   setPenWidth: (width: number) => void;
   setBrushType: (brush: InkBrush) => void;
   setLinePattern: (pattern: InkLinePattern) => void;
+  setBrushSettings: (settings: Partial<InkBrushSettings>) => void;
   setSelectionRect: (rect: SelectionRect | null) => void;
   setSelectionPreviewUri: (uri: string | null) => void;
   clearCurrentSelection: () => void;
@@ -38,6 +40,7 @@ export type CanvasActions = {
   changeSelectedStrokesColor: (color: string) => void;
   duplicateSelectedStrokes: () => void;
   resizeSelectedStrokes: (scale: number) => void;
+  resizeSelectedStrokesToRect: (rect: SelectionRect) => void;
   nudgeSelectedStrokes: (dx: number, dy: number) => void;
 };
 
@@ -52,6 +55,7 @@ export function CanvasProvider({ children }: { children: React.ReactNode }) {
     penWidth: globalContext.penWidth,
     brushType: globalContext.brushType,
     linePattern: globalContext.linePattern,
+    brushSettings: globalContext.brushSettings,
     inkStrokes: globalContext.inkStrokes ?? [],
     textAnnotations: globalContext.textAnnotations ?? [],
     selectionRect: globalContext.selectionRect ?? null,
@@ -64,6 +68,7 @@ export function CanvasProvider({ children }: { children: React.ReactNode }) {
     setPenWidth: globalContext.onChangePenWidth,
     setBrushType: globalContext.onChangeBrushType,
     setLinePattern: globalContext.onChangeLinePattern,
+    setBrushSettings: globalContext.onChangeBrushSettings,
     setSelectionRect: globalContext.onSelectionChange,
     setSelectionPreviewUri: globalContext.onSelectionPreviewChange,
     clearCurrentSelection: globalContext.onClearSelection,
@@ -79,6 +84,7 @@ export function CanvasProvider({ children }: { children: React.ReactNode }) {
     changeSelectedStrokesColor: globalContext.changeSelectedStrokesColor,
     duplicateSelectedStrokes: globalContext.duplicateSelectedStrokes,
     resizeSelectedStrokes: globalContext.resizeSelectedStrokes,
+    resizeSelectedStrokesToRect: globalContext.resizeSelectedStrokesToRect,
     nudgeSelectedStrokes: globalContext.nudgeSelectedStrokes,
   };
 

@@ -132,7 +132,15 @@ export type BackendUpload = {
   page_count: number;
   page_numbers: number[];
   page_image_urls?: string[];
+  thumbnail_url?: string | null;
   url: string;
+  processed_url?: string | null;
+  analysis?: {
+    status?: 'pending' | 'ready' | 'failed' | string;
+    summary?: string | null;
+    keywords?: string[] | null;
+    confidence?: number | null;
+  } | null;
 };
 
 export type BackendAuthUser = {
@@ -279,6 +287,8 @@ export async function uploadBackendFile(file: {
   return {
     ...upload,
     url: resolveBackendAssetUrl(upload.url) ?? upload.url,
+    processed_url: resolveBackendAssetUrl(upload.processed_url) ?? upload.processed_url,
+    thumbnail_url: resolveBackendAssetUrl(upload.thumbnail_url) ?? upload.thumbnail_url,
     page_image_urls: upload.page_image_urls?.map((url) => resolveBackendAssetUrl(url) ?? url) ?? [],
   };
 }
@@ -334,6 +344,8 @@ export async function uploadBackendPdfNote(payload: {
     upload: {
       ...result.upload,
       url: resolveBackendAssetUrl(result.upload.url) ?? result.upload.url,
+      processed_url: resolveBackendAssetUrl(result.upload.processed_url) ?? result.upload.processed_url,
+      thumbnail_url: resolveBackendAssetUrl(result.upload.thumbnail_url) ?? result.upload.thumbnail_url,
       page_image_urls: result.upload.page_image_urls?.map((url) => resolveBackendAssetUrl(url) ?? url) ?? [],
     },
     pages: result.pages.map((page) => ({
@@ -476,6 +488,41 @@ export async function updateBackendNotePage(payload: {
     ...page,
     image_url: resolveBackendAssetUrl(page.image_url) ?? page.image_url,
   };
+}
+
+function normalizeBackendNotePages(pages: BackendNotePage[]) {
+  return pages.map((page) => ({
+    ...page,
+    image_url: resolveBackendAssetUrl(page.image_url) ?? page.image_url,
+  }));
+}
+
+export async function duplicateBackendNotePage(payload: {
+  noteId: number;
+  pageNumber: number;
+}) {
+  return request<BackendNotePage[]>(`/notes/${payload.noteId}/pages/${payload.pageNumber}/duplicate`, {
+    method: 'POST',
+  }).then(normalizeBackendNotePages);
+}
+
+export async function deleteBackendNotePageByNumber(payload: {
+  noteId: number;
+  pageNumber: number;
+}) {
+  return request<BackendNotePage[]>(`/notes/${payload.noteId}/pages/by-number/${payload.pageNumber}`, {
+    method: 'DELETE',
+  }).then(normalizeBackendNotePages);
+}
+
+export async function moveBackendNotePage(payload: {
+  noteId: number;
+  pageNumber: number;
+  delta: -1 | 1;
+}) {
+  return request<BackendNotePage[]>(`/notes/${payload.noteId}/pages/${payload.pageNumber}/move?delta=${payload.delta}`, {
+    method: 'POST',
+  }).then(normalizeBackendNotePages);
 }
 
 export async function extractBackendPdfText(payload: {
