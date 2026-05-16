@@ -1,12 +1,14 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
   createBackendAiCanvasNote,
   deleteBackendAiCanvasNote,
+  getBackendAiCanvasNote,
   listBackendAiCanvasNotes,
   requestBackendAiCanvasEdit,
   updateBackendAiCanvasNote,
   type BackendAiCanvasNote,
+  type BackendAiCanvasNoteSummary,
 } from '../../../services/backend-api';
 
 export type AiCanvasMode = 'preview' | 'edit';
@@ -14,7 +16,7 @@ export type AiCanvasMode = 'preview' | 'edit';
 export type UseAiCanvasNotesResult = {
   isOpen: boolean;
   mode: AiCanvasMode;
-  notes: BackendAiCanvasNote[];
+  notes: BackendAiCanvasNoteSummary[];
   activeNote: BackendAiCanvasNote | null;
   activeNoteId: number | null;
   markdownDraft: string;
@@ -74,7 +76,8 @@ export function useAiCanvasNotes({
 }): UseAiCanvasNotesResult {
   const [isOpen, setIsOpen] = useState(false);
   const [mode, setMode] = useState<AiCanvasMode>('preview');
-  const [notes, setNotes] = useState<BackendAiCanvasNote[]>([]);
+  const [notes, setNotes] = useState<BackendAiCanvasNoteSummary[]>([]);
+  const [activeNote, setActiveNote] = useState<BackendAiCanvasNote | null>(null);
   const [activeNoteId, setActiveNoteId] = useState<number | null>(null);
   const [markdownDraft, setMarkdownDraft] = useState('');
   const [loading, setLoading] = useState(false);
@@ -82,27 +85,49 @@ export function useAiCanvasNotes({
   const [error, setError] = useState<string | null>(null);
   const [aiDraftMarkdown, setAiDraftMarkdown] = useState<string | null>(null);
   const [aiEditing, setAiEditing] = useState(false);
+  const detailRequestIdRef = useRef(0);
 
-  const activeNote = useMemo(
-    () => notes.find((note) => note.id === activeNoteId) ?? null,
-    [activeNoteId, notes],
-  );
   const hasUnsavedChanges = !!activeNote && (
     markdownDraft !== activeNote.markdown
   );
   const canCreateNote = notes.length < MAX_AI_CANVAS_NOTES_PER_NOTE;
 
   const applyActiveNote = useCallback((note: BackendAiCanvasNote | null) => {
+    setActiveNote(note);
     setActiveNoteId(note?.id ?? null);
     setMarkdownDraft(note?.markdown ?? '');
     setMode(note ? 'preview' : 'edit');
     setAiDraftMarkdown(null);
   }, []);
 
+  const loadCanvasNoteDetail = useCallback(async (canvasNoteId: number) => {
+    const requestId = detailRequestIdRef.current + 1;
+    detailRequestIdRef.current = requestId;
+    setLoading(true);
+    setError(null);
+    try {
+      const detail = await getBackendAiCanvasNote(canvasNoteId);
+      if (detailRequestIdRef.current !== requestId) return;
+      applyActiveNote(detail);
+    } catch {
+      if (detailRequestIdRef.current !== requestId) return;
+      setError('AI Canvas Note瑜?遺덈윭?ㅼ? 紐삵뻽?듬땲??');
+    } finally {
+      if (detailRequestIdRef.current === requestId) setLoading(false);
+    }
+  }, [applyActiveNote]);
+
   useEffect(() => {
     if (!enabled || !noteId) {
+      detailRequestIdRef.current += 1;
       setNotes([]);
       applyActiveNote(null);
+      setLoading(false);
+      setError(null);
+      return;
+    }
+    if (!isOpen) {
+      detailRequestIdRef.current += 1;
       setLoading(false);
       setError(null);
       return;
@@ -116,7 +141,12 @@ export function useAiCanvasNotes({
       .then((items) => {
         if (!mounted) return;
         setNotes(items);
-        applyActiveNote(items[0] ?? null);
+        const nextActive = items[0] ?? null;
+        if (nextActive) {
+          void loadCanvasNoteDetail(nextActive.id);
+        } else {
+          applyActiveNote(null);
+        }
       })
       .catch(() => {
         if (!mounted) return;
@@ -128,13 +158,18 @@ export function useAiCanvasNotes({
 
     return () => {
       mounted = false;
+      detailRequestIdRef.current += 1;
     };
-  }, [applyActiveNote, enabled, noteId]);
+  }, [applyActiveNote, enabled, isOpen, loadCanvasNoteDetail, noteId]);
 
   const selectNote = useCallback((nextNoteId: number) => {
     const next = notes.find((note) => note.id === nextNoteId) ?? null;
-    applyActiveNote(next);
-  }, [applyActiveNote, notes]);
+    if (!next) {
+      applyActiveNote(null);
+      return;
+    }
+    void loadCanvasNoteDetail(next.id);
+  }, [applyActiveNote, loadCanvasNoteDetail, notes]);
 
   const createCanvasNote = useCallback(async () => {
     if (!enabled || !noteId) {
@@ -232,14 +267,19 @@ export function useAiCanvasNotes({
       await deleteBackendAiCanvasNote(activeNote.id);
       const nextNotes = notes.filter((note) => note.id !== activeNote.id);
       setNotes(nextNotes);
-      applyActiveNote(nextNotes[0] ?? null);
+      const nextActive = nextNotes[0] ?? null;
+      if (nextActive) {
+        await loadCanvasNoteDetail(nextActive.id);
+      } else {
+        applyActiveNote(null);
+      }
       onFeedback('AI Canvas Note를 삭제했습니다.');
     } catch {
       setError('AI Canvas Note를 삭제하지 못했습니다.');
     } finally {
       setSaving(false);
     }
-  }, [activeNote, applyActiveNote, notes, onFeedback]);
+  }, [activeNote, applyActiveNote, loadCanvasNoteDetail, notes, onFeedback]);
 
   const requestAiEditFromChat = useCallback(async ({ question, answer }: { question: string; answer: string }) => {
     if (!enabled || !noteId) {

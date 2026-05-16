@@ -90,16 +90,19 @@ export type BackendNotePage = {
   image_url: string | null;
 };
 
-export type BackendAiCanvasNote = {
+export type BackendAiCanvasNoteSummary = {
   id: number;
   folder_id: number;
   note_id: number;
   title: string;
-  markdown: string;
   source_page_start: number | null;
   source_page_end: number | null;
   created_at: string;
   updated_at: string;
+};
+
+export type BackendAiCanvasNote = BackendAiCanvasNoteSummary & {
+  markdown: string;
 };
 
 export type BackendAiCanvasEditResponse = {
@@ -547,11 +550,15 @@ export async function extractBackendPdfText(payload: {
 }
 
 export function listBackendAiCanvasNotes(noteId: number) {
-  return request<BackendAiCanvasNote[]>(`/notes/${noteId}/ai-canvas-notes`);
+  return request<BackendAiCanvasNoteSummary[]>(`/notes/${noteId}/ai-canvas-notes`);
 }
 
 export function listBackendAiCanvasNotesByFolder(folderId: number) {
-  return request<BackendAiCanvasNote[]>(`/folders/${folderId}/ai-canvas-notes`);
+  return request<BackendAiCanvasNoteSummary[]>(`/folders/${folderId}/ai-canvas-notes`);
+}
+
+export function getBackendAiCanvasNote(canvasNoteId: number) {
+  return request<BackendAiCanvasNote>(`/ai-canvas-notes/${canvasNoteId}`);
 }
 
 export async function createBackendAiCanvasNote(payload: {

@@ -106,6 +106,7 @@ export type DesktopNotesViewProps = {
   onChangeAiPanelMode: (mode: 'floating' | 'sidebar') => void;
   onChangeAiQuestion: (value: string) => void;
   onChangeAiChatScope: (scope: 'note' | 'all') => void;
+  onLoadAllAiChatSessions: () => void;
   onChangeAiChatSearchQuery: (value: string) => void;
   onSelectAiChatSession: (sessionId: number) => void;
   onRenameAiChatSession: (sessionId: number, title: string) => Promise<boolean>;
@@ -334,6 +335,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           onChangeAiPanelMode: props.onChangeAiPanelMode,
           onChangeAiQuestion: props.onChangeAiQuestion,
           onChangeAiChatScope: props.onChangeAiChatScope,
+          onLoadAllAiChatSessions: props.onLoadAllAiChatSessions,
           onChangeAiChatSearchQuery: props.onChangeAiChatSearchQuery,
           onSelectAiChatSession: props.onSelectAiChatSession,
           onRenameAiChatSession: props.onRenameAiChatSession,

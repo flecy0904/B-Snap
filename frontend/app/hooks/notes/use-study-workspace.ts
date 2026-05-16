@@ -155,6 +155,23 @@ export function useStudyWorkspace(props: {
     };
   };
 
+  const loadAllAiChatSessions = useCallback(() => {
+    if (!isBackendApiEnabled()) return;
+
+    listAllBackendChatSessions()
+      .then((sessions) => {
+        setAllChatSessions(sessions);
+      })
+      .catch((error) => {
+        setAiError(getAiBackendErrorMessage(error, 'AI 梨꾪똿 ?댁뿭??遺덈윭?ㅼ? 紐삵뻽?듬땲??'));
+      });
+  }, []);
+
+  const changeAiChatScope = useCallback((scope: 'note' | 'all') => {
+    setAiChatScope(scope);
+    if (scope === 'all') loadAllAiChatSessions();
+  }, [loadAllAiChatSessions]);
+
   const {
     availableSubjects,
     allStudyDocuments,
@@ -634,7 +651,7 @@ export function useStudyWorkspace(props: {
   }, [pendingPageSaves, savingPageKeys]);
 
   useEffect(() => {
-    if (!workspaceHydrated || !isBackendApiEnabled() || !studyDocumentId || !currentDocumentHasBackendPages) {
+    if (!workspaceHydrated || !aiPanelOpen || !isBackendApiEnabled() || !studyDocumentId || !currentDocumentHasBackendPages) {
       return;
     }
 
@@ -642,16 +659,12 @@ export function useStudyWorkspace(props: {
 
     const loadAiMessages = async () => {
       try {
-        const [sessions, allSessions] = await Promise.all([
-          listBackendChatSessions(studyDocumentId),
-          listAllBackendChatSessions(),
-        ]);
+        const sessions = await listBackendChatSessions(studyDocumentId);
         const preferredSessionId = chatSessionByDocument[studyDocumentId] ?? lastChatSessionByDocument[studyDocumentId];
         const session = sessions.find((item) => item.id === preferredSessionId) ?? sessions[0] ?? null;
 
         if (!session) {
           if (!mounted) return;
-          setAllChatSessions(allSessions);
           setChatSessionsByDocument((current) => ({ ...current, [studyDocumentId]: [] }));
           setChatSessionByDocument((current) => {
             const next = { ...current };
@@ -664,7 +677,6 @@ export function useStudyWorkspace(props: {
         const messages = await listBackendChatMessages(session.id);
         if (!mounted) return;
 
-        setAllChatSessions(allSessions);
         setChatSessionsByDocument((current) => ({ ...current, [studyDocumentId]: sessions }));
         setChatSessionByDocument((current) => ({ ...current, [studyDocumentId]: session.id }));
         setLastChatSessionByDocument((current) => ({ ...current, [studyDocumentId]: session.id }));
@@ -695,25 +707,8 @@ export function useStudyWorkspace(props: {
     return () => {
       mounted = false;
     };
-  }, [currentDocumentHasBackendPages, studyDocumentId, workspaceHydrated]);
+  }, [aiPanelOpen, currentDocumentHasBackendPages, studyDocumentId, workspaceHydrated]);
 
-  useEffect(() => {
-    if (!workspaceHydrated || !aiPanelOpen || !isBackendApiEnabled()) return;
-
-    let mounted = true;
-
-    listAllBackendChatSessions()
-      .then((sessions) => {
-        if (mounted) setAllChatSessions(sessions);
-      })
-      .catch((error) => {
-        if (mounted) setAiError(getAiBackendErrorMessage(error, 'AI 채팅 내역을 불러오지 못했습니다.'));
-      });
-
-    return () => {
-      mounted = false;
-    };
-  }, [aiPanelOpen, workspaceHydrated]);
 
   const openSubject = (id: number) => {
     props.onOpenNotesTab();
@@ -1925,7 +1920,9 @@ export function useStudyWorkspace(props: {
     }),
     setAiPanelMode,
     setAiQuestion,
-    setAiChatScope,
+    setAiChatScope: changeAiChatScope,
+    onChangeAiChatScope: changeAiChatScope,
+    onLoadAllAiChatSessions: loadAllAiChatSessions,
     setAiChatSearchQuery,
     selectAiChatSession,
     renameAiChatSession,
