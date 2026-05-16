@@ -3,7 +3,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import BottomSheet, { BottomSheetBackdrop, BottomSheetScrollView, type BottomSheetBackdropProps } from '@gorhom/bottom-sheet';
 import { ActivityIndicator, Image, Modal, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { isClassInsightTargetDocument } from '../../../hooks/notes/class-insight';
-import { PageReferenceText } from '../ai/page-reference-text';
+import { AiResponseContent } from '../ai/ai-response-content';
 import { PdfPreview } from '../pdf/pdf-preview';
 import { BlankNoteCanvas } from '../canvas/blank-note-canvas';
 import { NoteSummaryContent } from '../shared/notes-shared';
@@ -859,9 +859,10 @@ export function MobileNotesView(props: {
                         {message.role === 'user' ? (
                           <Text style={props.styles.aiResponseBody}>{message.content}</Text>
                         ) : (
-                          <PageReferenceText
+                          <AiResponseContent
                             content={message.content}
                             pageCount={props.studyDocument?.pageCount}
+                            styles={props.styles}
                             textStyle={props.styles.aiResponseBody}
                             linkStyle={props.styles.aiResponsePageLink}
                             onOpenPage={props.onSetCurrentPdfPage}
@@ -878,18 +879,20 @@ export function MobileNotesView(props: {
                 {aiResponseSections ? aiResponseSections.map((section, index) => (
                   <View key={`${section.title}-${index}`} style={[props.styles.aiResponseSection, index === aiResponseSections.length - 1 && props.styles.aiResponseSectionLast]}>
                     <Text style={props.styles.aiResponseSectionTitle}>{section.title}</Text>
-                    <PageReferenceText
+                    <AiResponseContent
                       content={section.body}
                       pageCount={props.studyDocument?.pageCount}
+                      styles={props.styles}
                       textStyle={props.styles.aiResponseBody}
                       linkStyle={props.styles.aiResponsePageLink}
                       onOpenPage={props.onSetCurrentPdfPage}
                     />
                   </View>
                 )) : (
-                  <PageReferenceText
+                  <AiResponseContent
                     content={aiResponse}
                     pageCount={props.studyDocument?.pageCount}
+                    styles={props.styles}
                     textStyle={props.styles.aiResponseBody}
                     linkStyle={props.styles.aiResponsePageLink}
                     onOpenPage={props.onSetCurrentPdfPage}

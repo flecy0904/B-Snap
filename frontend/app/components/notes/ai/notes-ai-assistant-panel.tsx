@@ -2,7 +2,7 @@ import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { ActivityIndicator, Animated, Image, PanResponder, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { isClassInsightTargetDocument } from '../../../hooks/notes/class-insight';
-import { PageReferenceText } from './page-reference-text';
+import { AiResponseContent } from './ai-response-content';
 import { useNotesGlobalContext } from '../workspace/notes-global-context';
 
 const FLOATING_PANEL_WIDTH = 300;
@@ -502,9 +502,10 @@ export function NotesAiAssistantPanel() {
                 {isUser ? (
                   <Text style={[workspace.styles.aiMessageText, workspace.styles.aiMessageTextUser]}>{message.content}</Text>
                 ) : (
-                  <PageReferenceText
+                  <AiResponseContent
                     content={message.content}
                     pageCount={workspace.studyDocument?.pageCount}
+                    styles={workspace.styles}
                     textStyle={[workspace.styles.aiMessageText, workspace.styles.aiMessageTextAssistant]}
                     linkStyle={workspace.styles.aiMessagePageLink}
                     onOpenPage={openLinkedPdfPage}

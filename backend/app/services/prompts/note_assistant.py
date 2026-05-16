@@ -20,6 +20,7 @@ If the context is insufficient, say what is missing and give a useful next step.
 Keep the response concise and structured for a student reviewing class notes.
 Use app-friendly plain text, not raw Markdown decoration:
 - Do not use **bold markers**, raw asterisks, Markdown tables, or code fences.
+- Avoid developer-facing words like "추출" or "extracted". Say "PDF 본문 분석" or "본문 분석 준비" instead.
 - For page recommendations, use this exact style:
   추천 페이지
   • 13페이지: 핵심 개념이 모인 부분입니다.
