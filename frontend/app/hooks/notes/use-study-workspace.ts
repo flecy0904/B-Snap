@@ -144,6 +144,7 @@ export function useStudyWorkspace(props: {
   const lastQueuedPageContentRef = useRef<Record<string, string>>({});
   const lastSavedPageContentRef = useRef<Record<string, string>>({});
   const backendPageLoadsInFlightRef = useRef<Record<number, true>>({});
+  const dirtyPageKeysRef = useRef<Set<string>>(new Set());
 
   const isPdfAssetUrl = (url: string | null | undefined) => !!url && /\.pdf(?:$|[?#])/i.test(url);
   const normalizeDocumentFile = (file: StudyDocumentEntry['file']) => {
@@ -387,6 +388,10 @@ export function useStudyWorkspace(props: {
     }
   }, []);
 
+  const markBackendPageDirty = useCallback((documentId: number, pageNumber: number) => {
+    dirtyPageKeysRef.current.add(getPageSaveKey(documentId, pageNumber));
+  }, []);
+
   useEffect(() => {
     if (!workspaceHydrated || !isBackendApiEnabled()) return;
 
@@ -483,44 +488,46 @@ export function useStudyWorkspace(props: {
       const nextPendingSaves: Record<string, PendingPageSave> = {};
       const clearedSaveKeys = new Set<string>();
 
-      Object.entries(backendPageIdsByDocument).forEach(([documentIdText, pagesByNumber]) => {
+      Array.from(dirtyPageKeysRef.current).forEach((key) => {
+        const [documentIdText, pageNumberText] = key.split(':');
         const documentId = Number(documentIdText);
+        const pageNumber = Number(pageNumberText);
+        const pageId = backendPageIdsByDocument[documentId]?.[pageNumber];
+        if (!documentId || !pageNumber || !pageId) return;
+
         const documentInk = inkByDocument[documentId] ?? [];
         const documentTextAnnotations = textAnnotationsByDocument[documentId] ?? [];
+        const pageInkStrokes = documentInk.filter((stroke) => !stroke.generatedPageId && (stroke.pageNumber ?? 1) === pageNumber);
+        const pageTextAnnotations = documentTextAnnotations.filter((annotation) => !annotation.generatedPageId && annotation.pageNumber === pageNumber);
 
-        Object.entries(pagesByNumber).forEach(([pageNumberText, pageId]) => {
-          const pageNumber = Number(pageNumberText);
-          const pageInkStrokes = documentInk.filter((stroke) => !stroke.generatedPageId && (stroke.pageNumber ?? 1) === pageNumber);
-          const pageTextAnnotations = documentTextAnnotations.filter((annotation) => !annotation.generatedPageId && annotation.pageNumber === pageNumber);
-          const key = getPageSaveKey(documentId, pageNumber);
-
-          const content = serializeNotePageContent({
-            inkStrokes: pageInkStrokes,
-            textAnnotations: pageTextAnnotations,
-          });
-          const savedContent = lastSavedPageContentRef.current[key];
-          if (savedContent === undefined && content === EMPTY_PAGE_CONTENT) {
-            lastSavedPageContentRef.current[key] = content;
-            lastQueuedPageContentRef.current[key] = content;
-            return;
-          }
-          if (savedContent === content) {
-            lastQueuedPageContentRef.current[key] = content;
-            clearedSaveKeys.add(key);
-            return;
-          }
-          if (lastQueuedPageContentRef.current[key] === content) return;
-          lastQueuedPageContentRef.current[key] = content;
-
-          nextPendingSaves[key] = {
-            pageId,
-            documentId,
-            pageNumber,
-            content,
-            attempts: 0,
-            updatedAt: Date.now(),
-          };
+        const content = serializeNotePageContent({
+          inkStrokes: pageInkStrokes,
+          textAnnotations: pageTextAnnotations,
         });
+        const savedContent = lastSavedPageContentRef.current[key];
+        if (savedContent === undefined && content === EMPTY_PAGE_CONTENT) {
+          lastSavedPageContentRef.current[key] = content;
+          lastQueuedPageContentRef.current[key] = content;
+          dirtyPageKeysRef.current.delete(key);
+          return;
+        }
+        if (savedContent === content) {
+          lastQueuedPageContentRef.current[key] = content;
+          dirtyPageKeysRef.current.delete(key);
+          clearedSaveKeys.add(key);
+          return;
+        }
+        if (lastQueuedPageContentRef.current[key] === content) return;
+        lastQueuedPageContentRef.current[key] = content;
+
+        nextPendingSaves[key] = {
+          pageId,
+          documentId,
+          pageNumber,
+          content,
+          attempts: 0,
+          updatedAt: Date.now(),
+        };
       });
 
       if (!Object.keys(nextPendingSaves).length && !clearedSaveKeys.size) return;
@@ -563,6 +570,7 @@ export function useStudyWorkspace(props: {
         .then(() => {
           lastSavedPageContentRef.current[key] = pending.content;
           lastQueuedPageContentRef.current[key] = pending.content;
+          dirtyPageKeysRef.current.delete(key);
           setPendingPageSaves((current) => {
             const currentPending = current[key];
             if (!currentPending || currentPending.content !== pending.content) return current;
@@ -1729,6 +1737,7 @@ export function useStudyWorkspace(props: {
     setSelectionByDocument,
     setInkTool,
     setWorkspaceFeedback,
+    onMarkPageDirty: markBackendPageDirty,
   });
 
   const openWorkspaceAttachment = (attachmentId: string) => {
