@@ -8,6 +8,7 @@ import {
   deleteBackendNote,
   ensureFolderForSubject,
   extractBackendPdfText,
+  getBackendClassInsight,
   isBackendApiEnabled,
   listAllBackendChatSessions,
   listBackendChatMessages,
@@ -20,6 +21,7 @@ import {
   updateBackendNotePage,
   uploadBackendPdfNote,
   BackendApiError,
+  type BackendClassInsight,
   type BackendChatSession,
   type BackendChatMessage,
 } from '../../services/backend-api';
@@ -130,6 +132,7 @@ export function useStudyWorkspace(props: {
   const [viewingAiChatSessionId, setViewingAiChatSessionId] = useState<number | null>(null);
   const [lastChatSessionByDocument, setLastChatSessionByDocument] = useState<Record<number, number>>({});
   const [chatSessionsByDocument, setChatSessionsByDocument] = useState<Record<number, BackendChatSession[]>>({});
+  const [classInsightByDocument, setClassInsightByDocument] = useState<Record<number, BackendClassInsight | null>>({});
   const [allChatSessions, setAllChatSessions] = useState<BackendChatSession[]>([]);
   const [aiChatScope, setAiChatScope] = useState<'note' | 'all'>('note');
   const [aiChatSearchQuery, setAiChatSearchQuery] = useState('');
@@ -292,6 +295,7 @@ export function useStudyWorkspace(props: {
     currentPageNumber: currentAiCanvasPageNumber ?? null,
     onFeedback: setWorkspaceFeedback,
   });
+  const currentClassInsight = studyDocumentId ? classInsightByDocument[studyDocumentId] ?? null : null;
 
   useEffect(() => {
     if (!workspaceFeedback) return;
@@ -317,6 +321,25 @@ export function useStudyWorkspace(props: {
     setIncomingBannerQueue,
     setIncomingAssetSuggestion,
   });
+
+  useEffect(() => {
+    if (!workspaceHydrated || !isBackendApiEnabled() || !studyDocumentId || !currentDocumentHasBackendPages) return;
+    if (Object.prototype.hasOwnProperty.call(classInsightByDocument, studyDocumentId)) return;
+
+    let mounted = true;
+
+    getBackendClassInsight(studyDocumentId)
+      .then((insight) => {
+        if (mounted) setClassInsightByDocument((current) => ({ ...current, [studyDocumentId]: insight }));
+      })
+      .catch(() => {
+        if (mounted) setClassInsightByDocument((current) => ({ ...current, [studyDocumentId]: null }));
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [classInsightByDocument, currentDocumentHasBackendPages, studyDocumentId, workspaceHydrated]);
 
   useEffect(() => {
     if (!workspaceHydrated || !isBackendApiEnabled()) return;
@@ -1559,6 +1582,7 @@ export function useStudyWorkspace(props: {
       bookmarks: currentDocumentBookmarks,
       pageCaptureReferences,
       generatedPages: generatedWorkspacePages,
+      classInsight: currentClassInsight,
     }),
   });
 

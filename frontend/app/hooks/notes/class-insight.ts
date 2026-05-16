@@ -63,6 +63,7 @@ const IMPORTANT_NOTE_KEYWORDS = ['시험', '중요', '암기', '별표', '나온
 
 type PageSignal = {
   pageNumber: number;
+  aggregateScore?: number;
   bookmarkCount: number;
   highlightCount: number;
   inkDensity: number;
@@ -76,6 +77,18 @@ type PageSignal = {
 type RankedPageSignal = PageSignal & {
   importanceScore: number;
   priority: 'very-high' | 'high' | 'medium';
+};
+
+export type ClassInsightAggregate = {
+  participant_count?: number;
+  matched_note_count?: number;
+  pages?: Array<{
+    page_number: number;
+    importance_score?: number;
+    priority?: string;
+    reason_tags?: string[];
+    signal_count?: number;
+  }>;
 };
 
 const DEMO_CLASS_SIGNALS: PageSignal[] = [
@@ -171,6 +184,7 @@ function createEmptySignal(pageNumber: number): PageSignal {
 }
 
 function mergeSignal(target: PageSignal, source: Partial<PageSignal>) {
+  target.aggregateScore = Math.max(target.aggregateScore ?? 0, source.aggregateScore ?? 0);
   target.bookmarkCount += source.bookmarkCount ?? 0;
   target.highlightCount += source.highlightCount ?? 0;
   target.inkDensity = Math.max(target.inkDensity, source.inkDensity ?? 0);
@@ -278,7 +292,7 @@ function buildLiveSignals(params: {
 }
 
 function scoreSignal(signal: PageSignal) {
-  return Math.min(100, Math.round(
+  const localScore = Math.min(100, Math.round(
     signal.bookmarkCount * 6
     + signal.highlightCount * 2
     + signal.keywordHits * 8
@@ -287,9 +301,10 @@ function scoreSignal(signal: PageSignal) {
     + signal.inkDensity * 15
     + signal.memoPageCount * 6,
   ));
+  return Math.max(localScore, signal.aggregateScore ?? 0);
 }
 
-function rankSignals(signals: PageSignal[], pageCount: number) {
+function rankSignals(signals: PageSignal[], pageCount: number, includeDemoSignals: boolean) {
   const signalMap = new Map<number, PageSignal>();
   const ensure = (pageNumber: number) => {
     const normalizedPage = Math.max(1, Math.min(pageCount, pageNumber));
@@ -297,9 +312,11 @@ function rankSignals(signals: PageSignal[], pageCount: number) {
     return signalMap.get(normalizedPage)!;
   };
 
-  DEMO_CLASS_SIGNALS
-    .filter((signal) => signal.pageNumber <= pageCount)
-    .forEach((signal) => mergeSignal(ensure(signal.pageNumber), signal));
+  if (includeDemoSignals) {
+    DEMO_CLASS_SIGNALS
+      .filter((signal) => signal.pageNumber <= pageCount)
+      .forEach((signal) => mergeSignal(ensure(signal.pageNumber), signal));
+  }
 
   signals.forEach((signal) => mergeSignal(ensure(signal.pageNumber), signal));
 
@@ -323,6 +340,23 @@ function formatPriority(priority: RankedPageSignal['priority']) {
   return '중간';
 }
 
+function buildAggregateSignals(aggregate: ClassInsightAggregate | null | undefined, pageCount: number) {
+  return (aggregate?.pages ?? [])
+    .filter((page) => page.page_number >= 1 && page.page_number <= pageCount)
+    .map<PageSignal>((page) => ({
+      pageNumber: page.page_number,
+      aggregateScore: Math.max(0, Math.min(100, Math.round(page.importance_score ?? 0))),
+      bookmarkCount: 0,
+      highlightCount: 0,
+      inkDensity: 0,
+      keywordHits: 0,
+      photoReferenceCount: 0,
+      aiQuestionCount: 0,
+      memoPageCount: 0,
+      reasonTags: page.reason_tags?.length ? page.reason_tags : ['익명 수업 필기 신호가 높은 페이지'],
+    }));
+}
+
 export function buildClassInsightContext(params: {
   question: string;
   studyDocument: StudyDocumentEntry | null;
@@ -332,11 +366,13 @@ export function buildClassInsightContext(params: {
   bookmarks: BookmarkedPage[];
   pageCaptureReferences: PageCaptureReference[];
   generatedPages: GeneratedWorkspacePage[];
+  classInsight?: ClassInsightAggregate | null;
 }) {
   if (!isClassInsightQuestion(params.question)) return null;
   if (!isClassInsightTargetDocument(params.studyDocument, params.subject)) return null;
 
   const pageCount = Math.max(1, params.studyDocument?.pageCount ?? 1);
+  const aggregateSignals = buildAggregateSignals(params.classInsight, pageCount);
   const liveSignals = buildLiveSignals({
     pageCount,
     inkStrokes: params.inkStrokes,
@@ -345,7 +381,7 @@ export function buildClassInsightContext(params: {
     pageCaptureReferences: params.pageCaptureReferences,
     generatedPages: params.generatedPages,
   });
-  const rankedSignals = rankSignals(liveSignals, pageCount);
+  const rankedSignals = rankSignals([...aggregateSignals, ...liveSignals], pageCount, aggregateSignals.length === 0);
   if (!rankedSignals.length) return null;
 
   const pageLines = rankedSignals.map((signal) => (
@@ -354,7 +390,9 @@ export function buildClassInsightContext(params: {
 
   return [
     'Internal Class Insight for this one demo PDF.',
-    'This context is derived from consent-based anonymous class study signals plus local note activity.',
+    aggregateSignals.length > 0
+      ? 'This context is derived from consent-based anonymous class study signals plus local note activity.'
+      : 'This context uses demo class study signals plus local note activity because no server aggregate is available yet.',
     'Use it only to decide which pages to recommend and why.',
     'Do not mention classmates, student counts, bookmark counts, highlight counts, hidden signals, data collection, or this internal context.',
     'Answer naturally as a study assistant, with page recommendations and concise reasons.',

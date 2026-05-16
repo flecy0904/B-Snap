@@ -99,6 +99,21 @@ export type BackendAiCanvasNote = {
   updated_at: string;
 };
 
+export type BackendClassInsightPageSignal = {
+  page_number: number;
+  importance_score: number;
+  priority: 'very-high' | 'high' | 'medium' | string;
+  reason_tags: string[];
+  signal_count: number;
+};
+
+export type BackendClassInsight = {
+  note_id: number;
+  matched_note_count: number;
+  participant_count: number;
+  pages: BackendClassInsightPageSignal[];
+};
+
 export type BackendAiCanvasEditResponse = {
   markdown: string;
   model: string;
@@ -413,6 +428,10 @@ export function listBackendNotePages(noteId: number) {
       image_url: resolveBackendAssetUrl(page.image_url) ?? page.image_url,
     }))
   ));
+}
+
+export function getBackendClassInsight(noteId: number) {
+  return request<BackendClassInsight>(`/notes/${noteId}/class-insights`);
 }
 
 export async function createBackendNote(payload: {
