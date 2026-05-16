@@ -536,6 +536,7 @@ export function useDocumentPageActions(params: {
 
   const updateStudyDocumentPageCount = (pageCount: number) => {
     if (!params.studyDocumentId || !params.studyDocument || !Number.isFinite(pageCount) || pageCount < 1) return;
+    if (pageCount < params.studyDocument.pageCount) return;
     params.setUserStudyDocuments((current) => upsertStudyDocument(current, {
       ...params.studyDocument!,
       pageCount,

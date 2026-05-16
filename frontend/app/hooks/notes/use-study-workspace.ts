@@ -362,12 +362,14 @@ export function useStudyWorkspace(props: {
             });
 
             const firstPageUrl = firstPage?.image_url ?? null;
+            const fileUrl = backendNote.file_url ?? (isPdfAssetUrl(firstPageUrl) ? firstPageUrl : null);
             const pageImageUrls = pages.reduce<Record<number, string>>((next, page) => {
               if (page.image_url && !isPdfAssetUrl(page.image_url)) next[page.page_number] = page.image_url;
               return next;
             }, {});
-            const pdfLikeBackendNote = /\.pdf$/i.test(backendNote.title.trim()) || pages.length > 1 || isPdfAssetUrl(firstPageUrl);
+            const pdfLikeBackendNote = /\.pdf$/i.test(backendNote.title.trim()) || !!fileUrl || pages.length > 1;
             const documentType = pdfLikeBackendNote ? 'pdf' as const : firstPageUrl ? 'image' as const : 'blank' as const;
+            const pageCount = Math.max(1, backendNote.page_count ?? pages.length);
 
             return {
               id: backendNote.id,
@@ -375,10 +377,11 @@ export function useStudyWorkspace(props: {
               title: backendNote.title,
               type: documentType,
               updatedAt: 'DB 저장됨',
-              pageCount: Math.max(1, pages.length),
+              pageCount,
               preview: backendNote.summary ?? firstPage?.content ?? '백엔드에 저장된 노트입니다.',
-              file: firstPageUrl ? { uri: firstPageUrl } : undefined,
+              file: fileUrl ? { uri: fileUrl } : firstPageUrl ? { uri: firstPageUrl } : undefined,
               pageImageUrls: Object.keys(pageImageUrls).length ? pageImageUrls : undefined,
+              thumbnailUrl: backendNote.thumbnail_url ?? undefined,
             } satisfies StudyDocumentEntry;
           }),
         );
@@ -1023,10 +1026,10 @@ export function useStudyWorkspace(props: {
             title: result.note.title,
             type: 'pdf',
             updatedAt: '방금 전',
-            pageCount: Math.max(1, result.upload.page_count),
+            pageCount: Math.max(1, result.note.page_count ?? result.upload.page_count),
             preview: result.note.summary ?? '업로드한 PDF 문서입니다.',
-            file: { uri: result.upload.url },
-            thumbnailUrl: result.upload.thumbnail_url ?? undefined,
+            file: { uri: result.note.file_url ?? result.upload.url },
+            thumbnailUrl: result.note.thumbnail_url ?? result.upload.thumbnail_url ?? undefined,
           };
           openCreatedStudyDocument(document, `${document.pageCount}페이지 PDF를 백엔드에 저장했습니다.`);
           return;

@@ -55,7 +55,6 @@ class StoredUpload:
     size_bytes: int
     url: str
     page_numbers: list[int]
-    page_image_urls: list[str]
     thumbnail_url: str | None = None
     processed_url: str | None = None
     analysis: dict | None = None
@@ -242,7 +241,6 @@ async def _store_upload(file: UploadFile, settings: Settings) -> StoredUpload:
         size_bytes=total_bytes,
         url=f"/uploads/{stored_name}",
         page_numbers=page_numbers,
-        page_image_urls=[],
         thumbnail_url=thumbnail_url,
     )
     _analyze_image_upload(upload, target, settings)
@@ -257,7 +255,6 @@ def _upload_response(upload: StoredUpload) -> dict:
         "size_bytes": upload.size_bytes,
         "page_count": len(upload.page_numbers),
         "page_numbers": upload.page_numbers,
-        "page_image_urls": upload.page_image_urls,
         "thumbnail_url": upload.thumbnail_url,
         "url": upload.url,
         "processed_url": upload.processed_url,
@@ -290,8 +287,6 @@ async def upload_pdf_note(
         _cleanup_stored_upload(upload, settings)
         raise HTTPException(status_code=415, detail="PDF 파일만 노트로 업로드할 수 있습니다.")
 
-    page_image_urls = [upload.url if index == 0 else "" for index, _ in enumerate(upload.page_numbers)]
-
     try:
         with connection.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
@@ -303,11 +298,19 @@ async def upload_pdf_note(
 
             cursor.execute(
                 """
-                INSERT INTO notes (user_id, folder_id, title, summary)
-                VALUES (%s, %s, %s, %s)
-                RETURNING id, folder_id, title, summary, created_at, updated_at
+                INSERT INTO notes (user_id, folder_id, title, summary, file_url, thumbnail_url, page_count)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING id, folder_id, title, summary, file_url, thumbnail_url, page_count, created_at, updated_at
                 """,
-                (current_user["id"], folder_id, title.strip() or upload.filename, summary),
+                (
+                    current_user["id"],
+                    folder_id,
+                    title.strip() or upload.filename,
+                    summary,
+                    upload.url,
+                    upload.thumbnail_url,
+                    len(upload.page_numbers),
+                ),
             )
             note = cursor.fetchone()
             if note is None:
@@ -316,15 +319,14 @@ async def upload_pdf_note(
             cursor.execute(
                 """
                 INSERT INTO note_pages (note_id, page_number, content, image_url)
-                SELECT %s, pages.page_number, %s, NULLIF(pages.image_url, '')
-                FROM unnest(%s::int[], %s::text[]) AS pages(page_number, image_url)
+                SELECT %s, pages.page_number, %s, NULL
+                FROM unnest(%s::int[]) AS pages(page_number)
                 RETURNING id, note_id, page_number, content, image_url, created_at, updated_at
                 """,
                 (
                     note["id"],
                     EMPTY_PAGE_CONTENT,
                     upload.page_numbers,
-                    page_image_urls,
                 ),
             )
             pages = sorted(cursor.fetchall(), key=lambda page: page["page_number"])
