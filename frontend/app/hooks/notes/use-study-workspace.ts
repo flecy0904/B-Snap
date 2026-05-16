@@ -92,6 +92,7 @@ export function useStudyWorkspace(props: {
   const [noteWorkspaceMode, setNoteWorkspaceMode] = useState<NoteWorkspaceMode>('note');
   const [studyDocumentId, setStudyDocumentId] = useState<number | null>(null);
   const [inkTool, setInkTool] = useState<InkTool>('view');
+  const [fingerDrawingEnabled, setFingerDrawingEnabled] = useState(true);
   const [penColor, setPenColor] = useState<string>(DEFAULT_PEN_COLOR);
   const [penWidth, setPenWidth] = useState(3);
   const [brushType, setBrushType] = useState<InkBrush>('ballpoint');
@@ -1419,6 +1420,60 @@ export function useStudyWorkspace(props: {
     pdfSuffix: '페이지',
   });
 
+  const getReferencePageLabelForDocument = (documentId: number, page: DocumentPageView) => {
+    if (documentId === studyDocumentId) return getReferencePageLabel(page);
+    return getDocumentPageLabel({
+      page,
+      pages: page.kind === 'pdf'
+        ? Array.from({ length: Math.max(1, allStudyDocuments.find((document) => document.id === documentId)?.pageCount ?? 1) }, (_, index) => ({
+            kind: 'pdf' as const,
+            pageNumber: index + 1,
+          }))
+        : [],
+      memoPages: [],
+      pdfSuffix: '페이지',
+    });
+  };
+
+  const linkCaptureAssetToPage = (assetId: string, documentId: number, rawPageNumber: number) => {
+    const asset = findCaptureAssetById(assetId);
+    const targetDocument = allStudyDocuments.find((document) => document.id === documentId);
+    if (!asset || !targetDocument) {
+      setWorkspaceFeedback('연결할 사진 또는 노트를 찾지 못했습니다.');
+      return false;
+    }
+
+    const pageNumber = Math.max(1, Math.min(Math.max(1, targetDocument.pageCount), Math.round(rawPageNumber || 1)));
+    const page: DocumentPageView = { kind: 'pdf', pageNumber };
+    const pageLabel = getReferencePageLabelForDocument(documentId, page);
+    const existingReferences = pageCaptureReferencesByDocument[documentId] ?? [];
+    const alreadyLinked = existingReferences.some((reference) => reference.assetId === asset.id && isSameDocumentPage(reference.page, page));
+
+    setPageCaptureReferencesByDocument((current) => {
+      if (alreadyLinked) return current;
+      const currentReferences = current[documentId] ?? [];
+
+      const reference = buildPageCaptureReference({
+        asset,
+        documentId,
+        page,
+        pageLabel,
+        subjects: availableSubjects,
+      });
+
+      return {
+        ...current,
+        [documentId]: [reference, ...currentReferences],
+      };
+    });
+
+    updateAssetStatus(asset.id, 'accepted');
+    setIncomingAssetSuggestion((current) => (current?.id === asset.id ? null : current));
+    setIncomingBannerQueue((current) => current.filter((value) => value.id !== asset.id));
+    setWorkspaceFeedback(alreadyLinked ? `${pageLabel}에 이미 연결된 사진입니다.` : `${targetDocument.title} ${pageLabel}에 사진을 연결했습니다.`);
+    return !alreadyLinked;
+  };
+
   const linkCaptureAssetToCurrentPage = async (asset: CaptureAsset) => {
     if (!studyDocumentId || !studyDocument) {
       await createImageNoteFromAsset(asset);
@@ -1511,6 +1566,41 @@ export function useStudyWorkspace(props: {
     setWorkspaceFeedback('자료 연결 위치를 이동했습니다.');
   };
 
+  const movePageCaptureReferenceToPage = (referenceId: string, rawPageNumber: number) => {
+    let moved = false;
+    let targetLabel = '';
+
+    setPageCaptureReferencesByDocument((current) => {
+      const matchedEntry = Object.entries(current).find(([, references]) => references.some((reference) => reference.id === referenceId));
+      if (!matchedEntry) return current;
+
+      const documentId = Number(matchedEntry[0]);
+      const targetDocument = allStudyDocuments.find((document) => document.id === documentId);
+      if (!targetDocument) return current;
+
+      const pageNumber = Math.max(1, Math.min(Math.max(1, targetDocument.pageCount), Math.round(rawPageNumber || 1)));
+      const nextPage: DocumentPageView = { kind: 'pdf', pageNumber };
+      targetLabel = getReferencePageLabelForDocument(documentId, nextPage);
+
+      return {
+        ...current,
+        [documentId]: (current[documentId] ?? []).map((reference) => {
+          if (reference.id !== referenceId) return reference;
+          moved = true;
+          return {
+            ...reference,
+            page: nextPage,
+            pageLabel: targetLabel,
+          };
+        }),
+      };
+    });
+
+    if (moved) {
+      setWorkspaceFeedback(`${targetLabel}로 자료 연결 위치를 옮겼습니다.`);
+    }
+  };
+
   const removePageCaptureReference = (referenceId: string) => {
     if (!studyDocumentId) return;
     setPageCaptureReferencesByDocument((current) => ({
@@ -1596,11 +1686,12 @@ export function useStudyWorkspace(props: {
     }
 
     const question = buildPageCaptureReferenceQuestion(reference);
+    const referenceImageUri = resolveBackendAssetUrl(reference.processedUrl ?? reference.fileUrl ?? reference.thumbnailUrl ?? '') || null;
     setAiPanelOpen(true);
     setViewingAiChatSessionId(null);
     void requestAiAnswerForQuestion(question, {
       pageNumber: reference.page.kind === 'pdf' ? reference.page.pageNumber : currentPdfPage,
-      selectionImageUri: null,
+      selectionImageUri: referenceImageUri,
     });
     setWorkspaceFeedback('연결 자료로 AI 채팅을 시작했습니다.');
   };
@@ -1860,6 +1951,7 @@ export function useStudyWorkspace(props: {
     noteWorkspaceMode,
     studyDocument,
     inkTool,
+    fingerDrawingEnabled,
     penColor,
     penWidth,
     brushType,
@@ -1982,8 +2074,10 @@ export function useStudyWorkspace(props: {
     insertInboxAsset,
     removeInboxAsset,
     removeCaptureAsset,
+    linkCaptureAssetToPage,
     openPageCaptureReference,
     movePageCaptureReference,
+    movePageCaptureReferenceToPage,
     removePageCaptureReference,
     askAiAboutPageCaptureReference,
     openIncomingBanner,
@@ -2006,6 +2100,7 @@ export function useStudyWorkspace(props: {
     goToPreviousDocumentPage: () => moveDocumentPage(-1),
     goToNextDocumentPage: () => moveDocumentPage(1),
     setQuery,
+    toggleFingerDrawing: () => setFingerDrawingEnabled((current) => !current),
     toggleSort: () => setSort((current) => (current === 'latest' ? 'oldest' : 'latest')),
   };
 }

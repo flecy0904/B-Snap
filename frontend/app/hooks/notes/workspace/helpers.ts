@@ -101,6 +101,7 @@ export function buildWorkspaceAttachment(asset: CaptureAsset, generatedPageId: s
     previewImage: asset.previewImage,
     fileUrl: asset.fileUrl,
     thumbnailUrl: asset.thumbnailUrl,
+    processedUrl: asset.processedUrl,
     placementType: asset.type === 'image' ? 'next_page_insert' : 'side_reference',
   };
 }
@@ -149,6 +150,7 @@ export function buildPageCaptureReference(props: {
     previewImage: props.asset.previewImage,
     fileUrl: props.asset.fileUrl,
     thumbnailUrl: props.asset.thumbnailUrl,
+    processedUrl: props.asset.processedUrl,
     pageCount: props.asset.pageCount,
   };
 }

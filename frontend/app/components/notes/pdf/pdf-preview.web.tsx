@@ -160,6 +160,10 @@ function shouldCaptureDrawingMove(event: GestureResponderEvent, startPoint: Resp
   return Math.abs(dx) > Math.abs(dy) * 1.18;
 }
 
+function isInkCaptureTool(tool: InkTool) {
+  return isDrawingTool(tool) || tool === 'select' || tool === 'erase';
+}
+
 function isPdfUri(uri: string | undefined) {
   return !!uri && /\.pdf(?:$|[?#])/i.test(uri);
 }
@@ -321,6 +325,7 @@ export function PdfPreview(props: {
   file: number | string | { uri: string };
   page: number;
   inkTool: InkTool;
+  fingerDrawingEnabled?: boolean;
   penColor: string;
   penWidth: number;
   brushType: InkBrush;
@@ -381,8 +386,8 @@ export function PdfPreview(props: {
   const canvasRefs = useRef<Record<number, HTMLCanvasElement | null>>({});
   const scrollingProgrammaticallyRef = useRef(false);
   const suppressNextScrollSyncRef = useRef(false);
-  const interactionLocksScroll = props.inkTool !== 'view';
-  const scrollEnabled = !interactionLocksScroll;
+  const inkInputLocksScroll = Boolean(props.fingerDrawingEnabled && isInkCaptureTool(props.inkTool));
+  const scrollEnabled = !inkInputLocksScroll;
 
   const pdfUri = useMemo(() => {
     if (typeof props.file === 'string') return props.file;
@@ -977,16 +982,15 @@ export function PdfPreview(props: {
             responderStartPointRef.current = { x: event.nativeEvent.locationX, y: event.nativeEvent.locationY };
             if (event.nativeEvent.touches && event.nativeEvent.touches.length > 1) return false;
             if (!isPrimaryPointerEvent(event)) return false;
-            if (interactionLocksScroll && (isDrawingTool(props.inkTool) || props.inkTool === 'select' || props.inkTool === 'erase')) return true;
-            if (isLikelyStylusEvent(event) && (isDrawingTool(props.inkTool) || props.inkTool === 'select')) return true;
+            if (isInkCaptureTool(props.inkTool) && (props.fingerDrawingEnabled || isLikelyStylusEvent(event))) return true;
             return props.inkTool === 'text';
           }}
           onMoveShouldSetResponder={(event) => {
             if (event.nativeEvent.touches && event.nativeEvent.touches.length > 1) return false;
             if (!isPrimaryPointerEvent(event)) return false;
-            if (interactionLocksScroll && (isDrawingTool(props.inkTool) || props.inkTool === 'select' || props.inkTool === 'erase')) return true;
-            if (props.inkTool === 'select') return shouldCaptureDrawingMove(event, responderStartPointRef.current);
-            if (isDrawingTool(props.inkTool)) return shouldCaptureDrawingMove(event, responderStartPointRef.current);
+            if (isInkCaptureTool(props.inkTool)) {
+              return props.fingerDrawingEnabled || shouldCaptureDrawingMove(event, responderStartPointRef.current);
+            }
             return false;
           }}
           onResponderGrant={(event) => {

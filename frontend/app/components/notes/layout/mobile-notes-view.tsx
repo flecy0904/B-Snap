@@ -94,6 +94,7 @@ export function MobileNotesView(props: {
   noteTab: 'original' | 'summary';
   noteMode: NoteWorkspaceMode;
   inkTool: InkTool;
+  fingerDrawingEnabled: boolean;
   penColor: string;
   penWidth: number;
   brushType: InkBrush;
@@ -138,6 +139,7 @@ export function MobileNotesView(props: {
   onChangeNoteTab: (tab: 'original' | 'summary') => void;
   onChangeMode: (mode: NoteWorkspaceMode) => void;
   onChangeInkTool: (tool: InkTool) => void;
+  onToggleFingerDrawing: () => void;
   onChangePenColor: (color: string) => void;
   onChangePenWidth: (width: number) => void;
   onChangeBrushType: (brush: InkBrush) => void;
@@ -167,8 +169,10 @@ export function MobileNotesView(props: {
   onInsertInboxAsset: (assetId: string) => void;
   onRemoveInboxAsset: (assetId: string) => void;
   onRemoveCaptureAsset: (assetId: string) => void;
+  onLinkCaptureAssetToPage: (assetId: string, documentId: number, pageNumber: number) => boolean;
   onOpenPageCaptureReference: (referenceId: string) => void;
   onMovePageCaptureReference: (referenceId: string, delta: -1 | 1) => void;
+  onMovePageCaptureReferenceToPage: (referenceId: string, pageNumber: number) => void;
   onRemovePageCaptureReference: (referenceId: string) => void;
   onAskAiAboutPageCaptureReference: (referenceId: string) => void;
   onRemoveWorkspaceAttachment: (attachmentId: string) => void;
@@ -447,6 +451,12 @@ export function MobileNotesView(props: {
         ) : (
         <View style={props.styles.mobileDocToolbar}>
           <View style={props.styles.mobileDocTools}>
+            <Pressable
+              style={[props.styles.mobileDocToolButton, props.fingerDrawingEnabled && props.styles.inkToolButtonActive]}
+              onPress={props.onToggleFingerDrawing}
+            >
+              <MaterialCommunityIcons name="gesture-tap" size={18} color={props.fingerDrawingEnabled ? props.blueColor : '#7D8797'} />
+            </Pressable>
             <View style={props.styles.mobileInkToolCluster}>
               {MOBILE_HANDWRITING_TOOLS.map((tool) => {
                 const isBrush = tool.value === 'pen' || tool.value === 'highlight';
@@ -670,6 +680,7 @@ export function MobileNotesView(props: {
               file={props.studyDocument.file}
               page={props.currentPdfPage}
               inkTool={phoneViewerOnly ? (props.inkTool === 'select' ? 'select' : 'view') : props.inkTool}
+              fingerDrawingEnabled={props.fingerDrawingEnabled}
               penColor={props.penColor}
               penWidth={props.penWidth}
               brushType={props.brushType}

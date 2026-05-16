@@ -4,6 +4,7 @@ import { Image, Modal, Pressable, ScrollView, Text, TextInput, View } from 'reac
 import { subjects as allSubjects } from '../../../app-defaults';
 import { CaptureAsset, NoteEntry, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject } from '../../../types';
 import { cleanAiDisplayText, darkenHex } from '../../../ui-helpers';
+import { PhotoViewerLinkPanel } from './photo-viewer-link-panel';
 
 function getCaptureImageSource(asset: CaptureAsset) {
   const uri = asset.thumbnailUrl ?? asset.fileUrl ?? asset.previewImageKey;
@@ -66,6 +67,7 @@ export type NotesBrowserProps = {
   onRestoreNote: (id: number) => void;
   onRestoreStudyDocument: (id: number) => void;
   onInsertInboxAsset: (assetId: string) => void;
+  onLinkCaptureAssetToPage: (assetId: string, documentId: number, pageNumber: number) => boolean;
   onOpenPageCaptureReference: (referenceId: string) => void;
   onAskAiAboutPageCaptureReference: (referenceId: string) => void;
   onRemoveCaptureAsset: (assetId: string) => void;
@@ -124,8 +126,22 @@ export function NotesBrowser(props: NotesBrowserProps) {
     [previewAssetId, selectedPhotoAssets],
   );
   const previewImageSource = previewAsset ? getCaptureImageSource(previewAsset) : null;
-  const previewReferences = previewAsset ? getCaptureReferences(previewAsset, props.pageCaptureReferences) : [];
+  const previewReferences = React.useMemo(
+    () => previewAsset ? getCaptureReferences(previewAsset, props.pageCaptureReferences) : [],
+    [previewAsset, props.pageCaptureReferences],
+  );
   const previewPrimaryReference = previewReferences[0] ?? null;
+  const linkableDocuments = React.useMemo(() => {
+    if (!previewAsset) return [];
+    return props.allStudyDocuments
+      .filter((document) => document.subjectId === previewAsset.subjectId && document.type !== 'image' && document.pageCount > 0)
+      .sort((left, right) => (left.id === previewPrimaryReference?.documentId ? -1 : right.id === previewPrimaryReference?.documentId ? 1 : right.id - left.id));
+  }, [previewAsset, previewPrimaryReference?.documentId, props.allStudyDocuments]);
+  const selectedLinkDocument = React.useMemo(
+    () => linkableDocuments.find((document) => document.id === previewPrimaryReference?.documentId) ?? linkableDocuments[0] ?? null,
+    [linkableDocuments, previewPrimaryReference?.documentId],
+  );
+  const selectedLinkInitialPageNumber = previewPrimaryReference?.page.kind === 'pdf' ? previewPrimaryReference.page.pageNumber : 1;
 
   React.useEffect(() => {
     if (recoverableCount === 0) setRecoveryOpen(false);
@@ -368,6 +384,17 @@ export function NotesBrowser(props: NotesBrowserProps) {
                     ) : (
                       <Text style={props.styles.photoViewerInfoValue}>아직 노트 페이지에 연결되지 않았습니다.</Text>
                     )}
+                    <PhotoViewerLinkPanel
+                      styles={props.styles}
+                      assetId={previewAsset.id}
+                      documents={linkableDocuments}
+                      initialDocumentId={selectedLinkDocument?.id ?? null}
+                      initialPageNumber={selectedLinkInitialPageNumber}
+                      onLink={(assetId, documentId, pageNumber) => {
+                        props.onLinkCaptureAssetToPage(assetId, documentId, pageNumber);
+                        setPreviewAssetId(null);
+                      }}
+                    />
                   </View>
                   <View style={props.styles.photoViewerInfoCard}>
                     <View style={props.styles.photoViewerInfoHeader}>

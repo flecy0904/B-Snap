@@ -36,12 +36,12 @@ const ADVANCED_CONTROLS: Array<{ key: keyof InkBrushSettings; label: string }> =
 ];
 const TOP_DOCK_Y = 12;
 const TOP_DOCK_THRESHOLD = 72;
-const TOP_DOCK_RIGHT_GAP = 470;
+const TOP_DOCK_RIGHT_GAP = 360;
 
 function getDefaultPalettePosition(width: number) {
   const maxDockedX = Math.max(10, width - TOP_DOCK_RIGHT_GAP);
   return {
-    x: Math.max(10, Math.min(maxDockedX, Math.round(width * 0.62))),
+    x: Math.max(10, Math.min(maxDockedX, Math.round(width * 0.68))),
     y: TOP_DOCK_Y,
   };
 }
@@ -178,6 +178,12 @@ export function FloatingToolPalette() {
           onPress={() => setCollapsed((current) => !current)}
         >
           <MaterialCommunityIcons name={collapseIcon} size={20} color={collapsed ? '#2563EB' : '#283241'} />
+        </Pressable>
+        <Pressable
+          style={[workspaceContext.styles.floatingToolButton, workspaceContext.fingerDrawingEnabled && workspaceContext.styles.floatingToolButtonActive]}
+          onPress={workspaceContext.onToggleFingerDrawing}
+        >
+          <MaterialCommunityIcons name="gesture-tap" size={20} color={workspaceContext.fingerDrawingEnabled ? '#2563EB' : '#283241'} />
         </Pressable>
         {!collapsed ? (
           <>

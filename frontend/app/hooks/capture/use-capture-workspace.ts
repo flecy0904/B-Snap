@@ -14,6 +14,7 @@ function getCaptureErrorMessage(error: unknown, fallback: string) {
 }
 
 function applyUploadAnalysis(asset: CaptureAsset, upload: Awaited<ReturnType<typeof uploadBackendFile>>) {
+  asset.processedUrl = upload.processed_url ?? asset.processedUrl;
   if (!upload.analysis) return asset;
   asset.analysisStatus = upload.analysis.status === 'failed' ? 'failed' : upload.analysis.status === 'pending' ? 'pending' : 'ready';
   asset.analysisSummary = cleanAiDisplayText(upload.analysis.summary ?? asset.summary);

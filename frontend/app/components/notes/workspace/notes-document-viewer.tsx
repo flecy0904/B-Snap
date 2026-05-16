@@ -49,6 +49,7 @@ export const NotesDocumentViewer = React.memo(function NotesDocumentViewer() {
         file={documentContext.studyDocument?.file}
         page={documentContext.currentPdfPage}
         inkTool={canvasContext.inkTool}
+        fingerDrawingEnabled={globalContext.fingerDrawingEnabled}
         penColor={canvasContext.penColor}
         penWidth={canvasContext.penWidth}
         brushType={canvasContext.brushType}

@@ -212,6 +212,9 @@ export function NotesWorkspaceDock() {
                   <Pressable style={globalContext.styles.workspaceDockMiniAction} onPress={() => globalContext.onMovePageCaptureReference(reference.id, -1)}>
                     <MaterialCommunityIcons name="chevron-left" size={15} color="#4F68D2" />
                   </Pressable>
+                  <Pressable style={globalContext.styles.workspaceDockMiniActionWide} onPress={() => globalContext.onMovePageCaptureReferenceToPage(reference.id, documentContext.currentPdfPage)}>
+                    <Text style={globalContext.styles.workspaceDockMiniActionText}>현재</Text>
+                  </Pressable>
                   <Pressable style={globalContext.styles.workspaceDockMiniAction} onPress={() => globalContext.onMovePageCaptureReference(reference.id, 1)}>
                     <MaterialCommunityIcons name="chevron-right" size={15} color="#4F68D2" />
                   </Pressable>

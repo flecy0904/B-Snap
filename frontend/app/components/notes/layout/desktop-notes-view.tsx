@@ -45,6 +45,7 @@ export type DesktopNotesViewProps = {
   allStudyDocuments: StudyDocumentEntry[];
   deletedStudyDocuments: StudyDocumentEntry[];
   inkTool: InkTool;
+  fingerDrawingEnabled: boolean;
   penColor: string;
   penWidth: number;
   brushType: InkBrush;
@@ -99,6 +100,7 @@ export type DesktopNotesViewProps = {
   sort: 'latest' | 'oldest';
   onChangeMode: (mode: NoteWorkspaceMode) => void;
   onChangeInkTool: (tool: InkTool) => void;
+  onToggleFingerDrawing: () => void;
   onChangePenColor: (color: string) => void;
   onChangePenWidth: (width: number) => void;
   onChangeBrushType: (brush: InkBrush) => void;
@@ -139,8 +141,10 @@ export type DesktopNotesViewProps = {
   onInsertInboxAsset: (assetId: string) => void;
   onRemoveInboxAsset: (assetId: string) => void;
   onRemoveCaptureAsset: (assetId: string) => void;
+  onLinkCaptureAssetToPage: (assetId: string, documentId: number, pageNumber: number) => boolean;
   onOpenPageCaptureReference: (referenceId: string) => void;
   onMovePageCaptureReference: (referenceId: string, delta: -1 | 1) => void;
+  onMovePageCaptureReferenceToPage: (referenceId: string, pageNumber: number) => void;
   onRemovePageCaptureReference: (referenceId: string) => void;
   onAskAiAboutPageCaptureReference: (referenceId: string) => void;
   onRemoveWorkspaceAttachment: (attachmentId: string) => void;
@@ -285,6 +289,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           aiCanvas: props.aiCanvas,
           classInsight: props.classInsight,
           inkTool: props.inkTool,
+          fingerDrawingEnabled: props.fingerDrawingEnabled,
           penColor: props.penColor,
           penWidth: props.penWidth,
           brushType: props.brushType,
@@ -349,6 +354,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           onGoToPreviousDocumentPage: props.onGoToPreviousDocumentPage,
           onGoToNextDocumentPage: props.onGoToNextDocumentPage,
           onChangeInkTool: props.onChangeInkTool,
+          onToggleFingerDrawing: props.onToggleFingerDrawing,
           onChangePenColor: props.onChangePenColor,
           onChangePenWidth: props.onChangePenWidth,
           onChangeBrushType: props.onChangeBrushType,
@@ -379,8 +385,10 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           onCreateMemoPage: props.onCreateMemoPage,
           onInsertInboxAsset: props.onInsertInboxAsset,
           onRemoveInboxAsset: props.onRemoveInboxAsset,
+          onLinkCaptureAssetToPage: props.onLinkCaptureAssetToPage,
           onOpenPageCaptureReference: props.onOpenPageCaptureReference,
           onMovePageCaptureReference: props.onMovePageCaptureReference,
+          onMovePageCaptureReferenceToPage: props.onMovePageCaptureReferenceToPage,
           onRemovePageCaptureReference: props.onRemovePageCaptureReference,
           onAskAiAboutPageCaptureReference: props.onAskAiAboutPageCaptureReference,
           onPreviewAttachment: (assetId, attachmentId) => {
@@ -524,6 +532,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
       onRestoreNote={props.onRestoreNote}
       onRestoreStudyDocument={props.onRestoreStudyDocument}
       onInsertInboxAsset={props.onInsertInboxAsset}
+      onLinkCaptureAssetToPage={props.onLinkCaptureAssetToPage}
       onOpenPageCaptureReference={props.onOpenPageCaptureReference}
       onAskAiAboutPageCaptureReference={props.onAskAiAboutPageCaptureReference}
       onRemoveCaptureAsset={props.onRemoveCaptureAsset}

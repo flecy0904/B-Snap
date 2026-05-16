@@ -204,6 +204,7 @@ export function AppShell(props: {
                   allStudyDocuments={notesState.allStudyDocuments}
                   deletedStudyDocuments={notesState.deletedStudyDocuments}
                   inkTool={notesState.inkTool}
+                  fingerDrawingEnabled={notesState.fingerDrawingEnabled}
                   penColor={notesState.penColor}
                   penWidth={notesState.penWidth}
                   brushType={notesState.brushType}
@@ -256,6 +257,7 @@ export function AppShell(props: {
                   query={notesState.query}
                   sort={notesState.sort}
                   onChangeInkTool={notesState.changeInkTool}
+                  onToggleFingerDrawing={notesState.toggleFingerDrawing}
                   onChangePenColor={notesState.changePenColor}
                   onChangePenWidth={notesState.changePenWidth}
                   onChangeBrushType={notesState.changeBrushType}
@@ -297,8 +299,10 @@ export function AppShell(props: {
                   onInsertInboxAsset={notesState.insertInboxAsset}
                   onRemoveInboxAsset={notesState.removeInboxAsset}
                   onRemoveCaptureAsset={notesState.removeCaptureAsset}
+                  onLinkCaptureAssetToPage={notesState.linkCaptureAssetToPage}
                   onOpenPageCaptureReference={notesState.openPageCaptureReference}
                   onMovePageCaptureReference={notesState.movePageCaptureReference}
+                  onMovePageCaptureReferenceToPage={notesState.movePageCaptureReferenceToPage}
                   onRemovePageCaptureReference={notesState.removePageCaptureReference}
                   onAskAiAboutPageCaptureReference={notesState.askAiAboutPageCaptureReference}
                   onRemoveWorkspaceAttachment={notesState.removeWorkspaceAttachment}
@@ -426,6 +430,7 @@ export function AppShell(props: {
                   noteTab={notesState.noteDetailTab}
                   noteMode={notesState.noteWorkspaceMode}
                   inkTool={notesState.inkTool}
+                  fingerDrawingEnabled={notesState.fingerDrawingEnabled}
                   penColor={notesState.penColor}
                   penWidth={notesState.penWidth}
                   brushType={notesState.brushType}
@@ -471,6 +476,7 @@ export function AppShell(props: {
                   onChangeNoteTab={notesState.setNoteDetailTab}
                   onChangeMode={notesState.changeNoteWorkspaceMode}
                   onChangeInkTool={notesState.changeInkTool}
+                  onToggleFingerDrawing={notesState.toggleFingerDrawing}
                   onChangePenColor={notesState.changePenColor}
                   onChangePenWidth={notesState.changePenWidth}
                   onChangeBrushType={notesState.changeBrushType}
@@ -505,8 +511,10 @@ export function AppShell(props: {
                   onInsertInboxAsset={notesState.insertInboxAsset}
                   onRemoveInboxAsset={notesState.removeInboxAsset}
                   onRemoveCaptureAsset={notesState.removeCaptureAsset}
+                  onLinkCaptureAssetToPage={notesState.linkCaptureAssetToPage}
                   onOpenPageCaptureReference={notesState.openPageCaptureReference}
                   onMovePageCaptureReference={notesState.movePageCaptureReference}
+                  onMovePageCaptureReferenceToPage={notesState.movePageCaptureReferenceToPage}
                   onRemovePageCaptureReference={notesState.removePageCaptureReference}
                   onAskAiAboutPageCaptureReference={notesState.askAiAboutPageCaptureReference}
                   onRemoveWorkspaceAttachment={notesState.removeWorkspaceAttachment}

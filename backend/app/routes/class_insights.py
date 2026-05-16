@@ -15,7 +15,25 @@ from backend.app.services.note_page_content import parse_page_state
 
 router = APIRouter(tags=["class-insights"])
 
-IMPORTANT_NOTE_KEYWORDS = ("시험", "중요", "암기", "별표", "나온다", "나올", "퀴즈", "중간", "기말", "외우", "필수")
+IMPORTANT_NOTE_KEYWORDS = (
+    "시험",
+    "중요",
+    "암기",
+    "별표",
+    "나온다",
+    "나올",
+    "퀴즈",
+    "중간",
+    "기말",
+    "외우",
+    "필수",
+    "강조",
+    "체크",
+    "복습",
+    "정리",
+    "공식",
+    "주의",
+)
 PAGE_REFERENCE_PATTERN = re.compile(r"(\d{1,3})\s*(?:페이지|쪽|p(?:age)?\.?)", re.IGNORECASE)
 
 
@@ -56,20 +74,22 @@ class PageInsightAccumulator:
 
     def score(self) -> int:
         return min(100, round(
-            self.bookmark_count * 6
-            + self.highlight_count * 2.4
-            + self.keyword_hits * 9
-            + self.photo_reference_count * 5
-            + self.ai_question_count * 4
-            + self.memo_page_count * 6
-            + self.ink_density * 20
-            + max(0, len(self.participant_ids) - 1) * 7
+            self.bookmark_count * 7
+            + self.highlight_count * 2.8
+            + self.keyword_hits * 10
+            + self.photo_reference_count * 6
+            + self.ai_question_count * 5
+            + self.memo_page_count * 7
+            + self.ink_density * 22
+            + max(0, len(self.participant_ids) - 1) * 8
             + max(0, len(self.note_ids) - 1) * 4
         ))
 
     def reason_tags(self) -> list[str]:
         tags: list[str] = []
-        if len(self.participant_ids) >= 2:
+        if len(self.participant_ids) >= 4:
+            tags.append("여러 수강생 신호가 강하게 겹친 페이지")
+        elif len(self.participant_ids) >= 2:
             tags.append("여러 수강생의 필기 흔적이 겹친 페이지")
         if self.bookmark_count > 0:
             tags.append("중요 표시가 남은 페이지")

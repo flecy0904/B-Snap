@@ -1,6 +1,9 @@
 import base64
 import json
+import mimetypes
+import re
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 from fastapi import HTTPException
 from openai import OpenAI, OpenAIError
@@ -79,7 +82,7 @@ def build_response_input(
         input_items.append({"role": role, "content": message["content"]})
 
     selection_context = build_selection_context(selection_rect=selection_rect, page_number=page_number)
-    image_url = selection_image or selection_image_url
+    image_url = _prepare_input_image_url(selection_image or selection_image_url)
     if image_url:
         input_items.append(
             {
@@ -93,6 +96,45 @@ def build_response_input(
     else:
         input_items.append({"role": "user", "content": f"{selection_context}\n\n{user_content}".strip()})
     return input_items
+
+
+def _prepare_input_image_url(image_url: str | None) -> str | None:
+    if not image_url:
+        return None
+    if image_url.startswith("data:image/"):
+        return image_url
+    return _local_upload_image_data_uri(image_url) or image_url
+
+
+def _local_upload_image_data_uri(image_url: str) -> str | None:
+    parsed = urlparse(image_url)
+    raw_path = parsed.path if parsed.scheme else image_url
+    raw_path = unquote(raw_path)
+    if not raw_path.startswith("/uploads/"):
+        return None
+
+    relative_path = raw_path.removeprefix("/uploads/").lstrip("/")
+    if not relative_path:
+        return None
+
+    upload_root = get_settings().upload_path.resolve()
+    target = (upload_root / relative_path).resolve()
+    try:
+        target.relative_to(upload_root)
+    except ValueError:
+        return None
+
+    try:
+        if not target.is_file() or target.stat().st_size > get_settings().ai_image_max_bytes:
+            return None
+        mime_type = mimetypes.guess_type(target.name)[0] or "image/png"
+        if not mime_type.startswith("image/"):
+            return None
+        encoded = base64.b64encode(target.read_bytes()).decode("ascii")
+    except Exception:
+        return None
+
+    return f"data:{mime_type};base64,{encoded}"
 
 
 def build_selection_context(
@@ -237,10 +279,7 @@ def generate_capture_image_analysis(
         mock_response=mock_response,
     )
 
-    try:
-        parsed = json.loads(raw)
-    except Exception:
-        parsed = json.loads(mock_response)
+    parsed = _parse_json_object(raw) or json.loads(mock_response)
 
     summary = str(parsed.get("summary") or "").strip() or json.loads(mock_response)["summary"]
     keywords = parsed.get("keywords")
@@ -259,6 +298,32 @@ def generate_capture_image_analysis(
         "keywords": normalized_keywords,
         "confidence": confidence_value,
     }
+
+
+def _parse_json_object(raw: str) -> dict[str, Any] | None:
+    text = raw.strip()
+    if not text:
+        return None
+
+    candidates = [text]
+    if text.startswith("```"):
+        stripped = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        stripped = re.sub(r"\s*```$", "", stripped)
+        candidates.append(stripped.strip())
+
+    start = text.find("{")
+    end = text.rfind("}")
+    if start >= 0 and end > start:
+        candidates.append(text[start:end + 1])
+
+    for candidate in candidates:
+        try:
+            parsed = json.loads(candidate)
+        except Exception:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return None
 
 
 def generate_text_response(

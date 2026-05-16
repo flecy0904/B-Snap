@@ -1,3 +1,4 @@
+import argparse
 import json
 import sys
 from pathlib import Path
@@ -25,6 +26,10 @@ DEMO_USERS = [
     ("student2@class-demo.local", "컴퓨터네트워크 데모 2"),
     ("student3@class-demo.local", "컴퓨터네트워크 데모 3"),
     ("student4@class-demo.local", "컴퓨터네트워크 데모 4"),
+    ("student5@class-demo.local", "컴퓨터네트워크 데모 5"),
+    ("student6@class-demo.local", "컴퓨터네트워크 데모 6"),
+    ("student7@class-demo.local", "컴퓨터네트워크 데모 7"),
+    ("student8@class-demo.local", "컴퓨터네트워크 데모 8"),
 ]
 
 PAGE_PLANS: list[dict[int, dict[str, Any]]] = [
@@ -47,6 +52,26 @@ PAGE_PLANS: list[dict[int, dict[str, Any]]] = [
         21: {"strokes": 4, "highlights": 2, "text": "중요 개념 연결"},
         32: {"strokes": 6, "highlights": 3, "bookmarks": 1, "photos": 1, "text": "시험에 나올만한 그래프"},
     },
+    {
+        13: {"strokes": 7, "highlights": 4, "bookmarks": 1, "text": "강조. network core 복습 필수"},
+        21: {"strokes": 5, "highlights": 2, "text": "체크. protocol layer 정리"},
+        75: {"strokes": 4, "highlights": 1, "photos": 1, "text": "기말 대비 예시"},
+    },
+    {
+        8: {"strokes": 3, "highlights": 1, "text": "정의 확인"},
+        13: {"strokes": 9, "highlights": 5, "bookmarks": 1, "memos": 1, "text": "별표. 시험 중요 개념"},
+        32: {"strokes": 6, "highlights": 3, "photos": 1, "text": "queueing delay 주의"},
+    },
+    {
+        21: {"strokes": 8, "highlights": 4, "bookmarks": 1, "text": "퀴즈 가능. 공식 정리"},
+        32: {"strokes": 5, "highlights": 2, "text": "기말 중요"},
+        75: {"strokes": 6, "highlights": 2, "bookmarks": 1, "text": "암기할 예시"},
+    },
+    {
+        13: {"strokes": 5, "highlights": 3, "text": "중간 시험 대비"},
+        41: {"strokes": 4, "highlights": 1, "photos": 1, "text": "교수님 추가 설명"},
+        75: {"strokes": 7, "highlights": 3, "memos": 1, "text": "복습 필수"},
+    },
 ]
 
 AI_CANVAS_PLANS: list[list[dict[str, Any]]] = [
@@ -60,6 +85,18 @@ AI_CANVAS_PLANS: list[list[dict[str, Any]]] = [
         {"title": "[데모] 32페이지 기말 대비 정리", "source_page_start": 32, "source_page_end": 32},
     ],
     [],
+    [
+        {"title": "[데모] 13페이지 핵심 개념 정리", "source_page_start": 13, "source_page_end": 13},
+    ],
+    [
+        {"title": "[데모] 32페이지 지연/손실 정리", "source_page_start": 32, "source_page_end": 32},
+    ],
+    [
+        {"title": "[데모] 21페이지 계층 구조 정리", "source_page_start": 21, "source_page_end": 21},
+    ],
+    [
+        {"title": "[데모] 75페이지 예시 복습", "source_page_start": 75, "source_page_end": 75},
+    ],
 ]
 
 CHAT_QUESTION_PLANS: list[list[str]] = [
@@ -67,6 +104,10 @@ CHAT_QUESTION_PLANS: list[list[str]] = [
     ["13페이지랑 21페이지 중 어디를 먼저 봐야 하나요?"],
     ["32페이지 그래프가 기말에 중요한 부분인가요?", "13페이지 암기 포인트 알려줘"],
     ["21페이지, 32페이지가 시험 대비에 중요한가요?"],
+    ["13페이지와 75페이지 중 시험에 더 중요한 쪽은 어디인가요?"],
+    ["13페이지 network core랑 32페이지 지연 개념 같이 봐야 하나요?"],
+    ["21페이지 protocol layer가 퀴즈에 나올까요?"],
+    ["75페이지 예시가 기말에 중요한가요?", "41페이지 사진 설명도 복습해야 하나요?"],
 ]
 
 
@@ -189,7 +230,7 @@ def _upsert_folder(cursor, user_id: int) -> int:
     return int(cursor.fetchone()["id"])
 
 
-def _upsert_note(cursor, user_id: int, folder_id: int) -> int:
+def _upsert_note(cursor, user_id: int, folder_id: int, *, with_demo_signals: bool) -> int:
     cursor.execute(
         """
         SELECT id
@@ -201,7 +242,11 @@ def _upsert_note(cursor, user_id: int, folder_id: int) -> int:
         (user_id, folder_id, DOCUMENT_TITLE),
     )
     row = cursor.fetchone()
-    summary = "발표용 컴퓨터네트워크 수업 집단 인사이트 데모 PDF입니다."
+    summary = (
+        "발표용 컴퓨터네트워크 수업 집단 인사이트 데모 PDF입니다."
+        if with_demo_signals
+        else "컴퓨터네트워크 수업 PDF 데모 계정용 빈 노트입니다."
+    )
     if row:
         note_id = int(row["id"])
         cursor.execute(
@@ -227,10 +272,13 @@ def _table_exists(cursor, table_name: str) -> bool:
     return bool(row and row["table_name"])
 
 
-def _seed_ai_canvas_notes(cursor, note_id: int, folder_id: int, user_index: int) -> None:
+def _seed_ai_canvas_notes(cursor, note_id: int, folder_id: int, user_index: int, *, with_demo_signals: bool) -> None:
     if not _table_exists(cursor, "ai_canvas_notes"):
         return
     cursor.execute("DELETE FROM ai_canvas_notes WHERE note_id = %s", (note_id,))
+    if not with_demo_signals:
+        return
+
     for plan in AI_CANVAS_PLANS[user_index - 1]:
         page_range = (
             f"{plan['source_page_start']}페이지"
@@ -253,10 +301,13 @@ def _seed_ai_canvas_notes(cursor, note_id: int, folder_id: int, user_index: int)
         )
 
 
-def _seed_chat_questions(cursor, note_id: int, user_index: int) -> None:
+def _seed_chat_questions(cursor, note_id: int, user_index: int, *, with_demo_signals: bool) -> None:
     if not (_table_exists(cursor, "chat_sessions") and _table_exists(cursor, "chat_messages")):
         return
     cursor.execute("DELETE FROM chat_sessions WHERE note_id = %s", (note_id,))
+    if not with_demo_signals:
+        return
+
     questions = CHAT_QUESTION_PLANS[user_index - 1]
     if not questions:
         return
@@ -287,7 +338,21 @@ def _seed_chat_questions(cursor, note_id: int, user_index: int) -> None:
         )
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Create class insight demo accounts for the computer networks PDF.",
+    )
+    parser.add_argument(
+        "--with-demo-signals",
+        action="store_true",
+        help="Also seed synthetic ink/highlight/bookmark/photo/AI signals. Default creates clean accounts and empty pages.",
+    )
+    return parser.parse_args()
+
+
 def main() -> None:
+    args = _parse_args()
+    with_demo_signals = bool(args.with_demo_signals)
     pdf_url = _first_uploaded_pdf_url()
     seeded_notes: list[int] = []
 
@@ -297,13 +362,17 @@ def main() -> None:
                 for user_index, (email, name) in enumerate(DEMO_USERS, start=1):
                     user_id = _upsert_user(cursor, email, name)
                     folder_id = _upsert_folder(cursor, user_id)
-                    note_id = _upsert_note(cursor, user_id, folder_id)
+                    note_id = _upsert_note(cursor, user_id, folder_id, with_demo_signals=with_demo_signals)
                     seeded_notes.append(note_id)
 
                     cursor.execute("DELETE FROM note_pages WHERE note_id = %s", (note_id,))
                     page_plan = PAGE_PLANS[user_index - 1]
                     for page_number in range(1, PAGE_COUNT + 1):
-                        content = _make_page_state(page_number, page_plan[page_number], user_index) if page_number in page_plan else _empty_page_state()
+                        content = (
+                            _make_page_state(page_number, page_plan[page_number], user_index)
+                            if with_demo_signals and page_number in page_plan
+                            else _empty_page_state()
+                        )
                         image_url = pdf_url if page_number == 1 else None
                         cursor.execute(
                             """
@@ -312,8 +381,8 @@ def main() -> None:
                             """,
                             (note_id, page_number, content, image_url),
                         )
-                    _seed_ai_canvas_notes(cursor, note_id, folder_id, user_index)
-                    _seed_chat_questions(cursor, note_id, user_index)
+                    _seed_ai_canvas_notes(cursor, note_id, folder_id, user_index, with_demo_signals=with_demo_signals)
+                    _seed_chat_questions(cursor, note_id, user_index, with_demo_signals=with_demo_signals)
             connection.commit()
         except Exception:
             connection.rollback()
@@ -321,6 +390,7 @@ def main() -> None:
 
     print({
         "status": "ok",
+        "mode": "with-demo-signals" if with_demo_signals else "clean-accounts",
         "users": [email for email, _ in DEMO_USERS],
         "password": DEMO_PASSWORD,
         "note_ids": seeded_notes,

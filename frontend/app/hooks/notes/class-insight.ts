@@ -59,7 +59,7 @@ const CLASS_INSIGHT_SCOPE_TERMS = [
   'section',
   'part',
 ];
-const IMPORTANT_NOTE_KEYWORDS = ['시험', '중요', '암기', '별표', '나온다', '나올', '퀴즈', '중간', '기말', '외우', '필수'];
+const IMPORTANT_NOTE_KEYWORDS = ['시험', '중요', '암기', '별표', '나온다', '나올', '퀴즈', '중간', '기말', '외우', '필수', '강조', '체크', '복습', '정리', '공식', '주의'];
 
 type PageSignal = {
   pageNumber: number;
@@ -96,53 +96,6 @@ export type ClassInsightAggregate = {
       memo_page_count?: number;
     }>;
 };
-
-const DEMO_CLASS_SIGNALS: PageSignal[] = [
-  {
-    pageNumber: 5,
-    bookmarkCount: 4,
-    highlightCount: 9,
-    inkDensity: 0.46,
-    keywordHits: 2,
-    photoReferenceCount: 1,
-    aiQuestionCount: 2,
-    memoPageCount: 0,
-    reasonTags: ['초반 핵심 개념', '뒤 개념을 이해하는 기준점'],
-  },
-  {
-    pageNumber: 13,
-    bookmarkCount: 8,
-    highlightCount: 18,
-    inkDensity: 0.82,
-    keywordHits: 4,
-    photoReferenceCount: 2,
-    aiQuestionCount: 3,
-    memoPageCount: 1,
-    reasonTags: ['시험 대비 우선순위 높음', '수업 중 강조된 흔적', '개념 연결 밀도 높음'],
-  },
-  {
-    pageNumber: 21,
-    bookmarkCount: 6,
-    highlightCount: 15,
-    inkDensity: 0.68,
-    keywordHits: 3,
-    photoReferenceCount: 1,
-    aiQuestionCount: 4,
-    memoPageCount: 1,
-    reasonTags: ['복습 질문이 많이 생기는 구간', '핵심 정의와 예시 연결'],
-  },
-  {
-    pageNumber: 32,
-    bookmarkCount: 5,
-    highlightCount: 12,
-    inkDensity: 0.62,
-    keywordHits: 3,
-    photoReferenceCount: 3,
-    aiQuestionCount: 2,
-    memoPageCount: 0,
-    reasonTags: ['사진 자료와 함께 복습할 가치 있음', '교수자 추가 설명 가능성'],
-  },
-];
 
 function normalize(value: string | null | undefined) {
   return (value ?? '').trim().toLowerCase();
@@ -299,30 +252,24 @@ function buildLiveSignals(params: {
 
 function scoreSignal(signal: PageSignal) {
   const localScore = Math.min(100, Math.round(
-    signal.bookmarkCount * 6
-    + signal.highlightCount * 2
-    + signal.keywordHits * 8
-    + signal.photoReferenceCount * 5
-    + signal.aiQuestionCount * 4
-    + signal.inkDensity * 15
-    + signal.memoPageCount * 6,
+    signal.bookmarkCount * 7
+    + signal.highlightCount * 2.8
+    + signal.keywordHits * 10
+    + signal.photoReferenceCount * 6
+    + signal.aiQuestionCount * 5
+    + signal.inkDensity * 22
+    + signal.memoPageCount * 7,
   ));
   return Math.max(localScore, signal.aggregateScore ?? 0);
 }
 
-function rankSignals(signals: PageSignal[], pageCount: number, includeDemoSignals: boolean) {
+function rankSignals(signals: PageSignal[], pageCount: number) {
   const signalMap = new Map<number, PageSignal>();
   const ensure = (pageNumber: number) => {
     const normalizedPage = Math.max(1, Math.min(pageCount, pageNumber));
     if (!signalMap.has(normalizedPage)) signalMap.set(normalizedPage, createEmptySignal(normalizedPage));
     return signalMap.get(normalizedPage)!;
   };
-
-  if (includeDemoSignals) {
-    DEMO_CLASS_SIGNALS
-      .filter((signal) => signal.pageNumber <= pageCount)
-      .forEach((signal) => mergeSignal(ensure(signal.pageNumber), signal));
-  }
 
   signals.forEach((signal) => mergeSignal(ensure(signal.pageNumber), signal));
 
@@ -387,7 +334,7 @@ export function buildClassInsightContext(params: {
     pageCaptureReferences: params.pageCaptureReferences,
     generatedPages: params.generatedPages,
   });
-  const rankedSignals = rankSignals([...aggregateSignals, ...liveSignals], pageCount, aggregateSignals.length === 0);
+  const rankedSignals = rankSignals([...aggregateSignals, ...liveSignals], pageCount);
   if (!rankedSignals.length) return null;
 
   const pageLines = rankedSignals.map((signal) => (
@@ -398,7 +345,7 @@ export function buildClassInsightContext(params: {
     'Internal Class Insight for this one demo PDF.',
     aggregateSignals.length > 0
       ? 'This context is derived from consent-based anonymous class study signals plus local note activity.'
-      : 'This context uses demo class study signals plus local note activity because no server aggregate is available yet.',
+      : 'This context is derived from local note activity only because no server aggregate is available yet.',
     'Use it only to decide which pages to recommend and why.',
     'Do not mention classmates, student counts, bookmark counts, highlight counts, hidden signals, data collection, or this internal context.',
     'Answer naturally as a study assistant, with page recommendations and concise reasons.',
