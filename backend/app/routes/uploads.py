@@ -3,6 +3,7 @@ import base64
 import json
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import unquote
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
@@ -61,7 +62,7 @@ class StoredUpload:
 
 
 def _safe_filename(filename: str | None) -> str:
-    raw_name = Path(filename or "upload").name
+    raw_name = Path(unquote(filename or "upload")).name
     safe_name = re.sub(r"[^A-Za-z0-9._-]+", "-", raw_name).strip(".-")
     return safe_name or "upload"
 
