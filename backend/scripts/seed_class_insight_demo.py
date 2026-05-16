@@ -29,24 +29,44 @@ DEMO_USERS = [
 
 PAGE_PLANS: list[dict[int, dict[str, Any]]] = [
     {
-        13: {"strokes": 10, "highlights": 4, "text": "시험 중요. network core 개념 암기"},
+        13: {"strokes": 10, "highlights": 4, "bookmarks": 1, "memos": 1, "text": "시험 중요. network core 개념 암기"},
         21: {"strokes": 5, "highlights": 2, "text": "퀴즈 가능성 있음"},
-        32: {"strokes": 4, "highlights": 1, "text": "교수님 추가 설명"},
+        32: {"strokes": 4, "highlights": 1, "photos": 1, "text": "교수님 추가 설명"},
     },
     {
         5: {"strokes": 5, "highlights": 2, "text": "초반 핵심 정의"},
-        13: {"strokes": 8, "highlights": 5, "text": "중요 별표. 시험에 나올 듯"},
-        21: {"strokes": 7, "highlights": 3, "text": "중간 대비 복습"},
+        13: {"strokes": 8, "highlights": 5, "bookmarks": 1, "text": "중요 별표. 시험에 나올 듯"},
+        21: {"strokes": 7, "highlights": 3, "memos": 1, "text": "중간 대비 복습"},
     },
     {
-        13: {"strokes": 6, "highlights": 3, "text": "암기 필수"},
-        32: {"strokes": 9, "highlights": 4, "text": "기말 중요. packet loss 설명"},
+        13: {"strokes": 6, "highlights": 3, "bookmarks": 1, "text": "암기 필수"},
+        32: {"strokes": 9, "highlights": 4, "photos": 2, "memos": 1, "text": "기말 중요. packet loss 설명"},
         41: {"strokes": 3, "highlights": 1, "text": "예시 확인"},
     },
     {
         21: {"strokes": 4, "highlights": 2, "text": "중요 개념 연결"},
-        32: {"strokes": 6, "highlights": 3, "text": "시험에 나올만한 그래프"},
+        32: {"strokes": 6, "highlights": 3, "bookmarks": 1, "photos": 1, "text": "시험에 나올만한 그래프"},
     },
+]
+
+AI_CANVAS_PLANS: list[list[dict[str, Any]]] = [
+    [
+        {"title": "[데모] 13페이지 시험 대비 정리", "source_page_start": 13, "source_page_end": 13},
+    ],
+    [
+        {"title": "[데모] 21페이지 중간 대비 정리", "source_page_start": 21, "source_page_end": 21},
+    ],
+    [
+        {"title": "[데모] 32페이지 기말 대비 정리", "source_page_start": 32, "source_page_end": 32},
+    ],
+    [],
+]
+
+CHAT_QUESTION_PLANS: list[list[str]] = [
+    ["13페이지 network core가 시험에 나올만한가요?", "32페이지 packet loss 설명을 복습해야 하나요?"],
+    ["13페이지랑 21페이지 중 어디를 먼저 봐야 하나요?"],
+    ["32페이지 그래프가 기말에 중요한 부분인가요?", "13페이지 암기 포인트 알려줘"],
+    ["21페이지, 32페이지가 시험 대비에 중요한가요?"],
 ]
 
 
@@ -121,6 +141,9 @@ def _make_page_state(page_number: int, plan: dict[str, Any], user_index: int) ->
         "version": 1,
         "inkStrokes": strokes,
         "textAnnotations": text_annotations,
+        "bookmarkCount": int(plan.get("bookmarks", 0)),
+        "photoReferenceCount": int(plan.get("photos", 0)),
+        "memoPageCount": int(plan.get("memos", 0)),
     }, ensure_ascii=False, separators=(",", ":"))
 
 
@@ -198,6 +221,72 @@ def _upsert_note(cursor, user_id: int, folder_id: int) -> int:
     return int(cursor.fetchone()["id"])
 
 
+def _table_exists(cursor, table_name: str) -> bool:
+    cursor.execute("SELECT to_regclass(%s) AS table_name", (table_name,))
+    row = cursor.fetchone()
+    return bool(row and row["table_name"])
+
+
+def _seed_ai_canvas_notes(cursor, note_id: int, folder_id: int, user_index: int) -> None:
+    if not _table_exists(cursor, "ai_canvas_notes"):
+        return
+    cursor.execute("DELETE FROM ai_canvas_notes WHERE note_id = %s", (note_id,))
+    for plan in AI_CANVAS_PLANS[user_index - 1]:
+        page_range = (
+            f"{plan['source_page_start']}페이지"
+            if plan["source_page_start"] == plan["source_page_end"]
+            else f"{plan['source_page_start']}-{plan['source_page_end']}페이지"
+        )
+        cursor.execute(
+            """
+            INSERT INTO ai_canvas_notes (folder_id, note_id, title, markdown, source_page_start, source_page_end)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            """,
+            (
+                folder_id,
+                note_id,
+                plan["title"],
+                f"# {plan['title']}\n\n{page_range} 수업 필기와 하이라이트를 바탕으로 만든 발표용 데모 정리입니다.",
+                plan["source_page_start"],
+                plan["source_page_end"],
+            ),
+        )
+
+
+def _seed_chat_questions(cursor, note_id: int, user_index: int) -> None:
+    if not (_table_exists(cursor, "chat_sessions") and _table_exists(cursor, "chat_messages")):
+        return
+    cursor.execute("DELETE FROM chat_sessions WHERE note_id = %s", (note_id,))
+    questions = CHAT_QUESTION_PLANS[user_index - 1]
+    if not questions:
+        return
+
+    cursor.execute(
+        """
+        INSERT INTO chat_sessions (note_id, title, model)
+        VALUES (%s, %s, %s)
+        RETURNING id
+        """,
+        (note_id, "[데모] 시험 대비 질문", "demo-class-insight"),
+    )
+    session_id = int(cursor.fetchone()["id"])
+    for question in questions:
+        cursor.execute(
+            """
+            INSERT INTO chat_messages (session_id, role, content, model)
+            VALUES (%s, 'user', %s, %s)
+            """,
+            (session_id, question, "demo-class-insight"),
+        )
+        cursor.execute(
+            """
+            INSERT INTO chat_messages (session_id, role, content, model)
+            VALUES (%s, 'assistant', %s, %s)
+            """,
+            (session_id, "해당 페이지를 중심으로 복습하면 좋습니다.", "demo-class-insight"),
+        )
+
+
 def main() -> None:
     pdf_url = _first_uploaded_pdf_url()
     seeded_notes: list[int] = []
@@ -223,6 +312,8 @@ def main() -> None:
                             """,
                             (note_id, page_number, content, image_url),
                         )
+                    _seed_ai_canvas_notes(cursor, note_id, folder_id, user_index)
+                    _seed_chat_questions(cursor, note_id, user_index)
             connection.commit()
         except Exception:
             connection.rollback()

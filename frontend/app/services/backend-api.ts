@@ -105,6 +105,12 @@ export type BackendClassInsightPageSignal = {
   priority: 'very-high' | 'high' | 'medium' | string;
   reason_tags: string[];
   signal_count: number;
+  bookmark_count?: number;
+  highlight_count?: number;
+  keyword_hits?: number;
+  photo_reference_count?: number;
+  ai_question_count?: number;
+  memo_page_count?: number;
 };
 
 export type BackendClassInsight = {

@@ -82,13 +82,19 @@ type RankedPageSignal = PageSignal & {
 export type ClassInsightAggregate = {
   participant_count?: number;
   matched_note_count?: number;
-  pages?: Array<{
-    page_number: number;
-    importance_score?: number;
-    priority?: string;
-    reason_tags?: string[];
-    signal_count?: number;
-  }>;
+    pages?: Array<{
+      page_number: number;
+      importance_score?: number;
+      priority?: string;
+      reason_tags?: string[];
+      signal_count?: number;
+      bookmark_count?: number;
+      highlight_count?: number;
+      keyword_hits?: number;
+      photo_reference_count?: number;
+      ai_question_count?: number;
+      memo_page_count?: number;
+    }>;
 };
 
 const DEMO_CLASS_SIGNALS: PageSignal[] = [
@@ -346,13 +352,13 @@ function buildAggregateSignals(aggregate: ClassInsightAggregate | null | undefin
     .map<PageSignal>((page) => ({
       pageNumber: page.page_number,
       aggregateScore: Math.max(0, Math.min(100, Math.round(page.importance_score ?? 0))),
-      bookmarkCount: 0,
-      highlightCount: 0,
+      bookmarkCount: Math.max(0, page.bookmark_count ?? 0),
+      highlightCount: Math.max(0, page.highlight_count ?? 0),
       inkDensity: 0,
-      keywordHits: 0,
-      photoReferenceCount: 0,
-      aiQuestionCount: 0,
-      memoPageCount: 0,
+      keywordHits: Math.max(0, page.keyword_hits ?? 0),
+      photoReferenceCount: Math.max(0, page.photo_reference_count ?? 0),
+      aiQuestionCount: Math.max(0, page.ai_question_count ?? 0),
+      memoPageCount: Math.max(0, page.memo_page_count ?? 0),
       reasonTags: page.reason_tags?.length ? page.reason_tags : ['익명 수업 필기 신호가 높은 페이지'],
     }));
 }

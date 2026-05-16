@@ -16,6 +16,7 @@ from backend.app.services.note_page_content import parse_page_state
 router = APIRouter(tags=["class-insights"])
 
 IMPORTANT_NOTE_KEYWORDS = ("시험", "중요", "암기", "별표", "나온다", "나올", "퀴즈", "중간", "기말", "외우", "필수")
+PAGE_REFERENCE_PATTERN = re.compile(r"(\d{1,3})\s*(?:페이지|쪽|p(?:age)?\.?)", re.IGNORECASE)
 
 
 @dataclass
@@ -26,7 +27,11 @@ class PageInsightAccumulator:
     stroke_count: int = 0
     point_count: int = 0
     highlight_count: int = 0
+    bookmark_count: int = 0
     keyword_hits: int = 0
+    photo_reference_count: int = 0
+    ai_question_count: int = 0
+    memo_page_count: int = 0
 
     def add_activity(self, *, user_id: int, note_id: int) -> None:
         self.participant_ids.add(user_id)
@@ -34,7 +39,16 @@ class PageInsightAccumulator:
 
     @property
     def signal_count(self) -> int:
-        return self.stroke_count + self.highlight_count + self.keyword_hits + len(self.participant_ids)
+        return (
+            self.stroke_count
+            + self.highlight_count
+            + self.bookmark_count
+            + self.keyword_hits
+            + self.photo_reference_count
+            + self.ai_question_count
+            + self.memo_page_count
+            + len(self.participant_ids)
+        )
 
     @property
     def ink_density(self) -> float:
@@ -42,8 +56,12 @@ class PageInsightAccumulator:
 
     def score(self) -> int:
         return min(100, round(
-            self.highlight_count * 2.4
+            self.bookmark_count * 6
+            + self.highlight_count * 2.4
             + self.keyword_hits * 9
+            + self.photo_reference_count * 5
+            + self.ai_question_count * 4
+            + self.memo_page_count * 6
             + self.ink_density * 20
             + max(0, len(self.participant_ids) - 1) * 7
             + max(0, len(self.note_ids) - 1) * 4
@@ -53,10 +71,18 @@ class PageInsightAccumulator:
         tags: list[str] = []
         if len(self.participant_ids) >= 2:
             tags.append("여러 수강생의 필기 흔적이 겹친 페이지")
+        if self.bookmark_count > 0:
+            tags.append("중요 표시가 남은 페이지")
         if self.highlight_count > 0:
             tags.append("하이라이트가 집중된 구간")
         if self.keyword_hits > 0:
             tags.append("시험/중요 관련 메모가 반복된 구간")
+        if self.photo_reference_count > 0:
+            tags.append("수업 사진 자료와 함께 복습할 구간")
+        if self.ai_question_count > 0:
+            tags.append("복습 질문이 모인 페이지")
+        if self.memo_page_count > 0:
+            tags.append("추가 정리/메모가 붙은 구간")
         if self.ink_density > 0.45:
             tags.append("필기 밀도가 높은 페이지")
         return tags or ["수업 필기 활동이 감지된 페이지"]
@@ -78,6 +104,31 @@ def _is_same_class_document(row: dict[str, Any], current_document_key: str, curr
 
 def _count_keyword_hits(text: str) -> int:
     return sum(1 for keyword in IMPORTANT_NOTE_KEYWORDS if keyword in text)
+
+
+def _coerce_count(value: Any) -> int:
+    if isinstance(value, bool):
+        return 1 if value else 0
+    if isinstance(value, (int, float)):
+        return max(0, int(value))
+    if isinstance(value, list):
+        return len(value)
+    return 0
+
+
+def _sum_state_counts(state: dict[str, Any], keys: tuple[str, ...]) -> int:
+    return sum(_coerce_count(state.get(key)) for key in keys)
+
+
+def _page_placeholders(values: set[int]) -> tuple[str, tuple[int, ...]]:
+    ordered_values = tuple(sorted(values))
+    placeholders = ", ".join(["%s"] * len(ordered_values))
+    return placeholders, ordered_values
+
+
+def _table_exists(connection: Connection, table_name: str) -> bool:
+    row = fetch_one(connection, "SELECT to_regclass(%s) AS table_name", (table_name,))
+    return bool(row and row.get("table_name"))
 
 
 def _apply_page_state(accumulator: PageInsightAccumulator, state: dict[str, Any], *, user_id: int, note_id: int) -> None:
@@ -107,8 +158,76 @@ def _apply_page_state(accumulator: PageInsightAccumulator, state: dict[str, Any]
                 accumulator.keyword_hits += hits
                 had_activity = True
 
+    bookmark_count = _sum_state_counts(state, ("bookmarked", "bookmarkCount", "bookmark_count", "bookmarks"))
+    photo_reference_count = _sum_state_counts(
+        state,
+        (
+            "photoReferenceCount",
+            "photo_reference_count",
+            "captureReferenceCount",
+            "capture_reference_count",
+            "pageCaptureReferences",
+            "captureReferences",
+            "photoReferences",
+        ),
+    )
+    memo_page_count = _sum_state_counts(state, ("memoPageCount", "memo_page_count", "memoPages", "generatedMemoPages"))
+    if bookmark_count:
+        accumulator.bookmark_count += bookmark_count
+        had_activity = True
+    if photo_reference_count:
+        accumulator.photo_reference_count += photo_reference_count
+        had_activity = True
+    if memo_page_count:
+        accumulator.memo_page_count += memo_page_count
+        had_activity = True
+
     if had_activity:
         accumulator.add_activity(user_id=user_id, note_id=note_id)
+
+
+def _extract_page_references(text: str) -> set[int]:
+    return {
+        int(match.group(1))
+        for match in PAGE_REFERENCE_PATTERN.finditer(text)
+        if int(match.group(1)) >= 1
+    }
+
+
+def _apply_ai_canvas_signals(
+    accumulators: dict[int, PageInsightAccumulator],
+    rows: list[dict[str, Any]],
+    valid_page_numbers: set[int],
+) -> None:
+    for row in rows:
+        start = row.get("source_page_start")
+        end = row.get("source_page_end") or start
+        if start is None or end is None:
+            continue
+        start_page = max(1, int(start))
+        end_page = max(start_page, int(end))
+        for page_number in range(start_page, end_page + 1):
+            if page_number not in valid_page_numbers:
+                continue
+            accumulator = accumulators[page_number]
+            accumulator.page_number = page_number
+            accumulator.memo_page_count += 1
+            accumulator.add_activity(user_id=int(row["user_id"]), note_id=int(row["note_id"]))
+
+
+def _apply_chat_question_signals(
+    accumulators: dict[int, PageInsightAccumulator],
+    rows: list[dict[str, Any]],
+    valid_page_numbers: set[int],
+) -> None:
+    for row in rows:
+        for page_number in _extract_page_references(str(row.get("content") or "")):
+            if page_number not in valid_page_numbers:
+                continue
+            accumulator = accumulators[page_number]
+            accumulator.page_number = page_number
+            accumulator.ai_question_count += 1
+            accumulator.add_activity(user_id=int(row["user_id"]), note_id=int(row["note_id"]))
 
 
 def _priority(score: int) -> str:
@@ -164,6 +283,7 @@ def get_class_insights(
     accumulators: dict[int, PageInsightAccumulator] = defaultdict(lambda: PageInsightAccumulator(page_number=0))
     matched_note_ids: set[int] = set()
     participant_ids: set[int] = set()
+    valid_page_numbers: set[int] = set()
 
     for row in candidate_rows:
         if not _is_same_class_document(row, current_document_key, current_folder_key):
@@ -172,6 +292,7 @@ def get_class_insights(
         participant_ids.add(int(row["user_id"]))
 
         page_number = int(row["page_number"])
+        valid_page_numbers.add(page_number)
         state = parse_page_state(row.get("content"))
         if state is None:
             continue
@@ -180,6 +301,42 @@ def get_class_insights(
         accumulator.page_number = page_number
         _apply_page_state(accumulator, state, user_id=int(row["user_id"]), note_id=int(row["note_id"]))
 
+    if matched_note_ids:
+        note_placeholders, note_values = _page_placeholders(matched_note_ids)
+        if _table_exists(connection, "ai_canvas_notes"):
+            ai_canvas_rows = fetch_all(
+                connection,
+                f"""
+                SELECT c.note_id,
+                       n.user_id,
+                       c.source_page_start,
+                       c.source_page_end
+                FROM ai_canvas_notes c
+                JOIN notes n ON n.id = c.note_id
+                WHERE c.note_id IN ({note_placeholders})
+                  AND c.source_page_start IS NOT NULL
+                """,
+                note_values,
+            )
+            _apply_ai_canvas_signals(accumulators, ai_canvas_rows, valid_page_numbers)
+
+        if _table_exists(connection, "chat_sessions") and _table_exists(connection, "chat_messages"):
+            chat_rows = fetch_all(
+                connection,
+                f"""
+                SELECT s.note_id,
+                       n.user_id,
+                       m.content
+                FROM chat_sessions s
+                JOIN notes n ON n.id = s.note_id
+                JOIN chat_messages m ON m.session_id = s.id
+                WHERE s.note_id IN ({note_placeholders})
+                  AND m.role = 'user'
+                """,
+                note_values,
+            )
+            _apply_chat_question_signals(accumulators, chat_rows, valid_page_numbers)
+
     pages = [
         ClassInsightPageSignalRead(
             page_number=accumulator.page_number,
@@ -187,6 +344,12 @@ def get_class_insights(
             priority=_priority(score),
             reason_tags=accumulator.reason_tags(),
             signal_count=accumulator.signal_count,
+            bookmark_count=accumulator.bookmark_count,
+            highlight_count=accumulator.highlight_count,
+            keyword_hits=accumulator.keyword_hits,
+            photo_reference_count=accumulator.photo_reference_count,
+            ai_question_count=accumulator.ai_question_count,
+            memo_page_count=accumulator.memo_page_count,
         )
         for accumulator in accumulators.values()
         if (score := accumulator.score()) >= 18
