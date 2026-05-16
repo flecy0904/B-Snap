@@ -344,6 +344,9 @@ export function PdfPreview(props: {
     if (typeof source === 'object' && source && 'uri' in source && typeof source.uri === 'string' && source.uri.startsWith('/')) {
       return { ...source, uri: `file://${source.uri}` };
     }
+    if (typeof source === 'object' && source && 'uri' in source && typeof source.uri === 'string' && /^https?:\/\//i.test(source.uri)) {
+      return { ...source, cache: true };
+    }
     return source;
   }, [props.file]);
   const interactionLocksScroll = props.inkTool !== 'view';
