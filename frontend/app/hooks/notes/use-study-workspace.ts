@@ -332,7 +332,7 @@ export function useStudyWorkspace(props: {
     const documentTextAnnotations: InkTextAnnotation[] = [];
     const savedPageContentByKey: Record<string, string> = {};
     let hasStoredPageContent = false;
-    const firstPageUrl = pages[0]?.image_url ?? null;
+    const firstPageImageUrl = pages[0]?.image_url ?? null;
 
     pages.forEach((page) => {
       pageIdsByNumber[page.page_number] = page.id;
@@ -366,14 +366,15 @@ export function useStudyWorkspace(props: {
       ...current,
       [documentId]: pageIdsByNumber,
     }));
-    if (firstPageUrl || pages.length) {
+    if (firstPageImageUrl || pages.length) {
       setUserStudyDocuments((current) => current.map((document) => {
         if (document.id !== documentId) return document;
-        const legacyFile = !document.file && firstPageUrl ? { uri: firstPageUrl } : document.file;
+        const legacyImageFile = firstPageImageUrl && !isPdfAssetUrl(firstPageImageUrl) ? { uri: firstPageImageUrl } : undefined;
+        const legacyFile = !document.file && document.type !== 'pdf' ? legacyImageFile : document.file;
         const legacyFileUri = legacyFile && typeof legacyFile === 'object' && 'uri' in legacyFile ? legacyFile.uri : null;
         return {
           ...document,
-          type: legacyFileUri ? (isPdfAssetUrl(legacyFileUri) ? 'pdf' : 'image') : document.type,
+          type: legacyFileUri && !isPdfAssetUrl(legacyFileUri) ? 'image' : document.type,
           pageCount: Math.max(document.pageCount, pages.length || 1),
           file: legacyFile,
         };
