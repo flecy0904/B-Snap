@@ -4,28 +4,43 @@ import { GestureResponderEvent, Image, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { captureRef } from 'react-native-view-shot';
 import { TextAnnotationLayer } from './text-annotation-layer';
-import { findHitInkStrokeId, getInkStrokeSvgPath, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance } from '../../../ui-helpers';
+import { findHitInkStrokeId, getInkCenterlinePath, getInkStrokeSvgPath, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance } from '../../../ui-helpers';
 import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { useCanvasContext } from './canvas-context';
+import { shouldCaptureInkPointer, shouldUsePrimaryPointer } from './ink-input-policy';
 
-type ResponderNativeEvent = GestureResponderEvent['nativeEvent'] & {
-  buttons?: number;
-  touches?: unknown[];
-};
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
 
-function shouldUsePrimaryPointer(event: GestureResponderEvent) {
-  const nativeEvent = event.nativeEvent as ResponderNativeEvent;
-  if (nativeEvent.touches && nativeEvent.touches.length > 1) return false;
-  if (nativeEvent.buttons !== undefined && nativeEvent.buttons !== 1) return false;
-  return true;
-}
-
 function InkPath({ stroke, draft = false }: { stroke: InkStroke; draft?: boolean }) {
+  if (stroke.linePattern && stroke.linePattern !== 'solid' && stroke.style !== 'highlight' && stroke.style !== 'shape') {
+    const centerlinePath = getInkCenterlinePath(stroke.points);
+    if (!centerlinePath) return null;
+    const dashArray = stroke.linePattern === 'dotted'
+      ? `${Math.max(1, stroke.width * 0.45)} ${Math.max(6, stroke.width * 2)}`
+      : `${Math.max(8, stroke.width * 3)} ${Math.max(5, stroke.width * 1.8)}`;
+    return (
+      <Path
+        key={stroke.id}
+        d={centerlinePath}
+        fill="none"
+        stroke={stroke.color}
+        strokeWidth={stroke.width}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeDasharray={dashArray}
+      />
+    );
+  }
+
   const path = getInkStrokeSvgPath(stroke, !draft);
   if (!path) return null;
 
   if (stroke.style === 'shape') {
+    const dashArray = stroke.linePattern && stroke.linePattern !== 'solid'
+      ? stroke.linePattern === 'dotted'
+        ? `${Math.max(1, stroke.width * 0.45)} ${Math.max(6, stroke.width * 2)}`
+        : `${Math.max(8, stroke.width * 3)} ${Math.max(5, stroke.width * 1.8)}`
+      : undefined;
     return (
       <Path
         key={stroke.id}
@@ -35,6 +50,7 @@ function InkPath({ stroke, draft = false }: { stroke: InkStroke; draft?: boolean
         strokeWidth={stroke.width}
         strokeLinecap="round"
         strokeLinejoin="round"
+        strokeDasharray={dashArray}
       />
     );
   }
@@ -118,6 +134,7 @@ export function BlankNoteCanvas(props: {
   const canvasCtx = useCanvasContext();
   const {
     inkTool,
+    fingerDrawingEnabled,
     penColor,
     penWidth,
     brushType,
@@ -191,15 +208,18 @@ export function BlankNoteCanvas(props: {
     () => ({
       onStartShouldSetResponder: (event: GestureResponderEvent) => {
         if (!shouldUsePrimaryPointer(event)) return false;
-        return isDrawingTool(inkTool) || inkTool === 'text' || inkTool === 'erase' || inkTool === 'select';
+        if (isDrawingTool(inkTool)) return shouldCaptureInkPointer(event, fingerDrawingEnabled);
+        return inkTool === 'text' || inkTool === 'erase' || inkTool === 'select';
       },
       onMoveShouldSetResponder: (event: GestureResponderEvent) => {
         if (!shouldUsePrimaryPointer(event)) return false;
-        return isDrawingTool(inkTool) || inkTool === 'select';
+        if (isDrawingTool(inkTool)) return shouldCaptureInkPointer(event, fingerDrawingEnabled);
+        return inkTool === 'select';
       },
       onResponderGrant: (event: GestureResponderEvent) => {
         const point = clampPointToPage(event.nativeEvent.locationX, event.nativeEvent.locationY);
         if (isDrawingTool(inkTool)) {
+          if (!shouldCaptureInkPointer(event, fingerDrawingEnabled)) return;
           const appearance = isShapeTool(inkTool)
             ? resolveShapeStrokeAppearance(penColor, penWidth)
             : resolveInkStrokeAppearance(inkTool, penColor, penWidth, brushType);
@@ -255,6 +275,7 @@ export function BlankNoteCanvas(props: {
         const point = clampPointToPage(event.nativeEvent.locationX, event.nativeEvent.locationY);
         
         if (isDrawingTool(inkTool)) {
+          if (!shouldCaptureInkPointer(event, fingerDrawingEnabled)) return;
           const stroke = currentStrokeRef.current;
           if (!stroke) return;
           if (stroke.style === 'shape') {
@@ -334,7 +355,25 @@ export function BlankNoteCanvas(props: {
         setCurrentStroke(null);
       },
     }),
-    [buildSelectionPreview, props, pageSize],
+    [
+      brushSettings,
+      brushType,
+      buildSelectionPreview,
+      canvasCtx,
+      fingerDrawingEnabled,
+      inkStrokes,
+      inkTool,
+      linePattern,
+      onAddTextAnnotation,
+      onCommitInkStroke,
+      onRemoveInkStroke,
+      onSelectionChange,
+      onSelectionPreviewChange,
+      pageSize,
+      penColor,
+      penWidth,
+      selectionRect,
+    ],
   );
 
   return (

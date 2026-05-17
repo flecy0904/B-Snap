@@ -4,6 +4,7 @@ import { useNotesGlobalContext } from '../workspace/notes-global-context';
 
 export type CanvasState = {
   inkTool: InkTool;
+  fingerDrawingEnabled: boolean;
   penColor: string;
   penWidth: number;
   brushType: InkBrush;
@@ -51,6 +52,7 @@ export function CanvasProvider({ children }: { children: React.ReactNode }) {
 
   const value = {
     inkTool: globalContext.inkTool,
+    fingerDrawingEnabled: Boolean(globalContext.fingerDrawingEnabled),
     penColor: globalContext.penColor,
     penWidth: globalContext.penWidth,
     brushType: globalContext.brushType,
