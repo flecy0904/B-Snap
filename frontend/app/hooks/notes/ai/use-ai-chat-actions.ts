@@ -12,6 +12,7 @@ import {
 } from '../../../services/backend-api';
 import type { AiAnswer, StudyDocumentEntry } from '../../../types';
 import type { SelectionRect } from '../../../ui-types';
+import { getStudyDocumentBackendNoteId } from '../document/backend-sync';
 import { buildAiChatTitle } from './ai-chat-title';
 import { getAiBackendErrorMessage } from './ai-errors';
 
@@ -62,6 +63,13 @@ export function useAiChatActions(params: {
   setAiMessagesBySession: SetState<Record<number, BackendChatMessage[]>>;
   onRequestCanvasEditFromChat?: (payload: { question: string; answer: string }) => Promise<void>;
 }) {
+  const getCurrentBackendNoteId = () => getStudyDocumentBackendNoteId(params.studyDocument);
+  const getSessionDocumentKey = (session: BackendChatSession) => {
+    const backendNoteId = getCurrentBackendNoteId();
+    if (params.studyDocumentId && backendNoteId === session.note_id) return params.studyDocumentId;
+    return session.note_id;
+  };
+
   const buildSelectionImagePayload = async (overrideUri?: string | null) => {
     const uri = overrideUri ?? params.selectionPreviewUri;
     if (!uri) return null;
@@ -79,12 +87,13 @@ export function useAiChatActions(params: {
   };
 
   const upsertSession = (session: BackendChatSession) => {
+    const documentKey = getSessionDocumentKey(session);
     params.setAllChatSessions((current) => [session, ...current.filter((item) => item.id !== session.id)]);
     params.setChatSessionsByDocument((current) => ({
       ...current,
-      [session.note_id]: [
+      [documentKey]: [
         session,
-        ...(current[session.note_id] ?? []).filter((item) => item.id !== session.id),
+        ...(current[documentKey] ?? []).filter((item) => item.id !== session.id),
       ],
     }));
   };
@@ -105,7 +114,7 @@ export function useAiChatActions(params: {
         ?? Object.values(params.chatSessionsByDocument).flat().find((session) => session.id === sessionId)
         ?? null;
       const targetDocumentId = selectedSession?.note_id ?? params.studyDocumentId ?? null;
-      const isCurrentDocumentSession = Boolean(params.studyDocumentId && targetDocumentId === params.studyDocumentId);
+      const isCurrentDocumentSession = Boolean(params.studyDocumentId && targetDocumentId === getCurrentBackendNoteId());
       params.setViewingAiChatSessionId(isCurrentDocumentSession ? null : sessionId);
       if (isCurrentDocumentSession) {
         params.setChatSessionByDocument((current) => ({
@@ -255,12 +264,19 @@ export function useAiChatActions(params: {
       params.setAiError('AI 채팅은 백엔드에 저장된 노트에서 사용할 수 있습니다. 새 빈 노트나 PDF 업로드로 만든 노트에서 다시 시도해 주세요.');
       return;
     }
+    const backendNoteId = getCurrentBackendNoteId();
+    if (!backendNoteId) {
+      params.setAiAnswer(null);
+      params.setAiQuestion('');
+      params.setAiError('AI 채팅은 백엔드 동기화가 끝난 노트에서 사용할 수 있습니다.');
+      return;
+    }
 
     params.setAiLoading(true);
     params.setAiError(null);
     try {
       const session = await createBackendChatSession({
-        noteId: params.studyDocumentId,
+        noteId: backendNoteId,
         title: params.studyDocument?.title ? `${params.studyDocument.title} AI 채팅` : 'AI 채팅',
       });
       upsertSession(session);
@@ -324,12 +340,18 @@ export function useAiChatActions(params: {
         params.setAiError('AI 채팅은 백엔드에 저장된 노트에서 사용할 수 있습니다. 새 빈 노트나 PDF 업로드로 만든 노트에서 다시 시도해 주세요.');
         return;
       }
+      const backendNoteId = getCurrentBackendNoteId();
+      if (!backendNoteId) {
+        params.setAiAnswer(null);
+        params.setAiError('AI 채팅은 백엔드 동기화가 끝난 노트에서 사용할 수 있습니다.');
+        return;
+      }
 
       let sessionId = params.chatSessionByDocument[params.studyDocumentId];
       if (!sessionId) {
         aiRequestStage = 'chat-session';
         const session = await createBackendChatSession({
-          noteId: params.studyDocumentId,
+          noteId: backendNoteId,
           title: buildAiChatTitle(question, params.studyDocument?.title),
         });
         sessionId = session.id;

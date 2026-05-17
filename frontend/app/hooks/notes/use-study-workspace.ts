@@ -42,6 +42,7 @@ import { useAiChatActions } from './ai/use-ai-chat-actions';
 import { useAiChatDerivedState } from './ai/use-ai-chat-derived-state';
 import { useAiCanvasNotes } from './ai-canvas/use-ai-canvas-notes';
 import { addUniqueId, removeId, upsertStudyDocument } from './document/collection-helpers';
+import { getStudyDocumentBackendNoteId } from './document/backend-sync';
 import { useDocumentPageActions } from './document/use-document-page-actions';
 import { confirmDeleteAction } from './ui/confirm-delete-action';
 import { useInkActions, type WorkspaceEditSnapshot } from './ink/use-ink-actions';
@@ -305,9 +306,10 @@ export function useStudyWorkspace(props: {
     backendPageIdsByDocument,
   });
   const currentAiCanvasPageNumber = currentDocumentPage?.kind === 'pdf' ? currentDocumentPage.pageNumber : currentPdfPage;
+  const studyDocumentBackendNoteId = getStudyDocumentBackendNoteId(studyDocument);
   const aiCanvas = useAiCanvasNotes({
-    noteId: studyDocumentId,
-    enabled: workspaceHydrated && isBackendApiEnabled() && !!studyDocumentId && currentDocumentHasBackendPages,
+    noteId: studyDocumentBackendNoteId,
+    enabled: workspaceHydrated && isBackendApiEnabled() && !!studyDocumentBackendNoteId && currentDocumentHasBackendPages,
     currentPageNumber: currentAiCanvasPageNumber ?? null,
     onFeedback: setWorkspaceFeedback,
   });
@@ -432,13 +434,16 @@ export function useStudyWorkspace(props: {
             return {
               id: backendNote.id,
               subjectId: subject?.id ?? props.initialSubjectId ?? 101,
+              backendNoteId: backendNote.id,
               title: backendNote.title,
               type: documentType,
               updatedAt: 'DB 저장됨',
               pageCount,
               preview: backendNote.summary ?? '백엔드에 저장된 노트입니다.',
               file: fileUrl ? { uri: fileUrl } : undefined,
+              remoteFileUrl: fileUrl ?? undefined,
               thumbnailUrl: backendNote.thumbnail_url ?? undefined,
+              backendSyncStatus: 'synced',
             } satisfies StudyDocumentEntry;
           }),
         );
@@ -472,6 +477,8 @@ export function useStudyWorkspace(props: {
 
   useEffect(() => {
     if (!workspaceHydrated || !isBackendApiEnabled() || !studyDocumentId) return;
+    const backendNoteId = getStudyDocumentBackendNoteId(studyDocument);
+    if (!backendNoteId) return;
     if (backendPageIdsByDocument[studyDocumentId] || backendPageLoadsInFlightRef.current[studyDocumentId]) return;
 
     let mounted = true;
@@ -479,7 +486,7 @@ export function useStudyWorkspace(props: {
 
     const loadDocumentPages = async () => {
       try {
-        const pages = await listBackendNotePages(studyDocumentId);
+        const pages = await listBackendNotePages(backendNoteId);
         if (!mounted) return;
         applyLoadedBackendPages(studyDocumentId, pages);
       } catch {
@@ -496,7 +503,7 @@ export function useStudyWorkspace(props: {
     return () => {
       mounted = false;
     };
-  }, [applyLoadedBackendPages, backendPageIdsByDocument, studyDocumentId, workspaceHydrated]);
+  }, [applyLoadedBackendPages, backendPageIdsByDocument, studyDocument, studyDocumentId, workspaceHydrated]);
 
   useEffect(() => {
     if (!workspaceHydrated || !isBackendApiEnabled()) return;
@@ -654,12 +661,14 @@ export function useStudyWorkspace(props: {
     if (!workspaceHydrated || !aiPanelOpen || !isBackendApiEnabled() || !studyDocumentId || !currentDocumentHasBackendPages) {
       return;
     }
+    const backendNoteId = getStudyDocumentBackendNoteId(studyDocument);
+    if (!backendNoteId) return;
 
     let mounted = true;
 
     const loadAiMessages = async () => {
       try {
-        const sessions = await listBackendChatSessions(studyDocumentId);
+        const sessions = await listBackendChatSessions(backendNoteId);
         const preferredSessionId = chatSessionByDocument[studyDocumentId] ?? lastChatSessionByDocument[studyDocumentId];
         const session = sessions.find((item) => item.id === preferredSessionId) ?? sessions[0] ?? null;
 
@@ -707,7 +716,7 @@ export function useStudyWorkspace(props: {
     return () => {
       mounted = false;
     };
-  }, [aiPanelOpen, currentDocumentHasBackendPages, studyDocumentId, workspaceHydrated]);
+  }, [aiPanelOpen, currentDocumentHasBackendPages, studyDocument, studyDocumentId, workspaceHydrated]);
 
 
   const openSubject = (id: number) => {
@@ -807,12 +816,14 @@ export function useStudyWorkspace(props: {
         }));
         const document: StudyDocumentEntry = {
           id: backendNote.id,
+          backendNoteId: backendNote.id,
           subjectId: targetSubjectId,
           title: backendNote.title,
           type: 'blank',
           updatedAt: '방금 전',
           pageCount: 1,
           preview: backendNote.summary ?? '새 빈 노트입니다.',
+          backendSyncStatus: 'synced',
         };
         openCreatedStudyDocument(document, '새 빈 노트를 백엔드에 저장했습니다.');
         return;
@@ -829,6 +840,7 @@ export function useStudyWorkspace(props: {
       updatedAt: '방금 전',
       pageCount: 1,
       preview: '새로 만든 빈 필기 노트입니다.',
+      backendSyncStatus: 'local',
     };
 
     openCreatedStudyDocument(document, '새 빈 노트를 만들었습니다.');
@@ -856,7 +868,8 @@ export function useStudyWorkspace(props: {
   const requestDeleteStudyDocument = (id: number) => {
     const target = allStudyDocuments.find((value) => value.id === id);
     if (!target) return;
-    const isBackendDocument = isBackendApiEnabled() && Boolean(backendPageIdsByDocument[id]);
+    const backendNoteId = getStudyDocumentBackendNoteId(target);
+    const isBackendDocument = isBackendApiEnabled() && Boolean(backendNoteId);
 
     confirmDeleteAction({
       title: 'Note 삭제',
@@ -866,7 +879,7 @@ export function useStudyWorkspace(props: {
       confirmText: '삭제',
       onConfirm: () => {
         if (isBackendDocument) {
-          void deleteBackendNote(id)
+          void deleteBackendNote(backendNoteId!)
             .then(() => {
               setUserStudyDocuments((current) => current.filter((document) => document.id !== id));
               setBackendPageIdsByDocument((current) => {
@@ -929,7 +942,7 @@ export function useStudyWorkspace(props: {
                 delete next[id];
                 return next;
               });
-              setAllChatSessions((current) => current.filter((session) => session.note_id !== id));
+              setAllChatSessions((current) => current.filter((session) => session.note_id !== backendNoteId));
 
               if (studyDocumentId === id) {
                 setStudyDocumentId(null);
@@ -993,16 +1006,19 @@ export function useStudyWorkspace(props: {
 
     const target = allStudyDocuments.find((value) => value.id === id) ?? deletedStudyDocuments.find((value) => value.id === id);
     if (!target) return false;
-    const isBackendDocument = isBackendApiEnabled() && Boolean(backendPageIdsByDocument[id]);
+    const backendNoteId = getStudyDocumentBackendNoteId(target);
+    const isBackendDocument = isBackendApiEnabled() && Boolean(backendNoteId);
 
     if (isBackendDocument) {
-      void updateBackendNote({ noteId: id, title: nextTitle })
+      void updateBackendNote({ noteId: backendNoteId!, title: nextTitle })
         .then((updated) => {
           setUserStudyDocuments((current) => upsertStudyDocument(current, {
             ...target,
+            backendNoteId: updated.id,
             title: updated.title,
             preview: updated.summary ?? target.preview,
             updatedAt: 'DB 저장됨',
+            backendSyncStatus: 'synced',
           }));
           setWorkspaceFeedback('문서 제목을 백엔드에 저장했습니다.');
         })
@@ -1095,6 +1111,7 @@ export function useStudyWorkspace(props: {
             });
           const document: StudyDocumentEntry = {
             id: result.note.id,
+            backendNoteId: result.note.id,
             subjectId: targetSubjectId,
             title: result.note.title,
             type: 'pdf',
@@ -1102,7 +1119,9 @@ export function useStudyWorkspace(props: {
             pageCount: Math.max(1, result.note.page_count ?? result.upload.page_count),
             preview: result.note.summary ?? '업로드한 PDF 문서입니다.',
             file: { uri: result.note.file_url ?? result.upload.url },
+            remoteFileUrl: result.note.file_url ?? result.upload.url,
             thumbnailUrl: result.note.thumbnail_url ?? result.upload.thumbnail_url ?? undefined,
+            backendSyncStatus: 'synced',
           };
           openCreatedStudyDocument(document, `${document.pageCount}페이지 PDF를 백엔드에 저장했습니다.`);
           return;
@@ -1124,6 +1143,8 @@ export function useStudyWorkspace(props: {
         pageCount: 1,
         preview: '파일 선택기에서 업로드한 수업 PDF입니다.',
         file: { uri: localPdfFileUri },
+        localFileUri: localPdfFileUri,
+        backendSyncStatus: 'local',
       };
 
       openCreatedStudyDocument(document, 'PDF 파일을 업로드했습니다.');
@@ -1338,6 +1359,7 @@ export function useStudyWorkspace(props: {
         }));
         const document: StudyDocumentEntry = {
           id: backendNote.id,
+          backendNoteId: backendNote.id,
           subjectId: targetSubject.id,
           title: backendNote.title,
           type: 'image',
@@ -1345,6 +1367,8 @@ export function useStudyWorkspace(props: {
           pageCount: 1,
           preview: backendNote.summary ?? '이미지로 만든 노트입니다.',
           file: { uri: imageUrl },
+          remoteFileUrl: imageUrl,
+          backendSyncStatus: 'synced',
         };
         openCreatedStudyDocument(document, '이미지를 새 노트 페이지로 저장했습니다.');
         updateAssetStatus(asset.id, 'accepted');
@@ -1368,6 +1392,8 @@ export function useStudyWorkspace(props: {
       pageCount: 1,
       preview: asset.summary,
       file: { uri: imageUrl },
+      localFileUri: imageUrl,
+      backendSyncStatus: 'local',
     };
     openCreatedStudyDocument(document, '이미지를 새 노트로 만들었습니다.');
     updateAssetStatus(asset.id, 'accepted');
@@ -1376,6 +1402,8 @@ export function useStudyWorkspace(props: {
 
   const persistAssetForCurrentDocument = async (asset: CaptureAsset) => {
     if (!studyDocumentId || !isBackendApiEnabled() || !backendPageIdsByDocument[studyDocumentId]) return;
+    const backendNoteId = getStudyDocumentBackendNoteId(studyDocument);
+    if (!backendNoteId) return;
     const assetUrl = resolveAssetUri(asset);
     if (!assetUrl) return;
 
@@ -1383,7 +1411,7 @@ export function useStudyWorkspace(props: {
     const nextPageNumber = Math.max(0, ...existingPageNumbers) + 1;
     try {
       const backendPage = await createBackendNotePage({
-        noteId: studyDocumentId,
+        noteId: backendNoteId,
         pageNumber: nextPageNumber,
         content: serializeNotePageContent({ inkStrokes: [], textAnnotations: [] }),
         imageUrl: assetUrl,
