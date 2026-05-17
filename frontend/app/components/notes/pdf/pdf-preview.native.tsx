@@ -11,7 +11,8 @@ import { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkStroke, InkTex
 import { CaptureAsset, NotebookPage, PageCaptureReference } from '../../../types';
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
 type ResponderStartPoint = { x: number; y: number } | null;
-const PDF_RENDER_PAGE_RADIUS = 2;
+const PDF_RENDER_PAGE_RADIUS = 1;
+const PDF_VIEWABILITY_THRESHOLD = 65;
 
 function hasMultipleTouches(event: GestureResponderEvent) {
   return Boolean(event.nativeEvent.touches && event.nativeEvent.touches.length > 1);
@@ -41,6 +42,12 @@ function getPdfSourceKey(source: number | string | { uri: string }) {
   if (typeof source === 'number') return `asset:${source}`;
   if (typeof source === 'string') return source;
   return source.uri;
+}
+
+function isPdfPageNearCurrent(page: NotebookPage, currentPageNumber: number) {
+  return page.kind === 'pdf'
+    && typeof page.pageNumber === 'number'
+    && Math.abs(page.pageNumber - currentPageNumber) <= PDF_RENDER_PAGE_RADIUS;
 }
 
 function getReferencePreviewImage(reference: PageCaptureReference) {
@@ -253,6 +260,7 @@ export function PdfPreview(props: {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [openReferenceId, setOpenReferenceId] = useState<string | null>(null);
   const currentStrokeRef = useRef<InkStroke | null>(null);
+  const reportedDocumentPageCountRef = useRef(documentPageCount);
   const suppressNextAutoScrollRef = useRef(false);
   const visiblePageKeysRef = useRef('');
   const selectionOriginRef = useRef<InkPoint | null>(null);
@@ -360,10 +368,19 @@ export function PdfPreview(props: {
   const interactionLocksScroll = props.inkTool !== 'view';
   const scrollEnabled = !interactionLocksScroll;
   const [visiblePageKeys, setVisiblePageKeys] = useState<Set<string>>(() => new Set([getNotebookPageKey(pageItems[0])]));
+  const flatListExtraData = useMemo(() => ({
+    activeGeneratedPageId: props.activeGeneratedPageId,
+    page: props.page,
+    pdfSourceKey,
+    viewerHeight,
+    viewerWidth,
+    visiblePageKeys,
+  }), [props.activeGeneratedPageId, props.page, pdfSourceKey, viewerHeight, viewerWidth, visiblePageKeys]);
 
   useEffect(() => {
     setLoadError(null);
     setDocumentPageCount(Math.max(1, props.page));
+    reportedDocumentPageCountRef.current = 0;
     setVisiblePageKeys(new Set([getNotebookPageKey(pageItems[0])]));
     visiblePageKeysRef.current = '';
     suppressNextAutoScrollRef.current = false;
@@ -456,7 +473,7 @@ export function PdfPreview(props: {
     if (page.pageNumber) props.onPageChanged?.(page.pageNumber);
   };
 
-  const viewabilityConfig = useMemo(() => ({ itemVisiblePercentThreshold: 55, minimumViewTime: 80 }), []);
+  const viewabilityConfig = useMemo(() => ({ itemVisiblePercentThreshold: PDF_VIEWABILITY_THRESHOLD, minimumViewTime: 120 }), []);
   const handleViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: Array<{ item: NotebookPage; isViewable?: boolean }> }) => {
     const state = scrollStateRef.current;
     const visibleItems = viewableItems.filter((entry) => entry.isViewable);
@@ -489,6 +506,17 @@ export function PdfPreview(props: {
         ? referenceBuckets.pdf.get(page.pageNumber) ?? []
         : []
   );
+
+  const shouldRenderPdfContent = useCallback((page: NotebookPage, visiblePage: boolean) => (
+    page.kind === 'pdf' && Boolean(page.pageNumber) && (visiblePage || isPdfPageNearCurrent(page, props.page))
+  ), [props.page]);
+
+  const shouldRenderPageLayers = useCallback((page: NotebookPage, currentPage: boolean, visiblePage: boolean) => (
+    currentPage
+    || visiblePage
+    || isPdfPageNearCurrent(page, props.page)
+    || page.generatedPageId === props.activeGeneratedPageId
+  ), [props.activeGeneratedPageId, props.page]);
 
   useEffect(() => {
     if (!openReferenceId) return;
@@ -551,13 +579,10 @@ export function PdfPreview(props: {
     const currentPage = isCurrentNotebookPage(page);
     const pageKey = getNotebookPageKey(page);
     const visiblePage = visiblePageKeys.has(pageKey);
-    const nearCurrentPage = page.kind === 'pdf' && page.pageNumber
-      ? Math.abs(page.pageNumber - props.page) <= PDF_RENDER_PAGE_RADIUS
-      : page.generatedPageId === props.activeGeneratedPageId;
-    const shouldRenderInteractiveLayers = currentPage || visiblePage || nearCurrentPage;
+    const shouldRenderInteractiveLayers = shouldRenderPageLayers(page, currentPage, visiblePage);
     const pageStrokesForView = shouldRenderInteractiveLayers ? getPageStrokesForView(page) : [];
     const pageTextAnnotationsForView = shouldRenderInteractiveLayers ? getPageTextAnnotationsForView(page) : [];
-    const shouldRenderPdfPage = page.kind === 'pdf' && page.pageNumber ? nearCurrentPage || visiblePage : false;
+    const shouldRenderPdfPage = shouldRenderPdfContent(page, visiblePage);
     const pageReferences = shouldRenderInteractiveLayers ? getPageCaptureReferences(page) : [];
     const activePageReference = pageReferences.find((reference) => reference.id === openReferenceId) ?? null;
     const activeReferenceIndex = activePageReference ? pageReferences.findIndex((reference) => reference.id === activePageReference.id) : -1;
@@ -598,9 +623,18 @@ export function PdfPreview(props: {
               showsVerticalScrollIndicator={false}
               onLoadComplete={(pageCount, _path, size) => {
                 setLoadError(null);
-                if (size?.width && size?.height) setPdfPageSize(size);
-                setDocumentPageCount(pageCount);
-                props.onDocumentLoaded?.(pageCount);
+                if (size?.width && size?.height) {
+                  setPdfPageSize((current) => (
+                    current?.width === size.width && current?.height === size.height
+                      ? current
+                      : size
+                  ));
+                }
+                setDocumentPageCount((current) => (current === pageCount ? current : pageCount));
+                if (reportedDocumentPageCountRef.current !== pageCount) {
+                  reportedDocumentPageCountRef.current = pageCount;
+                  props.onDocumentLoaded?.(pageCount);
+                }
               }}
               onError={(error) => {
                 setLoadError(error instanceof Error ? error.message : 'PDF를 불러오지 못했습니다.');
@@ -947,25 +981,18 @@ export function PdfPreview(props: {
         data={pageItems}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => renderPage(item)}
-        extraData={{
-          activeGeneratedPageId: props.activeGeneratedPageId,
-          page: props.page,
-          pdfSourceKey,
-          viewerHeight,
-          viewerWidth,
-          visiblePageKeys,
-        }}
+        extraData={flatListExtraData}
         style={{ width: '100%' }}
         contentContainerStyle={{ alignItems: 'center', paddingTop: 4, paddingBottom: 24 }}
         scrollEnabled={scrollEnabled}
         viewabilityConfig={viewabilityConfig}
         onViewableItemsChanged={handleViewableItemsChanged}
         showsVerticalScrollIndicator
-        initialNumToRender={3}
-        maxToRenderPerBatch={2}
-        updateCellsBatchingPeriod={32}
+        initialNumToRender={2}
+        maxToRenderPerBatch={1}
+        updateCellsBatchingPeriod={48}
         windowSize={3}
-        removeClippedSubviews={false}
+        removeClippedSubviews
         onScrollToIndexFailed={(info) => {
           setTimeout(() => {
             listRef.current?.scrollToIndex({ index: info.index, animated: false });
