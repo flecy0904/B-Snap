@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from psycopg import Connection
 
 from backend.app.core.auth import get_current_user
+from backend.app.core.config import Settings, get_settings
 from backend.app.db.crud import execute_commit, execute_returning, fetch_all, fetch_one, require_row
 from backend.app.db.session import get_db_connection
 from backend.app.schemas.notes import (
@@ -15,7 +16,7 @@ from backend.app.schemas.notes import (
     PdfTextExtractionRead,
 )
 from backend.app.services.note_page_content import merge_page_state_content
-from backend.app.services.pdf_text_extractor import extract_pdf_text_pages
+from backend.app.services.pdf_text_extractor import extract_pdf_text_pages, extract_pdf_text_pages_from_path
 
 
 router = APIRouter(tags=["notes"])
@@ -310,9 +311,22 @@ def extract_note_pdf_text(
     payload: PdfTextExtractionCreate,
     connection: Connection = Depends(get_db_connection),
     current_user: dict = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
 ):
-    get_note_for_user(note_id, current_user["id"], connection)
-    page_texts = extract_pdf_text_pages(payload.pdf_data)
+    note = get_note_for_user(note_id, current_user["id"], connection)
+    if payload.pdf_data:
+        page_texts = extract_pdf_text_pages(payload.pdf_data)
+    else:
+        file_url = note.get("file_url")
+        if not file_url or not file_url.startswith("/uploads/"):
+            raise HTTPException(status_code=400, detail="stored pdf file is required")
+
+        upload_root = settings.upload_path.resolve()
+        pdf_path = (upload_root / file_url.removeprefix("/uploads/")).resolve()
+        if upload_root not in pdf_path.parents or pdf_path.suffix.lower() != ".pdf" or not pdf_path.exists():
+            raise HTTPException(status_code=400, detail="stored pdf file is unavailable")
+
+        page_texts = extract_pdf_text_pages_from_path(pdf_path)
     existing_pages = fetch_all(
         connection,
         """

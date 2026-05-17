@@ -539,13 +539,11 @@ export async function moveBackendNotePage(payload: {
 
 export async function extractBackendPdfText(payload: {
   noteId: number;
-  pdfData: string;
+  pdfData?: string;
 }) {
   return request<BackendPdfTextExtractionResponse>(`/notes/${payload.noteId}/extract-pdf-text`, {
     method: 'POST',
-    body: {
-      pdf_data: payload.pdfData,
-    },
+    body: payload.pdfData ? { pdf_data: payload.pdfData } : {},
   });
 }
 

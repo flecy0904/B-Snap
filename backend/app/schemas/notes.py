@@ -42,7 +42,7 @@ class NotePageUpdate(BaseModel):
 
 
 class PdfTextExtractionCreate(BaseModel):
-    pdf_data: str
+    pdf_data: str | None = None
 
 
 class NotePageRead(BaseModel):

@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Platform } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
-import { File } from 'expo-file-system';
 import {
   createBackendNote,
   createBackendNotePage,
@@ -67,19 +65,6 @@ type PendingPageSave = {
 const EMPTY_PAGE_CONTENT = serializeNotePageContent({ inkStrokes: [], textAnnotations: [] });
 
 const getPageSaveKey = (documentId: number, pageNumber: number) => `${documentId}:${pageNumber}`;
-
-async function buildPdfDataUriForTextExtraction(picked: DocumentPicker.DocumentPickerAsset, pdfFileUri: string) {
-  if (pdfFileUri.startsWith('data:application/pdf')) return pdfFileUri;
-  if (Platform.OS === 'web' && picked.base64) {
-    return picked.base64.startsWith('data:application/pdf')
-      ? picked.base64
-      : `data:application/pdf;base64,${picked.base64}`;
-  }
-  if (!picked.uri) return null;
-
-  const base64 = await new File(picked.uri).base64();
-  return `data:application/pdf;base64,${base64}`;
-}
 
 export function useStudyWorkspace(props: {
   wide: boolean;
@@ -147,6 +132,7 @@ export function useStudyWorkspace(props: {
   const lastSavedPageContentRef = useRef<Record<string, string>>({});
   const backendPageLoadsInFlightRef = useRef<Record<number, true>>({});
   const dirtyPageKeysRef = useRef<Set<string>>(new Set());
+  const pdfSyncInFlightRef = useRef<Record<number, true>>({});
 
   const isPdfAssetUrl = (url: string | null | undefined) => !!url && /\.pdf(?:$|[?#])/i.test(url);
   const normalizeDocumentFile = (file: StudyDocumentEntry['file']) => {
@@ -452,8 +438,29 @@ export function useStudyWorkspace(props: {
         if (!mounted) return;
         const backendDocumentIds = new Set(documents.map((document) => document.id));
         setUserStudyDocuments((current) => {
+          const backendDocumentByBackendId = new Map<number, StudyDocumentEntry>();
+          documents.forEach((document) => {
+            if (document.backendNoteId) backendDocumentByBackendId.set(document.backendNoteId, document);
+          });
+          const mergedCurrent = current.map((document) => {
+            const backendNoteId = getStudyDocumentBackendNoteId(document);
+            const backendDocument = backendNoteId ? backendDocumentByBackendId.get(backendNoteId) : null;
+            if (!backendDocument) return document;
+
+            return {
+              ...backendDocument,
+              id: document.id,
+              localFileUri: document.localFileUri,
+              file: document.localFileUri ? { uri: document.localFileUri } : normalizeDocumentFile(backendDocument.file),
+            };
+          });
+          const existingBackendNoteIds = new Set(
+            mergedCurrent
+              .map((document) => getStudyDocumentBackendNoteId(document))
+              .filter((id): id is number => typeof id === 'number'),
+          );
           const nextById = new Map<number, StudyDocumentEntry>();
-          [...current, ...documents].forEach((document) => {
+          [...mergedCurrent, ...documents.filter((document) => !document.backendNoteId || !existingBackendNoteIds.has(document.backendNoteId))].forEach((document) => {
             nextById.set(document.id, {
               ...document,
               file: normalizeDocumentFile(document.file),
@@ -1038,6 +1045,112 @@ export function useStudyWorkspace(props: {
     return true;
   };
 
+  const syncPdfDocumentToBackend = useCallback(async (document: StudyDocumentEntry, targetSubject: Subject) => {
+    if (!isBackendApiEnabled() || document.type !== 'pdf' || document.backendNoteId || pdfSyncInFlightRef.current[document.id]) {
+      return;
+    }
+
+    const sourceUri = document.localFileUri
+      ?? (document.file && typeof document.file === 'object' && 'uri' in document.file ? document.file.uri : null);
+    if (!sourceUri) return;
+
+    pdfSyncInFlightRef.current[document.id] = true;
+    setUserStudyDocuments((current) => current.map((item) => (
+      item.id === document.id
+        ? { ...item, backendSyncStatus: 'syncing', backendSyncError: undefined }
+        : item
+    )));
+
+    try {
+      const folder = await ensureFolderForSubject({ name: targetSubject.name, color: targetSubject.color });
+      const result = await uploadBackendPdfNote({
+        file: {
+          uri: sourceUri,
+          name: document.title || `${targetSubject.name} PDF`,
+          type: 'application/pdf',
+        },
+        folderId: folder.id,
+        title: document.title || `${targetSubject.name} PDF`,
+        summary: '업로드한 PDF 문서',
+      });
+      const pagesByNumber = Object.fromEntries(
+        result.pages.map((page) => [page.page_number, page.id]),
+      );
+      setBackendPageIdsByDocument((current) => ({
+        ...current,
+        [document.id]: pagesByNumber,
+      }));
+      setUserStudyDocuments((current) => current.map((item) => (
+        item.id === document.id
+          ? {
+            ...item,
+            backendNoteId: result.note.id,
+            title: result.note.title,
+            updatedAt: 'DB 저장됨',
+            pageCount: Math.max(item.pageCount, result.note.page_count ?? result.upload.page_count),
+            preview: result.note.summary ?? '업로드한 PDF 문서입니다.',
+            remoteFileUrl: result.note.file_url ?? result.upload.url,
+            thumbnailUrl: result.note.thumbnail_url ?? result.upload.thumbnail_url ?? undefined,
+            backendSyncStatus: 'synced',
+            backendSyncError: undefined,
+          }
+          : item
+      )));
+
+      void extractBackendPdfText({ noteId: result.note.id })
+        .then((textResult) => {
+          const textPageIdsByNumber = textResult.pages.reduce<Record<number, number>>((next, page) => {
+            next[page.page_number] = page.id;
+            return next;
+          }, {});
+          setBackendPageIdsByDocument((current) => ({
+            ...current,
+            [document.id]: {
+              ...(current[document.id] ?? {}),
+              ...textPageIdsByNumber,
+            },
+          }));
+          setUserStudyDocuments((current) => current.map((item) => (
+            item.id === document.id
+              ? { ...item, pageCount: Math.max(item.pageCount, textResult.pages_extracted) }
+              : item
+          )));
+        })
+        .catch(() => {
+          setWorkspaceFeedback('PDF 텍스트 추출에 실패했습니다.');
+        });
+
+      setWorkspaceFeedback(`${Math.max(document.pageCount, result.note.page_count ?? result.upload.page_count)}페이지 PDF를 백엔드에 저장했습니다.`);
+    } catch (error) {
+      const syncError = error instanceof BackendApiError && error.detail
+        ? error.detail
+        : '백엔드 저장에 실패했습니다.';
+      setWorkspaceFeedback(`${syncError} PDF는 이 기기에 유지됩니다.`);
+      setUserStudyDocuments((current) => current.map((item) => (
+        item.id === document.id
+          ? {
+            ...item,
+            backendSyncStatus: 'failed',
+            backendSyncError: syncError,
+          }
+          : item
+      )));
+    } finally {
+      delete pdfSyncInFlightRef.current[document.id];
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!workspaceHydrated || !isBackendApiEnabled()) return;
+
+    userStudyDocuments.forEach((document) => {
+      if (document.type !== 'pdf' || document.backendSyncStatus !== 'syncing' || document.backendNoteId) return;
+      const targetSubject = availableSubjects.find((item) => item.id === document.subjectId);
+      if (!targetSubject) return;
+      void syncPdfDocumentToBackend(document, targetSubject);
+    });
+  }, [availableSubjects, syncPdfDocumentToBackend, userStudyDocuments, workspaceHydrated]);
+
   const uploadPdfDocument = async () => {
     const targetSubjectId = subjectId ?? availableSubjects[0]?.id ?? null;
     if (!targetSubjectId) return;
@@ -1082,92 +1195,7 @@ export function useStudyWorkspace(props: {
       );
 
       if (isBackendApiEnabled()) {
-        void (async () => {
-          try {
-            const folder = await ensureFolderForSubject({ name: targetSubject.name, color: targetSubject.color });
-            const result = await uploadBackendPdfNote({
-              file: {
-                uri: picked.uri,
-                name: picked.name || `${targetSubject.name} PDF`,
-                type: picked.mimeType || 'application/pdf',
-              },
-              folderId: folder.id,
-              title: picked.name || `${targetSubject.name} PDF`,
-              summary: '업로드한 PDF 문서',
-            });
-            const pagesByNumber = Object.fromEntries(
-              result.pages.map((page) => [page.page_number, page.id]),
-            );
-            setBackendPageIdsByDocument((current) => ({
-              ...current,
-              [localDocumentId]: pagesByNumber,
-            }));
-            setUserStudyDocuments((current) => current.map((item) => (
-              item.id === localDocumentId
-                ? {
-                  ...item,
-                  backendNoteId: result.note.id,
-                  title: result.note.title,
-                  updatedAt: 'DB 저장됨',
-                  pageCount: Math.max(item.pageCount, result.note.page_count ?? result.upload.page_count),
-                  preview: result.note.summary ?? '업로드한 PDF 문서입니다.',
-                  remoteFileUrl: result.note.file_url ?? result.upload.url,
-                  thumbnailUrl: result.note.thumbnail_url ?? result.upload.thumbnail_url ?? undefined,
-                  backendSyncStatus: 'synced',
-                  backendSyncError: undefined,
-                }
-                : item
-            )));
-            void buildPdfDataUriForTextExtraction(picked, localPdfFileUri)
-              .then((pdfData) => {
-                if (!pdfData) return null;
-                return extractBackendPdfText({
-                  noteId: result.note.id,
-                  pdfData,
-                });
-              })
-              .then((textResult) => {
-                if (!textResult) return;
-                const pagesByNumber = textResult.pages.reduce<Record<number, number>>((next, page) => {
-                  next[page.page_number] = page.id;
-                  return next;
-                }, {});
-                setBackendPageIdsByDocument((current) => ({
-                  ...current,
-                  [localDocumentId]: {
-                    ...(current[localDocumentId] ?? {}),
-                    ...pagesByNumber,
-                  },
-                }));
-                setUserStudyDocuments((current) => current.map((item) => (
-                  item.id === localDocumentId
-                    ? { ...item, pageCount: Math.max(item.pageCount, textResult.pages_extracted) }
-                    : item
-                )));
-              })
-              .catch(() => {
-                setWorkspaceFeedback('PDF text extraction failed.');
-              });
-            setWorkspaceFeedback(`${Math.max(localPageCount, result.note.page_count ?? result.upload.page_count)}페이지 PDF를 백엔드에 저장했습니다.`);
-          } catch (error) {
-            setWorkspaceFeedback(
-              error instanceof BackendApiError && error.detail
-                ? error.detail
-                : '백엔드 저장에 실패했습니다. PDF는 이 기기에 유지됩니다.',
-            );
-            setUserStudyDocuments((current) => current.map((item) => (
-              item.id === localDocumentId
-                ? {
-                  ...item,
-                  backendSyncStatus: 'failed',
-                  backendSyncError: error instanceof BackendApiError && error.detail
-                    ? error.detail
-                    : '백엔드 저장에 실패했습니다.',
-                }
-                : item
-            )));
-          }
-        })();
+        void syncPdfDocumentToBackend(localDocument, targetSubject);
       }
     } catch {
       setWorkspaceFeedback('PDF 파일을 가져오지 못했습니다.');
