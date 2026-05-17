@@ -3,11 +3,12 @@ import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { FlatList, GestureResponderEvent, Image, Pressable, Text, useWindowDimensions, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import Pdf from 'react-native-pdf';
-import Svg, { Path } from 'react-native-svg';
+import Svg from 'react-native-svg';
 import { captureRef } from 'react-native-view-shot';
+import { InkPath } from '../canvas/ink-path';
 import { TextAnnotationLayer } from '../canvas/text-annotation-layer';
 import { hasMultipleTouches, isLikelyStylusEvent } from '../canvas/ink-input-policy';
-import { cleanAiDisplayText, findHitInkStrokeId, getInkCenterlinePath, getInkStrokeSvgPath, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize, shouldAppendInkPoint } from '../../../ui-helpers';
+import { cleanAiDisplayText, findHitInkStrokeId, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize, shouldAppendInkPoint } from '../../../ui-helpers';
 import { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { CaptureAsset, NotebookPage, PageCaptureReference } from '../../../types';
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
@@ -46,55 +47,6 @@ function getCaptureAssetPreviewImage(asset: CaptureAsset | null | undefined) {
 function getCaptureAssetSummary(asset: CaptureAsset | null | undefined) {
   if (!asset) return '';
   return cleanAiDisplayText(asset.analysisSummary || asset.summary);
-}
-
-function InkPath({ stroke, draft = false }: { stroke: InkStroke; draft?: boolean }) {
-  if (stroke.linePattern && stroke.linePattern !== 'solid' && stroke.style !== 'highlight' && stroke.style !== 'shape') {
-    const centerlinePath = getInkCenterlinePath(stroke.points);
-    if (!centerlinePath) return null;
-    const dashArray = stroke.linePattern === 'dotted' ? `${Math.max(1, stroke.width * 0.45)} ${Math.max(6, stroke.width * 2)}` : `${Math.max(8, stroke.width * 3)} ${Math.max(5, stroke.width * 1.8)}`;
-    return (
-      <Path
-        key={stroke.id}
-        d={centerlinePath}
-        fill="none"
-        stroke={stroke.color}
-        strokeWidth={stroke.width}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeDasharray={dashArray}
-      />
-    );
-  }
-
-  const path = getInkStrokeSvgPath(stroke, !draft);
-  if (!path) return null;
-
-  if (stroke.style === 'shape') {
-    const dashArray = stroke.linePattern && stroke.linePattern !== 'solid'
-      ? stroke.linePattern === 'dotted'
-        ? `${Math.max(1, stroke.width * 0.45)} ${Math.max(6, stroke.width * 2)}`
-        : `${Math.max(8, stroke.width * 3)} ${Math.max(5, stroke.width * 1.8)}`
-      : undefined;
-    return (
-      <Path
-        key={stroke.id}
-        d={path}
-        fill="none"
-        stroke={stroke.color}
-        strokeWidth={stroke.width}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeDasharray={dashArray}
-      />
-    );
-  }
-
-  if (stroke.style === 'highlight') {
-    return <Path key={stroke.id} d={path} fill={stroke.color} opacity={0.72} />;
-  }
-
-  return <Path key={stroke.id} d={path} fill={stroke.color} />;
 }
 
 function NotebookPaperBackground({ page }: { page: NotebookPage }) {
