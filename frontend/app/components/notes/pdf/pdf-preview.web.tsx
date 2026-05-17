@@ -3,6 +3,7 @@ import { GestureResponderEvent, Image, Pressable, ScrollView, Text, useWindowDim
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import Svg, { Path } from 'react-native-svg';
 import { TextAnnotationLayer } from '../canvas/text-annotation-layer';
+import { hasMultipleTouches, isLikelyStylusEvent, shouldUsePrimaryPointer } from '../canvas/ink-input-policy';
 import { cleanAiDisplayText, findHitInkStrokeId, getInkCenterlinePath, getInkStrokeSvgPath, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize } from '../../../ui-helpers';
 import { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { CaptureAsset, NotebookPage, PageCaptureReference } from '../../../types';
@@ -110,7 +111,6 @@ type PdfJsLib = {
   getDocument: (source: PdfJsDocumentSource) => { promise: Promise<PdfJsDocument>; destroy?: () => void };
 };
 type PageFrame = { width: number; height: number };
-type WebGestureNativeEvent = GestureResponderEvent['nativeEvent'] & { buttons?: number };
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
 type ResponderStartPoint = { x: number; y: number } | null;
 
@@ -139,17 +139,6 @@ declare global {
 }
 
 let pdfJsLoaderPromise: Promise<PdfJsLib> | null = null;
-
-function isPrimaryPointerEvent(event: GestureResponderEvent) {
-  const nativeEvent = event.nativeEvent as WebGestureNativeEvent;
-  return nativeEvent.buttons === undefined || nativeEvent.buttons === 1;
-}
-
-function isLikelyStylusEvent(event: GestureResponderEvent) {
-  const nativeEvent = event.nativeEvent as any;
-  const pointerType = nativeEvent.pointerType ?? nativeEvent.touchType;
-  return pointerType === 'pen' || pointerType === 'stylus' || pointerType === 'pencil';
-}
 
 function shouldCaptureDrawingMove(event: GestureResponderEvent, startPoint: ResponderStartPoint) {
   if (isLikelyStylusEvent(event)) return true;
@@ -980,14 +969,14 @@ export function PdfPreview(props: {
           style={[props.styles.inkOverlay, { pointerEvents: props.inkTool === 'view' ? 'none' : 'auto' }]}
           onStartShouldSetResponder={(event) => {
             responderStartPointRef.current = { x: event.nativeEvent.locationX, y: event.nativeEvent.locationY };
-            if (event.nativeEvent.touches && event.nativeEvent.touches.length > 1) return false;
-            if (!isPrimaryPointerEvent(event)) return false;
+            if (hasMultipleTouches(event)) return false;
+            if (!shouldUsePrimaryPointer(event)) return false;
             if (isInkCaptureTool(props.inkTool) && (props.fingerDrawingEnabled || isLikelyStylusEvent(event))) return true;
             return props.inkTool === 'text';
           }}
           onMoveShouldSetResponder={(event) => {
-            if (event.nativeEvent.touches && event.nativeEvent.touches.length > 1) return false;
-            if (!isPrimaryPointerEvent(event)) return false;
+            if (hasMultipleTouches(event)) return false;
+            if (!shouldUsePrimaryPointer(event)) return false;
             if (isInkCaptureTool(props.inkTool)) {
               return props.fingerDrawingEnabled || shouldCaptureDrawingMove(event, responderStartPointRef.current);
             }

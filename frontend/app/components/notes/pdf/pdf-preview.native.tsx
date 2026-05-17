@@ -6,22 +6,12 @@ import Pdf from 'react-native-pdf';
 import Svg, { Path } from 'react-native-svg';
 import { captureRef } from 'react-native-view-shot';
 import { TextAnnotationLayer } from '../canvas/text-annotation-layer';
+import { hasMultipleTouches, isLikelyStylusEvent } from '../canvas/ink-input-policy';
 import { cleanAiDisplayText, findHitInkStrokeId, getInkCenterlinePath, getInkStrokeSvgPath, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize } from '../../../ui-helpers';
 import { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { CaptureAsset, NotebookPage, PageCaptureReference } from '../../../types';
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
 type ResponderStartPoint = { x: number; y: number } | null;
-
-function hasMultipleTouches(event: GestureResponderEvent) {
-  return Boolean(event.nativeEvent.touches && event.nativeEvent.touches.length > 1);
-}
-
-function isLikelyStylusEvent(event: GestureResponderEvent) {
-  const nativeEvent = event.nativeEvent as any;
-  const touch = nativeEvent.changedTouches?.[0] ?? nativeEvent.touches?.[0] ?? null;
-  const pointerType = nativeEvent.pointerType ?? nativeEvent.touchType ?? touch?.pointerType ?? touch?.touchType ?? touch?.type;
-  return pointerType === 'pen' || pointerType === 'stylus' || pointerType === 'pencil';
-}
 
 function shouldCaptureDrawingMove(event: GestureResponderEvent, startPoint: ResponderStartPoint) {
   if (isLikelyStylusEvent(event)) return true;
