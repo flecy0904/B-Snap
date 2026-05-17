@@ -44,6 +44,7 @@ import { useAiCanvasNotes } from './ai-canvas/use-ai-canvas-notes';
 import { addUniqueId, removeId, upsertStudyDocument } from './document/collection-helpers';
 import { getStudyDocumentBackendNoteId } from './document/backend-sync';
 import { useDocumentPageActions } from './document/use-document-page-actions';
+import { createLocalStudyDocumentId, persistPickedPdfAsset, readPdfPageCount } from './document/pdf-local-import';
 import { confirmDeleteAction } from './ui/confirm-delete-action';
 import { useInkActions, type WorkspaceEditSnapshot } from './ink/use-ink-actions';
 import { parseNotePageContent, serializeNotePageContent } from './document/note-page-content';
@@ -1056,98 +1057,118 @@ export function useStudyWorkspace(props: {
       const picked = result.assets[0];
       const targetSubject = availableSubjects.find((value) => value.id === targetSubjectId);
       if (!targetSubject) return;
-      const localPdfFileUri = Platform.OS === 'web' && picked.base64 ? picked.base64 : picked.uri;
-      setWorkspaceFeedback('PDF 원본과 첫 페이지 썸네일을 저장하는 중입니다.');
-
-      if (isBackendApiEnabled()) {
-        try {
-          const folder = await ensureFolderForSubject({ name: targetSubject.name, color: targetSubject.color });
-          const result = await uploadBackendPdfNote({
-            file: {
-              uri: picked.uri,
-              name: picked.name || `${targetSubject.name} PDF`,
-              type: picked.mimeType || 'application/pdf',
-            },
-            folderId: folder.id,
-            title: picked.name || `${targetSubject.name} PDF`,
-            summary: '업로드한 PDF 문서',
-          });
-          const pagesByNumber = Object.fromEntries(
-            result.pages.map((page) => [page.page_number, page.id]),
-          );
-          setBackendPageIdsByDocument((current) => ({
-            ...current,
-            [result.note.id]: pagesByNumber,
-          }));
-          void buildPdfDataUriForTextExtraction(picked, localPdfFileUri)
-            .then((pdfData) => {
-              if (!pdfData) return null;
-              return extractBackendPdfText({
-                noteId: result.note.id,
-                pdfData,
-              });
-            })
-            .then((textResult) => {
-              if (!textResult) return;
-              const pagesByNumber = textResult.pages.reduce<Record<number, number>>((next, page) => {
-                next[page.page_number] = page.id;
-                return next;
-              }, {});
-              setBackendPageIdsByDocument((current) => ({
-                ...current,
-                [result.note.id]: {
-                  ...(current[result.note.id] ?? {}),
-                  ...pagesByNumber,
-                },
-              }));
-              setUserStudyDocuments((current) => current.map((item) => (
-                item.id === result.note.id
-                  ? { ...item, pageCount: Math.max(item.pageCount, textResult.pages_extracted) }
-                  : item
-              )));
-            })
-            .catch(() => {
-              setWorkspaceFeedback('PDF text extraction failed.');
-            });
-          const document: StudyDocumentEntry = {
-            id: result.note.id,
-            backendNoteId: result.note.id,
-            subjectId: targetSubjectId,
-            title: result.note.title,
-            type: 'pdf',
-            updatedAt: '방금 전',
-            pageCount: Math.max(1, result.note.page_count ?? result.upload.page_count),
-            preview: result.note.summary ?? '업로드한 PDF 문서입니다.',
-            file: { uri: result.note.file_url ?? result.upload.url },
-            remoteFileUrl: result.note.file_url ?? result.upload.url,
-            thumbnailUrl: result.note.thumbnail_url ?? result.upload.thumbnail_url ?? undefined,
-            backendSyncStatus: 'synced',
-          };
-          openCreatedStudyDocument(document, `${document.pageCount}페이지 PDF를 백엔드에 저장했습니다.`);
-          return;
-        } catch (error) {
-          setWorkspaceFeedback(
-            error instanceof BackendApiError && error.detail
-              ? error.detail
-              : '백엔드 저장에 실패해 이 기기에만 PDF를 추가했습니다.',
-          );
-        }
-      }
-
-      const document: StudyDocumentEntry = {
-        id: Date.now(),
+      setWorkspaceFeedback('PDF를 이 기기에 저장하는 중입니다.');
+      const localPdfFileUri = await persistPickedPdfAsset(picked);
+      const localPageCount = await readPdfPageCount(picked, localPdfFileUri);
+      const localDocumentId = createLocalStudyDocumentId();
+      const localDocument: StudyDocumentEntry = {
+        id: localDocumentId,
         subjectId: targetSubjectId,
-        title: picked.name || `${targetSubject?.name ?? '수업'} PDF`,
+        title: picked.name || `${targetSubject.name} PDF`,
         type: 'pdf',
         updatedAt: '방금 전',
-        pageCount: 1,
-        preview: '파일 선택기에서 업로드한 수업 PDF입니다.',
+        pageCount: localPageCount,
+        preview: isBackendApiEnabled()
+          ? '이 기기에서 바로 열고 백엔드 동기화 중입니다.'
+          : '이 기기에 저장된 PDF입니다.',
         file: { uri: localPdfFileUri },
         localFileUri: localPdfFileUri,
-        backendSyncStatus: 'local',
+        backendSyncStatus: isBackendApiEnabled() ? 'syncing' : 'local',
       };
 
-      openCreatedStudyDocument(document, 'PDF 파일을 업로드했습니다.');
+      openCreatedStudyDocument(
+        localDocument,
+        isBackendApiEnabled() ? 'PDF를 열었습니다. 백엔드 동기화 중입니다.' : 'PDF 파일을 업로드했습니다.',
+      );
+
+      if (isBackendApiEnabled()) {
+        void (async () => {
+          try {
+            const folder = await ensureFolderForSubject({ name: targetSubject.name, color: targetSubject.color });
+            const result = await uploadBackendPdfNote({
+              file: {
+                uri: picked.uri,
+                name: picked.name || `${targetSubject.name} PDF`,
+                type: picked.mimeType || 'application/pdf',
+              },
+              folderId: folder.id,
+              title: picked.name || `${targetSubject.name} PDF`,
+              summary: '업로드한 PDF 문서',
+            });
+            const pagesByNumber = Object.fromEntries(
+              result.pages.map((page) => [page.page_number, page.id]),
+            );
+            setBackendPageIdsByDocument((current) => ({
+              ...current,
+              [localDocumentId]: pagesByNumber,
+            }));
+            setUserStudyDocuments((current) => current.map((item) => (
+              item.id === localDocumentId
+                ? {
+                  ...item,
+                  backendNoteId: result.note.id,
+                  title: result.note.title,
+                  updatedAt: 'DB 저장됨',
+                  pageCount: Math.max(item.pageCount, result.note.page_count ?? result.upload.page_count),
+                  preview: result.note.summary ?? '업로드한 PDF 문서입니다.',
+                  remoteFileUrl: result.note.file_url ?? result.upload.url,
+                  thumbnailUrl: result.note.thumbnail_url ?? result.upload.thumbnail_url ?? undefined,
+                  backendSyncStatus: 'synced',
+                  backendSyncError: undefined,
+                }
+                : item
+            )));
+            void buildPdfDataUriForTextExtraction(picked, localPdfFileUri)
+              .then((pdfData) => {
+                if (!pdfData) return null;
+                return extractBackendPdfText({
+                  noteId: result.note.id,
+                  pdfData,
+                });
+              })
+              .then((textResult) => {
+                if (!textResult) return;
+                const pagesByNumber = textResult.pages.reduce<Record<number, number>>((next, page) => {
+                  next[page.page_number] = page.id;
+                  return next;
+                }, {});
+                setBackendPageIdsByDocument((current) => ({
+                  ...current,
+                  [localDocumentId]: {
+                    ...(current[localDocumentId] ?? {}),
+                    ...pagesByNumber,
+                  },
+                }));
+                setUserStudyDocuments((current) => current.map((item) => (
+                  item.id === localDocumentId
+                    ? { ...item, pageCount: Math.max(item.pageCount, textResult.pages_extracted) }
+                    : item
+                )));
+              })
+              .catch(() => {
+                setWorkspaceFeedback('PDF text extraction failed.');
+              });
+            setWorkspaceFeedback(`${Math.max(localPageCount, result.note.page_count ?? result.upload.page_count)}페이지 PDF를 백엔드에 저장했습니다.`);
+          } catch (error) {
+            setWorkspaceFeedback(
+              error instanceof BackendApiError && error.detail
+                ? error.detail
+                : '백엔드 저장에 실패했습니다. PDF는 이 기기에 유지됩니다.',
+            );
+            setUserStudyDocuments((current) => current.map((item) => (
+              item.id === localDocumentId
+                ? {
+                  ...item,
+                  backendSyncStatus: 'failed',
+                  backendSyncError: error instanceof BackendApiError && error.detail
+                    ? error.detail
+                    : '백엔드 저장에 실패했습니다.',
+                }
+                : item
+            )));
+          }
+        })();
+      }
     } catch {
       setWorkspaceFeedback('PDF 파일을 가져오지 못했습니다.');
     }
