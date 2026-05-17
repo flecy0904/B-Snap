@@ -4,7 +4,7 @@ import { GestureResponderEvent, Image, View } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { captureRef } from 'react-native-view-shot';
 import { TextAnnotationLayer } from './text-annotation-layer';
-import { findHitInkStrokeId, getInkCenterlinePath, getInkStrokeSvgPath, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance } from '../../../ui-helpers';
+import { findHitInkStrokeId, getInkCenterlinePath, getInkStrokeSvgPath, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, shouldAppendInkPoint } from '../../../ui-helpers';
 import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { useCanvasContext } from './canvas-context';
 import { shouldCaptureInkPointer, shouldUsePrimaryPointer } from './ink-input-policy';
@@ -299,9 +299,7 @@ export function BlankNoteCanvas(props: {
             setCurrentStroke(nextStroke);
             return;
           }
-          const lastPoint = stroke.points[stroke.points.length - 1];
-          const dist = Math.hypot(point.x - lastPoint.x, point.y - lastPoint.y);
-          if (dist < 1.2) return;
+          if (!shouldAppendInkPoint(stroke, point)) return;
 
           const nextStroke = { ...stroke, points: [...stroke.points, point] };
           currentStrokeRef.current = nextStroke;

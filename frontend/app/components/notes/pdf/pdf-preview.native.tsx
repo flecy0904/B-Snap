@@ -7,7 +7,7 @@ import Svg, { Path } from 'react-native-svg';
 import { captureRef } from 'react-native-view-shot';
 import { TextAnnotationLayer } from '../canvas/text-annotation-layer';
 import { hasMultipleTouches, isLikelyStylusEvent } from '../canvas/ink-input-policy';
-import { cleanAiDisplayText, findHitInkStrokeId, getInkCenterlinePath, getInkStrokeSvgPath, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize } from '../../../ui-helpers';
+import { cleanAiDisplayText, findHitInkStrokeId, getInkCenterlinePath, getInkStrokeSvgPath, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize, shouldAppendInkPoint } from '../../../ui-helpers';
 import { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { CaptureAsset, NotebookPage, PageCaptureReference } from '../../../types';
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
@@ -818,8 +818,7 @@ export function PdfPreview(props: {
                 setCurrentStroke(nextStroke);
                 return;
               }
-              const lastPoint = stroke.points[stroke.points.length - 1];
-              if (Math.hypot(point.x - lastPoint.x, point.y - lastPoint.y) < 1.2) return;
+              if (!shouldAppendInkPoint(stroke, point)) return;
               const nextStroke = { ...stroke, points: [...stroke.points, point] };
               currentStrokeRef.current = nextStroke;
               setCurrentStroke(nextStroke);

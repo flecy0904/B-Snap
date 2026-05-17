@@ -181,6 +181,19 @@ export function isDrawingTool(tool: InkTool) {
   return tool === 'pen' || tool === 'highlight' || isShapeTool(tool);
 }
 
+export function shouldAppendInkPoint(stroke: InkStroke, point: InkPoint) {
+  const lastPoint = stroke.points[stroke.points.length - 1];
+  if (!lastPoint) return true;
+
+  const distance = Math.hypot(point.x - lastPoint.x, point.y - lastPoint.y);
+  const width = Math.max(1, stroke.width);
+  const minDistance = stroke.style === 'highlight'
+    ? Math.max(2, Math.min(4.5, width * 0.18))
+    : Math.max(1.2, Math.min(3, width * 0.12));
+
+  return distance >= minDistance;
+}
+
 export function getInkStrokeBounds(stroke: InkStroke): SelectionRect | null {
   if (!stroke.points.length) return null;
   const xs = stroke.points.map((point) => point.x);
