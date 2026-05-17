@@ -5,7 +5,7 @@ import Svg from 'react-native-svg';
 import { InkPath } from '../canvas/ink-path';
 import { TextAnnotationLayer } from '../canvas/text-annotation-layer';
 import { hasMultipleTouches, isLikelyStylusEvent, shouldUsePrimaryPointer } from '../canvas/ink-input-policy';
-import { cleanAiDisplayText, findHitInkStrokeId, getInkCenterlinePath, getInkStrokeSvgPath, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize, shouldAppendInkPoint } from '../../../ui-helpers';
+import { cleanAiDisplayText, finalizeInkStroke, findHitInkStrokeId, getInkCenterlinePath, getInkStrokeSvgPath, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize, shouldAppendInkPoint } from '../../../ui-helpers';
 import { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { CaptureAsset, NotebookPage, PageCaptureReference } from '../../../types';
 
@@ -1064,7 +1064,7 @@ export function PdfPreview(props: {
           }}
           onResponderRelease={() => {
             const stroke = currentStrokeRef.current;
-            if (stroke && stroke.points.length > 1) props.onCommitInkStroke(stroke);
+            if (stroke && stroke.points.length > 1) props.onCommitInkStroke(finalizeInkStroke(stroke));
             finishSelection(page);
             currentStrokeRef.current = null;
             responderStartPointRef.current = null;
@@ -1072,7 +1072,7 @@ export function PdfPreview(props: {
           }}
           onResponderTerminate={() => {
             const stroke = currentStrokeRef.current;
-            if (stroke && stroke.points.length > 1) props.onCommitInkStroke(stroke);
+            if (stroke && stroke.points.length > 1) props.onCommitInkStroke(finalizeInkStroke(stroke));
             currentStrokeRef.current = null;
             draftSelectionRef.current = null;
             selectionOriginRef.current = null;

@@ -8,7 +8,7 @@ import { captureRef } from 'react-native-view-shot';
 import { InkPath } from '../canvas/ink-path';
 import { TextAnnotationLayer } from '../canvas/text-annotation-layer';
 import { hasMultipleTouches, isLikelyStylusEvent } from '../canvas/ink-input-policy';
-import { cleanAiDisplayText, findHitInkStrokeId, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize, shouldAppendInkPoint } from '../../../ui-helpers';
+import { cleanAiDisplayText, finalizeInkStroke, findHitInkStrokeId, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize, shouldAppendInkPoint } from '../../../ui-helpers';
 import { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { CaptureAsset, NotebookPage, PageCaptureReference } from '../../../types';
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
@@ -816,7 +816,7 @@ export function PdfPreview(props: {
           }}
           onResponderRelease={() => {
             const stroke = currentStrokeRef.current;
-            if (stroke && stroke.points.length > 1) props.onCommitInkStroke(stroke);
+            if (stroke && stroke.points.length > 1) props.onCommitInkStroke(finalizeInkStroke(stroke));
 
             if (props.inkTool === 'select') {
               const rect = draftSelectionRef.current;
@@ -853,7 +853,7 @@ export function PdfPreview(props: {
           }}
           onResponderTerminate={() => {
             const stroke = currentStrokeRef.current;
-            if (stroke && stroke.points.length > 1) props.onCommitInkStroke(stroke);
+            if (stroke && stroke.points.length > 1) props.onCommitInkStroke(finalizeInkStroke(stroke));
             currentStrokeRef.current = null;
             draftSelectionRef.current = null;
             selectionOriginRef.current = null;

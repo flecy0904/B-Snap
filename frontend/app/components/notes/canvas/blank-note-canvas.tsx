@@ -5,7 +5,7 @@ import Svg from 'react-native-svg';
 import { captureRef } from 'react-native-view-shot';
 import { TextAnnotationLayer } from './text-annotation-layer';
 import { InkPath } from './ink-path';
-import { findHitInkStrokeId, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, shouldAppendInkPoint } from '../../../ui-helpers';
+import { finalizeInkStroke, findHitInkStrokeId, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, shouldAppendInkPoint } from '../../../ui-helpers';
 import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { useCanvasContext } from './canvas-context';
 import { shouldCaptureInkPointer, shouldUsePrimaryPointer } from './ink-input-policy';
@@ -296,7 +296,7 @@ export function BlankNoteCanvas(props: {
       },
       onResponderRelease: () => {
         const stroke = currentStrokeRef.current;
-        if (stroke && stroke.points.length > 1) onCommitInkStroke(stroke);
+        if (stroke && stroke.points.length > 1) onCommitInkStroke(finalizeInkStroke(stroke));
         if (inkTool === 'select') {
           const rect = draftSelectionRef.current;
           const resized = Boolean(selectionResizeCornerRef.current && selectionResizeStartRectRef.current);
@@ -329,7 +329,7 @@ export function BlankNoteCanvas(props: {
       },
       onResponderTerminate: () => {
         const stroke = currentStrokeRef.current;
-        if (stroke && stroke.points.length > 1) onCommitInkStroke(stroke);
+        if (stroke && stroke.points.length > 1) onCommitInkStroke(finalizeInkStroke(stroke));
         currentStrokeRef.current = null;
         draftSelectionRef.current = null;
         selectionOriginRef.current = null;
