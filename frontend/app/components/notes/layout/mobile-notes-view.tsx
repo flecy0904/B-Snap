@@ -473,6 +473,15 @@ export function MobileNotesView(props: {
                       ]}
                       onPress={() => {
                         if (isBrush) {
+                          if (tool.value === 'highlight') {
+                            props.onChangeBrushType('highlighter');
+                            if (!HIGHLIGHT_WIDTHS.includes(props.penWidth)) props.onChangePenWidth(18);
+                            props.onChangeLinePattern('solid');
+                          }
+                          if (tool.value === 'pen' && props.brushType === 'highlighter') {
+                            props.onChangeBrushType('ballpoint');
+                            if (!PEN_WIDTHS.includes(props.penWidth)) props.onChangePenWidth(3);
+                          }
                           props.onChangeInkTool(tool.value);
                           setActiveBrushPopover((current) => (current === tool.value ? null : (tool.value as 'pen' | 'highlight')));
                           return;

@@ -109,6 +109,16 @@ export function FloatingToolPalette() {
 
   const activateTool = (tool: InkTool, nextExpanded: typeof expanded = null) => {
     const alreadyActiveTool = canvasContext.inkTool === tool && expanded === nextExpanded;
+    const switchingTool = canvasContext.inkTool !== tool;
+    if (switchingTool && tool === 'highlight') {
+      canvasContext.setBrushType('highlighter');
+      if (!HIGHLIGHT_WIDTHS.includes(canvasContext.penWidth)) canvasContext.setPenWidth(16);
+      canvasContext.setLinePattern('solid');
+    }
+    if (switchingTool && tool === 'pen' && canvasContext.brushType === 'highlighter') {
+      canvasContext.setBrushType('ballpoint');
+      if (!PEN_WIDTHS.includes(canvasContext.penWidth)) canvasContext.setPenWidth(3);
+    }
     canvasContext.setInkTool(tool);
     setExpanded(nextExpanded);
     setDetailOpen(Boolean(nextExpanded && alreadyActiveTool));
