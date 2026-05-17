@@ -158,6 +158,8 @@ export function BlankNoteCanvas(props: {
   const [capturingSelection, setCapturingSelection] = useState(false);
   const currentStrokeRef = useRef<InkStroke | null>(null);
   const selectionOriginRef = useRef<InkPoint | null>(null);
+  const selectionMoveOriginRef = useRef<InkPoint | null>(null);
+  const selectionMoveStartRectRef = useRef<SelectionRect | null>(null);
   const selectionResizeCornerRef = useRef<ResizeCorner | null>(null);
   const selectionResizeStartRectRef = useRef<SelectionRect | null>(null);
   const draftSelectionRef = useRef<SelectionRect | null>(null);
@@ -251,6 +253,19 @@ export function BlankNoteCanvas(props: {
             setDraftSelection(currentSelection);
             return;
           }
+          if (
+            currentSelection &&
+            point.x >= currentSelection.x &&
+            point.x <= currentSelection.x + currentSelection.width &&
+            point.y >= currentSelection.y &&
+            point.y <= currentSelection.y + currentSelection.height
+          ) {
+            selectionMoveOriginRef.current = point;
+            selectionMoveStartRectRef.current = currentSelection;
+            draftSelectionRef.current = currentSelection;
+            setDraftSelection(currentSelection);
+            return;
+          }
           onSelectionChange?.(null);
           onSelectionPreviewChange?.(null);
           selectionOriginRef.current = point;
@@ -303,6 +318,20 @@ export function BlankNoteCanvas(props: {
             setDraftSelection(nextRect);
             return;
           }
+          const moveOrigin = selectionMoveOriginRef.current;
+          const moveStartRect = selectionMoveStartRectRef.current;
+          if (moveOrigin && moveStartRect) {
+            const nextRect = {
+              ...moveStartRect,
+              x: moveStartRect.x + point.x - moveOrigin.x,
+              y: moveStartRect.y + point.y - moveOrigin.y,
+              pageWidth: point.pageWidth,
+              pageHeight: point.pageHeight,
+            };
+            draftSelectionRef.current = nextRect;
+            setDraftSelection(nextRect);
+            return;
+          }
           const origin = selectionOriginRef.current;
           if (!origin) return;
           const nextRect = {
@@ -323,13 +352,21 @@ export function BlankNoteCanvas(props: {
         if (inkTool === 'select') {
           const rect = draftSelectionRef.current;
           const resized = Boolean(selectionResizeCornerRef.current && selectionResizeStartRectRef.current);
+          const moveOrigin = selectionMoveOriginRef.current;
+          const moveStartRect = selectionMoveStartRectRef.current;
           draftSelectionRef.current = null;
           selectionOriginRef.current = null;
+          selectionMoveOriginRef.current = null;
+          selectionMoveStartRectRef.current = null;
           selectionResizeCornerRef.current = null;
           selectionResizeStartRectRef.current = null;
           setDraftSelection(null);
           if (resized && rect && rect.width > 24 && rect.height > 24) {
             canvasCtx.resizeSelectedStrokesToRect(rect);
+          } else if (rect && moveOrigin && moveStartRect) {
+            const dx = rect.x - moveStartRect.x;
+            const dy = rect.y - moveStartRect.y;
+            if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) canvasCtx.nudgeSelectedStrokes(dx, dy);
           } else if (rect && rect.width > 24 && rect.height > 24) {
             void buildSelectionPreview(rect).then((uri) => {
               onSelectionChange?.(rect);
@@ -348,6 +385,8 @@ export function BlankNoteCanvas(props: {
         currentStrokeRef.current = null;
         draftSelectionRef.current = null;
         selectionOriginRef.current = null;
+        selectionMoveOriginRef.current = null;
+        selectionMoveStartRectRef.current = null;
         selectionResizeCornerRef.current = null;
         selectionResizeStartRectRef.current = null;
         textTapRef.current = null;
