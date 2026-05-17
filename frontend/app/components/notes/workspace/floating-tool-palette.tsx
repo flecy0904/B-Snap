@@ -1,6 +1,7 @@
 import React from 'react';
 import { Animated, PanResponder, Pressable, Text, useWindowDimensions, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
+import Svg, { Path } from 'react-native-svg';
 import type { InkBrush, InkBrushSettings, InkTool } from '../../../ui-types';
 import { useCanvasContext } from '../canvas/canvas-context';
 import { useDesktopNotesWorkspaceContext } from './notes-workspace-context';
@@ -37,6 +38,7 @@ const ADVANCED_CONTROLS: Array<{ key: keyof InkBrushSettings; label: string }> =
 const TOP_DOCK_Y = 12;
 const TOP_DOCK_THRESHOLD = 72;
 const TOP_DOCK_RIGHT_GAP = 360;
+const PREVIEW_PATH = 'M 22 50 C 72 18 116 22 154 50 S 218 58 238 28';
 
 function getDefaultPalettePosition(width: number) {
   const maxDockedX = Math.max(10, width - TOP_DOCK_RIGHT_GAP);
@@ -136,6 +138,17 @@ export function FloatingToolPalette() {
   const detailColors = detailMode === 'highlight' ? HIGHLIGHT_COLORS : PEN_COLORS;
   const detailWidths = detailMode === 'highlight' ? HIGHLIGHT_WIDTHS : PEN_WIDTHS;
   const detailTitle = detailMode === 'shape' ? '도형' : BRUSH_LABELS[detailBrush];
+  const previewDashArray = canvasContext.linePattern === 'dotted'
+    ? `${Math.max(1, canvasContext.penWidth * 0.45)} ${Math.max(8, canvasContext.penWidth * 2.3)}`
+    : canvasContext.linePattern === 'dashed'
+      ? `${Math.max(10, canvasContext.penWidth * 3.2)} ${Math.max(7, canvasContext.penWidth * 2)}`
+      : undefined;
+  const previewStrokeWidth = detailMode === 'highlight'
+    ? Math.min(26, Math.max(14, canvasContext.penWidth * 0.82))
+    : detailBrush === 'marker'
+      ? Math.min(24, Math.max(8, canvasContext.penWidth * 2.2))
+      : Math.min(18, Math.max(4, canvasContext.penWidth * 1.6));
+  const previewOpacity = detailMode === 'highlight' ? 0.45 : detailBrush === 'pencil' ? 0.72 : 1;
   const setBrushSetting = (key: keyof InkBrushSettings, value: number) => {
     canvasContext.setBrushSettings({ [key]: Math.max(0, Math.min(100, value)) });
   };
@@ -236,16 +249,18 @@ export function FloatingToolPalette() {
             </Pressable>
           </View>
           <View style={workspaceContext.styles.penDetailPreview}>
-            <View
-              style={[
-                workspaceContext.styles.penDetailPreviewStroke,
-                {
-                  backgroundColor: canvasContext.penColor,
-                  height: detailMode === 'highlight' ? Math.min(18, Math.max(8, canvasContext.penWidth * 0.7)) : Math.min(16, Math.max(5, canvasContext.penWidth * 1.8)),
-                  opacity: detailMode === 'highlight' ? 0.44 : detailBrush === 'pencil' ? 0.68 : 1,
-                },
-              ]}
-            />
+            <Svg width="100%" height="100%" viewBox="0 0 260 80">
+              <Path
+                d={PREVIEW_PATH}
+                fill="none"
+                stroke={canvasContext.penColor}
+                strokeWidth={previewStrokeWidth}
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                strokeDasharray={previewDashArray}
+                opacity={previewOpacity}
+              />
+            </Svg>
           </View>
           <View style={workspaceContext.styles.penDetailSection}>
             <View style={workspaceContext.styles.penDetailRowHeader}>
@@ -314,7 +329,6 @@ export function FloatingToolPalette() {
           <View style={workspaceContext.styles.penDetailSection}>
             <View style={workspaceContext.styles.penDetailColorHeader}>
               <Text style={workspaceContext.styles.penDetailLabel}>색상</Text>
-              <MaterialCommunityIcons name="plus-circle" size={18} color="#1684FF" />
             </View>
             <View style={workspaceContext.styles.penDetailColorGrid}>
               {detailColors.map((color) => (
@@ -331,9 +345,9 @@ export function FloatingToolPalette() {
               ))}
             </View>
           </View>
-          <Pressable style={workspaceContext.styles.penDetailRemoveButton} onPress={() => setDetailOpen(false)}>
-            <MaterialCommunityIcons name="close-circle-outline" size={16} color="#FF2D2D" />
-            <Text style={workspaceContext.styles.penDetailRemoveText}>닫기</Text>
+          <Pressable style={workspaceContext.styles.penDetailDoneButton} onPress={() => setDetailOpen(false)}>
+            <MaterialCommunityIcons name="check-circle-outline" size={16} color="#2563EB" />
+            <Text style={workspaceContext.styles.penDetailDoneText}>완료</Text>
           </Pressable>
         </View>
       ) : null}

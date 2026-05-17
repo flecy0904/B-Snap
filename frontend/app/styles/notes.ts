@@ -471,6 +471,8 @@ export const notesStyles = {
   penDetailColorDot: { width: 25, height: 25, borderRadius: 99, borderWidth: 1, borderColor: '#E5E7EC' },
   penDetailRemoveButton: { height: 42, flexDirection: 'row' as const, alignItems: 'center' as const, justifyContent: 'center' as const, gap: 6, borderTopWidth: 1, borderTopColor: '#F1F2F5' },
   penDetailRemoveText: { fontSize: 14, lineHeight: 18, fontWeight: '900' as const, color: '#FF2D2D' },
+  penDetailDoneButton: { height: 42, flexDirection: 'row' as const, alignItems: 'center' as const, justifyContent: 'center' as const, gap: 6, borderTopWidth: 1, borderTopColor: '#F1F2F5', backgroundColor: '#FAFBFF' },
+  penDetailDoneText: { fontSize: 14, lineHeight: 18, fontWeight: '900' as const, color: '#2563EB' },
   thumbnailSidebarCollapsed: { width: 48, alignSelf: 'stretch' as const, borderRadius: 18, backgroundColor: 'rgba(255,255,255,0.74)', borderWidth: 1, borderColor: '#E4EAF3', alignItems: 'center' as const, paddingVertical: 10, gap: 8 },
   thumbnailSidebarToggle: { width: 34, height: 34, borderRadius: 12, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E8EDF5', alignItems: 'center' as const, justifyContent: 'center' as const },
   thumbnailSidebarCollapsedCount: { fontSize: 11, lineHeight: 14, fontWeight: '900' as const, color: '#6B7484' },
