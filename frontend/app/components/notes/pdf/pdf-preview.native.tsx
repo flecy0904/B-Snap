@@ -37,6 +37,12 @@ function getNotebookPageKey(page: NotebookPage) {
   return page.generatedPageId ? `generated:${page.generatedPageId}` : `pdf:${page.pageNumber ?? page.id}`;
 }
 
+function getPdfSourceKey(source: number | string | { uri: string }) {
+  if (typeof source === 'number') return `asset:${source}`;
+  if (typeof source === 'string') return source;
+  return source.uri;
+}
+
 function getReferencePreviewImage(reference: PageCaptureReference) {
   if (reference.thumbnailUrl) return { uri: reference.thumbnailUrl };
   if (reference.type === 'image' && reference.fileUrl) return { uri: reference.fileUrl };
@@ -350,9 +356,18 @@ export function PdfPreview(props: {
     }
     return source;
   }, [props.file]);
+  const pdfSourceKey = useMemo(() => getPdfSourceKey(props.file), [props.file]);
   const interactionLocksScroll = props.inkTool !== 'view';
   const scrollEnabled = !interactionLocksScroll;
   const [visiblePageKeys, setVisiblePageKeys] = useState<Set<string>>(() => new Set([getNotebookPageKey(pageItems[0])]));
+
+  useEffect(() => {
+    setLoadError(null);
+    setDocumentPageCount(Math.max(1, props.page));
+    setVisiblePageKeys(new Set([getNotebookPageKey(pageItems[0])]));
+    visiblePageKeysRef.current = '';
+    suppressNextAutoScrollRef.current = false;
+  }, [pdfSourceKey]);
 
   useEffect(() => {
     scrollStateRef.current = {
@@ -363,6 +378,18 @@ export function PdfPreview(props: {
       scrollEnabled,
     };
   }, [props.activeGeneratedPageId, props.onOpenGeneratedPage, props.onPageChanged, props.page, scrollEnabled]);
+
+  useEffect(() => {
+    const currentPage = pageItems.find(isCurrentNotebookPage);
+    if (!currentPage) return;
+    const currentKey = getNotebookPageKey(currentPage);
+    setVisiblePageKeys((current) => {
+      if (current.has(currentKey)) return current;
+      const next = new Set(current);
+      next.add(currentKey);
+      return next;
+    });
+  }, [props.activeGeneratedPageId, props.page, pageItems]);
 
   const clampPointToPage = (page: NotebookPage, x: number, y: number, mode: 'draw' | 'annotate' = 'draw'): InkPoint => ({
     x: Math.max(0, Math.min(viewerWidth - (mode === 'annotate' ? 180 : 0), x)),
@@ -553,6 +580,7 @@ export function PdfPreview(props: {
         {shouldRenderPdfPage && page.pageNumber ? (
           <View pointerEvents="none" style={props.styles.pdfViewer}>
             <Pdf
+              key={`${pdfSourceKey}:${page.pageNumber}:${viewerWidth}:${viewerHeight}`}
               source={pdfSource}
               page={page.pageNumber}
               style={{ flex: 1, width: '100%', height: '100%' }}
@@ -919,6 +947,14 @@ export function PdfPreview(props: {
         data={pageItems}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => renderPage(item)}
+        extraData={{
+          activeGeneratedPageId: props.activeGeneratedPageId,
+          page: props.page,
+          pdfSourceKey,
+          viewerHeight,
+          viewerWidth,
+          visiblePageKeys,
+        }}
         style={{ width: '100%' }}
         contentContainerStyle={{ alignItems: 'center', paddingTop: 4, paddingBottom: 24 }}
         scrollEnabled={scrollEnabled}
@@ -929,7 +965,7 @@ export function PdfPreview(props: {
         maxToRenderPerBatch={2}
         updateCellsBatchingPeriod={32}
         windowSize={3}
-        removeClippedSubviews
+        removeClippedSubviews={false}
         onScrollToIndexFailed={(info) => {
           setTimeout(() => {
             listRef.current?.scrollToIndex({ index: info.index, animated: false });
