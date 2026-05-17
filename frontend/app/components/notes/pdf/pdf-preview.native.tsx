@@ -2,16 +2,17 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { FlatList, GestureResponderEvent, Image, Pressable, Text, useWindowDimensions, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import Pdf from 'react-native-pdf';
 import Svg, { Path } from 'react-native-svg';
 import { captureRef } from 'react-native-view-shot';
 import { TextAnnotationLayer } from '../canvas/text-annotation-layer';
 import { findHitInkStrokeId, getInkCenterlinePath, getInkStrokeSvgPath, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize } from '../../../ui-helpers';
 import { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { CaptureAsset, NotebookPage, PageCaptureReference } from '../../../types';
+import { renderPdfPageToImage, type RenderedPdfPage } from '../../../services/pdf-page-renderer';
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
 type ResponderStartPoint = { x: number; y: number } | null;
 const PDF_RENDER_PAGE_RADIUS = 1;
+const PDF_RENDER_CACHE_RADIUS = 2;
 const PDF_VIEWABILITY_THRESHOLD = 65;
 
 function hasMultipleTouches(event: GestureResponderEvent) {
@@ -258,9 +259,12 @@ export function PdfPreview(props: {
   const [draftSelection, setDraftSelection] = useState<SelectionRect | null>(null);
   const [capturingSelection, setCapturingSelection] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [renderedPdfPages, setRenderedPdfPages] = useState<Record<string, RenderedPdfPage>>({});
   const [openReferenceId, setOpenReferenceId] = useState<string | null>(null);
   const currentStrokeRef = useRef<InkStroke | null>(null);
   const reportedDocumentPageCountRef = useRef(documentPageCount);
+  const pdfRenderGenerationRef = useRef(0);
+  const pdfRenderRequestsRef = useRef<Set<string>>(new Set());
   const suppressNextAutoScrollRef = useRef(false);
   const visiblePageKeysRef = useRef('');
   const selectionOriginRef = useRef<InkPoint | null>(null);
@@ -354,17 +358,10 @@ export function PdfPreview(props: {
 
     return { pdf, generated };
   }, [props.pageCaptureReferences]);
-  const pdfSource = useMemo(() => {
-    const source = typeof props.file === 'string' ? { uri: props.file } : props.file;
-    if (typeof source === 'object' && source && 'uri' in source && typeof source.uri === 'string' && source.uri.startsWith('/')) {
-      return { ...source, uri: `file://${source.uri}` };
-    }
-    if (typeof source === 'object' && source && 'uri' in source && typeof source.uri === 'string' && /^https?:\/\//i.test(source.uri)) {
-      return { ...source, cache: true };
-    }
-    return source;
-  }, [props.file]);
   const pdfSourceKey = useMemo(() => getPdfSourceKey(props.file), [props.file]);
+  const getPdfRenderCacheKey = useCallback((pageNumber: number) => (
+    `${pdfSourceKey}:${pageNumber}:${Math.round(viewerWidth)}`
+  ), [pdfSourceKey, viewerWidth]);
   const interactionLocksScroll = props.inkTool !== 'view';
   const scrollEnabled = !interactionLocksScroll;
   const [visiblePageKeys, setVisiblePageKeys] = useState<Set<string>>(() => new Set([getNotebookPageKey(pageItems[0])]));
@@ -379,12 +376,82 @@ export function PdfPreview(props: {
 
   useEffect(() => {
     setLoadError(null);
+    setPdfPageSize(null);
     setDocumentPageCount(Math.max(1, props.page));
     reportedDocumentPageCountRef.current = 0;
+    pdfRenderGenerationRef.current += 1;
+    pdfRenderRequestsRef.current.clear();
+    setRenderedPdfPages({});
     setVisiblePageKeys(new Set([getNotebookPageKey(pageItems[0])]));
     visiblePageKeysRef.current = '';
     suppressNextAutoScrollRef.current = false;
   }, [pdfSourceKey]);
+
+  const pdfPagesToRender = useMemo(() => {
+    const pageNumbers: number[] = [];
+    pageItems.forEach((page) => {
+      if (page.kind !== 'pdf' || !page.pageNumber) return;
+      const pageKey = getNotebookPageKey(page);
+      if (!visiblePageKeys.has(pageKey) && !isPdfPageNearCurrent(page, props.page)) return;
+      if (!pageNumbers.includes(page.pageNumber)) pageNumbers.push(page.pageNumber);
+    });
+    return pageNumbers;
+  }, [pageItems, props.page, visiblePageKeys]);
+
+  useEffect(() => {
+    if (!pdfPagesToRender.length || viewerWidth <= 0) return;
+    const generation = pdfRenderGenerationRef.current;
+
+    pdfPagesToRender.forEach((pageNumber) => {
+      const cacheKey = getPdfRenderCacheKey(pageNumber);
+      if (renderedPdfPages[cacheKey] || pdfRenderRequestsRef.current.has(cacheKey)) return;
+
+      pdfRenderRequestsRef.current.add(cacheKey);
+      void renderPdfPageToImage({ file: props.file, pageNumber, targetWidth: viewerWidth })
+        .then((renderedPage) => {
+          if (pdfRenderGenerationRef.current !== generation) return;
+          setLoadError(null);
+          setPdfPageSize((current) => (
+            current?.width === renderedPage.width && current?.height === renderedPage.height
+              ? current
+              : { width: renderedPage.width, height: renderedPage.height }
+          ));
+          setDocumentPageCount((current) => (current === renderedPage.pageCount ? current : renderedPage.pageCount));
+          if (reportedDocumentPageCountRef.current !== renderedPage.pageCount) {
+            reportedDocumentPageCountRef.current = renderedPage.pageCount;
+            props.onDocumentLoaded?.(renderedPage.pageCount);
+          }
+          setRenderedPdfPages((current) => (
+            current[cacheKey] ? current : { ...current, [cacheKey]: renderedPage }
+          ));
+        })
+        .catch((error) => {
+          if (pdfRenderGenerationRef.current !== generation) return;
+          setLoadError(error instanceof Error ? error.message : 'PDF 페이지를 렌더링하지 못했습니다.');
+        })
+        .finally(() => {
+          pdfRenderRequestsRef.current.delete(cacheKey);
+        });
+    });
+  }, [getPdfRenderCacheKey, pdfPagesToRender, props.file, props.onDocumentLoaded, renderedPdfPages, viewerWidth]);
+
+  useEffect(() => {
+    const keysToKeep = new Set<string>();
+    pageItems.forEach((page) => {
+      if (page.kind !== 'pdf' || !page.pageNumber) return;
+      const pageKey = getNotebookPageKey(page);
+      if (visiblePageKeys.has(pageKey) || Math.abs(page.pageNumber - props.page) <= PDF_RENDER_CACHE_RADIUS) {
+        keysToKeep.add(getPdfRenderCacheKey(page.pageNumber));
+      }
+    });
+    setRenderedPdfPages((current) => {
+      const next: Record<string, RenderedPdfPage> = {};
+      Object.entries(current).forEach(([key, value]) => {
+        if (keysToKeep.has(key)) next[key] = value;
+      });
+      return Object.keys(next).length === Object.keys(current).length ? current : next;
+    });
+  }, [getPdfRenderCacheKey, pageItems, props.page, visiblePageKeys]);
 
   useEffect(() => {
     scrollStateRef.current = {
@@ -583,6 +650,7 @@ export function PdfPreview(props: {
     const pageStrokesForView = shouldRenderInteractiveLayers ? getPageStrokesForView(page) : [];
     const pageTextAnnotationsForView = shouldRenderInteractiveLayers ? getPageTextAnnotationsForView(page) : [];
     const shouldRenderPdfPage = shouldRenderPdfContent(page, visiblePage);
+    const renderedPdfPage = page.pageNumber ? renderedPdfPages[getPdfRenderCacheKey(page.pageNumber)] : null;
     const pageReferences = shouldRenderInteractiveLayers ? getPageCaptureReferences(page) : [];
     const activePageReference = pageReferences.find((reference) => reference.id === openReferenceId) ?? null;
     const activeReferenceIndex = activePageReference ? pageReferences.findIndex((reference) => reference.id === activePageReference.id) : -1;
@@ -604,42 +672,18 @@ export function PdfPreview(props: {
       >
         {shouldRenderPdfPage && page.pageNumber ? (
           <View pointerEvents="none" style={props.styles.pdfViewer}>
-            <Pdf
-              key={`${pdfSourceKey}:${page.pageNumber}:${viewerWidth}:${viewerHeight}`}
-              source={pdfSource}
-              page={page.pageNumber}
-              style={{ flex: 1, width: '100%', height: '100%' }}
-              trustAllCerts={false}
-              scale={1}
-              minScale={1}
-              maxScale={1}
-              enableDoubleTapZoom={false}
-              scrollEnabled={false}
-              enablePaging={false}
-              singlePage
-              fitPolicy={0}
-              horizontal={false}
-              spacing={0}
-              showsVerticalScrollIndicator={false}
-              onLoadComplete={(pageCount, _path, size) => {
-                setLoadError(null);
-                if (size?.width && size?.height) {
-                  setPdfPageSize((current) => (
-                    current?.width === size.width && current?.height === size.height
-                      ? current
-                      : size
-                  ));
-                }
-                setDocumentPageCount((current) => (current === pageCount ? current : pageCount));
-                if (reportedDocumentPageCountRef.current !== pageCount) {
-                  reportedDocumentPageCountRef.current = pageCount;
-                  props.onDocumentLoaded?.(pageCount);
-                }
-              }}
-              onError={(error) => {
-                setLoadError(error instanceof Error ? error.message : 'PDF를 불러오지 못했습니다.');
-              }}
-            />
+            {renderedPdfPage ? (
+              <Image
+                source={{ uri: renderedPdfPage.uri }}
+                style={{ flex: 1, width: '100%', height: '100%' }}
+                resizeMode="contain"
+                fadeDuration={0}
+              />
+            ) : (
+              <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFFFF' }}>
+                <Text style={{ color: '#A3ACBA', fontWeight: '800' }}>{page.label}</Text>
+              </View>
+            )}
           </View>
         ) : page.kind === 'pdf' ? (
           <View style={[props.styles.pdfViewer, { alignItems: 'center', justifyContent: 'center' }]}>
