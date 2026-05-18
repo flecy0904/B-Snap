@@ -11,8 +11,8 @@ import { CaptureAsset, NotebookPage, PageCaptureReference } from '../../../types
 import { renderPdfPageToImage, type RenderedPdfPage } from '../../../services/pdf-page-renderer';
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
 type ResponderStartPoint = { x: number; y: number } | null;
-const PDF_RENDER_PAGE_RADIUS = 1;
-const PDF_RENDER_CACHE_RADIUS = 2;
+const PDF_RENDER_PAGE_RADIUS = 3;
+const PDF_RENDER_CACHE_RADIUS = 3;
 
 function hasMultipleTouches(event: GestureResponderEvent) {
   return Boolean(event.nativeEvent.touches && event.nativeEvent.touches.length > 1);

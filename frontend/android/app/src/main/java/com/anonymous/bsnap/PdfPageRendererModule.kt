@@ -21,6 +21,8 @@ import kotlin.math.roundToInt
 class PdfPageRendererModule(private val reactContext: ReactApplicationContext) :
   ReactContextBaseJavaModule(reactContext) {
 
+  private val maxCachedPageImages = 11
+
   override fun getName(): String = "BsnPdfPageRenderer"
 
   @ReactMethod
@@ -75,6 +77,7 @@ class PdfPageRendererModule(private val reactContext: ReactApplicationContext) :
         if (!temporaryOutputFile.renameTo(outputFile)) {
           throw IllegalStateException("Cannot commit cached PDF page image.")
         }
+        prunePageImageCache(outputFile)
       } catch (error: Exception) {
         temporaryOutputFile.delete()
         throw error
@@ -128,6 +131,23 @@ class PdfPageRendererModule(private val reactContext: ReactApplicationContext) :
 
   private fun getTemporaryOutputFile(outputFile: File): File {
     return File(outputFile.parentFile, "${outputFile.name}.${UUID.randomUUID()}.tmp")
+  }
+
+  private fun prunePageImageCache(activeOutputFile: File) {
+    val cacheDir = activeOutputFile.parentFile ?: return
+    val cachedImages = cacheDir.listFiles { file ->
+      file.isFile && file.extension == "png"
+    }?.toList() ?: return
+
+    if (cachedImages.size <= maxCachedPageImages) return
+
+    cachedImages
+      .filter { it.name != activeOutputFile.name }
+      .sortedByDescending { it.lastModified() }
+      .drop(maxCachedPageImages - 1)
+      .forEach { file ->
+        file.delete()
+      }
   }
 
   private fun sha1(value: String): String {
