@@ -8,6 +8,7 @@ import { captureRef } from 'react-native-view-shot';
 import { InkPath } from '../canvas/ink-path';
 import { TextAnnotationLayer } from '../canvas/text-annotation-layer';
 import { hasMultipleTouches, isLikelyStylusEvent } from '../canvas/ink-input-policy';
+import { getCaptureOriginalImageSource, getPageCaptureReferenceImageSource } from '../shared/capture-assets';
 import { cleanAiDisplayText, finalizeInkStroke, findHitInkStrokeId, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize, shouldAppendInkPoint } from '../../../ui-helpers';
 import { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { CaptureAsset, NotebookPage, PageCaptureReference } from '../../../types';
@@ -29,19 +30,6 @@ function isInkCaptureTool(tool: InkTool) {
 
 function getNotebookPageKey(page: NotebookPage) {
   return page.generatedPageId ? `generated:${page.generatedPageId}` : `pdf:${page.pageNumber ?? page.id}`;
-}
-
-function getReferencePreviewImage(reference: PageCaptureReference) {
-  if (reference.thumbnailUrl) return { uri: reference.thumbnailUrl };
-  if (reference.type === 'image' && reference.fileUrl) return { uri: reference.fileUrl };
-  return reference.previewImage ?? null;
-}
-
-function getCaptureAssetPreviewImage(asset: CaptureAsset | null | undefined) {
-  if (!asset) return null;
-  if (asset.thumbnailUrl) return { uri: asset.thumbnailUrl };
-  if (asset.type === 'image' && asset.fileUrl) return { uri: asset.fileUrl };
-  return asset.previewImage ?? null;
 }
 
 function getCaptureAssetSummary(asset: CaptureAsset | null | undefined) {
@@ -502,11 +490,11 @@ export function PdfPreview(props: {
     const pageReferences = shouldRenderInteractiveLayers ? getPageCaptureReferences(page) : [];
     const activePageReference = pageReferences.find((reference) => reference.id === openReferenceId) ?? null;
     const activeReferenceIndex = activePageReference ? pageReferences.findIndex((reference) => reference.id === activePageReference.id) : -1;
-    const activeReferenceImage = activePageReference ? getReferencePreviewImage(activePageReference) : null;
+    const activeReferenceImage = activePageReference ? getPageCaptureReferenceImageSource(activePageReference) : null;
     const imageReferenceCount = pageReferences.filter((reference) => reference.type === 'image').length;
     const referenceButtonLabel = imageReferenceCount > 0 ? `사진 ${imageReferenceCount}` : `자료 ${pageReferences.length}`;
     const incomingAsset = currentPage ? props.incomingAssetSuggestion : null;
-    const incomingAssetImage = getCaptureAssetPreviewImage(incomingAsset);
+    const incomingAssetImage = incomingAsset ? getCaptureOriginalImageSource(incomingAsset) : null;
     const incomingAssetSummary = getCaptureAssetSummary(incomingAsset);
 
     return (

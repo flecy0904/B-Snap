@@ -326,7 +326,7 @@ export function useStudyWorkspace(props: {
 
     let mounted = true;
 
-    getBackendClassInsight(studyDocumentId)
+    getBackendClassInsight(studyDocumentId, 12)
       .then((insight) => {
         if (mounted) setClassInsightByDocument((current) => ({ ...current, [studyDocumentId]: insight }));
       })

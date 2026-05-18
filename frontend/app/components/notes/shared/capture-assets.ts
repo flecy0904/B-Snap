@@ -1,5 +1,6 @@
 import type { ImageSourcePropType } from 'react-native';
 import type { CaptureAsset, PageCaptureReference } from '../../../types';
+import { resolveBackendAssetUrl } from '../../../services/backend-api';
 
 function isRenderableImageUri(uri: string | undefined) {
   if (!uri) return false;
@@ -9,17 +10,33 @@ function isRenderableImageUri(uri: string | undefined) {
     || uri.startsWith('data:image/');
 }
 
-function buildImageSource(uri: string | undefined, fallback: number | undefined): ImageSourcePropType | null {
-  if (uri && isRenderableImageUri(uri)) return { uri };
+function normalizeImageUri(uri: string | null | undefined) {
+  return resolveBackendAssetUrl(uri) ?? uri ?? undefined;
+}
+
+function buildImageSource(uri: string | null | undefined, fallback: number | undefined): ImageSourcePropType | null {
+  const normalizedUri = normalizeImageUri(uri);
+  if (normalizedUri && isRenderableImageUri(normalizedUri)) return { uri: normalizedUri };
   return fallback ?? null;
 }
 
+function getPersistedLocalImageUri(asset: Pick<CaptureAsset, 'previewImageKey'> | Pick<PageCaptureReference, 'previewImageKey'>) {
+  return asset.previewImageKey?.startsWith('file://') ? asset.previewImageKey : undefined;
+}
+
 export function getCaptureImageSource(asset: CaptureAsset) {
-  return buildImageSource(asset.thumbnailUrl ?? asset.fileUrl ?? asset.previewImageKey, asset.previewImage);
+  return buildImageSource(asset.thumbnailUrl ?? asset.fileUrl ?? asset.processedUrl ?? getPersistedLocalImageUri(asset) ?? asset.previewImageKey, asset.previewImage);
 }
 
 export function getCaptureOriginalImageSource(asset: CaptureAsset) {
-  return buildImageSource(asset.fileUrl ?? asset.thumbnailUrl ?? asset.previewImageKey, asset.previewImage);
+  return buildImageSource(asset.fileUrl ?? asset.thumbnailUrl ?? asset.processedUrl ?? getPersistedLocalImageUri(asset) ?? asset.previewImageKey, asset.previewImage);
+}
+
+export function getPageCaptureReferenceImageSource(reference: PageCaptureReference) {
+  return buildImageSource(
+    reference.fileUrl ?? reference.thumbnailUrl ?? reference.processedUrl ?? getPersistedLocalImageUri(reference) ?? reference.previewImageKey,
+    reference.previewImage,
+  );
 }
 
 export function formatCaptureDate(value: string) {

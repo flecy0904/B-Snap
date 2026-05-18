@@ -1,7 +1,7 @@
 import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { ActivityIndicator, Animated, Image, PanResponder, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
-import { isClassInsightTargetDocument } from '../../../hooks/notes/class-insight';
+import { isClassInsightQuestion, isClassInsightTargetDocument } from '../../../hooks/notes/class-insight';
 import { AiResponseContent } from './ai-response-content';
 import { useNotesGlobalContext } from '../workspace/notes-global-context';
 
@@ -21,6 +21,12 @@ function formatPriorityLabel(priority: string) {
   if (priority === 'high') return '높음';
   return '중간';
 }
+
+const CLASS_INSIGHT_QUICK_PROMPTS = [
+  { label: '중요 페이지', question: '시험에 나올만한 중요 페이지 추천해줘' },
+  { label: '다음 순위', question: '다음 순위 중요 페이지도 더 알려줘' },
+  { label: '복습 순서', question: '이 PDF에서 먼저 복습할 순서 알려줘' },
+] as const;
 
 export function NotesAiAssistantPanel() {
   const workspace = useNotesGlobalContext();
@@ -45,13 +51,25 @@ export function NotesAiAssistantPanel() {
   const hasChatHistory = workspace.aiMessages.length > 0;
   const quickPrompts = React.useMemo(() => (
     isClassInsightTargetDocument(workspace.studyDocument, workspace.subject)
-      ? ['시험에 나올만한 중요 페이지 추천해줘', '이 PDF에서 먼저 복습할 부분 알려줘']
+      ? CLASS_INSIGHT_QUICK_PROMPTS
       : []
   ), [workspace.studyDocument, workspace.subject]);
+  const showQuickPrompts = Boolean(
+    !workspace.aiChatReadOnly
+    && !workspace.aiLoading
+    && quickPrompts.length
+    && !workspace.aiQuestion.trim()
+    && !hasChatHistory,
+  );
+  const shouldShowClassInsightPages = React.useMemo(() => (
+    isClassInsightQuestion(workspace.aiQuestion)
+    || isClassInsightQuestion(workspace.aiAnswer?.question ?? '')
+  ), [workspace.aiAnswer?.question, workspace.aiQuestion]);
   const classInsightPages = React.useMemo(() => {
+    if (!shouldShowClassInsightPages) return [];
     if (!isClassInsightTargetDocument(workspace.studyDocument, workspace.subject)) return [];
     return (workspace.classInsight?.pages ?? []).slice(0, 3);
-  }, [workspace.classInsight?.pages, workspace.studyDocument, workspace.subject]);
+  }, [shouldShowClassInsightPages, workspace.classInsight?.pages, workspace.studyDocument, workspace.subject]);
   const activeSession = workspace.activeAiChatSessionId
     ? workspace.allAiChatSessions.find((session: any) => session.id === workspace.activeAiChatSessionId)
       ?? workspace.noteAiChatSessions.find((session: any) => session.id === workspace.activeAiChatSessionId)
@@ -551,19 +569,24 @@ export function NotesAiAssistantPanel() {
             </View>
           ) : null}
           {workspace.aiError ? <Text style={workspace.styles.aiErrorText}>{workspace.aiError}</Text> : null}
-          {!workspace.aiChatReadOnly && quickPrompts.length ? (
-            <View style={workspace.styles.aiComposerQuickRow}>
+          {showQuickPrompts ? (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={workspace.styles.aiComposerQuickRow}
+              keyboardShouldPersistTaps="handled"
+            >
               {quickPrompts.map((prompt) => (
                 <Pressable
-                  key={prompt}
+                  key={prompt.label}
                   style={workspace.styles.aiComposerQuickChip}
-                  onPress={() => workspace.onChangeAiQuestion(prompt)}
+                  onPress={() => workspace.onChangeAiQuestion(prompt.question)}
                   disabled={workspace.aiLoading}
                 >
-                  <Text style={workspace.styles.aiComposerQuickChipText}>{prompt}</Text>
+                  <Text style={workspace.styles.aiComposerQuickChipText}>{prompt.label}</Text>
                 </Pressable>
               ))}
-            </View>
+            </ScrollView>
           ) : null}
           {classInsightPages.length ? (
             <View style={workspace.styles.aiClassInsightStrip}>

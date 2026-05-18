@@ -2,7 +2,7 @@ import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import BottomSheet, { BottomSheetBackdrop, BottomSheetScrollView, type BottomSheetBackdropProps } from '@gorhom/bottom-sheet';
 import { ActivityIndicator, Image, Modal, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
-import { isClassInsightTargetDocument } from '../../../hooks/notes/class-insight';
+import { isClassInsightQuestion, isClassInsightTargetDocument } from '../../../hooks/notes/class-insight';
 import { AiResponseContent } from '../ai/ai-response-content';
 import { PdfPreview } from '../pdf/pdf-preview';
 import { BlankNoteCanvas } from '../canvas/blank-note-canvas';
@@ -14,6 +14,7 @@ import {
   getCaptureOriginalImageSource,
   getCapturePlacementLabel,
   getCaptureReferences,
+  getPageCaptureReferenceImageSource,
 } from '../shared/capture-assets';
 import type { BackendChatMessage, BackendChatSession, BackendClassInsight } from '../../../services/backend-api';
 import { AiAnswer, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NotebookPage, NoteEntry, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../../types';
@@ -38,6 +39,15 @@ const LINE_PATTERNS: Array<{ label: string; value: InkLinePattern }> = [
   { label: '점선', value: 'dotted' },
   { label: '대시', value: 'dashed' },
 ];
+const CLASS_INSIGHT_QUICK_PROMPTS = [
+  { label: '중요 페이지', question: '시험에 나올만한 중요 페이지 추천해줘' },
+  { label: '다음 순위', question: '다음 순위 중요 페이지도 더 알려줘' },
+  { label: '복습 순서', question: '이 PDF에서 먼저 복습할 순서 알려줘' },
+] as const;
+const DEFAULT_AI_QUICK_PROMPTS = [
+  { label: '핵심 3개', question: '여기서 중요한 개념 3개만 알려줘' },
+  { label: '시험 관점', question: '시험 대비 관점으로 설명해줘' },
+] as const;
 const MOBILE_HANDWRITING_TOOLS: Array<{ value: InkTool; icon: React.ComponentProps<typeof MaterialCommunityIcons>['name'] }> = [
   { value: 'view', icon: 'cursor-default-outline' },
   { value: 'pen', icon: 'pencil-outline' },
@@ -218,13 +228,7 @@ export function MobileNotesView(props: {
     }
     setPageListOpen(false);
   };
-  const getReferencePreview = (reference: PageCaptureReference) => (
-    reference.thumbnailUrl
-      ? { uri: reference.thumbnailUrl }
-      : reference.type === 'image' && reference.fileUrl
-        ? { uri: reference.fileUrl }
-        : reference.previewImage ?? null
-  );
+  const getReferencePreview = (reference: PageCaptureReference) => getPageCaptureReferenceImageSource(reference);
   const toggleSelectionMode = () => {
     props.onChangeInkTool(props.inkTool === 'select' ? 'view' : 'select');
   };
@@ -289,15 +293,25 @@ export function MobileNotesView(props: {
   );
   const selectedLinkInitialPageNumber = previewPrimaryReference?.page.kind === 'pdf' ? previewPrimaryReference.page.pageNumber : 1;
   const aiSuggestionPrompts = React.useMemo(() => {
-    const basePrompts = ['여기서 중요한 개념 3개만 알려줘', '시험 대비 관점으로 설명해줘'];
     return isClassInsightTargetDocument(props.studyDocument, props.subject)
-      ? ['시험에 나올만한 중요 페이지 추천해줘', ...basePrompts]
-      : ['이 그래프 의미 뭐야?', ...basePrompts];
+      ? CLASS_INSIGHT_QUICK_PROMPTS
+      : [{ label: '그래프 의미', question: '이 그래프 의미 뭐야?' }, ...DEFAULT_AI_QUICK_PROMPTS];
   }, [props.studyDocument, props.subject]);
+  const showAiSuggestionPrompts = Boolean(
+    aiSuggestionPrompts.length
+    && !props.aiQuestion.trim()
+    && !props.aiMessages.length
+    && !props.aiChatReadOnly,
+  );
+  const shouldShowClassInsightPages = React.useMemo(() => (
+    isClassInsightQuestion(props.aiQuestion)
+    || isClassInsightQuestion(props.aiAnswer?.question ?? '')
+  ), [props.aiAnswer?.question, props.aiQuestion]);
   const classInsightPages = React.useMemo(() => {
+    if (!shouldShowClassInsightPages) return [];
     if (!isClassInsightTargetDocument(props.studyDocument, props.subject)) return [];
     return (props.classInsight?.pages ?? []).slice(0, 3);
-  }, [props.classInsight?.pages, props.studyDocument, props.subject]);
+  }, [props.classInsight?.pages, props.studyDocument, props.subject, shouldShowClassInsightPages]);
 
   React.useEffect(() => {
     if (recoverableCount === 0) setRecoveryOpen(false);
@@ -817,9 +831,13 @@ export function MobileNotesView(props: {
                 <Text style={props.styles.aiStateTitle}>선택 영역</Text>
                 <Text style={props.styles.aiStateBody}>{props.selectionRect ? `${Math.round(props.selectionRect.width)} × ${Math.round(props.selectionRect.height)} 영역 선택됨` : '아직 선택된 영역이 없습니다'}</Text>
               </View>
-              {aiSuggestionPrompts.map((prompt) => (
-                <Pressable key={prompt} style={props.styles.aiSuggestionChip} onPress={() => props.onChangeAiQuestion(prompt)}><Text style={props.styles.aiSuggestionText}>{prompt}</Text></Pressable>
-              ))}
+              {showAiSuggestionPrompts ? (
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+                  {aiSuggestionPrompts.map((prompt) => (
+                    <Pressable key={prompt.label} style={props.styles.aiSuggestionChip} onPress={() => props.onChangeAiQuestion(prompt.question)}><Text style={props.styles.aiSuggestionText}>{prompt.label}</Text></Pressable>
+                  ))}
+                </ScrollView>
+              ) : null}
               {classInsightPages.length ? (
                 <View style={props.styles.aiClassInsightStrip}>
                   <View style={props.styles.aiClassInsightHeader}>
