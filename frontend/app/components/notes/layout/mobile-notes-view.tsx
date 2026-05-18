@@ -7,6 +7,7 @@ import { AiResponseContent } from '../ai/ai-response-content';
 import { PdfPreview } from '../pdf/pdf-preview';
 import { BlankNoteCanvas } from '../canvas/blank-note-canvas';
 import { NoteSummaryContent } from '../shared/notes-shared';
+import { PhotoViewerLinkPanel } from './photo-viewer-link-panel';
 import type { BackendChatMessage, BackendChatSession, BackendClassInsight } from '../../../services/backend-api';
 import { AiAnswer, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NotebookPage, NoteEntry, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../../types';
 import { InkBrush, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
@@ -51,6 +52,14 @@ function formatClassInsightPriority(priority: string) {
 
 function getCaptureImageSource(asset: CaptureAsset) {
   const uri = asset.thumbnailUrl ?? asset.fileUrl ?? asset.previewImageKey;
+  if (uri && (uri.startsWith('http://') || uri.startsWith('https://') || uri.startsWith('file://') || uri.startsWith('data:image/'))) {
+    return { uri };
+  }
+  return asset.previewImage ?? null;
+}
+
+function getCaptureOriginalImageSource(asset: CaptureAsset) {
+  const uri = asset.fileUrl ?? asset.thumbnailUrl ?? asset.previewImageKey;
   if (uri && (uri.startsWith('http://') || uri.startsWith('https://') || uri.startsWith('file://') || uri.startsWith('data:image/'))) {
     return { uri };
   }
@@ -296,9 +305,20 @@ export function MobileNotesView(props: {
     () => currentSubjectPhotoAssets.find((asset) => asset.id === previewAssetId) ?? null,
     [currentSubjectPhotoAssets, previewAssetId],
   );
-  const previewImageSource = previewAsset ? getCaptureImageSource(previewAsset) : null;
+  const previewImageSource = previewAsset ? getCaptureOriginalImageSource(previewAsset) : null;
   const previewReferences = previewAsset ? getCaptureReferences(previewAsset, props.allPageCaptureReferences) : [];
   const previewPrimaryReference = previewReferences[0] ?? null;
+  const linkableDocuments = React.useMemo(() => {
+    if (!previewAsset) return [];
+    return props.allStudyDocuments
+      .filter((document) => document.subjectId === previewAsset.subjectId && document.type !== 'image' && document.pageCount > 0)
+      .sort((left, right) => (left.id === previewPrimaryReference?.documentId ? -1 : right.id === previewPrimaryReference?.documentId ? 1 : right.id - left.id));
+  }, [previewAsset, previewPrimaryReference?.documentId, props.allStudyDocuments]);
+  const selectedLinkDocument = React.useMemo(
+    () => linkableDocuments.find((document) => document.id === previewPrimaryReference?.documentId) ?? linkableDocuments[0] ?? null,
+    [linkableDocuments, previewPrimaryReference?.documentId],
+  );
+  const selectedLinkInitialPageNumber = previewPrimaryReference?.page.kind === 'pdf' ? previewPrimaryReference.page.pageNumber : 1;
   const aiSuggestionPrompts = React.useMemo(() => {
     const basePrompts = ['여기서 중요한 개념 3개만 알려줘', '시험 대비 관점으로 설명해줘'];
     return isClassInsightTargetDocument(props.studyDocument, props.subject)
@@ -1194,6 +1214,17 @@ export function MobileNotesView(props: {
                       ) : (
                         <Text style={props.styles.photoViewerInfoValue}>아직 노트 페이지에 연결되지 않았습니다.</Text>
                       )}
+                      <PhotoViewerLinkPanel
+                        styles={props.styles}
+                        assetId={previewAsset.id}
+                        documents={linkableDocuments}
+                        initialDocumentId={selectedLinkDocument?.id ?? null}
+                        initialPageNumber={selectedLinkInitialPageNumber}
+                        onLink={(assetId, documentId, pageNumber) => {
+                          props.onLinkCaptureAssetToPage(assetId, documentId, pageNumber);
+                          setPreviewAssetId(null);
+                        }}
+                      />
                     </View>
                     <View style={props.styles.photoViewerInfoCard}>
                       <View style={props.styles.photoViewerInfoHeader}>

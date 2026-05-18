@@ -14,6 +14,14 @@ function getCaptureImageSource(asset: CaptureAsset) {
   return asset.previewImage ?? null;
 }
 
+function getCaptureOriginalImageSource(asset: CaptureAsset) {
+  const uri = asset.fileUrl ?? asset.thumbnailUrl ?? asset.previewImageKey;
+  if (uri && (uri.startsWith('http://') || uri.startsWith('https://') || uri.startsWith('file://') || uri.startsWith('data:image/'))) {
+    return { uri };
+  }
+  return asset.previewImage ?? null;
+}
+
 function formatCaptureDate(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
@@ -125,7 +133,7 @@ export function NotesBrowser(props: NotesBrowserProps) {
     () => selectedPhotoAssets.find((asset) => asset.id === previewAssetId) ?? null,
     [previewAssetId, selectedPhotoAssets],
   );
-  const previewImageSource = previewAsset ? getCaptureImageSource(previewAsset) : null;
+  const previewImageSource = previewAsset ? getCaptureOriginalImageSource(previewAsset) : null;
   const previewReferences = React.useMemo(
     () => previewAsset ? getCaptureReferences(previewAsset, props.pageCaptureReferences) : [],
     [previewAsset, props.pageCaptureReferences],

@@ -37,12 +37,15 @@ type SectionBlock = {
 type AiContentBlock = TextBlock | RecommendationBlock | SectionBlock;
 
 const RECOMMENDATION_HEADING_PATTERN = /^\s*(추천\s*페이지|먼저\s*볼\s*페이지|중요\s*페이지)\s*[:：]?\s*$/i;
-const RECOMMENDATION_LINE_PATTERN = /^\s*(?:[•*-]\s*)?(\d{1,3})\s*(?:페이지|쪽|p(?:age)?\.?)\s*[:：-]\s*(.+)$/i;
+const RECOMMENDATION_LINE_PATTERN = /^\s*(?:[•*-]\s*)?(?:\d+[.)]\s*)?(\d{1,3})\s*(?:페이지|쪽|p(?:age)?\.?)\s*[:：-]\s*(.+)$/i;
 const SECTION_HEADING_PATTERN = /^\s*(추천\s*이유|이유|근거|복습\s*순서|공부\s*순서|시험\s*포인트|핵심\s*포인트|다음\s*단계|먼저\s*볼\s*내용|정리)\s*[:：]?\s*$/i;
 const INLINE_SECTION_PATTERN = /^\s*(추천\s*이유|이유|근거|복습\s*순서|공부\s*순서|시험\s*포인트|핵심\s*포인트|다음\s*단계|먼저\s*볼\s*내용|정리)\s*[:：]\s*(.+)$/i;
 
 function normalizeAiLine(line: string) {
-  return line.replace(/^\s*[*-]\s+/, '• ').trimEnd();
+  return line
+    .replace(/^\s*[*-]\s+/, '• ')
+    .replace(/^\s*\d+[.)]\s+/, (match) => match.trimEnd() + ' ')
+    .trimEnd();
 }
 
 function parseRecommendationLine(line: string): RecommendationItem | null {
@@ -161,17 +164,63 @@ function renderTextBlock(props: {
     .split(/\n{2,}/)
     .map((paragraph, paragraphIndex) => paragraph.trim())
     .filter(Boolean)
-    .map((paragraph, paragraphIndex) => (
-      <View key={`text-${props.blockIndex}-${paragraphIndex}`} style={props.styles.aiStructuredParagraph}>
+    .flatMap((paragraph, paragraphIndex) => renderStructuredLines({
+      content: paragraph,
+      keyPrefix: `text-${props.blockIndex}-${paragraphIndex}`,
+      pageCount: props.pageCount,
+      styles: props.styles,
+      textStyle: props.textStyle,
+      linkStyle: props.linkStyle,
+      onOpenPage: props.onOpenPage,
+    }));
+}
+
+function renderStructuredLines(props: {
+  content: string;
+  keyPrefix: string;
+  pageCount?: number | null;
+  styles: any;
+  textStyle?: any;
+  linkStyle?: any;
+  onOpenPage?: (pageNumber: number) => void;
+}) {
+  const lines = props.content
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map((line) => normalizeAiLine(line).trim())
+    .filter(Boolean);
+
+  if (!lines.length) return null;
+
+  return lines.map((line, index) => {
+    const bullet = line.match(/^•\s*(.+)$/);
+    if (bullet) {
+      return (
+        <View key={`${props.keyPrefix}-bullet-${index}`} style={props.styles.aiStructuredBulletRow}>
+          <Text style={props.styles.aiStructuredBulletDot}>•</Text>
+          <PageReferenceText
+            content={bullet[1]}
+            pageCount={props.pageCount}
+            textStyle={[props.textStyle, props.styles.aiStructuredBulletText]}
+            linkStyle={props.linkStyle}
+            onOpenPage={props.onOpenPage}
+          />
+        </View>
+      );
+    }
+
+    return (
+      <View key={`${props.keyPrefix}-paragraph-${index}`} style={props.styles.aiStructuredParagraph}>
         <PageReferenceText
-          content={paragraph}
+          content={line}
           pageCount={props.pageCount}
           textStyle={props.textStyle}
           linkStyle={props.linkStyle}
           onOpenPage={props.onOpenPage}
         />
       </View>
-    ));
+    );
+  });
 }
 
 function getSectionIcon(title: string): React.ComponentProps<typeof MaterialCommunityIcons>['name'] {
@@ -216,13 +265,17 @@ export function AiResponseContent({
                 </View>
                 <Text style={styles.aiStructuredSectionTitle}>{block.title}</Text>
               </View>
-              <PageReferenceText
-                content={block.lines.join('\n').trim()}
-                pageCount={pageCount}
-                textStyle={textStyle}
-                linkStyle={linkStyle}
-                onOpenPage={onOpenPage}
-              />
+              <View style={styles.aiStructuredSectionBody}>
+                {renderStructuredLines({
+                  content: block.lines.join('\n').trim(),
+                  keyPrefix: `section-${blockIndex}-${block.title}`,
+                  pageCount,
+                  styles,
+                  textStyle,
+                  linkStyle,
+                  onOpenPage,
+                })}
+              </View>
             </View>
           );
         }

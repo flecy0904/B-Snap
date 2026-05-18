@@ -74,6 +74,11 @@ export function FloatingToolPalette() {
     setAdvancedOpen(false);
   }, [defaultPosition, workspaceContext.studyDocumentId]);
 
+  const closeDetail = React.useCallback(() => {
+    setDetailOpen(false);
+    setAdvancedOpen(false);
+  }, []);
+
   const panResponder = React.useMemo(() => PanResponder.create({
     onStartShouldSetPanResponder: () => true,
     onMoveShouldSetPanResponder: (_, gesture) => Math.abs(gesture.dx) + Math.abs(gesture.dy) > 4,
@@ -122,6 +127,7 @@ export function FloatingToolPalette() {
     canvasContext.setInkTool(tool);
     setExpanded(nextExpanded);
     setDetailOpen(Boolean(nextExpanded && alreadyActiveTool));
+    if (!nextExpanded || !alreadyActiveTool) setAdvancedOpen(false);
     workspaceContext.setPageListOpen(false);
   };
 
@@ -174,7 +180,7 @@ export function FloatingToolPalette() {
         <Pressable
           pointerEvents="auto"
           style={workspaceContext.styles.floatingToolDismissLayer}
-          onPress={() => setDetailOpen(false)}
+          onPress={closeDetail}
         />
       ) : null}
       <Animated.View
@@ -198,13 +204,19 @@ export function FloatingToolPalette() {
         </View>
         <Pressable
           style={[workspaceContext.styles.floatingToolButton, collapsed && workspaceContext.styles.floatingToolButtonActive]}
-          onPress={() => setCollapsed((current) => !current)}
+          onPress={() => {
+            setCollapsed((current) => !current);
+            closeDetail();
+          }}
         >
           <MaterialCommunityIcons name={collapseIcon} size={20} color={collapsed ? '#2563EB' : '#283241'} />
         </Pressable>
         <Pressable
           style={[workspaceContext.styles.floatingToolButton, workspaceContext.fingerDrawingEnabled && workspaceContext.styles.floatingToolButtonActive]}
-          onPress={workspaceContext.onToggleFingerDrawing}
+          onPress={() => {
+            workspaceContext.onToggleFingerDrawing();
+            closeDetail();
+          }}
         >
           <MaterialCommunityIcons name="gesture-tap" size={20} color={workspaceContext.fingerDrawingEnabled ? '#2563EB' : '#283241'} />
         </Pressable>
@@ -355,7 +367,7 @@ export function FloatingToolPalette() {
               ))}
             </View>
           </View>
-          <Pressable style={workspaceContext.styles.penDetailDoneButton} onPress={() => setDetailOpen(false)}>
+          <Pressable style={workspaceContext.styles.penDetailDoneButton} onPress={closeDetail}>
             <MaterialCommunityIcons name="check-circle-outline" size={16} color="#2563EB" />
             <Text style={workspaceContext.styles.penDetailDoneText}>완료</Text>
           </Pressable>
