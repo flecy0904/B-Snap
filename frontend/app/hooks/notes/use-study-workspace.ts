@@ -8,6 +8,7 @@ import {
   deleteBackendNote,
   ensureFolderForSubject,
   extractBackendPdfText,
+  getBackendClassInsight,
   isBackendApiEnabled,
   listAllBackendChatSessions,
   listBackendChatMessages,
@@ -20,6 +21,7 @@ import {
   updateBackendNotePage,
   uploadBackendPdfNote,
   BackendApiError,
+  type BackendClassInsight,
   type BackendChatSession,
   type BackendChatMessage,
 } from '../../services/backend-api';
@@ -41,6 +43,7 @@ import { getAiBackendErrorMessage } from './ai/ai-errors';
 import { useAiChatActions } from './ai/use-ai-chat-actions';
 import { useAiChatDerivedState } from './ai/use-ai-chat-derived-state';
 import { useAiCanvasNotes } from './ai-canvas/use-ai-canvas-notes';
+import { buildClassInsightContext } from './class-insight';
 import { addUniqueId, removeId, upsertStudyDocument } from './document/collection-helpers';
 import { useDocumentPageActions } from './document/use-document-page-actions';
 import { confirmDeleteAction } from './ui/confirm-delete-action';
@@ -49,7 +52,7 @@ import { parseNotePageContent, serializeNotePageContent } from './document/note-
 import { useIncomingAssetSubscription } from './workspace/use-incoming-asset-subscription';
 import { useStudyWorkspaceDerivedState } from './workspace/use-study-workspace-derived-state';
 import { useStudyWorkspacePersistence } from './workspace/use-study-workspace-persistence';
-import { getDocumentPageLabel, isSameDocumentPage, isShapeTool } from '../../ui-helpers';
+import { cleanAiDisplayText, getDocumentPageLabel, isSameDocumentPage, isShapeTool } from '../../ui-helpers';
 import type { InkBrush, InkBrushSettings, InkLinePattern, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../ui-types';
 import type { AiAnswer, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../types';
 
@@ -89,6 +92,7 @@ export function useStudyWorkspace(props: {
   const [noteWorkspaceMode, setNoteWorkspaceMode] = useState<NoteWorkspaceMode>('note');
   const [studyDocumentId, setStudyDocumentId] = useState<number | null>(null);
   const [inkTool, setInkTool] = useState<InkTool>('view');
+  const [fingerDrawingEnabled, setFingerDrawingEnabled] = useState(true);
   const [penColor, setPenColor] = useState<string>(DEFAULT_PEN_COLOR);
   const [penWidth, setPenWidth] = useState(3);
   const [brushType, setBrushType] = useState<InkBrush>('ballpoint');
@@ -129,6 +133,7 @@ export function useStudyWorkspace(props: {
   const [viewingAiChatSessionId, setViewingAiChatSessionId] = useState<number | null>(null);
   const [lastChatSessionByDocument, setLastChatSessionByDocument] = useState<Record<number, number>>({});
   const [chatSessionsByDocument, setChatSessionsByDocument] = useState<Record<number, BackendChatSession[]>>({});
+  const [classInsightByDocument, setClassInsightByDocument] = useState<Record<number, BackendClassInsight | null>>({});
   const [allChatSessions, setAllChatSessions] = useState<BackendChatSession[]>([]);
   const [aiChatScope, setAiChatScope] = useState<'note' | 'all'>('note');
   const [aiChatSearchQuery, setAiChatSearchQuery] = useState('');
@@ -203,6 +208,10 @@ export function useStudyWorkspace(props: {
     if (!studyDocumentId) return [];
     return pageCaptureReferencesByDocument[studyDocumentId] ?? [];
   }, [pageCaptureReferencesByDocument, studyDocumentId]);
+  const allPageCaptureReferences = useMemo(
+    () => Object.values(pageCaptureReferencesByDocument).flat(),
+    [pageCaptureReferencesByDocument],
+  );
   const currentPageCaptureReferences = useMemo(() => {
     if (!currentDocumentPage) return [];
     return pageCaptureReferences.filter((reference) => isSameDocumentPage(reference.page, currentDocumentPage));
@@ -287,6 +296,7 @@ export function useStudyWorkspace(props: {
     currentPageNumber: currentAiCanvasPageNumber ?? null,
     onFeedback: setWorkspaceFeedback,
   });
+  const currentClassInsight = studyDocumentId ? classInsightByDocument[studyDocumentId] ?? null : null;
 
   useEffect(() => {
     if (!workspaceFeedback) return;
@@ -312,6 +322,25 @@ export function useStudyWorkspace(props: {
     setIncomingBannerQueue,
     setIncomingAssetSuggestion,
   });
+
+  useEffect(() => {
+    if (!workspaceHydrated || !isBackendApiEnabled() || !studyDocumentId || !currentDocumentHasBackendPages) return;
+    if (Object.prototype.hasOwnProperty.call(classInsightByDocument, studyDocumentId)) return;
+
+    let mounted = true;
+
+    getBackendClassInsight(studyDocumentId)
+      .then((insight) => {
+        if (mounted) setClassInsightByDocument((current) => ({ ...current, [studyDocumentId]: insight }));
+      })
+      .catch(() => {
+        if (mounted) setClassInsightByDocument((current) => ({ ...current, [studyDocumentId]: null }));
+      });
+
+    return () => {
+      mounted = false;
+    };
+  }, [classInsightByDocument, currentDocumentHasBackendPages, studyDocumentId, workspaceHydrated]);
 
   useEffect(() => {
     if (!workspaceHydrated || !isBackendApiEnabled()) return;
@@ -1212,6 +1241,12 @@ export function useStudyWorkspace(props: {
     });
   };
 
+  const findCaptureAssetById = (assetId: string) => (
+    Object.values(captureAssetsBySubject)
+      .flat()
+      .find((asset) => asset.id === assetId) ?? null
+  );
+
   const resolveAssetUri = (asset: CaptureAsset) => {
     const uri = asset.fileUrl ?? asset.thumbnailUrl ?? asset.previewImageKey;
     return (
@@ -1385,6 +1420,60 @@ export function useStudyWorkspace(props: {
     pdfSuffix: '페이지',
   });
 
+  const getReferencePageLabelForDocument = (documentId: number, page: DocumentPageView) => {
+    if (documentId === studyDocumentId) return getReferencePageLabel(page);
+    return getDocumentPageLabel({
+      page,
+      pages: page.kind === 'pdf'
+        ? Array.from({ length: Math.max(1, allStudyDocuments.find((document) => document.id === documentId)?.pageCount ?? 1) }, (_, index) => ({
+            kind: 'pdf' as const,
+            pageNumber: index + 1,
+          }))
+        : [],
+      memoPages: [],
+      pdfSuffix: '페이지',
+    });
+  };
+
+  const linkCaptureAssetToPage = (assetId: string, documentId: number, rawPageNumber: number) => {
+    const asset = findCaptureAssetById(assetId);
+    const targetDocument = allStudyDocuments.find((document) => document.id === documentId);
+    if (!asset || !targetDocument) {
+      setWorkspaceFeedback('연결할 사진 또는 노트를 찾지 못했습니다.');
+      return false;
+    }
+
+    const pageNumber = Math.max(1, Math.min(Math.max(1, targetDocument.pageCount), Math.round(rawPageNumber || 1)));
+    const page: DocumentPageView = { kind: 'pdf', pageNumber };
+    const pageLabel = getReferencePageLabelForDocument(documentId, page);
+    const existingReferences = pageCaptureReferencesByDocument[documentId] ?? [];
+    const alreadyLinked = existingReferences.some((reference) => reference.assetId === asset.id && isSameDocumentPage(reference.page, page));
+
+    setPageCaptureReferencesByDocument((current) => {
+      if (alreadyLinked) return current;
+      const currentReferences = current[documentId] ?? [];
+
+      const reference = buildPageCaptureReference({
+        asset,
+        documentId,
+        page,
+        pageLabel,
+        subjects: availableSubjects,
+      });
+
+      return {
+        ...current,
+        [documentId]: [reference, ...currentReferences],
+      };
+    });
+
+    updateAssetStatus(asset.id, 'accepted');
+    setIncomingAssetSuggestion((current) => (current?.id === asset.id ? null : current));
+    setIncomingBannerQueue((current) => current.filter((value) => value.id !== asset.id));
+    setWorkspaceFeedback(alreadyLinked ? `${pageLabel}에 이미 연결된 사진입니다.` : `${targetDocument.title} ${pageLabel}에 사진을 연결했습니다.`);
+    return !alreadyLinked;
+  };
+
   const linkCaptureAssetToCurrentPage = async (asset: CaptureAsset) => {
     if (!studyDocumentId || !studyDocument) {
       await createImageNoteFromAsset(asset);
@@ -1423,19 +1512,34 @@ export function useStudyWorkspace(props: {
   };
 
   const openPageCaptureReference = (referenceId: string) => {
-    if (!studyDocumentId) return;
-    const reference = (pageCaptureReferencesByDocument[studyDocumentId] ?? []).find((value) => value.id === referenceId);
-    if (!reference) return;
+    let targetDocumentId = studyDocumentId;
+    let reference = targetDocumentId
+      ? (pageCaptureReferencesByDocument[targetDocumentId] ?? []).find((value) => value.id === referenceId)
+      : null;
 
+    if (!reference) {
+      const matchedEntry = Object.entries(pageCaptureReferencesByDocument)
+        .find(([, references]) => references.some((value) => value.id === referenceId));
+      if (matchedEntry) {
+        targetDocumentId = Number(matchedEntry[0]);
+        reference = matchedEntry[1].find((value) => value.id === referenceId) ?? null;
+      }
+    }
+
+    if (!targetDocumentId || !reference) return;
+
+    if (studyDocumentId !== targetDocumentId) {
+      openStudyDocument(targetDocumentId);
+    }
     setActivePageByDocument((current) => ({
       ...current,
-      [studyDocumentId]: reference.page,
+      [targetDocumentId]: reference.page,
     }));
     if (reference.page.kind === 'pdf') {
       const pageNumber = reference.page.pageNumber;
       setCurrentPdfPageByDocument((current) => ({
         ...current,
-        [studyDocumentId]: pageNumber,
+        [targetDocumentId]: pageNumber,
       }));
     }
     setWorkspaceFeedback(`${reference.pageLabel}로 이동했습니다.`);
@@ -1462,6 +1566,41 @@ export function useStudyWorkspace(props: {
     setWorkspaceFeedback('자료 연결 위치를 이동했습니다.');
   };
 
+  const movePageCaptureReferenceToPage = (referenceId: string, rawPageNumber: number) => {
+    let moved = false;
+    let targetLabel = '';
+
+    setPageCaptureReferencesByDocument((current) => {
+      const matchedEntry = Object.entries(current).find(([, references]) => references.some((reference) => reference.id === referenceId));
+      if (!matchedEntry) return current;
+
+      const documentId = Number(matchedEntry[0]);
+      const targetDocument = allStudyDocuments.find((document) => document.id === documentId);
+      if (!targetDocument) return current;
+
+      const pageNumber = Math.max(1, Math.min(Math.max(1, targetDocument.pageCount), Math.round(rawPageNumber || 1)));
+      const nextPage: DocumentPageView = { kind: 'pdf', pageNumber };
+      targetLabel = getReferencePageLabelForDocument(documentId, nextPage);
+
+      return {
+        ...current,
+        [documentId]: (current[documentId] ?? []).map((reference) => {
+          if (reference.id !== referenceId) return reference;
+          moved = true;
+          return {
+            ...reference,
+            page: nextPage,
+            pageLabel: targetLabel,
+          };
+        }),
+      };
+    });
+
+    if (moved) {
+      setWorkspaceFeedback(`${targetLabel}로 자료 연결 위치를 옮겼습니다.`);
+    }
+  };
+
   const removePageCaptureReference = (referenceId: string) => {
     if (!studyDocumentId) return;
     setPageCaptureReferencesByDocument((current) => ({
@@ -1474,7 +1613,7 @@ export function useStudyWorkspace(props: {
   const buildPageCaptureReferenceQuestion = (reference: PageCaptureReference) => (
     [
       `${reference.pageLabel}에 연결한 자료 "${reference.title}"를 수업 맥락에 맞춰 설명해줘.`,
-      `자료 설명: ${reference.aiSummary || reference.summary}`,
+      `자료 설명: ${cleanAiDisplayText(reference.aiSummary || reference.summary)}`,
       reference.keywords.length ? `키워드: ${reference.keywords.join(', ')}` : '',
       '핵심 개념, 시험 포인트, 원본 PDF 페이지와 연결해서 볼 부분을 정리해줘.',
     ].filter(Boolean).join('\n')
@@ -1524,6 +1663,17 @@ export function useStudyWorkspace(props: {
     setAllChatSessions,
     setAiMessagesBySession,
     onRequestCanvasEditFromChat: aiCanvas.requestAiEditFromChat,
+    buildContextHint: (question) => buildClassInsightContext({
+      question,
+      studyDocument,
+      subject,
+      inkStrokes: studyDocumentId ? inkByDocument[studyDocumentId] ?? [] : [],
+      textAnnotations: studyDocumentId ? textAnnotationsByDocument[studyDocumentId] ?? [] : [],
+      bookmarks: currentDocumentBookmarks,
+      pageCaptureReferences,
+      generatedPages: generatedWorkspacePages,
+      classInsight: currentClassInsight,
+    }),
   });
 
   const askAiAboutPageCaptureReference = (referenceId: string) => {
@@ -1536,11 +1686,12 @@ export function useStudyWorkspace(props: {
     }
 
     const question = buildPageCaptureReferenceQuestion(reference);
+    const referenceImageUri = resolveBackendAssetUrl(reference.processedUrl ?? reference.fileUrl ?? reference.thumbnailUrl ?? '') || null;
     setAiPanelOpen(true);
     setViewingAiChatSessionId(null);
     void requestAiAnswerForQuestion(question, {
       pageNumber: reference.page.kind === 'pdf' ? reference.page.pageNumber : currentPdfPage,
-      selectionImageUri: null,
+      selectionImageUri: referenceImageUri,
     });
     setWorkspaceFeedback('연결 자료로 AI 채팅을 시작했습니다.');
   };
@@ -1565,7 +1716,7 @@ export function useStudyWorkspace(props: {
   };
 
   const insertInboxAsset = (assetId: string) => {
-    const asset = captureInbox.find((value) => value.id === assetId);
+    const asset = captureInbox.find((value) => value.id === assetId) ?? findCaptureAssetById(assetId);
     if (!asset) return;
     void linkCaptureAssetToCurrentPage(asset);
   };
@@ -1578,6 +1729,48 @@ export function useStudyWorkspace(props: {
       setIncomingAssetSuggestion(null);
     }
     setWorkspaceFeedback('inbox에서 자료를 삭제했습니다.');
+  };
+
+  const removeCaptureAsset = (assetId: string) => {
+    setCaptureAssetsBySubject((current) => {
+      const next: Record<number, CaptureAsset[]> = {};
+
+      Object.keys(current).forEach((key) => {
+        next[Number(key)] = (current[Number(key)] ?? []).filter((asset) => asset.id !== assetId);
+      });
+
+      return next;
+    });
+    setIncomingBannerQueue((current) => current.filter((asset) => asset.id !== assetId));
+    setIncomingAssetSuggestion((current) => (current?.id === assetId ? null : current));
+    setAttachmentsByDocument((current) => {
+      const next: Record<number, WorkspaceAttachment[]> = {};
+
+      Object.keys(current).forEach((key) => {
+        next[Number(key)] = (current[Number(key)] ?? []).filter((attachment) => attachment.assetId !== assetId);
+      });
+
+      return next;
+    });
+    setPageCaptureReferencesByDocument((current) => {
+      const next: Record<number, PageCaptureReference[]> = {};
+
+      Object.keys(current).forEach((key) => {
+        next[Number(key)] = (current[Number(key)] ?? []).filter((reference) => reference.assetId !== assetId);
+      });
+
+      return next;
+    });
+    setGeneratedPagesByDocument((current) => {
+      const next: Record<number, GeneratedWorkspacePage[]> = {};
+
+      Object.keys(current).forEach((key) => {
+        next[Number(key)] = (current[Number(key)] ?? []).filter((page) => page.sourceAssetId !== assetId);
+      });
+
+      return next;
+    });
+    setWorkspaceFeedback('Photo 라이브러리에서 원본 사진을 삭제했습니다.');
   };
 
   const removeWorkspaceAttachment = (attachmentId: string) => {
@@ -1758,6 +1951,7 @@ export function useStudyWorkspace(props: {
     noteWorkspaceMode,
     studyDocument,
     inkTool,
+    fingerDrawingEnabled,
     penColor,
     penWidth,
     brushType,
@@ -1784,6 +1978,7 @@ export function useStudyWorkspace(props: {
     aiLoading,
     aiError,
     aiCanvas,
+    classInsight: currentClassInsight,
     query,
     sort,
     incomingAssetSuggestion,
@@ -1798,6 +1993,7 @@ export function useStudyWorkspace(props: {
     captureInbox,
     workspaceAttachments,
     pageCaptureReferences,
+    allPageCaptureReferences,
     currentPageCaptureReferences,
     generatedWorkspacePages,
     memoPages,
@@ -1877,8 +2073,11 @@ export function useStudyWorkspace(props: {
     dismissIncomingBanner,
     insertInboxAsset,
     removeInboxAsset,
+    removeCaptureAsset,
+    linkCaptureAssetToPage,
     openPageCaptureReference,
     movePageCaptureReference,
+    movePageCaptureReferenceToPage,
     removePageCaptureReference,
     askAiAboutPageCaptureReference,
     openIncomingBanner,
@@ -1901,6 +2100,7 @@ export function useStudyWorkspace(props: {
     goToPreviousDocumentPage: () => moveDocumentPage(-1),
     goToNextDocumentPage: () => moveDocumentPage(1),
     setQuery,
+    toggleFingerDrawing: () => setFingerDrawingEnabled((current) => !current),
     toggleSort: () => setSort((current) => (current === 'latest' ? 'oldest' : 'latest')),
   };
 }

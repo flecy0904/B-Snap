@@ -6,6 +6,7 @@ import { createCaptureAsset, useSyncBridge, useSyncBridgeStatus } from '../use-s
 import { BackendApiError, isBackendApiEnabled, uploadBackendFile } from '../../services/backend-api';
 import type { CaptureAsset, Subject } from '../../types';
 import { buildEmptyStudyWorkspaceState, loadStudyWorkspaceState, saveStudyWorkspaceState } from '../../storage/local-workspace-store';
+import { cleanAiDisplayText } from '../../ui-helpers';
 
 function getCaptureErrorMessage(error: unknown, fallback: string) {
   if (error instanceof BackendApiError && error.detail) return error.detail;
@@ -13,9 +14,10 @@ function getCaptureErrorMessage(error: unknown, fallback: string) {
 }
 
 function applyUploadAnalysis(asset: CaptureAsset, upload: Awaited<ReturnType<typeof uploadBackendFile>>) {
+  asset.processedUrl = upload.processed_url ?? asset.processedUrl;
   if (!upload.analysis) return asset;
   asset.analysisStatus = upload.analysis.status === 'failed' ? 'failed' : upload.analysis.status === 'pending' ? 'pending' : 'ready';
-  asset.analysisSummary = upload.analysis.summary ?? asset.summary;
+  asset.analysisSummary = cleanAiDisplayText(upload.analysis.summary ?? asset.summary);
   asset.analysisKeywords = upload.analysis.keywords?.filter(Boolean) ?? asset.analysisKeywords;
   return asset;
 }

@@ -1,14 +1,16 @@
 import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import BottomSheet, { BottomSheetBackdrop, BottomSheetScrollView, type BottomSheetBackdropProps } from '@gorhom/bottom-sheet';
-import { ActivityIndicator, Image, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Image, Modal, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import { isClassInsightTargetDocument } from '../../../hooks/notes/class-insight';
+import { AiResponseContent } from '../ai/ai-response-content';
 import { PdfPreview } from '../pdf/pdf-preview';
 import { BlankNoteCanvas } from '../canvas/blank-note-canvas';
 import { NoteSummaryContent } from '../shared/notes-shared';
-import type { BackendChatMessage, BackendChatSession } from '../../../services/backend-api';
+import type { BackendChatMessage, BackendChatSession, BackendClassInsight } from '../../../services/backend-api';
 import { AiAnswer, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NotebookPage, NoteEntry, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../../types';
 import { InkBrush, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
-import { darkenHex, getDocumentPageLabel, isSameDocumentPage } from '../../../ui-helpers';
+import { cleanAiDisplayText, darkenHex, getDocumentPageLabel, isSameDocumentPage } from '../../../ui-helpers';
 
 const PEN_COLORS = ['#1F2937', '#2563EB', '#7C3AED', '#D9485F', '#F59E0B', '#16A34A'];
 const HIGHLIGHT_COLORS = ['#FDE047', '#FB7185', '#86EFAC', '#67E8F9', '#FDBA74'];
@@ -41,6 +43,12 @@ const MOBILE_HANDWRITING_TOOLS: Array<{ value: InkTool; icon: React.ComponentPro
   { value: 'ellipse', icon: 'circle-outline' },
 ];
 
+function formatClassInsightPriority(priority: string) {
+  if (priority === 'very-high') return '매우 높음';
+  if (priority === 'high') return '높음';
+  return '중간';
+}
+
 function getCaptureImageSource(asset: CaptureAsset) {
   const uri = asset.thumbnailUrl ?? asset.fileUrl ?? asset.previewImageKey;
   if (uri && (uri.startsWith('http://') || uri.startsWith('https://') || uri.startsWith('file://') || uri.startsWith('data:image/'))) {
@@ -60,6 +68,17 @@ function formatCaptureDate(value: string) {
   });
 }
 
+function getCapturePlacementLabel(asset: CaptureAsset, references: PageCaptureReference[]) {
+  const matches = references.filter((reference) => reference.assetId === asset.id);
+  if (!matches.length) return '미연결';
+  const firstLabel = matches[0]?.pageLabel || '연결됨';
+  return matches.length > 1 ? `${firstLabel} 외 ${matches.length - 1}` : firstLabel;
+}
+
+function getCaptureReferences(asset: CaptureAsset, references: PageCaptureReference[]) {
+  return references.filter((reference) => reference.assetId === asset.id);
+}
+
 export function MobileNotesView(props: {
   subject: Subject | null;
   note: NoteEntry | null;
@@ -75,6 +94,7 @@ export function MobileNotesView(props: {
   noteTab: 'original' | 'summary';
   noteMode: NoteWorkspaceMode;
   inkTool: InkTool;
+  fingerDrawingEnabled: boolean;
   penColor: string;
   penWidth: number;
   brushType: InkBrush;
@@ -102,6 +122,7 @@ export function MobileNotesView(props: {
   aiChatReadOnly: boolean;
   aiLoading: boolean;
   aiError: string | null;
+  classInsight: BackendClassInsight | null;
   incomingAssetSuggestion: CaptureAsset | null;
   inboxHint: string | null;
   inboxPendingCount: number;
@@ -111,12 +132,14 @@ export function MobileNotesView(props: {
   captureInbox: CaptureAsset[];
   workspaceAttachments: WorkspaceAttachment[];
   pageCaptureReferences: PageCaptureReference[];
+  allPageCaptureReferences: PageCaptureReference[];
   currentPageCaptureReferences: PageCaptureReference[];
   bookmarks: BookmarkedPage[];
   currentPageBookmarked: boolean;
   onChangeNoteTab: (tab: 'original' | 'summary') => void;
   onChangeMode: (mode: NoteWorkspaceMode) => void;
   onChangeInkTool: (tool: InkTool) => void;
+  onToggleFingerDrawing: () => void;
   onChangePenColor: (color: string) => void;
   onChangePenWidth: (width: number) => void;
   onChangeBrushType: (brush: InkBrush) => void;
@@ -145,8 +168,11 @@ export function MobileNotesView(props: {
   onDismissIncomingAsset: () => void;
   onInsertInboxAsset: (assetId: string) => void;
   onRemoveInboxAsset: (assetId: string) => void;
+  onRemoveCaptureAsset: (assetId: string) => void;
+  onLinkCaptureAssetToPage: (assetId: string, documentId: number, pageNumber: number) => boolean;
   onOpenPageCaptureReference: (referenceId: string) => void;
   onMovePageCaptureReference: (referenceId: string, delta: -1 | 1) => void;
+  onMovePageCaptureReferenceToPage: (referenceId: string, pageNumber: number) => void;
   onRemovePageCaptureReference: (referenceId: string) => void;
   onAskAiAboutPageCaptureReference: (referenceId: string) => void;
   onRemoveWorkspaceAttachment: (attachmentId: string) => void;
@@ -179,6 +205,7 @@ export function MobileNotesView(props: {
   const [recoveryOpen, setRecoveryOpen] = React.useState(false);
   const [documentRenameOpen, setDocumentRenameOpen] = React.useState(false);
   const [documentTitleDraft, setDocumentTitleDraft] = React.useState('');
+  const [previewAssetId, setPreviewAssetId] = React.useState<string | null>(null);
   const [activeBrushPopover, setActiveBrushPopover] = React.useState<'pen' | 'highlight' | null>(null);
   const { width } = useWindowDimensions();
   const phoneViewerOnly = width < 700;
@@ -265,6 +292,23 @@ export function MobileNotesView(props: {
     () => props.subject ? getSubjectPhotoAssets(props.subject.id) : [],
     [getSubjectPhotoAssets, props.subject],
   );
+  const previewAsset = React.useMemo(
+    () => currentSubjectPhotoAssets.find((asset) => asset.id === previewAssetId) ?? null,
+    [currentSubjectPhotoAssets, previewAssetId],
+  );
+  const previewImageSource = previewAsset ? getCaptureImageSource(previewAsset) : null;
+  const previewReferences = previewAsset ? getCaptureReferences(previewAsset, props.allPageCaptureReferences) : [];
+  const previewPrimaryReference = previewReferences[0] ?? null;
+  const aiSuggestionPrompts = React.useMemo(() => {
+    const basePrompts = ['여기서 중요한 개념 3개만 알려줘', '시험 대비 관점으로 설명해줘'];
+    return isClassInsightTargetDocument(props.studyDocument, props.subject)
+      ? ['시험에 나올만한 중요 페이지 추천해줘', ...basePrompts]
+      : ['이 그래프 의미 뭐야?', ...basePrompts];
+  }, [props.studyDocument, props.subject]);
+  const classInsightPages = React.useMemo(() => {
+    if (!isClassInsightTargetDocument(props.studyDocument, props.subject)) return [];
+    return (props.classInsight?.pages ?? []).slice(0, 3);
+  }, [props.classInsight?.pages, props.studyDocument, props.subject]);
 
   React.useEffect(() => {
     if (recoverableCount === 0) setRecoveryOpen(false);
@@ -407,6 +451,12 @@ export function MobileNotesView(props: {
         ) : (
         <View style={props.styles.mobileDocToolbar}>
           <View style={props.styles.mobileDocTools}>
+            <Pressable
+              style={[props.styles.mobileDocToolButton, props.fingerDrawingEnabled && props.styles.inkToolButtonActive]}
+              onPress={props.onToggleFingerDrawing}
+            >
+              <MaterialCommunityIcons name="gesture-tap" size={18} color={props.fingerDrawingEnabled ? props.blueColor : '#7D8797'} />
+            </Pressable>
             <View style={props.styles.mobileInkToolCluster}>
               {MOBILE_HANDWRITING_TOOLS.map((tool) => {
                 const isBrush = tool.value === 'pen' || tool.value === 'highlight';
@@ -540,7 +590,7 @@ export function MobileNotesView(props: {
                     )}
                     <Text style={props.styles.workspaceCardType}>{reference.pageLabel}</Text>
                     <Text style={props.styles.workspaceCardTitle} numberOfLines={1}>{reference.title}</Text>
-                    <Text style={props.styles.workspaceCardBody} numberOfLines={2}>{reference.aiSummary}</Text>
+                    <Text style={props.styles.workspaceCardBody} numberOfLines={2}>{cleanAiDisplayText(reference.aiSummary)}</Text>
                     <View style={props.styles.workspaceInboxRowButtons}>
                       <Pressable style={props.styles.workspaceInlineAction} onPress={() => props.onAskAiAboutPageCaptureReference(reference.id)}>
                         <Text style={props.styles.workspaceInlineActionText}>AI 질문</Text>
@@ -630,6 +680,7 @@ export function MobileNotesView(props: {
               file={props.studyDocument.file}
               page={props.currentPdfPage}
               inkTool={phoneViewerOnly ? (props.inkTool === 'select' ? 'select' : 'view') : props.inkTool}
+              fingerDrawingEnabled={props.fingerDrawingEnabled}
               penColor={props.penColor}
               penWidth={props.penWidth}
               brushType={props.brushType}
@@ -768,9 +819,29 @@ export function MobileNotesView(props: {
                 <Text style={props.styles.aiStateTitle}>선택 영역</Text>
                 <Text style={props.styles.aiStateBody}>{props.selectionRect ? `${Math.round(props.selectionRect.width)} × ${Math.round(props.selectionRect.height)} 영역 선택됨` : '아직 선택된 영역이 없습니다'}</Text>
               </View>
-              {['이 그래프 의미 뭐야?', '여기서 중요한 개념 3개만 알려줘', '시험 대비 관점으로 설명해줘'].map((prompt) => (
+              {aiSuggestionPrompts.map((prompt) => (
                 <Pressable key={prompt} style={props.styles.aiSuggestionChip} onPress={() => props.onChangeAiQuestion(prompt)}><Text style={props.styles.aiSuggestionText}>{prompt}</Text></Pressable>
               ))}
+              {classInsightPages.length ? (
+                <View style={props.styles.aiClassInsightStrip}>
+                  <View style={props.styles.aiClassInsightHeader}>
+                    <Text style={props.styles.aiClassInsightTitle}>추천 페이지</Text>
+                    <Text style={props.styles.aiClassInsightMeta}>수업 필기 흐름 기준</Text>
+                  </View>
+                  <View style={props.styles.aiClassInsightChipRow}>
+                    {classInsightPages.map((page) => (
+                      <Pressable
+                        key={page.page_number}
+                        style={props.styles.aiClassInsightChip}
+                        onPress={() => props.onSetCurrentPdfPage(page.page_number)}
+                      >
+                        <Text style={props.styles.aiClassInsightPage}>{page.page_number}p</Text>
+                        <Text style={props.styles.aiClassInsightPriority}>{formatClassInsightPriority(page.priority)}</Text>
+                      </Pressable>
+                    ))}
+                  </View>
+                </View>
+              ) : null}
               {props.aiChatReadOnly ? (
                 <View style={props.styles.aiReadOnlyNotice}>
                   <MaterialCommunityIcons name="lock-outline" size={14} color="#5B6472" />
@@ -796,7 +867,18 @@ export function MobileNotesView(props: {
                     {props.aiMessages.map((message) => (
                       <View key={message.id} style={props.styles.aiResponseSection}>
                         <Text style={props.styles.aiResponseSectionTitle}>{message.role === 'user' ? '나' : 'AI'}</Text>
-                        <Text style={props.styles.aiResponseBody}>{message.content}</Text>
+                        {message.role === 'user' ? (
+                          <Text style={props.styles.aiResponseBody}>{message.content}</Text>
+                        ) : (
+                          <AiResponseContent
+                            content={message.content}
+                            pageCount={props.studyDocument?.pageCount}
+                            styles={props.styles}
+                            textStyle={props.styles.aiResponseBody}
+                            linkStyle={props.styles.aiResponsePageLink}
+                            onOpenPage={props.onSetCurrentPdfPage}
+                          />
+                        )}
                       </View>
                     ))}
                   </View>
@@ -808,9 +890,25 @@ export function MobileNotesView(props: {
                 {aiResponseSections ? aiResponseSections.map((section, index) => (
                   <View key={`${section.title}-${index}`} style={[props.styles.aiResponseSection, index === aiResponseSections.length - 1 && props.styles.aiResponseSectionLast]}>
                     <Text style={props.styles.aiResponseSectionTitle}>{section.title}</Text>
-                    <Text style={props.styles.aiResponseBody}>{section.body}</Text>
+                    <AiResponseContent
+                      content={section.body}
+                      pageCount={props.studyDocument?.pageCount}
+                      styles={props.styles}
+                      textStyle={props.styles.aiResponseBody}
+                      linkStyle={props.styles.aiResponsePageLink}
+                      onOpenPage={props.onSetCurrentPdfPage}
+                    />
                   </View>
-                )) : <Text style={props.styles.aiResponseBody}>{aiResponse}</Text>}
+                )) : (
+                  <AiResponseContent
+                    content={aiResponse}
+                    pageCount={props.studyDocument?.pageCount}
+                    styles={props.styles}
+                    textStyle={props.styles.aiResponseBody}
+                    linkStyle={props.styles.aiResponsePageLink}
+                    onOpenPage={props.onSetCurrentPdfPage}
+                  />
+                )}
               </View>
             </BottomSheetScrollView>
           </BottomSheet>
@@ -935,7 +1033,7 @@ export function MobileNotesView(props: {
           <View style={[props.styles.subjectHeroDot, { backgroundColor: currentSubject.color }]} />
           <View style={props.styles.fill}>
             <Text style={[props.styles.subjectHeroMeta, { color: currentSubject.textColor }]}>
-              {props.noteMode === 'photo' ? latestPhoto ? `최근 사진 · ${latestPhoto.title}` : '촬영하거나 가져온 원본 사진이 아직 없습니다' : props.studyDocuments[0] ? `최근 문서 · ${props.studyDocuments[0].title}` : '아직 등록된 문서가 없습니다'}
+              {props.noteMode === 'photo' ? latestPhoto ? `최근 사진 · ${formatCaptureDate(latestPhoto.createdAt)}` : '촬영하거나 가져온 원본 사진이 아직 없습니다' : props.studyDocuments[0] ? `최근 문서 · ${props.studyDocuments[0].title}` : '아직 등록된 문서가 없습니다'}
             </Text>
           </View>
         </View>
@@ -952,31 +1050,34 @@ export function MobileNotesView(props: {
                   <View style={props.styles.photoGalleryGrid}>
                     {currentSubjectPhotoAssets.map((asset) => {
                       const imageSource = getCaptureImageSource(asset);
-                      const keywords = (asset.analysisKeywords ?? []).slice(0, 3);
+                      const placementLabel = getCapturePlacementLabel(asset, props.allPageCaptureReferences);
+                      const linked = placementLabel !== '미연결';
                       return (
-                        <View key={asset.id} style={props.styles.photoGalleryCard}>
-                          {imageSource ? (
-                            <Image source={imageSource} style={props.styles.photoGalleryImage} resizeMode="cover" />
-                          ) : (
-                            <View style={props.styles.photoGalleryFallback}>
-                              <MaterialCommunityIcons name="image-outline" size={28} color="#9AA6B8" />
-                            </View>
-                          )}
-                          <View style={props.styles.photoGalleryCardBody}>
-                            <Text style={props.styles.photoGalleryCardTitle} numberOfLines={2}>{asset.title}</Text>
-                            <Text style={props.styles.photoGalleryCardMeta} numberOfLines={1}>{formatCaptureDate(asset.createdAt)} · {asset.sourceDeviceLabel}</Text>
-                            <Text style={props.styles.photoGalleryCardSummary} numberOfLines={2}>{asset.analysisSummary ?? asset.summary}</Text>
-                            {keywords.length ? (
-                              <View style={props.styles.photoGalleryKeywordRow}>
-                                {keywords.map((keyword) => (
-                                  <View key={`${asset.id}-${keyword}`} style={props.styles.photoGalleryKeyword}>
-                                    <Text style={props.styles.photoGalleryKeywordText}>{keyword}</Text>
-                                  </View>
-                                ))}
+                        <Pressable key={asset.id} style={props.styles.photoGalleryCard} onPress={() => setPreviewAssetId(asset.id)}>
+                          <View style={props.styles.photoGalleryImageWrap}>
+                            {imageSource ? (
+                              <Image source={imageSource} style={props.styles.photoGalleryImage} resizeMode="cover" />
+                            ) : (
+                              <View style={props.styles.photoGalleryFallback}>
+                                <MaterialCommunityIcons name="image-outline" size={28} color="#9AA6B8" />
                               </View>
-                            ) : null}
+                            )}
+                            <View style={[props.styles.photoGalleryStatusBadge, linked && props.styles.photoGalleryStatusBadgeLinked]}>
+                              <Text style={[props.styles.photoGalleryStatusBadgeText, linked && props.styles.photoGalleryStatusBadgeTextLinked]}>
+                                {linked ? '연결됨' : '미연결'}
+                              </Text>
+                            </View>
                           </View>
-                        </View>
+                          <View style={props.styles.photoGalleryCardBody}>
+                            <Text style={props.styles.photoGalleryCardMeta} numberOfLines={1}>{formatCaptureDate(asset.createdAt)}</Text>
+                            <View style={props.styles.photoGalleryPlacementRow}>
+                              <MaterialCommunityIcons name={linked ? 'file-link-outline' : 'link-off'} size={14} color={linked ? '#4F68D2' : '#9AA3B2'} />
+                              <Text style={[props.styles.photoGalleryPlacementText, linked && props.styles.photoGalleryPlacementTextLinked]} numberOfLines={1}>
+                                {placementLabel}
+                              </Text>
+                            </View>
+                          </View>
+                        </Pressable>
                       );
                     })}
                   </View>
@@ -1020,6 +1121,132 @@ export function MobileNotesView(props: {
                   <Text style={[props.styles.emptyBody, { color: currentSubject.textColor }]}>PDF 업로드와 빈 노트는 모바일에서도 같은 방식으로 열 수 있습니다.</Text>
                 </View>
               )}
+        <Modal
+          visible={!!previewAsset}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setPreviewAssetId(null)}
+        >
+          <View style={props.styles.photoViewerOverlay}>
+            <Pressable style={props.styles.photoViewerBackdrop} onPress={() => setPreviewAssetId(null)} />
+            {previewAsset ? (
+              <View style={props.styles.photoViewerCard}>
+                <View style={props.styles.photoViewerHeader}>
+                  <View style={props.styles.fill}>
+                    <Text style={props.styles.photoViewerTitle} numberOfLines={1}>{previewAsset.title || '원본 사진'}</Text>
+                    <View style={props.styles.photoViewerMetaRow}>
+                      <View style={props.styles.photoViewerMetaPill}>
+                        <MaterialCommunityIcons name="calendar-clock-outline" size={13} color="#7E8798" />
+                        <Text style={props.styles.photoViewerMetaPillText}>{formatCaptureDate(previewAsset.createdAt)}</Text>
+                      </View>
+                      <View style={[props.styles.photoViewerMetaPill, previewReferences.length && props.styles.photoViewerMetaPillLinked]}>
+                        <MaterialCommunityIcons name={previewReferences.length ? 'link-variant' : 'link-off'} size={13} color={previewReferences.length ? '#4F68D2' : '#7E8798'} />
+                        <Text style={[props.styles.photoViewerMetaPillText, previewReferences.length && props.styles.photoViewerMetaPillTextLinked]}>
+                          {previewReferences.length ? `${previewReferences.length}곳 연결` : '미연결'}
+                        </Text>
+                      </View>
+                    </View>
+                  </View>
+                  <Pressable style={props.styles.photoViewerCloseButton} onPress={() => setPreviewAssetId(null)}>
+                    <MaterialCommunityIcons name="close" size={20} color="#5F6876" />
+                  </Pressable>
+                </View>
+                <ScrollView contentContainerStyle={props.styles.photoViewerBody} showsVerticalScrollIndicator={false}>
+                  <View style={props.styles.photoViewerImageFrame}>
+                    {previewImageSource ? (
+                      <Image source={previewImageSource} style={props.styles.photoViewerImage} resizeMode="contain" />
+                    ) : (
+                      <View style={props.styles.photoViewerFallback}>
+                        <MaterialCommunityIcons name="image-off-outline" size={36} color="#9AA6B8" />
+                      </View>
+                    )}
+                  </View>
+                  <View style={props.styles.photoViewerInfo}>
+                    <View style={props.styles.photoViewerInfoCard}>
+                      <View style={props.styles.photoViewerInfoHeader}>
+                        <MaterialCommunityIcons name="file-link-outline" size={15} color="#5F79FF" />
+                        <Text style={props.styles.photoViewerInfoTitle}>연결 위치</Text>
+                      </View>
+                      {previewReferences.length ? (
+                        <View style={props.styles.photoViewerReferenceRow}>
+                          {previewReferences.map((reference) => (
+                            <Pressable
+                              key={reference.id}
+                              style={props.styles.photoViewerReferencePill}
+                              onPress={() => {
+                                props.onOpenPageCaptureReference(reference.id);
+                                setPreviewAssetId(null);
+                              }}
+                            >
+                              <Text style={props.styles.photoViewerReferencePillText}>{reference.pageLabel}</Text>
+                            </Pressable>
+                          ))}
+                        </View>
+                      ) : (
+                        <Text style={props.styles.photoViewerInfoValue}>아직 노트 페이지에 연결되지 않았습니다.</Text>
+                      )}
+                    </View>
+                    <View style={props.styles.photoViewerInfoCard}>
+                      <View style={props.styles.photoViewerInfoHeader}>
+                        <MaterialCommunityIcons name="star-four-points" size={15} color="#5F79FF" />
+                        <Text style={props.styles.photoViewerInfoTitle}>AI 설명</Text>
+                      </View>
+                      <Text style={props.styles.photoViewerInfoValue}>
+                        {cleanAiDisplayText(previewAsset.analysisSummary ?? previewAsset.summary)}
+                      </Text>
+                    </View>
+                  </View>
+                </ScrollView>
+                <View style={props.styles.photoViewerActionRow}>
+                  {previewPrimaryReference ? (
+                    <Pressable
+                      style={props.styles.photoViewerActionButton}
+                      onPress={() => {
+                        props.onAskAiAboutPageCaptureReference(previewPrimaryReference.id);
+                        setPreviewAssetId(null);
+                      }}
+                    >
+                      <MaterialCommunityIcons name="star-four-points" size={16} color="#4F68D2" />
+                      <Text style={props.styles.photoViewerActionText}>AI에게 질문</Text>
+                    </Pressable>
+                  ) : null}
+                  {previewPrimaryReference ? (
+                    <Pressable
+                      style={[props.styles.photoViewerActionButton, props.styles.photoViewerActionButtonPrimary]}
+                      onPress={() => {
+                        props.onOpenPageCaptureReference(previewPrimaryReference.id);
+                        setPreviewAssetId(null);
+                      }}
+                    >
+                      <MaterialCommunityIcons name="notebook-outline" size={16} color="#FFFFFF" />
+                      <Text style={[props.styles.photoViewerActionText, props.styles.photoViewerActionTextPrimary]}>노트에서 열기</Text>
+                    </Pressable>
+                  ) : null}
+                  <Pressable
+                    style={props.styles.photoViewerActionButton}
+                    onPress={() => {
+                      props.onInsertInboxAsset(previewAsset.id);
+                      setPreviewAssetId(null);
+                    }}
+                  >
+                    <MaterialCommunityIcons name="file-image-plus-outline" size={16} color="#4F68D2" />
+                    <Text style={props.styles.photoViewerActionText}>이미지 노트 만들기</Text>
+                  </Pressable>
+                  <Pressable
+                    style={[props.styles.photoViewerActionButton, props.styles.photoViewerActionButtonDanger]}
+                    onPress={() => {
+                      props.onRemoveCaptureAsset(previewAsset.id);
+                      setPreviewAssetId(null);
+                    }}
+                  >
+                    <MaterialCommunityIcons name="trash-can-outline" size={16} color="#D64B4B" />
+                    <Text style={[props.styles.photoViewerActionText, props.styles.photoViewerActionTextDanger]}>삭제</Text>
+                  </Pressable>
+                </View>
+              </View>
+            ) : null}
+          </View>
+        </Modal>
       </ScrollView>
     );
   }

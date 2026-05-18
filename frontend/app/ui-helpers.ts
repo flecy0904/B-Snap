@@ -75,6 +75,25 @@ export function getDocumentPageLabel(props: {
   return props.generatedFallback ?? '생성된 페이지';
 }
 
+export function cleanAiDisplayText(value: string | null | undefined) {
+  const text = (value ?? '').trim();
+  if (!text) return '';
+
+  return text
+    .replace(/\b(?:[A-F0-9]{2}[-_]){6,}[A-F0-9]{2}(?:\.(?:jpe?g|png|heic|heif))?/gi, '이 사진')
+    .replace(/\b[a-f0-9]{24,}[-_][^\s]+?\.(?:jpe?g|png|heic|heif)\b/gi, '이 사진')
+    .replace(/이 사진\s+원본 사진입니다\.?/g, '수업 중 촬영한 원본 사진입니다.')
+    .replace(/PDF\s*(내용|본문|텍스트)이 아직 추출되지 않아/g, 'PDF 본문 분석이 아직 준비되지 않아')
+    .replace(/PDF\s*(내용|본문|텍스트)이 아직 추출되지 않았/g, 'PDF 본문 분석이 아직 준비되지 않았')
+    .replace(/PDF\s*(내용|본문|텍스트)가 추출되면/g, 'PDF 본문 분석이 준비되면')
+    .replace(/추출된 PDF\s*(내용|본문|텍스트)/g, '분석된 PDF 본문')
+    .replace(/PDF\s*(내용|본문|텍스트)\s*추출/g, 'PDF 본문 분석')
+    .replace(/\*\*/g, '')
+    .replace(/^\s*[*-]\s+/gm, '• ')
+    .replace(/[ \t]{2,}/g, ' ')
+    .trim();
+}
+
 function distanceToSegment(point: InkPoint, start: InkPoint, end: InkPoint) {
   const dx = end.x - start.x;
   const dy = end.y - start.y;

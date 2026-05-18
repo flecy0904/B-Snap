@@ -24,6 +24,7 @@ class Settings(BaseSettings):
     )
     upload_dir: str = Field(default="backend/uploads", validation_alias="UPLOAD_DIR")
     upload_max_bytes: int = Field(default=30 * 1024 * 1024, validation_alias="UPLOAD_MAX_BYTES")
+    ai_image_max_bytes: int = Field(default=28 * 1024 * 1024, validation_alias="AI_IMAGE_MAX_BYTES")
     jwt_secret_key: str = Field(default_factory=lambda: token_urlsafe(32), validation_alias="JWT_SECRET_KEY")
     jwt_algorithm: str = Field(default="HS256", validation_alias="JWT_ALGORITHM")
     jwt_access_token_minutes: int = Field(default=60 * 24 * 7, validation_alias="JWT_ACCESS_TOKEN_MINUTES")
