@@ -14,6 +14,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.net.URLDecoder
 import java.security.MessageDigest
+import java.util.UUID
 import kotlin.math.max
 import kotlin.math.roundToInt
 
@@ -59,13 +60,29 @@ class PdfPageRendererModule(private val reactContext: ReactApplicationContext) :
       page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
 
       val outputFile = getOutputFile(fileUri, pageNumber, bitmapWidth)
+      val temporaryOutputFile = getTemporaryOutputFile(outputFile)
       outputFile.parentFile?.mkdirs()
-      FileOutputStream(outputFile).use { stream ->
-        bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)
+      temporaryOutputFile.delete()
+      try {
+        FileOutputStream(temporaryOutputFile).use { stream ->
+          if (!bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream)) {
+            throw IllegalStateException("Cannot encode PDF page image.")
+          }
+        }
+        if (outputFile.exists() && !outputFile.delete()) {
+          throw IllegalStateException("Cannot replace cached PDF page image.")
+        }
+        if (!temporaryOutputFile.renameTo(outputFile)) {
+          throw IllegalStateException("Cannot commit cached PDF page image.")
+        }
+      } catch (error: Exception) {
+        temporaryOutputFile.delete()
+        throw error
       }
 
+      val outputUri = "${Uri.fromFile(outputFile)}?v=${outputFile.lastModified()}"
       val result = Arguments.createMap().apply {
-        putString("uri", Uri.fromFile(outputFile).toString())
+        putString("uri", outputUri)
         putInt("width", bitmapWidth)
         putInt("height", bitmapHeight)
         putInt("pageNumber", pageNumber)
@@ -107,6 +124,10 @@ class PdfPageRendererModule(private val reactContext: ReactApplicationContext) :
     val cacheDir = File(reactContext.cacheDir, "bsnap-pdf-pages")
     val key = sha1("$fileUri:$pageNumber:$targetWidth")
     return File(cacheDir, "$key.png")
+  }
+
+  private fun getTemporaryOutputFile(outputFile: File): File {
+    return File(outputFile.parentFile, "${outputFile.name}.${UUID.randomUUID()}.tmp")
   }
 
   private fun sha1(value: String): String {
