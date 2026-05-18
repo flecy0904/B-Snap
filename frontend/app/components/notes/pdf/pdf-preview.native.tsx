@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
-import { FlatList, GestureResponderEvent, Image, Pressable, Text, useWindowDimensions, View } from 'react-native';
+import { FlatList, GestureResponderEvent, Image, NativeScrollEvent, NativeSyntheticEvent, Pressable, Text, useWindowDimensions, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import Svg, { Path } from 'react-native-svg';
 import { captureRef } from 'react-native-view-shot';
@@ -13,7 +13,6 @@ type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
 type ResponderStartPoint = { x: number; y: number } | null;
 const PDF_RENDER_PAGE_RADIUS = 1;
 const PDF_RENDER_CACHE_RADIUS = 2;
-const PDF_VIEWABILITY_THRESHOLD = 65;
 
 function hasMultipleTouches(event: GestureResponderEvent) {
   return Boolean(event.nativeEvent.touches && event.nativeEvent.touches.length > 1);
@@ -365,6 +364,15 @@ export function PdfPreview(props: {
   const interactionLocksScroll = props.inkTool !== 'view';
   const scrollEnabled = !interactionLocksScroll;
   const [visiblePageKeys, setVisiblePageKeys] = useState<Set<string>>(() => new Set([getNotebookPageKey(pageItems[0])]));
+  const visiblePdfPageNumbers = useMemo(() => {
+    const pageNumbers: number[] = [];
+    pageItems.forEach((page) => {
+      if (page.kind !== 'pdf' || !page.pageNumber) return;
+      if (!visiblePageKeys.has(getNotebookPageKey(page))) return;
+      if (!pageNumbers.includes(page.pageNumber)) pageNumbers.push(page.pageNumber);
+    });
+    return pageNumbers;
+  }, [pageItems, visiblePageKeys]);
   const flatListExtraData = useMemo(() => ({
     activeGeneratedPageId: props.activeGeneratedPageId,
     page: props.page,
@@ -392,11 +400,14 @@ export function PdfPreview(props: {
     pageItems.forEach((page) => {
       if (page.kind !== 'pdf' || !page.pageNumber) return;
       const pageKey = getNotebookPageKey(page);
-      if (!visiblePageKeys.has(pageKey) && !isPdfPageNearCurrent(page, props.page)) return;
+      const nearVisiblePage = visiblePdfPageNumbers.some((visiblePageNumber) => (
+        Math.abs(page.pageNumber! - visiblePageNumber) <= PDF_RENDER_PAGE_RADIUS
+      ));
+      if (!visiblePageKeys.has(pageKey) && !nearVisiblePage && !isPdfPageNearCurrent(page, props.page)) return;
       if (!pageNumbers.includes(page.pageNumber)) pageNumbers.push(page.pageNumber);
     });
     return pageNumbers;
-  }, [pageItems, props.page, visiblePageKeys]);
+  }, [pageItems, props.page, visiblePageKeys, visiblePdfPageNumbers]);
 
   useEffect(() => {
     if (!pdfPagesToRender.length || viewerWidth <= 0) return;
@@ -440,7 +451,10 @@ export function PdfPreview(props: {
     pageItems.forEach((page) => {
       if (page.kind !== 'pdf' || !page.pageNumber) return;
       const pageKey = getNotebookPageKey(page);
-      if (visiblePageKeys.has(pageKey) || Math.abs(page.pageNumber - props.page) <= PDF_RENDER_CACHE_RADIUS) {
+      const nearVisiblePage = visiblePdfPageNumbers.some((visiblePageNumber) => (
+        Math.abs(page.pageNumber! - visiblePageNumber) <= PDF_RENDER_CACHE_RADIUS
+      ));
+      if (visiblePageKeys.has(pageKey) || nearVisiblePage || Math.abs(page.pageNumber - props.page) <= PDF_RENDER_CACHE_RADIUS) {
         keysToKeep.add(getPdfRenderCacheKey(page.pageNumber));
       }
     });
@@ -451,7 +465,7 @@ export function PdfPreview(props: {
       });
       return Object.keys(next).length === Object.keys(current).length ? current : next;
     });
-  }, [getPdfRenderCacheKey, pageItems, props.page, visiblePageKeys]);
+  }, [getPdfRenderCacheKey, pageItems, props.page, visiblePageKeys, visiblePdfPageNumbers]);
 
   useEffect(() => {
     scrollStateRef.current = {
@@ -540,18 +554,29 @@ export function PdfPreview(props: {
     if (page.pageNumber) props.onPageChanged?.(page.pageNumber);
   };
 
-  const viewabilityConfig = useMemo(() => ({ itemVisiblePercentThreshold: PDF_VIEWABILITY_THRESHOLD, minimumViewTime: 120 }), []);
-  const handleViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: Array<{ item: NotebookPage; isViewable?: boolean }> }) => {
-    const state = scrollStateRef.current;
-    const visibleItems = viewableItems.filter((entry) => entry.isViewable);
-    const keys = (visibleItems.length ? visibleItems : viewableItems).map((entry) => getNotebookPageKey(entry.item));
+  const updateVisiblePagesFromScroll = useCallback((offsetY: number, viewportHeight: number) => {
+    if (!pageItems.length || viewportHeight <= 0) return;
+
+    const itemLength = viewerHeight + pageGap;
+    const visibleTop = Math.max(0, offsetY);
+    const visibleBottom = Math.max(visibleTop, offsetY + viewportHeight);
+    const firstIndex = Math.max(0, Math.floor(visibleTop / itemLength));
+    const lastIndex = Math.min(pageItems.length - 1, Math.floor(Math.max(visibleTop, visibleBottom - 1) / itemLength));
+    const visibleItems = pageItems.slice(firstIndex, lastIndex + 1);
+    const keys = visibleItems.map((page) => getNotebookPageKey(page));
     const joinedKeys = keys.join('|');
-    if (joinedKeys !== visiblePageKeysRef.current) {
+
+    if (joinedKeys && joinedKeys !== visiblePageKeysRef.current) {
       visiblePageKeysRef.current = joinedKeys;
       setVisiblePageKeys(new Set(keys));
     }
+
+    const state = scrollStateRef.current;
     if (!state.scrollEnabled) return;
-    const nextPage = visibleItems[0]?.item ?? viewableItems[0]?.item;
+
+    const viewportCenter = visibleTop + viewportHeight / 2;
+    const centerIndex = Math.max(0, Math.min(pageItems.length - 1, Math.floor(viewportCenter / itemLength)));
+    const nextPage = pageItems[centerIndex] ?? visibleItems[0];
     if (nextPage?.generatedPageId && nextPage.generatedPageId !== state.activeGeneratedPageId) {
       suppressNextAutoScrollRef.current = true;
       state.onOpenGeneratedPage?.(nextPage.generatedPageId);
@@ -560,7 +585,11 @@ export function PdfPreview(props: {
       suppressNextAutoScrollRef.current = true;
       state.onPageChanged?.(nextPage.pageNumber);
     }
-  }).current;
+  }, [pageGap, pageItems, viewerHeight]);
+
+  const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    updateVisiblePagesFromScroll(event.nativeEvent.contentOffset.y, event.nativeEvent.layoutMeasurement.height);
+  }, [updateVisiblePagesFromScroll]);
 
   const isCurrentNotebookPage = (page: NotebookPage) => (
     page.generatedPageId ? page.generatedPageId === props.activeGeneratedPageId : page.pageNumber === props.page
@@ -1029,8 +1058,10 @@ export function PdfPreview(props: {
         style={{ width: '100%' }}
         contentContainerStyle={{ alignItems: 'center', paddingTop: 4, paddingBottom: 24 }}
         scrollEnabled={scrollEnabled}
-        viewabilityConfig={viewabilityConfig}
-        onViewableItemsChanged={handleViewableItemsChanged}
+        onScroll={handleScroll}
+        onScrollEndDrag={handleScroll}
+        onMomentumScrollEnd={handleScroll}
+        scrollEventThrottle={32}
         showsVerticalScrollIndicator
         initialNumToRender={2}
         maxToRenderPerBatch={1}
