@@ -8,6 +8,13 @@ import { PdfPreview } from '../pdf/pdf-preview';
 import { BlankNoteCanvas } from '../canvas/blank-note-canvas';
 import { NoteSummaryContent } from '../shared/notes-shared';
 import { PhotoViewerLinkPanel } from './photo-viewer-link-panel';
+import {
+  formatCaptureDate,
+  getCaptureImageSource,
+  getCaptureOriginalImageSource,
+  getCapturePlacementLabel,
+  getCaptureReferences,
+} from '../shared/capture-assets';
 import type { BackendChatMessage, BackendChatSession, BackendClassInsight } from '../../../services/backend-api';
 import { AiAnswer, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NotebookPage, NoteEntry, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../../types';
 import { InkBrush, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
@@ -48,44 +55,6 @@ function formatClassInsightPriority(priority: string) {
   if (priority === 'very-high') return '매우 높음';
   if (priority === 'high') return '높음';
   return '중간';
-}
-
-function getCaptureImageSource(asset: CaptureAsset) {
-  const uri = asset.thumbnailUrl ?? asset.fileUrl ?? asset.previewImageKey;
-  if (uri && (uri.startsWith('http://') || uri.startsWith('https://') || uri.startsWith('file://') || uri.startsWith('data:image/'))) {
-    return { uri };
-  }
-  return asset.previewImage ?? null;
-}
-
-function getCaptureOriginalImageSource(asset: CaptureAsset) {
-  const uri = asset.fileUrl ?? asset.thumbnailUrl ?? asset.previewImageKey;
-  if (uri && (uri.startsWith('http://') || uri.startsWith('https://') || uri.startsWith('file://') || uri.startsWith('data:image/'))) {
-    return { uri };
-  }
-  return asset.previewImage ?? null;
-}
-
-function formatCaptureDate(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString('ko-KR', {
-    month: 'numeric',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
-function getCapturePlacementLabel(asset: CaptureAsset, references: PageCaptureReference[]) {
-  const matches = references.filter((reference) => reference.assetId === asset.id);
-  if (!matches.length) return '미연결';
-  const firstLabel = matches[0]?.pageLabel || '연결됨';
-  return matches.length > 1 ? `${firstLabel} 외 ${matches.length - 1}` : firstLabel;
-}
-
-function getCaptureReferences(asset: CaptureAsset, references: PageCaptureReference[]) {
-  return references.filter((reference) => reference.assetId === asset.id);
 }
 
 export function MobileNotesView(props: {
