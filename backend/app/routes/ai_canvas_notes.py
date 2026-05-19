@@ -11,6 +11,7 @@ from backend.app.schemas.ai_canvas_notes import (
     AiCanvasNoteAiEditRead,
     AiCanvasNoteCreate,
     AiCanvasNoteRead,
+    AiCanvasNoteSummaryRead,
     AiCanvasNoteUpdate,
 )
 from backend.app.services.openai_service import generate_ai_canvas_edit
@@ -89,7 +90,7 @@ def create_ai_canvas_note(
     )
 
 
-@router.get("/notes/{note_id}/ai-canvas-notes", response_model=list[AiCanvasNoteRead])
+@router.get("/notes/{note_id}/ai-canvas-notes", response_model=list[AiCanvasNoteSummaryRead])
 def list_ai_canvas_notes_for_note(
     note_id: int,
     connection: Connection = Depends(get_db_connection),
@@ -99,7 +100,7 @@ def list_ai_canvas_notes_for_note(
     return fetch_all(
         connection,
         """
-        SELECT id, folder_id, note_id, title, markdown, source_page_start, source_page_end, created_at, updated_at
+        SELECT id, folder_id, note_id, title, source_page_start, source_page_end, created_at, updated_at
         FROM ai_canvas_notes
         WHERE note_id = %s
         ORDER BY updated_at DESC, id DESC
@@ -108,7 +109,7 @@ def list_ai_canvas_notes_for_note(
     )
 
 
-@router.get("/folders/{folder_id}/ai-canvas-notes", response_model=list[AiCanvasNoteRead])
+@router.get("/folders/{folder_id}/ai-canvas-notes", response_model=list[AiCanvasNoteSummaryRead])
 def list_ai_canvas_notes_for_folder(
     folder_id: int,
     connection: Connection = Depends(get_db_connection),
@@ -121,7 +122,7 @@ def list_ai_canvas_notes_for_folder(
     return fetch_all(
         connection,
         """
-        SELECT id, folder_id, note_id, title, markdown, source_page_start, source_page_end, created_at, updated_at
+        SELECT id, folder_id, note_id, title, source_page_start, source_page_end, created_at, updated_at
         FROM ai_canvas_notes
         WHERE folder_id = %s
         ORDER BY updated_at DESC, id DESC

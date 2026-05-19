@@ -299,7 +299,10 @@ export function NotesAiAssistantPanel() {
   }, [sidebarOpen, sidebarProgress]);
 
   const closeSidebar = () => setSidebarOpen(false);
-  const openSidebar = () => setSidebarOpen(true);
+  const openSidebar = () => {
+    workspace.onLoadAllAiChatSessions();
+    setSidebarOpen(true);
+  };
 
   const sidebarAnimatedStyle = {
     opacity: sidebarProgress,

@@ -1,8 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
-import { FlatList, GestureResponderEvent, Image, Pressable, Text, useWindowDimensions, View } from 'react-native';
+import { FlatList, GestureResponderEvent, Image, NativeScrollEvent, NativeSyntheticEvent, Pressable, Text, useWindowDimensions, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import Pdf from 'react-native-pdf';
 import Svg from 'react-native-svg';
 import { captureRef } from 'react-native-view-shot';
 import { InkPath } from '../canvas/ink-path';
@@ -12,8 +11,11 @@ import { getCaptureOriginalImageSource, getPageCaptureReferenceImageSource } fro
 import { cleanAiDisplayText, finalizeInkStroke, findHitInkStrokeId, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize, shouldAppendInkPoint } from '../../../ui-helpers';
 import { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { CaptureAsset, NotebookPage, PageCaptureReference } from '../../../types';
+import { renderPdfPageToImage, type PdfRenderSource, type RenderedPdfPage } from '../../../services/pdf-page-renderer';
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
 type ResponderStartPoint = { x: number; y: number } | null;
+const PDF_RENDER_PAGE_RADIUS = 3;
+const PDF_RENDER_CACHE_RADIUS = 3;
 
 function shouldCaptureDrawingMove(event: GestureResponderEvent, startPoint: ResponderStartPoint) {
   if (isLikelyStylusEvent(event)) return true;
@@ -30,6 +32,23 @@ function isInkCaptureTool(tool: InkTool) {
 
 function getNotebookPageKey(page: NotebookPage) {
   return page.generatedPageId ? `generated:${page.generatedPageId}` : `pdf:${page.pageNumber ?? page.id}`;
+}
+
+function getPdfSourceKey(source: number | string | { uri: string }) {
+  if (typeof source === 'number') return `asset:${source}`;
+  if (typeof source === 'string') return source;
+  return source.uri;
+}
+
+function getPdfRenderSource(source: number | string | { uri: string }): PdfRenderSource | null {
+  if (typeof source === 'number') return null;
+  return source;
+}
+
+function isPdfPageNearCurrent(page: NotebookPage, currentPageNumber: number) {
+  return page.kind === 'pdf'
+    && typeof page.pageNumber === 'number'
+    && Math.abs(page.pageNumber - currentPageNumber) <= PDF_RENDER_PAGE_RADIUS;
 }
 
 function getCaptureAssetSummary(asset: CaptureAsset | null | undefined) {
@@ -71,10 +90,6 @@ function NotebookPaperBackground({ page }: { page: NotebookPage }) {
       </Text>
     </View>
   );
-}
-
-function isPdfUri(uri: string | undefined) {
-  return !!uri && /\.pdf(?:$|[?#])/i.test(uri);
 }
 
 function getResizeCorner(rect: SelectionRect | null, point: InkPoint): ResizeCorner | null {
@@ -155,7 +170,6 @@ export function PdfPreview(props: {
   onDocumentLoaded?: (pageCount: number) => void;
   notebookPages?: NotebookPage[];
   activeGeneratedPageId?: string | null;
-  pageImageUrls?: Record<number, string>;
   pageCaptureReferences?: PageCaptureReference[];
   incomingAssetSuggestion?: CaptureAsset | null;
   onAcceptIncomingAsset?: () => void;
@@ -184,8 +198,12 @@ export function PdfPreview(props: {
   const [draftSelection, setDraftSelection] = useState<SelectionRect | null>(null);
   const [capturingSelection, setCapturingSelection] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [renderedPdfPages, setRenderedPdfPages] = useState<Record<string, RenderedPdfPage>>({});
   const [openReferenceId, setOpenReferenceId] = useState<string | null>(null);
   const currentStrokeRef = useRef<InkStroke | null>(null);
+  const reportedDocumentPageCountRef = useRef(documentPageCount);
+  const pdfRenderGenerationRef = useRef(0);
+  const pdfRenderRequestsRef = useRef<Set<string>>(new Set());
   const suppressNextAutoScrollRef = useRef(false);
   const visiblePageKeysRef = useRef('');
   const selectionOriginRef = useRef<InkPoint | null>(null);
@@ -218,10 +236,6 @@ export function PdfPreview(props: {
         })),
     [documentPageCount, props.notebookPages],
   );
-  const pageImageUrls = useMemo(() => {
-    const entries = Object.entries(props.pageImageUrls ?? {}).filter(([, uri]) => !isPdfUri(uri));
-    return Object.fromEntries(entries) as Record<number, string>;
-  }, [props.pageImageUrls]);
   const strokeBuckets = useMemo(() => {
     const pdf = new Map<number, InkStroke[]>();
     const generated = new Map<string, InkStroke[]>();
@@ -283,20 +297,120 @@ export function PdfPreview(props: {
 
     return { pdf, generated };
   }, [props.pageCaptureReferences]);
-  const firstCachedPageImageUri = useMemo(() => {
-    const firstPdfPage = pageItems.find((item) => item.pageNumber);
-    return firstPdfPage?.pageNumber ? pageImageUrls[firstPdfPage.pageNumber] : undefined;
-  }, [pageImageUrls, pageItems]);
-  const pdfSource = useMemo(() => {
-    const source = typeof props.file === 'string' ? { uri: props.file } : props.file;
-    if (typeof source === 'object' && source && 'uri' in source && typeof source.uri === 'string' && source.uri.startsWith('/')) {
-      return { ...source, uri: `file://${source.uri}` };
-    }
-    return source;
-  }, [props.file]);
+  const pdfSourceKey = useMemo(() => getPdfSourceKey(props.file), [props.file]);
+  const getPdfRenderCacheKey = useCallback((pageNumber: number) => (
+    `${pdfSourceKey}:${pageNumber}:${Math.round(viewerWidth)}`
+  ), [pdfSourceKey, viewerWidth]);
   const inkInputLocksScroll = Boolean(props.fingerDrawingEnabled && isInkCaptureTool(props.inkTool));
   const scrollEnabled = !inkInputLocksScroll;
   const [visiblePageKeys, setVisiblePageKeys] = useState<Set<string>>(() => new Set([getNotebookPageKey(pageItems[0])]));
+  const visiblePdfPageNumbers = useMemo(() => {
+    const pageNumbers: number[] = [];
+    pageItems.forEach((page) => {
+      if (page.kind !== 'pdf' || !page.pageNumber) return;
+      if (!visiblePageKeys.has(getNotebookPageKey(page))) return;
+      if (!pageNumbers.includes(page.pageNumber)) pageNumbers.push(page.pageNumber);
+    });
+    return pageNumbers;
+  }, [pageItems, visiblePageKeys]);
+  const flatListExtraData = useMemo(() => ({
+    activeGeneratedPageId: props.activeGeneratedPageId,
+    page: props.page,
+    pdfSourceKey,
+    viewerHeight,
+    viewerWidth,
+    visiblePageKeys,
+  }), [props.activeGeneratedPageId, props.page, pdfSourceKey, viewerHeight, viewerWidth, visiblePageKeys]);
+
+  useEffect(() => {
+    setLoadError(null);
+    setPdfPageSize(null);
+    setDocumentPageCount(Math.max(1, props.page));
+    reportedDocumentPageCountRef.current = 0;
+    pdfRenderGenerationRef.current += 1;
+    pdfRenderRequestsRef.current.clear();
+    setRenderedPdfPages({});
+    setVisiblePageKeys(new Set([getNotebookPageKey(pageItems[0])]));
+    visiblePageKeysRef.current = '';
+    suppressNextAutoScrollRef.current = false;
+  }, [pdfSourceKey]);
+
+  const pdfPagesToRender = useMemo(() => {
+    const pageNumbers: number[] = [];
+    pageItems.forEach((page) => {
+      if (page.kind !== 'pdf' || !page.pageNumber) return;
+      const pageKey = getNotebookPageKey(page);
+      const nearVisiblePage = visiblePdfPageNumbers.some((visiblePageNumber) => (
+        Math.abs(page.pageNumber! - visiblePageNumber) <= PDF_RENDER_PAGE_RADIUS
+      ));
+      if (!visiblePageKeys.has(pageKey) && !nearVisiblePage && !isPdfPageNearCurrent(page, props.page)) return;
+      if (!pageNumbers.includes(page.pageNumber)) pageNumbers.push(page.pageNumber);
+    });
+    return pageNumbers;
+  }, [pageItems, props.page, visiblePageKeys, visiblePdfPageNumbers]);
+
+  useEffect(() => {
+    if (!pdfPagesToRender.length || viewerWidth <= 0) return;
+    const generation = pdfRenderGenerationRef.current;
+    const renderSource = getPdfRenderSource(props.file);
+    if (!renderSource) {
+      setLoadError('PDF source URI is unavailable.');
+      return;
+    }
+
+    pdfPagesToRender.forEach((pageNumber) => {
+      const cacheKey = getPdfRenderCacheKey(pageNumber);
+      if (renderedPdfPages[cacheKey] || pdfRenderRequestsRef.current.has(cacheKey)) return;
+
+      pdfRenderRequestsRef.current.add(cacheKey);
+      void renderPdfPageToImage({ file: renderSource, pageNumber, targetWidth: viewerWidth })
+        .then((renderedPage) => {
+          if (pdfRenderGenerationRef.current !== generation) return;
+          setLoadError(null);
+          setPdfPageSize((current) => (
+            current?.width === renderedPage.width && current?.height === renderedPage.height
+              ? current
+              : { width: renderedPage.width, height: renderedPage.height }
+          ));
+          setDocumentPageCount((current) => (current === renderedPage.pageCount ? current : renderedPage.pageCount));
+          if (reportedDocumentPageCountRef.current !== renderedPage.pageCount) {
+            reportedDocumentPageCountRef.current = renderedPage.pageCount;
+            props.onDocumentLoaded?.(renderedPage.pageCount);
+          }
+          setRenderedPdfPages((current) => (
+            current[cacheKey] ? current : { ...current, [cacheKey]: renderedPage }
+          ));
+        })
+        .catch((error) => {
+          if (pdfRenderGenerationRef.current !== generation) return;
+          setLoadError(error instanceof Error ? error.message : 'PDF 페이지를 렌더링하지 못했습니다.');
+        })
+        .finally(() => {
+          pdfRenderRequestsRef.current.delete(cacheKey);
+        });
+    });
+  }, [getPdfRenderCacheKey, pdfPagesToRender, props.file, props.onDocumentLoaded, renderedPdfPages, viewerWidth]);
+
+  useEffect(() => {
+    const keysToKeep = new Set<string>();
+    pageItems.forEach((page) => {
+      if (page.kind !== 'pdf' || !page.pageNumber) return;
+      const pageKey = getNotebookPageKey(page);
+      const nearVisiblePage = visiblePdfPageNumbers.some((visiblePageNumber) => (
+        Math.abs(page.pageNumber! - visiblePageNumber) <= PDF_RENDER_CACHE_RADIUS
+      ));
+      if (visiblePageKeys.has(pageKey) || nearVisiblePage || Math.abs(page.pageNumber - props.page) <= PDF_RENDER_CACHE_RADIUS) {
+        keysToKeep.add(getPdfRenderCacheKey(page.pageNumber));
+      }
+    });
+    setRenderedPdfPages((current) => {
+      const next: Record<string, RenderedPdfPage> = {};
+      Object.entries(current).forEach(([key, value]) => {
+        if (keysToKeep.has(key)) next[key] = value;
+      });
+      return Object.keys(next).length === Object.keys(current).length ? current : next;
+    });
+  }, [getPdfRenderCacheKey, pageItems, props.page, visiblePageKeys, visiblePdfPageNumbers]);
 
   useEffect(() => {
     scrollStateRef.current = {
@@ -309,15 +423,16 @@ export function PdfPreview(props: {
   }, [props.activeGeneratedPageId, props.onOpenGeneratedPage, props.onPageChanged, props.page, scrollEnabled]);
 
   useEffect(() => {
-    if (!firstCachedPageImageUri) return;
-    Image.getSize(
-      firstCachedPageImageUri,
-      (imageWidth, imageHeight) => {
-        if (imageWidth > 0 && imageHeight > 0) setPdfPageSize({ width: imageWidth, height: imageHeight });
-      },
-      () => undefined,
-    );
-  }, [firstCachedPageImageUri]);
+    const currentPage = pageItems.find(isCurrentNotebookPage);
+    if (!currentPage) return;
+    const currentKey = getNotebookPageKey(currentPage);
+    setVisiblePageKeys((current) => {
+      if (current.has(currentKey)) return current;
+      const next = new Set(current);
+      next.add(currentKey);
+      return next;
+    });
+  }, [props.activeGeneratedPageId, props.page, pageItems]);
 
   const clampPointToPage = (page: NotebookPage, x: number, y: number, mode: 'draw' | 'annotate' = 'draw'): InkPoint => ({
     x: Math.max(0, Math.min(viewerWidth - (mode === 'annotate' ? 180 : 0), x)),
@@ -384,18 +499,29 @@ export function PdfPreview(props: {
     if (page.pageNumber) props.onPageChanged?.(page.pageNumber);
   };
 
-  const viewabilityConfig = useMemo(() => ({ itemVisiblePercentThreshold: 55, minimumViewTime: 80 }), []);
-  const handleViewableItemsChanged = useRef(({ viewableItems }: { viewableItems: Array<{ item: NotebookPage; isViewable?: boolean }> }) => {
-    const state = scrollStateRef.current;
-    const visibleItems = viewableItems.filter((entry) => entry.isViewable);
-    const keys = (visibleItems.length ? visibleItems : viewableItems).map((entry) => getNotebookPageKey(entry.item));
+  const updateVisiblePagesFromScroll = useCallback((offsetY: number, viewportHeight: number) => {
+    if (!pageItems.length || viewportHeight <= 0) return;
+
+    const itemLength = viewerHeight + pageGap;
+    const visibleTop = Math.max(0, offsetY);
+    const visibleBottom = Math.max(visibleTop, offsetY + viewportHeight);
+    const firstIndex = Math.max(0, Math.floor(visibleTop / itemLength));
+    const lastIndex = Math.min(pageItems.length - 1, Math.floor(Math.max(visibleTop, visibleBottom - 1) / itemLength));
+    const visibleItems = pageItems.slice(firstIndex, lastIndex + 1);
+    const keys = visibleItems.map((page) => getNotebookPageKey(page));
     const joinedKeys = keys.join('|');
-    if (joinedKeys !== visiblePageKeysRef.current) {
+
+    if (joinedKeys && joinedKeys !== visiblePageKeysRef.current) {
       visiblePageKeysRef.current = joinedKeys;
       setVisiblePageKeys(new Set(keys));
     }
+
+    const state = scrollStateRef.current;
     if (!state.scrollEnabled) return;
-    const nextPage = visibleItems[0]?.item ?? viewableItems[0]?.item;
+
+    const viewportCenter = visibleTop + viewportHeight / 2;
+    const centerIndex = Math.max(0, Math.min(pageItems.length - 1, Math.floor(viewportCenter / itemLength)));
+    const nextPage = pageItems[centerIndex] ?? visibleItems[0];
     if (nextPage?.generatedPageId && nextPage.generatedPageId !== state.activeGeneratedPageId) {
       suppressNextAutoScrollRef.current = true;
       state.onOpenGeneratedPage?.(nextPage.generatedPageId);
@@ -404,7 +530,11 @@ export function PdfPreview(props: {
       suppressNextAutoScrollRef.current = true;
       state.onPageChanged?.(nextPage.pageNumber);
     }
-  }).current;
+  }, [pageGap, pageItems, viewerHeight]);
+
+  const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    updateVisiblePagesFromScroll(event.nativeEvent.contentOffset.y, event.nativeEvent.layoutMeasurement.height);
+  }, [updateVisiblePagesFromScroll]);
 
   const isCurrentNotebookPage = (page: NotebookPage) => (
     page.generatedPageId ? page.generatedPageId === props.activeGeneratedPageId : page.pageNumber === props.page
@@ -417,6 +547,17 @@ export function PdfPreview(props: {
         ? referenceBuckets.pdf.get(page.pageNumber) ?? []
         : []
   );
+
+  const shouldRenderPdfContent = useCallback((page: NotebookPage, visiblePage: boolean) => (
+    page.kind === 'pdf' && Boolean(page.pageNumber) && (visiblePage || isPdfPageNearCurrent(page, props.page))
+  ), [props.page]);
+
+  const shouldRenderPageLayers = useCallback((page: NotebookPage, currentPage: boolean, visiblePage: boolean) => (
+    currentPage
+    || visiblePage
+    || isPdfPageNearCurrent(page, props.page)
+    || page.generatedPageId === props.activeGeneratedPageId
+  ), [props.activeGeneratedPageId, props.page]);
 
   useEffect(() => {
     if (!openReferenceId) return;
@@ -479,14 +620,11 @@ export function PdfPreview(props: {
     const currentPage = isCurrentNotebookPage(page);
     const pageKey = getNotebookPageKey(page);
     const visiblePage = visiblePageKeys.has(pageKey);
-    const nearCurrentPage = page.kind === 'pdf' && page.pageNumber
-      ? Math.abs(page.pageNumber - props.page) <= 1
-      : page.generatedPageId === props.activeGeneratedPageId;
-    const shouldRenderInteractiveLayers = currentPage || visiblePage || nearCurrentPage;
+    const shouldRenderInteractiveLayers = shouldRenderPageLayers(page, currentPage, visiblePage);
     const pageStrokesForView = shouldRenderInteractiveLayers ? getPageStrokesForView(page) : [];
     const pageTextAnnotationsForView = shouldRenderInteractiveLayers ? getPageTextAnnotationsForView(page) : [];
-    const shouldRenderPdfPage = page.kind === 'pdf' && page.pageNumber ? nearCurrentPage || visiblePage : false;
-    const pageImageUri = page.pageNumber ? pageImageUrls[page.pageNumber] : undefined;
+    const shouldRenderPdfPage = shouldRenderPdfContent(page, visiblePage);
+    const renderedPdfPage = page.pageNumber ? renderedPdfPages[getPdfRenderCacheKey(page.pageNumber)] : null;
     const pageReferences = shouldRenderInteractiveLayers ? getPageCaptureReferences(page) : [];
     const activePageReference = pageReferences.find((reference) => reference.id === openReferenceId) ?? null;
     const activeReferenceIndex = activePageReference ? pageReferences.findIndex((reference) => reference.id === activePageReference.id) : -1;
@@ -506,36 +644,20 @@ export function PdfPreview(props: {
         collapsable={false}
         style={[props.styles.pdfStage, { width: viewerWidth, height: viewerHeight, marginBottom: pageGap, backgroundColor: '#FFFFFF' }]}
       >
-        {pageImageUri ? (
-          <Image source={{ uri: pageImageUri }} style={props.styles.pdfViewer} resizeMode="contain" fadeDuration={0} resizeMethod="resize" />
-        ) : shouldRenderPdfPage && page.pageNumber ? (
+        {shouldRenderPdfPage && page.pageNumber ? (
           <View pointerEvents="none" style={props.styles.pdfViewer}>
-            <Pdf
-              source={pdfSource}
-              page={page.pageNumber}
-              style={{ flex: 1, width: '100%', height: '100%' }}
-              trustAllCerts={false}
-              scale={1}
-              minScale={1}
-              maxScale={1}
-              enableDoubleTapZoom={false}
-              scrollEnabled={false}
-              enablePaging={false}
-              singlePage
-              fitPolicy={0}
-              horizontal={false}
-              spacing={0}
-              showsVerticalScrollIndicator={false}
-              onLoadComplete={(pageCount, _path, size) => {
-                setLoadError(null);
-                if (size?.width && size?.height) setPdfPageSize(size);
-                setDocumentPageCount(pageCount);
-                props.onDocumentLoaded?.(pageCount);
-              }}
-              onError={(error) => {
-                setLoadError(error instanceof Error ? error.message : 'PDF를 불러오지 못했습니다.');
-              }}
-            />
+            {renderedPdfPage ? (
+              <Image
+                source={{ uri: renderedPdfPage.uri }}
+                style={{ flex: 1, width: '100%', height: '100%' }}
+                resizeMode="contain"
+                fadeDuration={0}
+              />
+            ) : (
+              <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#FFFFFF' }}>
+                <Text style={{ color: '#A3ACBA', fontWeight: '800' }}>{page.label}</Text>
+              </View>
+            )}
           </View>
         ) : page.kind === 'pdf' ? (
           <View style={[props.styles.pdfViewer, { alignItems: 'center', justifyContent: 'center' }]}>
@@ -875,15 +997,18 @@ export function PdfPreview(props: {
         data={pageItems}
         keyExtractor={(item) => item.id}
         renderItem={({ item }) => renderPage(item)}
+        extraData={flatListExtraData}
         style={{ width: '100%' }}
         contentContainerStyle={{ alignItems: 'center', paddingTop: 4, paddingBottom: 24 }}
         scrollEnabled={scrollEnabled}
-        viewabilityConfig={viewabilityConfig}
-        onViewableItemsChanged={handleViewableItemsChanged}
+        onScroll={handleScroll}
+        onScrollEndDrag={handleScroll}
+        onMomentumScrollEnd={handleScroll}
+        scrollEventThrottle={32}
         showsVerticalScrollIndicator
-        initialNumToRender={3}
-        maxToRenderPerBatch={2}
-        updateCellsBatchingPeriod={32}
+        initialNumToRender={2}
+        maxToRenderPerBatch={1}
+        updateCellsBatchingPeriod={48}
         windowSize={3}
         removeClippedSubviews
         onScrollToIndexFailed={(info) => {

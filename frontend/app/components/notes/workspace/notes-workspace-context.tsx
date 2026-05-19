@@ -87,6 +87,7 @@ export type DesktopNotesWorkspaceContextValue = {
   onChangeAiPanelMode: (mode: 'floating' | 'sidebar') => void;
   onChangeAiQuestion: (value: string) => void;
   onChangeAiChatScope: (scope: 'note' | 'all') => void;
+  onLoadAllAiChatSessions: () => void;
   onChangeAiChatSearchQuery: (value: string) => void;
   onSelectAiChatSession: (sessionId: number) => void;
   onRenameAiChatSession: (sessionId: number, title: string) => Promise<boolean>;

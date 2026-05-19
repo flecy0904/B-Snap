@@ -261,7 +261,7 @@ export function NotesBrowser(props: NotesBrowserProps) {
                 const subjectColor = subject?.color ?? '#D6DCE8';
                 const isPdf = item.type === 'pdf';
                 const isImage = item.type === 'image';
-                const documentPreviewUri = item.thumbnailUrl ?? item.pageImageUrls?.[1] ?? (!isPdf && typeof item.file === 'object' && item.file && 'uri' in item.file ? item.file.uri : null);
+                const documentPreviewUri = item.thumbnailUrl ?? (!isPdf && typeof item.file === 'object' && item.file && 'uri' in item.file ? item.file.uri : null);
                 return (
                   <Pressable key={item.id} style={props.styles.documentListCard} onPress={() => props.onOpenStudyDocument(item.id)}>
                     <View style={[props.styles.documentListRail, { backgroundColor: subjectColor }]} />

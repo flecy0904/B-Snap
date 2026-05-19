@@ -11,6 +11,7 @@ import {
 import type { InkStroke, InkTextAnnotation, InkTool } from '../../../ui-types';
 import type { AiAnswer, BookmarkedPage, DocumentPageView, GeneratedWorkspacePage, StudyDocumentEntry } from '../../../types';
 import { getDocumentPageLabel, isSameDocumentPage } from '../../../ui-helpers';
+import { getStudyDocumentBackendNoteId } from './backend-sync';
 import { upsertStudyDocument } from './collection-helpers';
 import { serializeNotePageContent } from './note-page-content';
 
@@ -71,14 +72,10 @@ export function useDocumentPageActions(params: {
     });
   };
 
-  const isPdfAssetUrl = (url: string | null | undefined) => !!url && /\.pdf(?:$|[?#])/i.test(url);
+  const getBackendNoteId = () => getStudyDocumentBackendNoteId(params.studyDocument);
 
   const applyBackendPageList = (pages: BackendNotePage[], activePageNumber: number, feedback: string) => {
     if (!params.studyDocumentId || !params.studyDocument) return;
-    const pageImageUrls = pages.reduce<Record<number, string>>((next, page) => {
-      if (page.image_url && !isPdfAssetUrl(page.image_url)) next[page.page_number] = page.image_url;
-      return next;
-    }, {});
     const backendPageIds = pages.reduce<Record<number, number>>((next, page) => {
       next[page.page_number] = page.id;
       return next;
@@ -93,7 +90,6 @@ export function useDocumentPageActions(params: {
     params.setUserStudyDocuments((current) => upsertStudyDocument(current, {
       ...params.studyDocument!,
       pageCount: nextPageCount,
-      pageImageUrls: Object.keys(pageImageUrls).length ? pageImageUrls : undefined,
       updatedAt: '방금 전',
     }));
     params.setCurrentPdfPageByDocument((current) => ({
@@ -295,8 +291,10 @@ export function useDocumentPageActions(params: {
         [params.studyDocumentId!]: { kind: 'pdf', pageNumber: nextPage },
       }));
       if (isBackendApiEnabled() && params.currentDocumentHasBackendPages) {
+        const backendNoteId = getBackendNoteId();
+        if (!backendNoteId) return;
         void createBackendNotePage({
-          noteId: params.studyDocumentId,
+          noteId: backendNoteId,
           pageNumber: nextPage,
           content: serializeNotePageContent({ inkStrokes: [], textAnnotations: [] }),
         })
@@ -479,8 +477,10 @@ export function useDocumentPageActions(params: {
       params.setWorkspaceFeedback('백엔드에 저장된 PDF만 페이지 복제를 지원합니다.');
       return;
     }
+    const backendNoteId = getBackendNoteId();
+    if (!backendNoteId) return;
 
-    void duplicateBackendNotePage({ noteId: params.studyDocumentId, pageNumber })
+    void duplicateBackendNotePage({ noteId: backendNoteId, pageNumber })
       .then((pages) => {
         params.pushWorkspaceHistorySnapshot();
         duplicatePdfPageLocally(pageNumber);
@@ -501,9 +501,11 @@ export function useDocumentPageActions(params: {
       params.setWorkspaceFeedback('백엔드에 저장된 PDF만 페이지 삭제를 지원합니다.');
       return;
     }
+    const backendNoteId = getBackendNoteId();
+    if (!backendNoteId) return;
 
     const nextActivePage = Math.max(1, Math.min(params.studyDocument.pageCount - 1, pageNumber));
-    void deleteBackendNotePageByNumber({ noteId: params.studyDocumentId, pageNumber })
+    void deleteBackendNotePageByNumber({ noteId: backendNoteId, pageNumber })
       .then((pages) => {
         params.pushWorkspaceHistorySnapshot();
         deletePdfPageLocally(pageNumber);
@@ -522,8 +524,10 @@ export function useDocumentPageActions(params: {
       params.setWorkspaceFeedback('백엔드에 저장된 PDF만 페이지 이동을 지원합니다.');
       return;
     }
+    const backendNoteId = getBackendNoteId();
+    if (!backendNoteId) return;
 
-    void moveBackendNotePage({ noteId: params.studyDocumentId, pageNumber, delta })
+    void moveBackendNotePage({ noteId: backendNoteId, pageNumber, delta })
       .then((pages) => {
         params.pushWorkspaceHistorySnapshot();
         swapPdfPagesLocally(pageNumber, delta);
@@ -536,17 +540,21 @@ export function useDocumentPageActions(params: {
 
   const updateStudyDocumentPageCount = (pageCount: number) => {
     if (!params.studyDocumentId || !params.studyDocument || !Number.isFinite(pageCount) || pageCount < 1) return;
+    if (pageCount < params.studyDocument.pageCount) return;
+    if (pageCount === params.studyDocument.pageCount) return;
     params.setUserStudyDocuments((current) => upsertStudyDocument(current, {
       ...params.studyDocument!,
       pageCount,
     }));
     if (isBackendApiEnabled() && params.currentDocumentHasBackendPages) {
+      const backendNoteId = getBackendNoteId();
+      if (!backendNoteId) return;
       const existingPages = params.backendPageIdsByDocument[params.studyDocumentId] ?? {};
       for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
         if (existingPages[pageNumber]) continue;
 
         void createBackendNotePage({
-          noteId: params.studyDocumentId,
+          noteId: backendNoteId,
           pageNumber,
           content: serializeNotePageContent({ inkStrokes: [], textAnnotations: [] }),
         })

@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from psycopg import Connection
 
 from backend.app.core.auth import get_current_user
+from backend.app.core.config import Settings, get_settings
 from backend.app.db.crud import execute_commit, execute_returning, fetch_all, fetch_one, require_row
 from backend.app.db.session import get_db_connection
 from backend.app.schemas.notes import (
@@ -15,7 +16,7 @@ from backend.app.schemas.notes import (
     PdfTextExtractionRead,
 )
 from backend.app.services.note_page_content import merge_page_state_content
-from backend.app.services.pdf_text_extractor import extract_pdf_text_pages
+from backend.app.services.pdf_text_extractor import extract_pdf_text_pages, extract_pdf_text_pages_from_path
 
 
 router = APIRouter(tags=["notes"])
@@ -26,7 +27,7 @@ def get_note_for_user(note_id: int, user_id: int, connection: Connection):
         fetch_one(
             connection,
             """
-            SELECT id, folder_id, title, summary, created_at, updated_at
+            SELECT id, folder_id, title, summary, file_url, thumbnail_url, page_count, created_at, updated_at
             FROM notes
             WHERE id = %s AND user_id = %s
             """,
@@ -64,7 +65,7 @@ def create_note(
         """
         INSERT INTO notes (user_id, folder_id, title, summary)
         VALUES (%s, %s, %s, %s)
-        RETURNING id, folder_id, title, summary, created_at, updated_at
+        RETURNING id, folder_id, title, summary, file_url, thumbnail_url, page_count, created_at, updated_at
         """,
         (current_user["id"], payload.folder_id, payload.title, payload.summary),
     )
@@ -80,7 +81,7 @@ def list_notes(
         return fetch_all(
             connection,
             """
-            SELECT id, folder_id, title, summary, created_at, updated_at
+            SELECT id, folder_id, title, summary, file_url, thumbnail_url, page_count, created_at, updated_at
             FROM notes
             WHERE user_id = %s
             ORDER BY updated_at DESC, id DESC
@@ -91,7 +92,7 @@ def list_notes(
     return fetch_all(
         connection,
         """
-        SELECT id, folder_id, title, summary, created_at, updated_at
+        SELECT id, folder_id, title, summary, file_url, thumbnail_url, page_count, created_at, updated_at
         FROM notes
         WHERE folder_id = %s AND user_id = %s
         ORDER BY updated_at DESC, id DESC
@@ -128,7 +129,7 @@ def update_note(
         UPDATE notes
         SET folder_id = %s, title = %s, summary = %s, updated_at = now()
         WHERE id = %s AND user_id = %s
-        RETURNING id, folder_id, title, summary, created_at, updated_at
+        RETURNING id, folder_id, title, summary, file_url, thumbnail_url, page_count, created_at, updated_at
         """,
         (
             next_folder_id,
@@ -309,9 +310,23 @@ def extract_note_pdf_text(
     note_id: int,
     payload: PdfTextExtractionCreate,
     connection: Connection = Depends(get_db_connection),
+    current_user: dict = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
 ):
-    get_note(note_id, connection)
-    page_texts = extract_pdf_text_pages(payload.pdf_data)
+    note = get_note_for_user(note_id, current_user["id"], connection)
+    if payload.pdf_data:
+        page_texts = extract_pdf_text_pages(payload.pdf_data)
+    else:
+        file_url = note.get("file_url")
+        if not file_url or not file_url.startswith("/uploads/"):
+            raise HTTPException(status_code=400, detail="stored pdf file is required")
+
+        upload_root = settings.upload_path.resolve()
+        pdf_path = (upload_root / file_url.removeprefix("/uploads/")).resolve()
+        if upload_root not in pdf_path.parents or pdf_path.suffix.lower() != ".pdf" or not pdf_path.exists():
+            raise HTTPException(status_code=400, detail="stored pdf file is unavailable")
+
+        page_texts = extract_pdf_text_pages_from_path(pdf_path)
     existing_pages = fetch_all(
         connection,
         """
@@ -355,7 +370,12 @@ def extract_note_pdf_text(
                 ),
             )
 
-    pages = list_note_pages(note_id, connection)
+    execute_commit(
+        connection,
+        "UPDATE notes SET page_count = GREATEST(COALESCE(page_count, 0), %s), updated_at = now() WHERE id = %s",
+        (len(page_texts), note_id),
+    )
+    pages = _list_pages_for_note(connection, note_id)
     return {
         "note_id": note_id,
         "pages_extracted": len(page_texts),

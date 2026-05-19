@@ -59,7 +59,6 @@ export const NotesDocumentViewer = React.memo(function NotesDocumentViewer() {
         textAnnotations={documentTextAnnotations}
         notebookPages={documentContext.notebookPages}
         activeGeneratedPageId={documentContext.currentDocumentPage?.kind === 'generated' ? documentContext.currentDocumentPage.pageId : null}
-        pageImageUrls={documentContext.studyDocument.pageImageUrls}
         pageCaptureReferences={globalContext.pageCaptureReferences}
         incomingAssetSuggestion={globalContext.incomingAssetSuggestion}
         onAcceptIncomingAsset={globalContext.onAcceptIncomingAsset}

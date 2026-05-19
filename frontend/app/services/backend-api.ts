@@ -63,6 +63,9 @@ export type BackendNote = {
   folder_id: number;
   title: string;
   summary: string | null;
+  file_url?: string | null;
+  thumbnail_url?: string | null;
+  page_count?: number | null;
 };
 
 export type BackendChatSession = {
@@ -90,16 +93,19 @@ export type BackendNotePage = {
   image_url: string | null;
 };
 
-export type BackendAiCanvasNote = {
+export type BackendAiCanvasNoteSummary = {
   id: number;
   folder_id: number;
   note_id: number;
   title: string;
-  markdown: string;
   source_page_start: number | null;
   source_page_end: number | null;
   created_at: string;
   updated_at: string;
+};
+
+export type BackendAiCanvasNote = BackendAiCanvasNoteSummary & {
+  markdown: string;
 };
 
 export type BackendClassInsightPageSignal = {
@@ -155,7 +161,6 @@ export type BackendUpload = {
   size_bytes: number;
   page_count: number;
   page_numbers: number[];
-  page_image_urls?: string[];
   thumbnail_url?: string | null;
   url: string;
   processed_url?: string | null;
@@ -209,6 +214,14 @@ export function resolveBackendAssetUrl(url: string | null | undefined) {
   const baseUrl = getBackendUrl();
   if (!baseUrl) return url;
   return `${baseUrl.replace(/\/$/, '')}/${url.replace(/^\//, '')}`;
+}
+
+function normalizeBackendNote(note: BackendNote): BackendNote {
+  return {
+    ...note,
+    file_url: resolveBackendAssetUrl(note.file_url) ?? note.file_url,
+    thumbnail_url: resolveBackendAssetUrl(note.thumbnail_url) ?? note.thumbnail_url,
+  };
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -325,7 +338,6 @@ export async function uploadBackendFile(file: {
     url: resolveBackendAssetUrl(upload.url) ?? upload.url,
     processed_url: resolveBackendAssetUrl(upload.processed_url) ?? upload.processed_url,
     thumbnail_url: resolveBackendAssetUrl(upload.thumbnail_url) ?? upload.thumbnail_url,
-    page_image_urls: upload.page_image_urls?.map((url) => resolveBackendAssetUrl(url) ?? url) ?? [],
   };
 }
 
@@ -382,8 +394,8 @@ export async function uploadBackendPdfNote(payload: {
       url: resolveBackendAssetUrl(result.upload.url) ?? result.upload.url,
       processed_url: resolveBackendAssetUrl(result.upload.processed_url) ?? result.upload.processed_url,
       thumbnail_url: resolveBackendAssetUrl(result.upload.thumbnail_url) ?? result.upload.thumbnail_url,
-      page_image_urls: result.upload.page_image_urls?.map((url) => resolveBackendAssetUrl(url) ?? url) ?? [],
     },
+    note: normalizeBackendNote(result.note),
     pages: result.pages.map((page) => ({
       ...page,
       image_url: resolveBackendAssetUrl(page.image_url) ?? page.image_url,
@@ -439,7 +451,7 @@ export function listBackendFolders() {
 }
 
 export function listBackendNotes() {
-  return request<BackendNote[]>('/notes');
+  return request<BackendNote[]>('/notes').then((notes) => notes.map(normalizeBackendNote));
 }
 
 export function listBackendNotePages(noteId: number) {
@@ -467,7 +479,7 @@ export async function createBackendNote(payload: {
       title: payload.title,
       summary: payload.summary ?? null,
     },
-  });
+  }).then(normalizeBackendNote);
 }
 
 export async function updateBackendNote(payload: {
@@ -481,7 +493,7 @@ export async function updateBackendNote(payload: {
       title: payload.title,
       summary: payload.summary,
     },
-  });
+  }).then(normalizeBackendNote);
 }
 
 export async function deleteBackendNote(noteId: number) {
@@ -567,22 +579,24 @@ export async function moveBackendNotePage(payload: {
 
 export async function extractBackendPdfText(payload: {
   noteId: number;
-  pdfData: string;
+  pdfData?: string;
 }) {
   return request<BackendPdfTextExtractionResponse>(`/notes/${payload.noteId}/extract-pdf-text`, {
     method: 'POST',
-    body: {
-      pdf_data: payload.pdfData,
-    },
+    body: payload.pdfData ? { pdf_data: payload.pdfData } : {},
   });
 }
 
 export function listBackendAiCanvasNotes(noteId: number) {
-  return request<BackendAiCanvasNote[]>(`/notes/${noteId}/ai-canvas-notes`);
+  return request<BackendAiCanvasNoteSummary[]>(`/notes/${noteId}/ai-canvas-notes`);
 }
 
 export function listBackendAiCanvasNotesByFolder(folderId: number) {
-  return request<BackendAiCanvasNote[]>(`/folders/${folderId}/ai-canvas-notes`);
+  return request<BackendAiCanvasNoteSummary[]>(`/folders/${folderId}/ai-canvas-notes`);
+}
+
+export function getBackendAiCanvasNote(canvasNoteId: number) {
+  return request<BackendAiCanvasNote>(`/ai-canvas-notes/${canvasNoteId}`);
 }
 
 export async function createBackendAiCanvasNote(payload: {

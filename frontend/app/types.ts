@@ -36,6 +36,7 @@ export interface AiAnswer {
 
 export type NoteWorkspaceMode = 'photo' | 'note';
 export type StudyDocumentType = 'pdf' | 'blank' | 'image';
+export type StudyDocumentBackendSyncStatus = 'local' | 'syncing' | 'synced' | 'failed';
 export type CaptureAssetType = 'image' | 'pdf';
 export type CaptureAssetStatus = 'uploaded' | 'suggested' | 'accepted' | 'archived' | 'dismissed';
 export type CaptureSource = 'camera' | 'library' | 'document';
@@ -72,6 +73,7 @@ export interface BookmarkedPage {
 
 export interface StudyDocumentEntry {
   id: number;
+  backendNoteId?: number;
   subjectId: number;
   title: string;
   type: StudyDocumentType;
@@ -79,8 +81,11 @@ export interface StudyDocumentEntry {
   pageCount: number;
   preview: string;
   file?: number | string | { uri: string };
-  pageImageUrls?: Record<number, string>;
+  localFileUri?: string;
+  remoteFileUrl?: string;
   thumbnailUrl?: string;
+  backendSyncStatus?: StudyDocumentBackendSyncStatus;
+  backendSyncError?: string;
 }
 
 export interface CaptureAsset {
