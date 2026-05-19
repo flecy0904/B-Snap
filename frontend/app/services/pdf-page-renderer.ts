@@ -55,8 +55,8 @@ export async function renderPdfPageToImage(params: {
   pageNumber: number;
   targetWidth: number;
 }) {
-  if (Platform.OS !== 'android') {
-    throw new Error('Native PDF page rendering is only enabled on Android.');
+  if (Platform.OS !== 'android' && Platform.OS !== 'ios') {
+    throw new Error('Native PDF page rendering is only enabled on iOS and Android.');
   }
   if (!nativeRenderer) {
     throw new Error('BsnPdfPageRenderer native module is unavailable.');
