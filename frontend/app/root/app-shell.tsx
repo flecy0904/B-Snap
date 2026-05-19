@@ -267,6 +267,7 @@ export function AppShell(props: {
                   onChangeAiPanelMode={notesState.setAiPanelMode}
                   onChangeAiQuestion={notesState.setAiQuestion}
                   onChangeAiChatScope={notesState.setAiChatScope}
+                  onLoadAllAiChatSessions={notesState.onLoadAllAiChatSessions}
                   onChangeAiChatSearchQuery={notesState.setAiChatSearchQuery}
                   onSelectAiChatSession={notesState.selectAiChatSession}
                   onRenameAiChatSession={notesState.renameAiChatSession}

@@ -20,6 +20,9 @@ class NoteRead(BaseModel):
     folder_id: int
     title: str
     summary: str | None = None
+    file_url: str | None = None
+    thumbnail_url: str | None = None
+    page_count: int | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -39,7 +42,7 @@ class NotePageUpdate(BaseModel):
 
 
 class PdfTextExtractionCreate(BaseModel):
-    pdf_data: str
+    pdf_data: str | None = None
 
 
 class NotePageRead(BaseModel):

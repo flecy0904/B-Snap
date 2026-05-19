@@ -1,5 +1,5 @@
-import React from 'react';
-import { Image, Pressable, ScrollView, Text, View } from 'react-native';
+﻿import React from 'react';
+import { Pressable, ScrollView, Text, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import type { NotebookPage } from '../../../types';
 import { useDocumentContext } from './document-context';
@@ -70,7 +70,6 @@ export function NotebookThumbnailSidebar() {
       >
         {pages.map((page, index) => {
           const active = isActivePage(page);
-          const imageUrl = page.kind === 'pdf' && page.pageNumber ? documentContext.studyDocument?.pageImageUrls?.[page.pageNumber] : null;
           return (
             <Pressable
               key={page.id}
@@ -78,18 +77,12 @@ export function NotebookThumbnailSidebar() {
               onPress={() => openPage(page)}
             >
               <View style={workspaceContext.styles.thumbnailPreview}>
-                {imageUrl ? (
-                  <Image source={{ uri: imageUrl }} style={workspaceContext.styles.thumbnailPreviewImage} resizeMode="cover" />
-                ) : (
-                  <View style={[workspaceContext.styles.thumbnailPreviewFallback, page.kind !== 'pdf' && workspaceContext.styles.thumbnailPreviewFallbackMemo]}>
-                    <MaterialCommunityIcons name={getPageIcon(page)} size={18} color={active ? '#4F68D2' : '#7F8999'} />
-                  </View>
-                )}
+                <View style={[workspaceContext.styles.thumbnailPreviewFallback, page.kind !== 'pdf' && workspaceContext.styles.thumbnailPreviewFallbackMemo]}>
+                  <MaterialCommunityIcons name={getPageIcon(page)} size={18} color={active ? '#4F68D2' : '#7F8999'} />
+                </View>
                 {page.kind === 'pdf' ? (
-                  <View style={[workspaceContext.styles.thumbnailCacheBadge, imageUrl && workspaceContext.styles.thumbnailCacheBadgeReady]}>
-                    <Text style={[workspaceContext.styles.thumbnailCacheBadgeText, imageUrl && workspaceContext.styles.thumbnailCacheBadgeTextReady]}>
-                      {imageUrl ? '캐시' : '원본'}
-                    </Text>
+                  <View style={workspaceContext.styles.thumbnailCacheBadge}>
+                    <Text style={workspaceContext.styles.thumbnailCacheBadgeText}>원본</Text>
                   </View>
                 ) : null}
               </View>

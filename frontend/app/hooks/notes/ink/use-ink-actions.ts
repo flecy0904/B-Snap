@@ -37,6 +37,7 @@ export function useInkActions(params: {
   setSelectionByDocument: SetState<Record<number, SelectionRect | null>>;
   setInkTool: SetState<InkTool>;
   setWorkspaceFeedback: SetState<string | null>;
+  onMarkPageDirty?: (documentId: number, pageNumber: number) => void;
 }) {
   const textEditHistoryTimersRef = useRef<Record<string, ReturnType<typeof setTimeout>>>({});
   const isStrokeOnCurrentPage = (stroke: InkStroke) => (
@@ -137,6 +138,15 @@ export function useInkActions(params: {
     params.setSelectionByDocument((current) => ({ ...current, [params.studyDocumentId!]: null }));
   };
 
+  const markPageDirty = (pageNumber?: number | null) => {
+    if (!params.studyDocumentId || !pageNumber || params.currentDocumentPage?.kind === 'generated') return;
+    params.onMarkPageDirty?.(params.studyDocumentId, pageNumber);
+  };
+
+  const markCurrentPageDirty = () => {
+    markPageDirty(params.currentDocumentPage?.kind === 'pdf' ? params.currentDocumentPage.pageNumber : params.currentPdfPage);
+  };
+
   const getCurrentSnapshot = (): WorkspaceEditSnapshot => ({
     inkStrokes: params.studyDocumentId ? (params.inkByDocument[params.studyDocumentId] ?? []) : [],
     textAnnotations: params.studyDocumentId ? (params.textAnnotationsByDocument[params.studyDocumentId] ?? []) : [],
@@ -203,6 +213,7 @@ export function useInkActions(params: {
       ...current,
       [params.studyDocumentId!]: (current[params.studyDocumentId!] ?? []).filter((stroke) => !isStrokeOnCurrentPage(stroke)),
     }));
+    markCurrentPageDirty();
   };
 
   const undoInk = () => {
@@ -220,6 +231,7 @@ export function useInkActions(params: {
         [params.studyDocumentId!]: (current[params.studyDocumentId!] ?? []).slice(0, -1),
       }));
       applySnapshot(previousSnapshot);
+      markCurrentPageDirty();
       params.setWorkspaceFeedback('이전 편집 상태로 되돌렸습니다.');
       return;
     }
@@ -248,6 +260,7 @@ export function useInkActions(params: {
         )),
       };
     });
+    markCurrentPageDirty();
   };
 
   const redoInk = () => {
@@ -265,6 +278,7 @@ export function useInkActions(params: {
         [params.studyDocumentId!]: (current[params.studyDocumentId!] ?? []).slice(0, -1),
       }));
       applySnapshot(nextSnapshot);
+      markCurrentPageDirty();
       params.setWorkspaceFeedback('되돌린 편집 상태를 다시 적용했습니다.');
       return;
     }
@@ -293,6 +307,7 @@ export function useInkActions(params: {
         )),
       };
     });
+    markCurrentPageDirty();
   };
 
   const commitInkStroke = (stroke: InkStroke) => {
@@ -311,6 +326,7 @@ export function useInkActions(params: {
       ...current,
       [params.studyDocumentId!]: [],
     }));
+    if (!scopedStroke.generatedPageId) markPageDirty(scopedStroke.pageNumber ?? params.currentPdfPage);
   };
 
   const removeInkStroke = (strokeId: string) => {
@@ -322,6 +338,7 @@ export function useInkActions(params: {
       ...current,
       [params.studyDocumentId!]: (current[params.studyDocumentId!] ?? []).filter((stroke) => stroke.id !== strokeId),
     }));
+    markCurrentPageDirty();
   };
 
   const addTextAnnotation = (point: InkPoint) => {
@@ -355,6 +372,7 @@ export function useInkActions(params: {
     if (anchoredSelection) {
       clearCurrentSelection();
     }
+    if (!generatedPageId) markPageDirty(pageNumber);
     params.setInkTool('view');
     params.setWorkspaceFeedback(anchoredSelection ? '선택 영역 메모를 추가했습니다.' : '텍스트 메모를 추가했습니다.');
   };
@@ -376,6 +394,8 @@ export function useInkActions(params: {
         annotation.id === annotationId ? { ...annotation, text } : annotation,
       ),
     }));
+    const targetAnnotation = (params.textAnnotationsByDocument[params.studyDocumentId] ?? []).find((annotation) => annotation.id === annotationId);
+    if (!targetAnnotation?.generatedPageId) markPageDirty(targetAnnotation?.pageNumber ?? params.currentPdfPage);
   };
 
   const removeTextAnnotation = (annotationId: string) => {
@@ -391,6 +411,7 @@ export function useInkActions(params: {
       ...current,
       [params.studyDocumentId!]: [],
     }));
+    markCurrentPageDirty();
   };
 
   const deleteSelectedStrokes = () => {
@@ -408,6 +429,7 @@ export function useInkActions(params: {
         ...current,
         [params.studyDocumentId!]: (current[params.studyDocumentId!] ?? []).filter((annotation) => !selectedTextAnnotationIds.has(annotation.id)),
       }));
+      markCurrentPageDirty();
       params.setWorkspaceFeedback(`선택한 객체 ${selectedStrokeIds.size + selectedTextAnnotationIds.size}개를 지웠습니다.`);
     }
     clearCurrentSelection();
@@ -434,6 +456,7 @@ export function useInkActions(params: {
         ...current,
         [params.studyDocumentId!]: nextStrokes,
       }));
+      markCurrentPageDirty();
       params.setWorkspaceFeedback(`선택한 ${selectedStrokeIds.size}개의 필기 색상을 변경했습니다.`);
     }
     clearCurrentSelection();
@@ -507,6 +530,7 @@ export function useInkActions(params: {
           }
         : null,
     }));
+    markCurrentPageDirty();
     params.setWorkspaceFeedback(`선택한 객체 ${selectedStrokeIds.size + selectedTextAnnotationIds.size}개를 복제했습니다.`);
     params.setInkTool('select');
   };
@@ -574,6 +598,7 @@ export function useInkActions(params: {
         height: params.selectionRect!.height * scale,
       },
     }));
+    markCurrentPageDirty();
     params.setWorkspaceFeedback('선택한 필기 크기를 조절했습니다.');
     params.setInkTool('select');
   };
@@ -648,6 +673,7 @@ export function useInkActions(params: {
       ...current,
       [params.studyDocumentId!]: nextRect,
     }));
+    markCurrentPageDirty();
     params.setWorkspaceFeedback('선택한 필기 크기를 조절했습니다.');
     params.setInkTool('select');
   };
@@ -706,6 +732,7 @@ export function useInkActions(params: {
         y: params.selectionRect!.y + dy,
       },
     }));
+    markCurrentPageDirty();
     params.setWorkspaceFeedback('선택한 객체를 이동했습니다.');
     params.setInkTool('select');
   };

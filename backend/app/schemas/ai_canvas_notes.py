@@ -37,18 +37,21 @@ class AiCanvasNoteUpdate(BaseModel):
         return self
 
 
-class AiCanvasNoteRead(BaseModel):
+class AiCanvasNoteSummaryRead(BaseModel):
     id: int
     folder_id: int
     note_id: int
     title: str
-    markdown: str
     source_page_start: int | None = None
     source_page_end: int | None = None
     created_at: datetime
     updated_at: datetime
 
     model_config = ConfigDict(from_attributes=True)
+
+
+class AiCanvasNoteRead(AiCanvasNoteSummaryRead):
+    markdown: str
 
 
 class AiCanvasNoteAiEditCreate(BaseModel):

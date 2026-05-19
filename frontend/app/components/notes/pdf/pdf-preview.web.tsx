@@ -113,6 +113,20 @@ type PageFrame = { width: number; height: number };
 type WebGestureNativeEvent = GestureResponderEvent['nativeEvent'] & { buttons?: number };
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
 type ResponderStartPoint = { x: number; y: number } | null;
+const PDF_RENDER_PAGE_RADIUS = 2;
+
+function getPriorityPageNumbers(currentPage: number, pageCount: number) {
+  const pageNumbers: number[] = [];
+  for (let offset = 0; offset <= PDF_RENDER_PAGE_RADIUS; offset += 1) {
+    const candidates = offset === 0 ? [currentPage] : [currentPage - offset, currentPage + offset];
+    candidates.forEach((pageNumber) => {
+      if (pageNumber >= 1 && pageNumber <= pageCount && !pageNumbers.includes(pageNumber)) {
+        pageNumbers.push(pageNumber);
+      }
+    });
+  }
+  return pageNumbers;
+}
 
 function getReferencePreviewImage(reference: PageCaptureReference) {
   if (reference.thumbnailUrl) return { uri: reference.thumbnailUrl };
@@ -349,7 +363,6 @@ export function PdfPreview(props: {
   onDocumentLoaded?: (pageCount: number) => void;
   notebookPages?: NotebookPage[];
   activeGeneratedPageId?: string | null;
-  pageImageUrls?: Record<number, string>;
   pageCaptureReferences?: PageCaptureReference[];
   incomingAssetSuggestion?: CaptureAsset | null;
   onAcceptIncomingAsset?: () => void;
@@ -368,7 +381,6 @@ export function PdfPreview(props: {
   const pageGap = 22;
   const [pdfDocument, setPdfDocument] = useState<PdfJsDocument | null>(null);
   const [pageFrames, setPageFrames] = useState<Record<number, PageFrame>>({});
-  const [cachedImageFrames, setCachedImageFrames] = useState<Record<number, PageFrame>>({});
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [currentStroke, setCurrentStroke] = useState<InkStroke | null>(null);
@@ -395,11 +407,6 @@ export function PdfPreview(props: {
     return props.file.uri ?? null;
   }, [props.file]);
   const pageCount = pdfDocument?.numPages ?? 0;
-  const pageImageUrls = useMemo(() => {
-    const entries = Object.entries(props.pageImageUrls ?? {}).filter(([, uri]) => !isPdfUri(uri));
-    return Object.fromEntries(entries) as Record<number, string>;
-  }, [props.pageImageUrls]);
-  const hasCachedPageImages = Object.keys(pageImageUrls).length > 0;
   const pageItems = useMemo<NotebookPage[]>(
     () => props.notebookPages?.length
       ? props.notebookPages
@@ -434,55 +441,8 @@ export function PdfPreview(props: {
     return { width, height: Math.round(width / aspectRatio) };
   };
 
-  useEffect(() => {
-    const entries = Object.entries(pageImageUrls);
-    if (!entries.length) {
-      setCachedImageFrames({});
-      return;
-    }
-
-    let cancelled = false;
-    const [firstPageNumberText, firstImageUri] = entries[0];
-    const firstPageNumber = Number(firstPageNumberText);
-
-    Image.getSize(
-      firstImageUri,
-      (naturalWidth, naturalHeight) => {
-        if (cancelled) return;
-        const firstFrame = fitPageFrame(naturalWidth, naturalHeight);
-        setCachedImageFrames((current) => {
-          const next: Record<number, PageFrame> = { ...current, [firstPageNumber]: firstFrame };
-          entries.forEach(([pageNumberText]) => {
-            const pageNumber = Number(pageNumberText);
-            if (!next[pageNumber]) next[pageNumber] = firstFrame;
-          });
-          return next;
-        });
-      },
-      () => {
-        if (!cancelled) setCachedImageFrames({});
-      },
-    );
-
-    entries.slice(1).forEach(([pageNumberText, uri]) => {
-      const pageNumber = Number(pageNumberText);
-      Image.getSize(
-        uri,
-        (naturalWidth, naturalHeight) => {
-          if (!cancelled) setCachedImageFrames((current) => ({ ...current, [pageNumber]: fitPageFrame(naturalWidth, naturalHeight) }));
-        },
-        () => undefined,
-      );
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [pageImageUrls, viewerWidth]);
-
   const getFrameForPage = (page: NotebookPage): PageFrame => {
     const sourcePageNumber = page.pageNumber ?? page.insertAfterPage;
-    if (sourcePageNumber && cachedImageFrames[sourcePageNumber]) return cachedImageFrames[sourcePageNumber];
     if (sourcePageNumber && pageFrames[sourcePageNumber]) return pageFrames[sourcePageNumber];
     return fitPageFrame();
   };
@@ -608,14 +568,6 @@ export function PdfPreview(props: {
     let cancelled = false;
     let task: { promise: Promise<PdfJsDocument>; destroy?: () => void } | null = null;
 
-    if (hasCachedPageImages) {
-      setPdfDocument(null);
-      setPageFrames({});
-      setIsLoading(false);
-      setLoadError(null);
-      return;
-    }
-
     if (!pdfUri) {
       setPdfDocument(null);
       setPageFrames({});
@@ -651,7 +603,7 @@ export function PdfPreview(props: {
       cancelled = true;
       task?.destroy?.();
     };
-  }, [hasCachedPageImages, pdfUri]);
+  }, [pdfUri]);
 
   useEffect(() => {
     let cancelled = false;
@@ -666,9 +618,7 @@ export function PdfPreview(props: {
 
     const renderPages = async () => {
       const nextFrames: Record<number, PageFrame> = {};
-      for (let pageNumber = 1; pageNumber <= pdfDocument.numPages; pageNumber += 1) {
-        if (pageImageUrls[pageNumber]) continue;
-        if (Math.abs(pageNumber - props.page) > 1) continue;
+      for (const pageNumber of getPriorityPageNumbers(props.page, pdfDocument.numPages)) {
         const canvas = canvasRefs.current[pageNumber];
         if (!canvas || cancelled) continue;
         const page = await pdfDocument.getPage(pageNumber);
@@ -711,10 +661,10 @@ export function PdfPreview(props: {
       cancelled = true;
       renderTasks.forEach((task) => task.cancel?.());
     };
-  }, [pageImageUrls, pdfDocument, props.page, viewerWidth]);
+  }, [pdfDocument, props.page, viewerWidth]);
 
   useEffect(() => {
-    if (!pageFrames[props.page] && !cachedImageFrames[props.page]) return;
+    if (!pageFrames[props.page]) return;
     if (suppressNextScrollSyncRef.current) {
       suppressNextScrollSyncRef.current = false;
       return;
@@ -725,7 +675,7 @@ export function PdfPreview(props: {
     window.setTimeout(() => {
       scrollingProgrammaticallyRef.current = false;
     }, 120);
-  }, [cachedImageFrames[props.page], pageFrames[props.page], props.page]);
+  }, [pageFrames[props.page], props.page]);
 
   const handleScroll = (event: any) => {
     if (scrollingProgrammaticallyRef.current || props.inkTool !== 'view') return;
@@ -811,7 +761,6 @@ export function PdfPreview(props: {
     const active = page.generatedPageId ? page.generatedPageId === props.activeGeneratedPageId : page.pageNumber === props.page;
     const selectionRectStyle = active ? scaleSelectionRectToPageSize(props.selectionRect, frame.width, frame.height) : null;
     const draftSelectionStyle = (page.generatedPageId ? currentStroke?.generatedPageId === page.generatedPageId : currentStroke?.pageNumber === page.pageNumber) ? draftSelection : null;
-    const cachedPageImageUri = page.pageNumber ? pageImageUrls[page.pageNumber] : undefined;
     const pageReferences = getPageCaptureReferences(page);
     const activePageReference = pageReferences.find((reference) => reference.id === openReferenceId) ?? null;
     const activeReferenceIndex = activePageReference ? pageReferences.findIndex((reference) => reference.id === activePageReference.id) : -1;
@@ -828,13 +777,7 @@ export function PdfPreview(props: {
         nativeID={page.pageNumber ? `bsnap-pdf-page-${page.pageNumber}` : `bsnap-page-${page.id}`}
         style={{ width: frame.width, height: frame.height, marginBottom: pageGap, backgroundColor: '#FFFFFF', shadowColor: '#182436', shadowOpacity: 0.08, shadowRadius: 18, shadowOffset: { width: 0, height: 10 }, position: 'relative' }}
       >
-        {page.kind === 'pdf' && cachedPageImageUri ? (
-          <Image
-            source={{ uri: cachedPageImageUri }}
-            style={{ position: 'absolute', left: 0, top: 0, width: frame.width, height: frame.height, backgroundColor: '#FFFFFF' }}
-            resizeMode="contain"
-          />
-        ) : page.kind === 'pdf' && page.pageNumber ? (
+        {page.kind === 'pdf' && page.pageNumber ? (
           <canvas
             ref={(node) => {
               canvasRefs.current[page.pageNumber!] = node;

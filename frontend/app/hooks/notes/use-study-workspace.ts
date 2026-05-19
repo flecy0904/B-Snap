@@ -1,7 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Platform } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
-import { File } from 'expo-file-system';
 import {
   createBackendNote,
   createBackendNotePage,
@@ -45,7 +43,9 @@ import { useAiChatDerivedState } from './ai/use-ai-chat-derived-state';
 import { useAiCanvasNotes } from './ai-canvas/use-ai-canvas-notes';
 import { buildClassInsightContext } from './class-insight';
 import { addUniqueId, removeId, upsertStudyDocument } from './document/collection-helpers';
+import { getStudyDocumentBackendNoteId } from './document/backend-sync';
 import { useDocumentPageActions } from './document/use-document-page-actions';
+import { createLocalStudyDocumentId, persistPickedPdfAsset, readPdfPageCount } from './document/pdf-local-import';
 import { confirmDeleteAction } from './ui/confirm-delete-action';
 import { useInkActions, type WorkspaceEditSnapshot } from './ink/use-ink-actions';
 import { parseNotePageContent, serializeNotePageContent } from './document/note-page-content';
@@ -65,18 +65,9 @@ type PendingPageSave = {
   updatedAt: number;
 };
 
-async function buildPdfDataUriForTextExtraction(picked: DocumentPicker.DocumentPickerAsset, pdfFileUri: string) {
-  if (pdfFileUri.startsWith('data:application/pdf')) return pdfFileUri;
-  if (Platform.OS === 'web' && picked.base64) {
-    return picked.base64.startsWith('data:application/pdf')
-      ? picked.base64
-      : `data:application/pdf;base64,${picked.base64}`;
-  }
-  if (!picked.uri) return null;
+const EMPTY_PAGE_CONTENT = serializeNotePageContent({ inkStrokes: [], textAnnotations: [] });
 
-  const base64 = await new File(picked.uri).base64();
-  return `data:application/pdf;base64,${base64}`;
-}
+const getPageSaveKey = (documentId: number, pageNumber: number) => `${documentId}:${pageNumber}`;
 
 export function useStudyWorkspace(props: {
   wide: boolean;
@@ -143,6 +134,10 @@ export function useStudyWorkspace(props: {
   const [savingPageKeys, setSavingPageKeys] = useState<Record<string, true>>({});
   const [failedPageSaveKeys, setFailedPageSaveKeys] = useState<Record<string, true>>({});
   const lastQueuedPageContentRef = useRef<Record<string, string>>({});
+  const lastSavedPageContentRef = useRef<Record<string, string>>({});
+  const backendPageLoadsInFlightRef = useRef<Record<number, true>>({});
+  const dirtyPageKeysRef = useRef<Set<string>>(new Set());
+  const pdfSyncInFlightRef = useRef<Record<number, true>>({});
 
   const isPdfAssetUrl = (url: string | null | undefined) => !!url && /\.pdf(?:$|[?#])/i.test(url);
   const normalizeDocumentFile = (file: StudyDocumentEntry['file']) => {
@@ -152,6 +147,23 @@ export function useStudyWorkspace(props: {
       uri: resolveBackendAssetUrl(file.uri) ?? file.uri,
     };
   };
+
+  const loadAllAiChatSessions = useCallback(() => {
+    if (!isBackendApiEnabled()) return;
+
+    listAllBackendChatSessions()
+      .then((sessions) => {
+        setAllChatSessions(sessions);
+      })
+      .catch((error) => {
+        setAiError(getAiBackendErrorMessage(error, 'AI 梨꾪똿 ?댁뿭??遺덈윭?ㅼ? 紐삵뻽?듬땲??'));
+      });
+  }, []);
+
+  const changeAiChatScope = useCallback((scope: 'note' | 'all') => {
+    setAiChatScope(scope);
+    if (scope === 'all') loadAllAiChatSessions();
+  }, [loadAllAiChatSessions]);
 
   const {
     availableSubjects,
@@ -290,9 +302,10 @@ export function useStudyWorkspace(props: {
     backendPageIdsByDocument,
   });
   const currentAiCanvasPageNumber = currentDocumentPage?.kind === 'pdf' ? currentDocumentPage.pageNumber : currentPdfPage;
+  const studyDocumentBackendNoteId = getStudyDocumentBackendNoteId(studyDocument);
   const aiCanvas = useAiCanvasNotes({
-    noteId: studyDocumentId,
-    enabled: workspaceHydrated && isBackendApiEnabled() && !!studyDocumentId && currentDocumentHasBackendPages,
+    noteId: studyDocumentBackendNoteId,
+    enabled: workspaceHydrated && isBackendApiEnabled() && !!studyDocumentBackendNoteId && currentDocumentHasBackendPages,
     currentPageNumber: currentAiCanvasPageNumber ?? null,
     onFeedback: setWorkspaceFeedback,
   });
@@ -322,6 +335,79 @@ export function useStudyWorkspace(props: {
     setIncomingBannerQueue,
     setIncomingAssetSuggestion,
   });
+
+  const applyLoadedBackendPages = useCallback((documentId: number, pages: Awaited<ReturnType<typeof listBackendNotePages>>) => {
+    const pageIdsByNumber: Record<number, number> = {};
+    const documentInk: InkStroke[] = [];
+    const documentTextAnnotations: InkTextAnnotation[] = [];
+    const savedPageContentByKey: Record<string, string> = {};
+    let hasStoredPageContent = false;
+    const firstPageImageUrl = pages[0]?.image_url ?? null;
+
+    pages.forEach((page) => {
+      pageIdsByNumber[page.page_number] = page.id;
+      const storedPage = parseNotePageContent(page.content);
+      if (!storedPage) {
+        savedPageContentByKey[getPageSaveKey(documentId, page.page_number)] = EMPTY_PAGE_CONTENT;
+        return;
+      }
+
+      hasStoredPageContent = true;
+      const normalizedInkStrokes = storedPage.inkStrokes.map((stroke) => ({
+        ...stroke,
+        generatedPageId: undefined,
+        pageNumber: page.page_number,
+      }));
+      const normalizedTextAnnotations = storedPage.textAnnotations.map((annotation) => ({
+        ...annotation,
+        generatedPageId: undefined,
+        pageNumber: page.page_number,
+      }));
+
+      savedPageContentByKey[getPageSaveKey(documentId, page.page_number)] = serializeNotePageContent({
+        inkStrokes: normalizedInkStrokes,
+        textAnnotations: normalizedTextAnnotations,
+      });
+      documentInk.push(...normalizedInkStrokes);
+      documentTextAnnotations.push(...normalizedTextAnnotations);
+    });
+
+    setBackendPageIdsByDocument((current) => ({
+      ...current,
+      [documentId]: pageIdsByNumber,
+    }));
+    if (firstPageImageUrl || pages.length) {
+      setUserStudyDocuments((current) => current.map((document) => {
+        if (document.id !== documentId) return document;
+        const legacyImageFile = firstPageImageUrl && !isPdfAssetUrl(firstPageImageUrl) ? { uri: firstPageImageUrl } : undefined;
+        const legacyFile = !document.file && document.type !== 'pdf' ? legacyImageFile : document.file;
+        const legacyFileUri = legacyFile && typeof legacyFile === 'object' && 'uri' in legacyFile ? legacyFile.uri : null;
+        return {
+          ...document,
+          type: legacyFileUri && !isPdfAssetUrl(legacyFileUri) ? 'image' : document.type,
+          pageCount: Math.max(document.pageCount, pages.length || 1),
+          file: legacyFile,
+        };
+      }));
+    }
+    lastSavedPageContentRef.current = {
+      ...lastSavedPageContentRef.current,
+      ...savedPageContentByKey,
+    };
+    lastQueuedPageContentRef.current = {
+      ...lastQueuedPageContentRef.current,
+      ...savedPageContentByKey,
+    };
+
+    if (hasStoredPageContent) {
+      setInkByDocument((current) => ({ ...current, [documentId]: documentInk }));
+      setTextAnnotationsByDocument((current) => ({ ...current, [documentId]: documentTextAnnotations }));
+    }
+  }, []);
+
+  const markBackendPageDirty = useCallback((documentId: number, pageNumber: number) => {
+    dirtyPageKeysRef.current.add(getPageSaveKey(documentId, pageNumber));
+  }, []);
 
   useEffect(() => {
     if (!workspaceHydrated || !isBackendApiEnabled() || !studyDocumentId || !currentDocumentHasBackendPages) return;
@@ -353,61 +439,28 @@ export function useStudyWorkspace(props: {
           listBackendFolders(),
           listBackendNotes(),
         ]);
-        const pageIdsByDocument: Record<number, Record<number, number>> = {};
-        const inkByBackendDocument: Record<number, InkStroke[]> = {};
-        const textAnnotationsByBackendDocument: Record<number, InkTextAnnotation[]> = {};
-        const hasStoredPageContentByDocument: Record<number, boolean> = {};
         const documents = await Promise.all(
           backendNotes.map(async (backendNote) => {
             const folder = folders.find((item) => item.id === backendNote.folder_id);
             const subject = availableSubjects.find((item) => item.name === folder?.name) ?? availableSubjects[0] ?? null;
-            const pages = await listBackendNotePages(backendNote.id);
-            const firstPage = pages[0] ?? null;
-            pageIdsByDocument[backendNote.id] = {};
-            inkByBackendDocument[backendNote.id] = [];
-            textAnnotationsByBackendDocument[backendNote.id] = [];
-            hasStoredPageContentByDocument[backendNote.id] = false;
-
-            pages.forEach((page) => {
-              pageIdsByDocument[backendNote.id][page.page_number] = page.id;
-              const storedPage = parseNotePageContent(page.content);
-              if (!storedPage) return;
-              hasStoredPageContentByDocument[backendNote.id] = true;
-
-              inkByBackendDocument[backendNote.id].push(
-                ...storedPage.inkStrokes.map((stroke) => ({
-                  ...stroke,
-                  generatedPageId: undefined,
-                  pageNumber: page.page_number,
-                })),
-              );
-              textAnnotationsByBackendDocument[backendNote.id].push(
-                ...storedPage.textAnnotations.map((annotation) => ({
-                  ...annotation,
-                  generatedPageId: undefined,
-                  pageNumber: page.page_number,
-                })),
-              );
-            });
-
-            const firstPageUrl = firstPage?.image_url ?? null;
-            const pageImageUrls = pages.reduce<Record<number, string>>((next, page) => {
-              if (page.image_url && !isPdfAssetUrl(page.image_url)) next[page.page_number] = page.image_url;
-              return next;
-            }, {});
-            const pdfLikeBackendNote = /\.pdf$/i.test(backendNote.title.trim()) || pages.length > 1 || isPdfAssetUrl(firstPageUrl);
-            const documentType = pdfLikeBackendNote ? 'pdf' as const : firstPageUrl ? 'image' as const : 'blank' as const;
+            const fileUrl = backendNote.file_url ?? null;
+            const pageCount = Math.max(1, backendNote.page_count ?? 1);
+            const pdfLikeBackendNote = /\.pdf$/i.test(backendNote.title.trim()) || !!fileUrl || pageCount > 1;
+            const documentType = pdfLikeBackendNote ? 'pdf' as const : 'blank' as const;
 
             return {
               id: backendNote.id,
               subjectId: subject?.id ?? props.initialSubjectId ?? 101,
+              backendNoteId: backendNote.id,
               title: backendNote.title,
               type: documentType,
               updatedAt: 'DB 저장됨',
-              pageCount: Math.max(1, pages.length),
-              preview: backendNote.summary ?? firstPage?.content ?? '백엔드에 저장된 노트입니다.',
-              file: firstPageUrl ? { uri: firstPageUrl } : undefined,
-              pageImageUrls: Object.keys(pageImageUrls).length ? pageImageUrls : undefined,
+              pageCount,
+              preview: backendNote.summary ?? '백엔드에 저장된 노트입니다.',
+              file: fileUrl ? { uri: fileUrl } : undefined,
+              remoteFileUrl: fileUrl ?? undefined,
+              thumbnailUrl: backendNote.thumbnail_url ?? undefined,
+              backendSyncStatus: 'synced',
             } satisfies StudyDocumentEntry;
           }),
         );
@@ -415,8 +468,29 @@ export function useStudyWorkspace(props: {
         if (!mounted) return;
         const backendDocumentIds = new Set(documents.map((document) => document.id));
         setUserStudyDocuments((current) => {
+          const backendDocumentByBackendId = new Map<number, StudyDocumentEntry>();
+          documents.forEach((document) => {
+            if (document.backendNoteId) backendDocumentByBackendId.set(document.backendNoteId, document);
+          });
+          const mergedCurrent = current.map((document) => {
+            const backendNoteId = getStudyDocumentBackendNoteId(document);
+            const backendDocument = backendNoteId ? backendDocumentByBackendId.get(backendNoteId) : null;
+            if (!backendDocument) return document;
+
+            return {
+              ...backendDocument,
+              id: document.id,
+              localFileUri: document.localFileUri,
+              file: document.localFileUri ? { uri: document.localFileUri } : normalizeDocumentFile(backendDocument.file),
+            };
+          });
+          const existingBackendNoteIds = new Set(
+            mergedCurrent
+              .map((document) => getStudyDocumentBackendNoteId(document))
+              .filter((id): id is number => typeof id === 'number'),
+          );
           const nextById = new Map<number, StudyDocumentEntry>();
-          [...current, ...documents].forEach((document) => {
+          [...mergedCurrent, ...documents.filter((document) => !document.backendNoteId || !existingBackendNoteIds.has(document.backendNoteId))].forEach((document) => {
             nextById.set(document.id, {
               ...document,
               file: normalizeDocumentFile(document.file),
@@ -425,24 +499,6 @@ export function useStudyWorkspace(props: {
           return Array.from(nextById.values()).sort((left, right) => right.id - left.id);
         });
         setDeletedStudyDocumentIds((current) => current.filter((id) => !backendDocumentIds.has(id)));
-        setBackendPageIdsByDocument((current) => ({
-          ...current,
-          ...pageIdsByDocument,
-        }));
-        setInkByDocument((current) => {
-          const next = { ...current };
-          Object.entries(inkByBackendDocument).forEach(([documentId, strokes]) => {
-            if (hasStoredPageContentByDocument[Number(documentId)]) next[Number(documentId)] = strokes;
-          });
-          return next;
-        });
-        setTextAnnotationsByDocument((current) => {
-          const next = { ...current };
-          Object.entries(textAnnotationsByBackendDocument).forEach(([documentId, annotations]) => {
-            if (hasStoredPageContentByDocument[Number(documentId)]) next[Number(documentId)] = annotations;
-          });
-          return next;
-        });
       } catch {
         if (mounted) {
           setWorkspaceFeedback('백엔드 노트 목록을 불러오지 못했습니다.');
@@ -458,44 +514,99 @@ export function useStudyWorkspace(props: {
   }, [availableSubjects, props.initialSubjectId, workspaceHydrated]);
 
   useEffect(() => {
+    if (!workspaceHydrated || !isBackendApiEnabled() || !studyDocumentId) return;
+    const backendNoteId = getStudyDocumentBackendNoteId(studyDocument);
+    if (!backendNoteId) return;
+    if (backendPageIdsByDocument[studyDocumentId] || backendPageLoadsInFlightRef.current[studyDocumentId]) return;
+
+    let mounted = true;
+    backendPageLoadsInFlightRef.current[studyDocumentId] = true;
+
+    const loadDocumentPages = async () => {
+      try {
+        const pages = await listBackendNotePages(backendNoteId);
+        if (!mounted) return;
+        applyLoadedBackendPages(studyDocumentId, pages);
+      } catch {
+        if (mounted) {
+          setWorkspaceFeedback('노트 페이지를 불러오지 못했습니다. backend 연결을 확인해주세요.');
+        }
+      } finally {
+        delete backendPageLoadsInFlightRef.current[studyDocumentId];
+      }
+    };
+
+    void loadDocumentPages();
+
+    return () => {
+      mounted = false;
+    };
+  }, [applyLoadedBackendPages, backendPageIdsByDocument, studyDocument, studyDocumentId, workspaceHydrated]);
+
+  useEffect(() => {
     if (!workspaceHydrated || !isBackendApiEnabled()) return;
 
     const timer = setTimeout(() => {
       const nextPendingSaves: Record<string, PendingPageSave> = {};
+      const clearedSaveKeys = new Set<string>();
 
-      Object.entries(backendPageIdsByDocument).forEach(([documentIdText, pagesByNumber]) => {
+      Array.from(dirtyPageKeysRef.current).forEach((key) => {
+        const [documentIdText, pageNumberText] = key.split(':');
         const documentId = Number(documentIdText);
+        const pageNumber = Number(pageNumberText);
+        const pageId = backendPageIdsByDocument[documentId]?.[pageNumber];
+        if (!documentId || !pageNumber || !pageId) return;
+
         const documentInk = inkByDocument[documentId] ?? [];
         const documentTextAnnotations = textAnnotationsByDocument[documentId] ?? [];
+        const pageInkStrokes = documentInk.filter((stroke) => !stroke.generatedPageId && (stroke.pageNumber ?? 1) === pageNumber);
+        const pageTextAnnotations = documentTextAnnotations.filter((annotation) => !annotation.generatedPageId && annotation.pageNumber === pageNumber);
 
-        Object.entries(pagesByNumber).forEach(([pageNumberText, pageId]) => {
-          const pageNumber = Number(pageNumberText);
-          const pageInkStrokes = documentInk.filter((stroke) => !stroke.generatedPageId && (stroke.pageNumber ?? 1) === pageNumber);
-          const pageTextAnnotations = documentTextAnnotations.filter((annotation) => !annotation.generatedPageId && annotation.pageNumber === pageNumber);
-          const key = `${documentId}:${pageNumber}`;
-
-          const content = serializeNotePageContent({
-            inkStrokes: pageInkStrokes,
-            textAnnotations: pageTextAnnotations,
-          });
-          if (lastQueuedPageContentRef.current[key] === content) return;
-          lastQueuedPageContentRef.current[key] = content;
-
-          nextPendingSaves[key] = {
-            pageId,
-            documentId,
-            pageNumber,
-            content,
-            attempts: 0,
-            updatedAt: Date.now(),
-          };
+        const content = serializeNotePageContent({
+          inkStrokes: pageInkStrokes,
+          textAnnotations: pageTextAnnotations,
         });
+        const savedContent = lastSavedPageContentRef.current[key];
+        if (savedContent === undefined && content === EMPTY_PAGE_CONTENT) {
+          lastSavedPageContentRef.current[key] = content;
+          lastQueuedPageContentRef.current[key] = content;
+          dirtyPageKeysRef.current.delete(key);
+          return;
+        }
+        if (savedContent === content) {
+          lastQueuedPageContentRef.current[key] = content;
+          dirtyPageKeysRef.current.delete(key);
+          clearedSaveKeys.add(key);
+          return;
+        }
+        if (lastQueuedPageContentRef.current[key] === content) return;
+        lastQueuedPageContentRef.current[key] = content;
+
+        nextPendingSaves[key] = {
+          pageId,
+          documentId,
+          pageNumber,
+          content,
+          attempts: 0,
+          updatedAt: Date.now(),
+        };
       });
 
-      setPendingPageSaves((current) => ({
-        ...current,
-        ...nextPendingSaves,
-      }));
+      if (!Object.keys(nextPendingSaves).length && !clearedSaveKeys.size) return;
+
+      setPendingPageSaves((current) => {
+        let next = current;
+        if (clearedSaveKeys.size) {
+          next = { ...next };
+          clearedSaveKeys.forEach((key) => {
+            delete next[key];
+          });
+        }
+        return {
+          ...next,
+          ...nextPendingSaves,
+        };
+      });
     }, 700);
 
     return () => clearTimeout(timer);
@@ -519,6 +630,9 @@ export function useStudyWorkspace(props: {
         content: pending.content,
       })
         .then(() => {
+          lastSavedPageContentRef.current[key] = pending.content;
+          lastQueuedPageContentRef.current[key] = pending.content;
+          dirtyPageKeysRef.current.delete(key);
           setPendingPageSaves((current) => {
             const currentPending = current[key];
             if (!currentPending || currentPending.content !== pending.content) return current;
@@ -582,24 +696,22 @@ export function useStudyWorkspace(props: {
   }, [pendingPageSaves, savingPageKeys]);
 
   useEffect(() => {
-    if (!workspaceHydrated || !isBackendApiEnabled() || !studyDocumentId || !currentDocumentHasBackendPages) {
+    if (!workspaceHydrated || !aiPanelOpen || !isBackendApiEnabled() || !studyDocumentId || !currentDocumentHasBackendPages) {
       return;
     }
+    const backendNoteId = getStudyDocumentBackendNoteId(studyDocument);
+    if (!backendNoteId) return;
 
     let mounted = true;
 
     const loadAiMessages = async () => {
       try {
-        const [sessions, allSessions] = await Promise.all([
-          listBackendChatSessions(studyDocumentId),
-          listAllBackendChatSessions(),
-        ]);
+        const sessions = await listBackendChatSessions(backendNoteId);
         const preferredSessionId = chatSessionByDocument[studyDocumentId] ?? lastChatSessionByDocument[studyDocumentId];
         const session = sessions.find((item) => item.id === preferredSessionId) ?? sessions[0] ?? null;
 
         if (!session) {
           if (!mounted) return;
-          setAllChatSessions(allSessions);
           setChatSessionsByDocument((current) => ({ ...current, [studyDocumentId]: [] }));
           setChatSessionByDocument((current) => {
             const next = { ...current };
@@ -612,7 +724,6 @@ export function useStudyWorkspace(props: {
         const messages = await listBackendChatMessages(session.id);
         if (!mounted) return;
 
-        setAllChatSessions(allSessions);
         setChatSessionsByDocument((current) => ({ ...current, [studyDocumentId]: sessions }));
         setChatSessionByDocument((current) => ({ ...current, [studyDocumentId]: session.id }));
         setLastChatSessionByDocument((current) => ({ ...current, [studyDocumentId]: session.id }));
@@ -643,25 +754,8 @@ export function useStudyWorkspace(props: {
     return () => {
       mounted = false;
     };
-  }, [currentDocumentHasBackendPages, studyDocumentId, workspaceHydrated]);
+  }, [aiPanelOpen, currentDocumentHasBackendPages, studyDocument, studyDocumentId, workspaceHydrated]);
 
-  useEffect(() => {
-    if (!workspaceHydrated || !aiPanelOpen || !isBackendApiEnabled()) return;
-
-    let mounted = true;
-
-    listAllBackendChatSessions()
-      .then((sessions) => {
-        if (mounted) setAllChatSessions(sessions);
-      })
-      .catch((error) => {
-        if (mounted) setAiError(getAiBackendErrorMessage(error, 'AI 채팅 내역을 불러오지 못했습니다.'));
-      });
-
-    return () => {
-      mounted = false;
-    };
-  }, [aiPanelOpen, workspaceHydrated]);
 
   const openSubject = (id: number) => {
     props.onOpenNotesTab();
@@ -760,12 +854,14 @@ export function useStudyWorkspace(props: {
         }));
         const document: StudyDocumentEntry = {
           id: backendNote.id,
+          backendNoteId: backendNote.id,
           subjectId: targetSubjectId,
           title: backendNote.title,
           type: 'blank',
           updatedAt: '방금 전',
           pageCount: 1,
           preview: backendNote.summary ?? '새 빈 노트입니다.',
+          backendSyncStatus: 'synced',
         };
         openCreatedStudyDocument(document, '새 빈 노트를 백엔드에 저장했습니다.');
         return;
@@ -782,6 +878,7 @@ export function useStudyWorkspace(props: {
       updatedAt: '방금 전',
       pageCount: 1,
       preview: '새로 만든 빈 필기 노트입니다.',
+      backendSyncStatus: 'local',
     };
 
     openCreatedStudyDocument(document, '새 빈 노트를 만들었습니다.');
@@ -809,7 +906,8 @@ export function useStudyWorkspace(props: {
   const requestDeleteStudyDocument = (id: number) => {
     const target = allStudyDocuments.find((value) => value.id === id);
     if (!target) return;
-    const isBackendDocument = isBackendApiEnabled() && Boolean(backendPageIdsByDocument[id]);
+    const backendNoteId = getStudyDocumentBackendNoteId(target);
+    const isBackendDocument = isBackendApiEnabled() && Boolean(backendNoteId);
 
     confirmDeleteAction({
       title: 'Note 삭제',
@@ -819,7 +917,7 @@ export function useStudyWorkspace(props: {
       confirmText: '삭제',
       onConfirm: () => {
         if (isBackendDocument) {
-          void deleteBackendNote(id)
+          void deleteBackendNote(backendNoteId!)
             .then(() => {
               setUserStudyDocuments((current) => current.filter((document) => document.id !== id));
               setBackendPageIdsByDocument((current) => {
@@ -882,7 +980,7 @@ export function useStudyWorkspace(props: {
                 delete next[id];
                 return next;
               });
-              setAllChatSessions((current) => current.filter((session) => session.note_id !== id));
+              setAllChatSessions((current) => current.filter((session) => session.note_id !== backendNoteId));
 
               if (studyDocumentId === id) {
                 setStudyDocumentId(null);
@@ -946,16 +1044,19 @@ export function useStudyWorkspace(props: {
 
     const target = allStudyDocuments.find((value) => value.id === id) ?? deletedStudyDocuments.find((value) => value.id === id);
     if (!target) return false;
-    const isBackendDocument = isBackendApiEnabled() && Boolean(backendPageIdsByDocument[id]);
+    const backendNoteId = getStudyDocumentBackendNoteId(target);
+    const isBackendDocument = isBackendApiEnabled() && Boolean(backendNoteId);
 
     if (isBackendDocument) {
-      void updateBackendNote({ noteId: id, title: nextTitle })
+      void updateBackendNote({ noteId: backendNoteId!, title: nextTitle })
         .then((updated) => {
           setUserStudyDocuments((current) => upsertStudyDocument(current, {
             ...target,
+            backendNoteId: updated.id,
             title: updated.title,
             preview: updated.summary ?? target.preview,
             updatedAt: 'DB 저장됨',
+            backendSyncStatus: 'synced',
           }));
           setWorkspaceFeedback('문서 제목을 백엔드에 저장했습니다.');
         })
@@ -973,6 +1074,112 @@ export function useStudyWorkspace(props: {
     setWorkspaceFeedback('문서 제목을 수정했습니다.');
     return true;
   };
+
+  const syncPdfDocumentToBackend = useCallback(async (document: StudyDocumentEntry, targetSubject: Subject) => {
+    if (!isBackendApiEnabled() || document.type !== 'pdf' || document.backendNoteId || pdfSyncInFlightRef.current[document.id]) {
+      return;
+    }
+
+    const sourceUri = document.localFileUri
+      ?? (document.file && typeof document.file === 'object' && 'uri' in document.file ? document.file.uri : null);
+    if (!sourceUri) return;
+
+    pdfSyncInFlightRef.current[document.id] = true;
+    setUserStudyDocuments((current) => current.map((item) => (
+      item.id === document.id
+        ? { ...item, backendSyncStatus: 'syncing', backendSyncError: undefined }
+        : item
+    )));
+
+    try {
+      const folder = await ensureFolderForSubject({ name: targetSubject.name, color: targetSubject.color });
+      const result = await uploadBackendPdfNote({
+        file: {
+          uri: sourceUri,
+          name: document.title || `${targetSubject.name} PDF`,
+          type: 'application/pdf',
+        },
+        folderId: folder.id,
+        title: document.title || `${targetSubject.name} PDF`,
+        summary: '업로드한 PDF 문서',
+      });
+      const pagesByNumber = Object.fromEntries(
+        result.pages.map((page) => [page.page_number, page.id]),
+      );
+      setBackendPageIdsByDocument((current) => ({
+        ...current,
+        [document.id]: pagesByNumber,
+      }));
+      setUserStudyDocuments((current) => current.map((item) => (
+        item.id === document.id
+          ? {
+            ...item,
+            backendNoteId: result.note.id,
+            title: result.note.title,
+            updatedAt: 'DB 저장됨',
+            pageCount: Math.max(item.pageCount, result.note.page_count ?? result.upload.page_count),
+            preview: result.note.summary ?? '업로드한 PDF 문서입니다.',
+            remoteFileUrl: result.note.file_url ?? result.upload.url,
+            thumbnailUrl: result.note.thumbnail_url ?? result.upload.thumbnail_url ?? undefined,
+            backendSyncStatus: 'synced',
+            backendSyncError: undefined,
+          }
+          : item
+      )));
+
+      void extractBackendPdfText({ noteId: result.note.id })
+        .then((textResult) => {
+          const textPageIdsByNumber = textResult.pages.reduce<Record<number, number>>((next, page) => {
+            next[page.page_number] = page.id;
+            return next;
+          }, {});
+          setBackendPageIdsByDocument((current) => ({
+            ...current,
+            [document.id]: {
+              ...(current[document.id] ?? {}),
+              ...textPageIdsByNumber,
+            },
+          }));
+          setUserStudyDocuments((current) => current.map((item) => (
+            item.id === document.id
+              ? { ...item, pageCount: Math.max(item.pageCount, textResult.pages_extracted) }
+              : item
+          )));
+        })
+        .catch(() => {
+          setWorkspaceFeedback('PDF 텍스트 추출에 실패했습니다.');
+        });
+
+      setWorkspaceFeedback(`${Math.max(document.pageCount, result.note.page_count ?? result.upload.page_count)}페이지 PDF를 백엔드에 저장했습니다.`);
+    } catch (error) {
+      const syncError = error instanceof BackendApiError && error.detail
+        ? error.detail
+        : '백엔드 저장에 실패했습니다.';
+      setWorkspaceFeedback(`${syncError} PDF는 이 기기에 유지됩니다.`);
+      setUserStudyDocuments((current) => current.map((item) => (
+        item.id === document.id
+          ? {
+            ...item,
+            backendSyncStatus: 'failed',
+            backendSyncError: syncError,
+          }
+          : item
+      )));
+    } finally {
+      delete pdfSyncInFlightRef.current[document.id];
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!workspaceHydrated || !isBackendApiEnabled()) return;
+
+    userStudyDocuments.forEach((document) => {
+      if (document.type !== 'pdf' || document.backendSyncStatus !== 'syncing' || document.backendNoteId) return;
+      const targetSubject = availableSubjects.find((item) => item.id === document.subjectId);
+      if (!targetSubject) return;
+      void syncPdfDocumentToBackend(document, targetSubject);
+    });
+  }, [availableSubjects, syncPdfDocumentToBackend, userStudyDocuments, workspaceHydrated]);
 
   const uploadPdfDocument = async () => {
     const targetSubjectId = subjectId ?? availableSubjects[0]?.id ?? null;
@@ -993,93 +1200,33 @@ export function useStudyWorkspace(props: {
       const picked = result.assets[0];
       const targetSubject = availableSubjects.find((value) => value.id === targetSubjectId);
       if (!targetSubject) return;
-      const localPdfFileUri = Platform.OS === 'web' && picked.base64 ? picked.base64 : picked.uri;
-      setWorkspaceFeedback('PDF 원본과 첫 페이지 썸네일을 저장하는 중입니다.');
-
-      if (isBackendApiEnabled()) {
-        try {
-          const folder = await ensureFolderForSubject({ name: targetSubject.name, color: targetSubject.color });
-          const result = await uploadBackendPdfNote({
-            file: {
-              uri: picked.uri,
-              name: picked.name || `${targetSubject.name} PDF`,
-              type: picked.mimeType || 'application/pdf',
-            },
-            folderId: folder.id,
-            title: picked.name || `${targetSubject.name} PDF`,
-            summary: '업로드한 PDF 문서',
-          });
-          const pagesByNumber = Object.fromEntries(
-            result.pages.map((page) => [page.page_number, page.id]),
-          );
-          setBackendPageIdsByDocument((current) => ({
-            ...current,
-            [result.note.id]: pagesByNumber,
-          }));
-          void buildPdfDataUriForTextExtraction(picked, localPdfFileUri)
-            .then((pdfData) => {
-              if (!pdfData) return null;
-              return extractBackendPdfText({
-                noteId: result.note.id,
-                pdfData,
-              });
-            })
-            .then((textResult) => {
-              if (!textResult) return;
-              const pagesByNumber = textResult.pages.reduce<Record<number, number>>((next, page) => {
-                next[page.page_number] = page.id;
-                return next;
-              }, {});
-              setBackendPageIdsByDocument((current) => ({
-                ...current,
-                [result.note.id]: {
-                  ...(current[result.note.id] ?? {}),
-                  ...pagesByNumber,
-                },
-              }));
-              setUserStudyDocuments((current) => current.map((item) => (
-                item.id === result.note.id
-                  ? { ...item, pageCount: Math.max(item.pageCount, textResult.pages_extracted) }
-                  : item
-              )));
-            })
-            .catch(() => {
-              setWorkspaceFeedback('PDF text extraction failed.');
-            });
-          const document: StudyDocumentEntry = {
-            id: result.note.id,
-            subjectId: targetSubjectId,
-            title: result.note.title,
-            type: 'pdf',
-            updatedAt: '방금 전',
-            pageCount: Math.max(1, result.upload.page_count),
-            preview: result.note.summary ?? '업로드한 PDF 문서입니다.',
-            file: { uri: result.upload.url },
-            thumbnailUrl: result.upload.thumbnail_url ?? undefined,
-          };
-          openCreatedStudyDocument(document, `${document.pageCount}페이지 PDF를 백엔드에 저장했습니다.`);
-          return;
-        } catch (error) {
-          setWorkspaceFeedback(
-            error instanceof BackendApiError && error.detail
-              ? error.detail
-              : '백엔드 저장에 실패해 이 기기에만 PDF를 추가했습니다.',
-          );
-        }
-      }
-
-      const document: StudyDocumentEntry = {
-        id: Date.now(),
+      setWorkspaceFeedback('PDF를 이 기기에 저장하는 중입니다.');
+      const localPdfFileUri = await persistPickedPdfAsset(picked);
+      const localPageCount = await readPdfPageCount(picked, localPdfFileUri);
+      const localDocumentId = createLocalStudyDocumentId();
+      const localDocument: StudyDocumentEntry = {
+        id: localDocumentId,
         subjectId: targetSubjectId,
-        title: picked.name || `${targetSubject?.name ?? '수업'} PDF`,
+        title: picked.name || `${targetSubject.name} PDF`,
         type: 'pdf',
         updatedAt: '방금 전',
-        pageCount: 1,
-        preview: '파일 선택기에서 업로드한 수업 PDF입니다.',
+        pageCount: localPageCount,
+        preview: isBackendApiEnabled()
+          ? '이 기기에서 바로 열고 백엔드 동기화 중입니다.'
+          : '이 기기에 저장된 PDF입니다.',
         file: { uri: localPdfFileUri },
+        localFileUri: localPdfFileUri,
+        backendSyncStatus: isBackendApiEnabled() ? 'syncing' : 'local',
       };
 
-      openCreatedStudyDocument(document, 'PDF 파일을 업로드했습니다.');
+      openCreatedStudyDocument(
+        localDocument,
+        isBackendApiEnabled() ? 'PDF를 열었습니다. 백엔드 동기화 중입니다.' : 'PDF 파일을 업로드했습니다.',
+      );
+
+      if (isBackendApiEnabled()) {
+        void syncPdfDocumentToBackend(localDocument, targetSubject);
+      }
     } catch {
       setWorkspaceFeedback('PDF 파일을 가져오지 못했습니다.');
     }
@@ -1297,6 +1444,7 @@ export function useStudyWorkspace(props: {
         }));
         const document: StudyDocumentEntry = {
           id: backendNote.id,
+          backendNoteId: backendNote.id,
           subjectId: targetSubject.id,
           title: backendNote.title,
           type: 'image',
@@ -1304,6 +1452,8 @@ export function useStudyWorkspace(props: {
           pageCount: 1,
           preview: backendNote.summary ?? '이미지로 만든 노트입니다.',
           file: { uri: imageUrl },
+          remoteFileUrl: imageUrl,
+          backendSyncStatus: 'synced',
         };
         openCreatedStudyDocument(document, '이미지를 새 노트 페이지로 저장했습니다.');
         updateAssetStatus(asset.id, 'accepted');
@@ -1327,6 +1477,8 @@ export function useStudyWorkspace(props: {
       pageCount: 1,
       preview: asset.summary,
       file: { uri: imageUrl },
+      localFileUri: imageUrl,
+      backendSyncStatus: 'local',
     };
     openCreatedStudyDocument(document, '이미지를 새 노트로 만들었습니다.');
     updateAssetStatus(asset.id, 'accepted');
@@ -1335,6 +1487,8 @@ export function useStudyWorkspace(props: {
 
   const persistAssetForCurrentDocument = async (asset: CaptureAsset) => {
     if (!studyDocumentId || !isBackendApiEnabled() || !backendPageIdsByDocument[studyDocumentId]) return;
+    const backendNoteId = getStudyDocumentBackendNoteId(studyDocument);
+    if (!backendNoteId) return;
     const assetUrl = resolveAssetUri(asset);
     if (!assetUrl) return;
 
@@ -1342,7 +1496,7 @@ export function useStudyWorkspace(props: {
     const nextPageNumber = Math.max(0, ...existingPageNumbers) + 1;
     try {
       const backendPage = await createBackendNotePage({
-        noteId: studyDocumentId,
+        noteId: backendNoteId,
         pageNumber: nextPageNumber,
         content: serializeNotePageContent({ inkStrokes: [], textAnnotations: [] }),
         imageUrl: assetUrl,
@@ -1849,6 +2003,7 @@ export function useStudyWorkspace(props: {
     setSelectionByDocument,
     setInkTool,
     setWorkspaceFeedback,
+    onMarkPageDirty: markBackendPageDirty,
   });
 
   const openWorkspaceAttachment = (attachmentId: string) => {
@@ -2039,7 +2194,9 @@ export function useStudyWorkspace(props: {
     }),
     setAiPanelMode,
     setAiQuestion,
-    setAiChatScope,
+    setAiChatScope: changeAiChatScope,
+    onChangeAiChatScope: changeAiChatScope,
+    onLoadAllAiChatSessions: loadAllAiChatSessions,
     setAiChatSearchQuery,
     selectAiChatSession,
     renameAiChatSession,
