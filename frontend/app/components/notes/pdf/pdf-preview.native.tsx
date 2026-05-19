@@ -8,7 +8,7 @@ import { TextAnnotationLayer } from '../canvas/text-annotation-layer';
 import { findHitInkStrokeId, getInkCenterlinePath, getInkStrokeSvgPath, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize } from '../../../ui-helpers';
 import { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { CaptureAsset, NotebookPage, PageCaptureReference } from '../../../types';
-import { renderPdfPageToImage, type RenderedPdfPage } from '../../../services/pdf-page-renderer';
+import { renderPdfPageToImage, type PdfRenderSource, type RenderedPdfPage } from '../../../services/pdf-page-renderer';
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
 type ResponderStartPoint = { x: number; y: number } | null;
 const PDF_RENDER_PAGE_RADIUS = 3;
@@ -42,6 +42,11 @@ function getPdfSourceKey(source: number | string | { uri: string }) {
   if (typeof source === 'number') return `asset:${source}`;
   if (typeof source === 'string') return source;
   return source.uri;
+}
+
+function getPdfRenderSource(source: number | string | { uri: string }): PdfRenderSource | null {
+  if (typeof source === 'number') return null;
+  return source;
 }
 
 function isPdfPageNearCurrent(page: NotebookPage, currentPageNumber: number) {
@@ -412,13 +417,18 @@ export function PdfPreview(props: {
   useEffect(() => {
     if (!pdfPagesToRender.length || viewerWidth <= 0) return;
     const generation = pdfRenderGenerationRef.current;
+    const renderSource = getPdfRenderSource(props.file);
+    if (!renderSource) {
+      setLoadError('PDF source URI is unavailable.');
+      return;
+    }
 
     pdfPagesToRender.forEach((pageNumber) => {
       const cacheKey = getPdfRenderCacheKey(pageNumber);
       if (renderedPdfPages[cacheKey] || pdfRenderRequestsRef.current.has(cacheKey)) return;
 
       pdfRenderRequestsRef.current.add(cacheKey);
-      void renderPdfPageToImage({ file: props.file, pageNumber, targetWidth: viewerWidth })
+      void renderPdfPageToImage({ file: renderSource, pageNumber, targetWidth: viewerWidth })
         .then((renderedPage) => {
           if (pdfRenderGenerationRef.current !== generation) return;
           setLoadError(null);

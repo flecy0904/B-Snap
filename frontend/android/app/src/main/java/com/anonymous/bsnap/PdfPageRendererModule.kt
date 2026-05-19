@@ -2,6 +2,7 @@ package com.anonymous.bsnap
 
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.graphics.Matrix
 import android.graphics.pdf.PdfRenderer
 import android.net.Uri
 import android.os.ParcelFileDescriptor
@@ -59,7 +60,13 @@ class PdfPageRendererModule(private val reactContext: ReactApplicationContext) :
 
       bitmap = Bitmap.createBitmap(bitmapWidth, bitmapHeight, Bitmap.Config.ARGB_8888)
       bitmap.eraseColor(Color.WHITE)
-      page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+      val renderMatrix = Matrix().apply {
+        postScale(
+          bitmapWidth.toFloat() / page.width.toFloat(),
+          bitmapHeight.toFloat() / page.height.toFloat()
+        )
+      }
+      page.render(bitmap, null, renderMatrix, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
 
       val outputFile = getOutputFile(fileUri, pageNumber, bitmapWidth)
       val temporaryOutputFile = getTemporaryOutputFile(outputFile)

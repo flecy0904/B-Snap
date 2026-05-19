@@ -138,12 +138,12 @@ export function useAiCanvasNotes({
     setError(null);
 
     listBackendAiCanvasNotes(noteId)
-      .then((items) => {
+      .then(async (items) => {
         if (!mounted) return;
         setNotes(items);
         const nextActive = items[0] ?? null;
         if (nextActive) {
-          void loadCanvasNoteDetail(nextActive.id);
+          await loadCanvasNoteDetail(nextActive.id);
         } else {
           applyActiveNote(null);
         }

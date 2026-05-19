@@ -13,6 +13,8 @@ export type RenderedPdfPage = {
   pageCount: number;
 };
 
+export type PdfRenderSource = string | { uri: string };
+
 const nativeRenderer = NativeModules.BsnPdfPageRenderer as NativePdfPageRenderer | undefined;
 const PDF_SOURCE_CACHE_DIR = `${FileSystem.cacheDirectory ?? ''}bsnap-pdf-sources/`;
 const pdfSourceDownloadPromises = new Map<string, Promise<string>>();
@@ -49,7 +51,7 @@ async function ensureLocalPdfUri(fileUri: string) {
 }
 
 export async function renderPdfPageToImage(params: {
-  file: number | string | { uri: string };
+  file: PdfRenderSource;
   pageNumber: number;
   targetWidth: number;
 }) {
@@ -60,11 +62,7 @@ export async function renderPdfPageToImage(params: {
     throw new Error('BsnPdfPageRenderer native module is unavailable.');
   }
 
-  const sourceUri = typeof params.file === 'string'
-    ? params.file
-    : typeof params.file === 'object' && params.file && 'uri' in params.file
-      ? params.file.uri
-      : null;
+  const sourceUri = typeof params.file === 'string' ? params.file : params.file.uri;
 
   if (!sourceUri) {
     throw new Error('PDF source URI is unavailable.');
