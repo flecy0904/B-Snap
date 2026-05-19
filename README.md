@@ -29,12 +29,19 @@ npm clean-install
 
 `backend/.env.example`을 참고해서 `backend/.env` 파일을 만듭니다.
 
+macOS/Linux:
+
+```bash
+cp backend/.env.example backend/.env
+```
+
 예시:
 
 ```env
 APP_ENV=local
 APP_NAME=B-Snap API
 DATABASE_URL=postgresql+psycopg://postgres:<password>@localhost:5432/bsnap
+AI_PROVIDER=openai
 OPENAI_API_KEY=<your_openai_api_key>
 OPENAI_DEFAULT_MODEL=gpt-4.1-mini
 ALLOWED_ORIGINS=http://localhost:8081,http://localhost:19006
@@ -50,6 +57,29 @@ UPLOAD_MAX_BYTES=31457280
 - 실제 `.env` 파일은 git에 올리지 않습니다.
 - 실제 API key나 DB 비밀번호를 README, 이슈, PR, 채팅에 적지 않습니다.
 - `JWT_SECRET_KEY`는 팀/환경마다 충분히 긴 랜덤 문자열로 설정합니다.
+- 저비용 AI 채팅/사진 설명 기본 모델은 `gpt-4.1-mini`입니다.
+
+### 2-1. Frontend 환경변수 생성
+
+`frontend/.env.example`을 참고해서 `frontend/.env` 파일을 만듭니다.
+
+```bash
+cp frontend/.env.example frontend/.env
+```
+
+시뮬레이터만 사용할 때는 `localhost`도 가능하지만, 실기기와 같이 테스트할 때는 Mac의 같은 Wi-Fi IP를 넣습니다.
+
+```bash
+ipconfig getifaddr en0
+```
+
+예시:
+
+```env
+EXPO_PUBLIC_BACKEND_URL=http://172.31.97.89:8000
+```
+
+Wi-Fi가 바뀌면 IP도 바뀔 수 있으므로 `frontend/.env`를 수정하고 Metro를 다시 시작합니다.
 
 ### 3. PostgreSQL DB 생성
 
@@ -86,7 +116,7 @@ cd C:\Users\User\Desktop\WorkSpace\B-Snap
 
 ```powershell
 cd frontend
-npm run backend
+npm run backend:dev
 ```
 
 기본 주소:
@@ -125,7 +155,7 @@ cd ..
 
 ```bash
 cd frontend
-npm run start
+npm run start:reset -- --host lan
 ```
 
 새 터미널:
@@ -141,6 +171,16 @@ iPad A16 시뮬레이터로 실행:
 cd frontend
 npm run ios:ipad
 ```
+
+실기기는 같은 Wi-Fi에 연결한 뒤 Metro QR을 개발 빌드에서 열거나, USB 연결 후 Xcode/React Native CLI로 설치한 개발 빌드를 실행합니다. `No script URL provided`가 뜨면 Metro가 꺼져 있거나, 앱이 다른 Metro 포트/주소를 보고 있는 상태입니다. 이때는 Expo 서버를 하나만 남기고 다시 시작합니다.
+
+```bash
+pkill -f "expo start --dev-client"
+cd frontend
+npm run start:reset -- --host lan
+```
+
+앱과 Metro가 같은 서버에 붙어 있으면 터미널의 `r` 또는 시뮬레이터의 `Cmd+R`로 리로드할 수 있습니다.
 ### Android 실행
 
 필수:
@@ -224,6 +264,18 @@ Backend:
 - 노트 제목 및 노트 페이지 내용 저장 API
 - OpenAI `gpt-4.1-mini` 연결
 - AI 질문/응답 DB 저장
+- 이미지 업로드 시 원본 파일 저장, 전처리 이미지 생성, 전처리 이미지를 우선 사용한 AI 사진 설명 생성
+
+## 이미지 전처리/사진 설명 흐름
+
+사진 업로드 흐름은 다음 구조를 따릅니다.
+
+1. 원본 이미지는 `backend/uploads`에 저장합니다.
+2. 가능한 경우 전처리 이미지는 `backend/uploads/processed-images`에 PNG로 저장합니다.
+3. AI 사진 설명은 전처리 이미지를 우선 사용하고, 전처리 실패 시 원본 이미지로 fallback합니다.
+4. 앱 UI는 원본 사진을 우선 보여주고, `AI로 더 보기` 같은 분석 요청에는 전처리 URL을 우선 사용합니다.
+
+따라서 팀원이 로컬에서 사진 설명까지 테스트하려면 `backend/.env`의 `AI_PROVIDER`, `OPENAI_API_KEY`, `UPLOAD_DIR`, `AI_IMAGE_MAX_BYTES` 설정이 필요합니다.
 
 ## 팀 개발 참고 문서
 
