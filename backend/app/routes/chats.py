@@ -233,6 +233,7 @@ def create_ai_chat_message(
             selection_rect=payload.selection_rect.model_dump() if payload.selection_rect else None,
             page_number=payload.page_number,
             selection_image_url=payload.selection_image_url,
+            context_hint=payload.context_hint,
         )
     user_message = execute_returning(
         connection,

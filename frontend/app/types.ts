@@ -101,6 +101,7 @@ export interface CaptureAsset {
   previewImage?: number;
   fileUrl?: string;
   thumbnailUrl?: string;
+  processedUrl?: string;
   pageCount?: number;
   analysisStatus?: 'pending' | 'ready' | 'failed';
   analysisSummary?: string;
@@ -138,6 +139,7 @@ export interface WorkspaceAttachment {
   previewImage?: number;
   fileUrl?: string;
   thumbnailUrl?: string;
+  processedUrl?: string;
   pageCount?: number;
 }
 
@@ -159,6 +161,7 @@ export interface PageCaptureReference {
   previewImage?: number;
   fileUrl?: string;
   thumbnailUrl?: string;
+  processedUrl?: string;
   pageCount?: number;
 }
 

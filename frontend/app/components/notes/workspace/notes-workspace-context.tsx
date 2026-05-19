@@ -1,5 +1,5 @@
 import React from 'react';
-import type { BackendChatMessage, BackendChatSession } from '../../../services/backend-api';
+import type { BackendChatMessage, BackendChatSession, BackendClassInsight } from '../../../services/backend-api';
 import type { UseAiCanvasNotesResult } from '../../../hooks/notes/ai-canvas/use-ai-canvas-notes';
 import { AiAnswer, NoteSummarySection, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NotebookPage, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../../types';
 import { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
@@ -31,7 +31,9 @@ export type DesktopNotesWorkspaceContextValue = {
   aiLoading: boolean;
   aiError: string | null;
   aiCanvas: UseAiCanvasNotesResult;
+  classInsight: BackendClassInsight | null;
   inkTool: InkTool;
+  fingerDrawingEnabled: boolean;
   penColor: string;
   penWidth: number;
   brushType: InkBrush;
@@ -97,6 +99,7 @@ export type DesktopNotesWorkspaceContextValue = {
   onGoToPreviousDocumentPage: () => void;
   onGoToNextDocumentPage: () => void;
   onChangeInkTool: (tool: InkTool) => void;
+  onToggleFingerDrawing: () => void;
   onChangePenColor: (color: string) => void;
   onChangePenWidth: (width: number) => void;
   onChangeBrushType: (brush: InkBrush) => void;
@@ -127,8 +130,10 @@ export type DesktopNotesWorkspaceContextValue = {
   onCreateMemoPage: (insertAfterPage?: number) => void;
   onInsertInboxAsset: (assetId: string) => void;
   onRemoveInboxAsset: (assetId: string) => void;
+  onLinkCaptureAssetToPage: (assetId: string, documentId: number, pageNumber: number) => boolean;
   onOpenPageCaptureReference: (referenceId: string) => void;
   onMovePageCaptureReference: (referenceId: string, delta: -1 | 1) => void;
+  onMovePageCaptureReferenceToPage: (referenceId: string, pageNumber: number) => void;
   onRemovePageCaptureReference: (referenceId: string) => void;
   onAskAiAboutPageCaptureReference: (referenceId: string) => void;
   onPreviewAttachment: (assetId: string, attachmentId: string) => void;

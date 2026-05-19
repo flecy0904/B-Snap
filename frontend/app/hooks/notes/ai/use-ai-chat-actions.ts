@@ -62,6 +62,7 @@ export function useAiChatActions(params: {
   setAllChatSessions: SetState<BackendChatSession[]>;
   setAiMessagesBySession: SetState<Record<number, BackendChatMessage[]>>;
   onRequestCanvasEditFromChat?: (payload: { question: string; answer: string }) => Promise<void>;
+  buildContextHint?: (question: string) => string | null;
 }) {
   const getCurrentBackendNoteId = () => getStudyDocumentBackendNoteId(params.studyDocument);
   const getSessionDocumentKey = (session: BackendChatSession) => {
@@ -320,6 +321,7 @@ export function useAiChatActions(params: {
     const hasSelection = Boolean(params.selectionRect || params.selectionPreviewUri);
     const selectionPreviewUri = override?.selectionImageUri ?? params.selectionPreviewUri;
     const question = override?.question?.trim() || params.aiQuestion.trim() || (hasSelection ? '선택한 영역을 설명해줘' : '현재 페이지를 요약해줘');
+    const contextHint = params.buildContextHint?.(question) ?? null;
     params.setAiLoading(true);
     params.setAiError(null);
     params.setAiQuestion('');
@@ -389,6 +391,7 @@ export function useAiChatActions(params: {
         selectionImageUri: selectionPreviewUri,
         selectionRect: params.selectionRect,
         pageNumber: override?.pageNumber ?? params.currentPageNumber,
+        contextHint,
       });
       const userMessageWithAttachment = {
         ...response.user_message,

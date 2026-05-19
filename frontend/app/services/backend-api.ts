@@ -105,6 +105,27 @@ export type BackendAiCanvasNote = BackendAiCanvasNoteSummary & {
   markdown: string;
 };
 
+export type BackendClassInsightPageSignal = {
+  page_number: number;
+  importance_score: number;
+  priority: 'very-high' | 'high' | 'medium' | string;
+  reason_tags: string[];
+  signal_count: number;
+  bookmark_count?: number;
+  highlight_count?: number;
+  keyword_hits?: number;
+  photo_reference_count?: number;
+  ai_question_count?: number;
+  memo_page_count?: number;
+};
+
+export type BackendClassInsight = {
+  note_id: number;
+  matched_note_count: number;
+  participant_count: number;
+  pages: BackendClassInsightPageSignal[];
+};
+
 export type BackendAiCanvasEditResponse = {
   markdown: string;
   model: string;
@@ -427,6 +448,10 @@ export function listBackendNotePages(noteId: number) {
   ));
 }
 
+export function getBackendClassInsight(noteId: number) {
+  return request<BackendClassInsight>(`/notes/${noteId}/class-insights`);
+}
+
 export async function createBackendNote(payload: {
   folderId: number;
   title: string;
@@ -676,6 +701,7 @@ export async function sendBackendAiMessage(payload: {
   } | null;
   pageNumber?: number | null;
   selectionImageUri?: string | null;
+  contextHint?: string | null;
 }) {
   return request<BackendAiMessageResponse>(`/chat-sessions/${payload.sessionId}/ai-messages`, {
     method: 'POST',
@@ -686,6 +712,7 @@ export async function sendBackendAiMessage(payload: {
       selection_rect: payload.selectionRect ?? null,
       page_number: payload.pageNumber ?? null,
       selection_image_url: payload.selectionImageUri ?? null,
+      context_hint: payload.contextHint ?? null,
     },
   });
 }

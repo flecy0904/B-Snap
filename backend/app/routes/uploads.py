@@ -157,21 +157,40 @@ def _preprocess_image(path: Path, upload_root: Path, stored_filename: str) -> tu
     return output_path, f"/uploads/processed-images/{output_name}"
 
 
-def _image_data_uri(path: Path, content_type: str) -> str | None:
+def _image_data_uri(path: Path, content_type: str, max_bytes: int) -> str | None:
     try:
         data = path.read_bytes()
     except Exception:
         return None
-    if not data or len(data) > 8 * 1024 * 1024:
+    if not data or len(data) > max_bytes:
         return None
     encoded = base64.b64encode(data).decode("ascii")
     return f"data:{content_type};base64,{encoded}"
 
 
+def _build_upload_analysis_image_data_uri(
+    *,
+    source_path: Path,
+    source_content_type: str,
+    processed_path: Path | None,
+    max_bytes: int,
+) -> str | None:
+    candidates: list[tuple[Path, str]] = []
+    if processed_path is not None:
+        candidates.append((processed_path, "image/png"))
+    candidates.append((source_path, source_content_type))
+
+    for path, content_type in candidates:
+        image_data_uri = _image_data_uri(path, content_type, max_bytes=max_bytes)
+        if image_data_uri:
+            return image_data_uri
+    return None
+
+
 def _fallback_image_analysis(filename: str, status: str = "ready") -> dict:
     return {
         "status": status,
-        "summary": f"{filename} 원본 사진입니다. 수업 중 촬영한 자료로, PDF 페이지와 연결해 복습할 수 있습니다.",
+        "summary": "수업 중 촬영한 원본 사진입니다. PDF 페이지와 연결해 복습 자료로 활용할 수 있습니다.",
         "keywords": ["수업사진", "판서", "복습자료"],
         "confidence": 0.3,
     }
@@ -183,9 +202,12 @@ def _analyze_image_upload(upload: StoredUpload, source_path: Path, settings: Set
 
     processed_path, processed_url = _preprocess_image(source_path, settings.upload_path, upload.stored_filename)
     upload.processed_url = processed_url
-    analysis_path = processed_path or source_path
-    analysis_content_type = "image/png" if processed_path else upload.content_type
-    image_data_uri = _image_data_uri(analysis_path, analysis_content_type)
+    image_data_uri = _build_upload_analysis_image_data_uri(
+        source_path=source_path,
+        source_content_type=upload.content_type,
+        processed_path=processed_path,
+        max_bytes=settings.ai_image_max_bytes,
+    )
 
     if not image_data_uri:
         upload.analysis = _fallback_image_analysis(upload.filename, status="failed")
