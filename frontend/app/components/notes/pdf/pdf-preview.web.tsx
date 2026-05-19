@@ -4,7 +4,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import Svg from 'react-native-svg';
 import { InkPath } from '../canvas/ink-path';
 import { TextAnnotationLayer } from '../canvas/text-annotation-layer';
-import { hasMultipleTouches, isLikelyStylusEvent, shouldUsePrimaryPointer } from '../canvas/ink-input-policy';
+import { hasMultipleTouches, shouldCaptureInkPointer, shouldUsePrimaryPointer } from '../canvas/ink-input-policy';
 import { getCaptureOriginalImageSource, getPageCaptureReferenceImageSource } from '../shared/capture-assets';
 import { cleanAiDisplayText, finalizeInkStroke, findHitInkStrokeId, getInkCenterlinePath, getInkStrokeSvgPath, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize, shouldAppendInkPoint } from '../../../ui-helpers';
 import { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
@@ -65,7 +65,6 @@ type PdfJsLib = {
 };
 type PageFrame = { width: number; height: number };
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
-type ResponderStartPoint = { x: number; y: number } | null;
 const PDF_RENDER_PAGE_RADIUS = 2;
 
 function getPriorityPageNumbers(currentPage: number, pageCount: number) {
@@ -94,17 +93,23 @@ declare global {
 
 let pdfJsLoaderPromise: Promise<PdfJsLib> | null = null;
 
-function shouldCaptureDrawingMove(event: GestureResponderEvent, startPoint: ResponderStartPoint) {
-  if (isLikelyStylusEvent(event)) return true;
-  if (!startPoint) return false;
-  const dx = event.nativeEvent.locationX - startPoint.x;
-  const dy = event.nativeEvent.locationY - startPoint.y;
-  if (Math.hypot(dx, dy) < 8) return false;
-  return Math.abs(dx) > Math.abs(dy) * 1.18;
+function shouldLockScrollForTool(tool: InkTool, fingerDrawingEnabled: boolean | undefined) {
+  return tool === 'select'
+    || tool === 'erase'
+    || tool === 'text'
+    || Boolean(fingerDrawingEnabled && isDrawingTool(tool));
 }
 
-function isInkCaptureTool(tool: InkTool) {
-  return isDrawingTool(tool) || tool === 'select' || tool === 'erase';
+function shouldCaptureToolStart(tool: InkTool, event: GestureResponderEvent, fingerDrawingEnabled: boolean | undefined) {
+  if (!shouldUsePrimaryPointer(event)) return false;
+  if (isDrawingTool(tool)) return shouldCaptureInkPointer(event, Boolean(fingerDrawingEnabled));
+  return tool === 'select' || tool === 'erase' || tool === 'text';
+}
+
+function shouldCaptureToolMove(tool: InkTool, event: GestureResponderEvent, fingerDrawingEnabled: boolean | undefined) {
+  if (!shouldUsePrimaryPointer(event)) return false;
+  if (isDrawingTool(tool)) return shouldCaptureInkPointer(event, Boolean(fingerDrawingEnabled));
+  return tool === 'select' || tool === 'erase';
 }
 
 function isPdfUri(uri: string | undefined) {
@@ -323,11 +328,10 @@ export function PdfPreview(props: {
   const selectionResizeStartRectRef = useRef<SelectionRect | null>(null);
   const draftSelectionRef = useRef<SelectionRect | null>(null);
   const textTapRef = useRef<InkPoint | null>(null);
-  const responderStartPointRef = useRef<ResponderStartPoint>(null);
   const canvasRefs = useRef<Record<number, HTMLCanvasElement | null>>({});
   const scrollingProgrammaticallyRef = useRef(false);
   const suppressNextScrollSyncRef = useRef(false);
-  const inkInputLocksScroll = Boolean(props.fingerDrawingEnabled && isInkCaptureTool(props.inkTool));
+  const inkInputLocksScroll = shouldLockScrollForTool(props.inkTool, props.fingerDrawingEnabled);
   const scrollEnabled = !inkInputLocksScroll;
 
   const pdfUri = useMemo(() => {
@@ -851,19 +855,15 @@ export function PdfPreview(props: {
         <View
           style={[props.styles.inkOverlay, { pointerEvents: props.inkTool === 'view' ? 'none' : 'auto' }]}
           onStartShouldSetResponder={(event) => {
-            responderStartPointRef.current = { x: event.nativeEvent.locationX, y: event.nativeEvent.locationY };
             if (hasMultipleTouches(event)) return false;
-            if (!shouldUsePrimaryPointer(event)) return false;
-            if (isInkCaptureTool(props.inkTool) && (props.fingerDrawingEnabled || isLikelyStylusEvent(event))) return true;
-            return props.inkTool === 'text';
+            return shouldCaptureToolStart(props.inkTool, event, props.fingerDrawingEnabled);
           }}
           onMoveShouldSetResponder={(event) => {
             if (hasMultipleTouches(event)) return false;
-            if (!shouldUsePrimaryPointer(event)) return false;
-            if (isInkCaptureTool(props.inkTool)) {
-              return props.fingerDrawingEnabled || shouldCaptureDrawingMove(event, responderStartPointRef.current);
+            if (isDrawingTool(props.inkTool)) {
+              return shouldCaptureToolMove(props.inkTool, event, props.fingerDrawingEnabled);
             }
-            return false;
+            return shouldCaptureToolMove(props.inkTool, event, props.fingerDrawingEnabled);
           }}
           onResponderGrant={(event) => {
             beginInteraction(page);
@@ -998,7 +998,6 @@ export function PdfPreview(props: {
             if (stroke && stroke.points.length > 1) props.onCommitInkStroke(finalizeInkStroke(stroke));
             finishSelection(page);
             currentStrokeRef.current = null;
-            responderStartPointRef.current = null;
             setCurrentStroke(null);
           }}
           onResponderTerminate={() => {
@@ -1012,7 +1011,6 @@ export function PdfPreview(props: {
             selectionResizeCornerRef.current = null;
             selectionResizeStartRectRef.current = null;
             textTapRef.current = null;
-            responderStartPointRef.current = null;
             setDraftSelection(null);
             setCurrentStroke(null);
           }}
@@ -1043,7 +1041,7 @@ export function PdfPreview(props: {
         style={{ width: '100%', maxHeight: viewerHeight }}
         contentContainerStyle={{ alignItems: 'center', paddingTop: 18, paddingBottom: 36 }}
         scrollEnabled={scrollEnabled}
-        scrollEventThrottle={80}
+        scrollEventThrottle={16}
         onScroll={handleScroll}
         showsVerticalScrollIndicator
       >

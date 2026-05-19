@@ -83,7 +83,7 @@ export function useStudyWorkspace(props: {
   const [noteWorkspaceMode, setNoteWorkspaceMode] = useState<NoteWorkspaceMode>('note');
   const [studyDocumentId, setStudyDocumentId] = useState<number | null>(null);
   const [inkTool, setInkTool] = useState<InkTool>('view');
-  const [fingerDrawingEnabled, setFingerDrawingEnabled] = useState(true);
+  const [fingerDrawingEnabled, setFingerDrawingEnabled] = useState(false);
   const [penColor, setPenColor] = useState<string>(DEFAULT_PEN_COLOR);
   const [penWidth, setPenWidth] = useState(3);
   const [brushType, setBrushType] = useState<InkBrush>('ballpoint');

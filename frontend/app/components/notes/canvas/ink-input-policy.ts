@@ -4,6 +4,10 @@ type PointerLikeTouch = {
   pointerType?: string;
   touchType?: string;
   type?: string;
+  altitudeAngle?: number;
+  azimuthAngle?: number;
+  altitude?: number;
+  azimuth?: number;
 };
 
 type InkInputNativeEvent = GestureResponderEvent['nativeEvent'] & {
@@ -12,6 +16,10 @@ type InkInputNativeEvent = GestureResponderEvent['nativeEvent'] & {
   touchType?: string;
   touches?: PointerLikeTouch[];
   changedTouches?: PointerLikeTouch[];
+  altitudeAngle?: number;
+  azimuthAngle?: number;
+  altitude?: number;
+  azimuth?: number;
 };
 
 function getPointerType(event: GestureResponderEvent) {
@@ -28,14 +36,32 @@ function getPointerType(event: GestureResponderEvent) {
   return String(pointerType).toLowerCase();
 }
 
+function hasStylusOnlyMetrics(input: PointerLikeTouch | InkInputNativeEvent | null | undefined) {
+  if (!input) return false;
+  return (
+    typeof input.altitudeAngle === 'number'
+    || typeof input.azimuthAngle === 'number'
+    || typeof input.altitude === 'number'
+    || typeof input.azimuth === 'number'
+  );
+}
+
 export function hasMultipleTouches(event: GestureResponderEvent) {
   const nativeEvent = event.nativeEvent as InkInputNativeEvent;
   return Boolean(nativeEvent.touches && nativeEvent.touches.length > 1);
 }
 
 export function isLikelyStylusEvent(event: GestureResponderEvent) {
+  const nativeEvent = event.nativeEvent as InkInputNativeEvent;
+  const touch = nativeEvent.changedTouches?.[0] ?? nativeEvent.touches?.[0] ?? null;
   const pointerType = getPointerType(event);
-  return pointerType === 'pen' || pointerType === 'stylus' || pointerType === 'pencil';
+  return (
+    pointerType === 'pen'
+    || pointerType === 'stylus'
+    || pointerType === 'pencil'
+    || hasStylusOnlyMetrics(nativeEvent)
+    || hasStylusOnlyMetrics(touch)
+  );
 }
 
 export function shouldUsePrimaryPointer(event: GestureResponderEvent) {
