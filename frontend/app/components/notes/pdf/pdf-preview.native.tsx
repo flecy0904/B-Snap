@@ -86,6 +86,42 @@ function NotebookPaperBackground({ page }: { page: NotebookPage }) {
   );
 }
 
+function AdaptiveReferenceImage(props: {
+  source: any;
+  frameStyle: any;
+  imageStyle: any;
+  minHeight?: number;
+  maxHeight?: number;
+}) {
+  const [frameWidth, setFrameWidth] = useState(0);
+  const [aspectRatio, setAspectRatio] = useState<number | null>(null);
+  const minHeight = props.minHeight ?? 220;
+  const maxHeight = props.maxHeight ?? 430;
+  const dynamicHeight = frameWidth > 0 && aspectRatio
+    ? Math.round(Math.max(minHeight, Math.min(maxHeight, frameWidth / aspectRatio)))
+    : undefined;
+
+  return (
+    <View
+      style={[props.frameStyle, dynamicHeight ? { height: dynamicHeight } : null]}
+      onLayout={(event) => setFrameWidth(Math.round(event.nativeEvent.layout.width))}
+    >
+      <Image
+        source={props.source}
+        style={props.imageStyle}
+        resizeMode="contain"
+        fadeDuration={0}
+        onLoad={(event) => {
+          const source = (event.nativeEvent as any)?.source ?? {};
+          const width = Number(source.width);
+          const height = Number(source.height);
+          if (width > 0 && height > 0) setAspectRatio(width / height);
+        }}
+      />
+    </View>
+  );
+}
+
 function getResizeCorner(rect: SelectionRect | null, point: InkPoint): ResizeCorner | null {
   if (!rect) return null;
   const threshold = 24;
@@ -1127,9 +1163,13 @@ export function PdfPreview(props: {
               </Pressable>
             </View>
             {activeReferenceImage ? (
-              <View style={props.styles.pdfPageReferencePopoverImageFrame}>
-                <Image source={activeReferenceImage} style={props.styles.pdfPageReferencePopoverImage} resizeMode="contain" fadeDuration={0} />
-              </View>
+              <AdaptiveReferenceImage
+                source={activeReferenceImage}
+                frameStyle={props.styles.pdfPageReferencePopoverImageFrame}
+                imageStyle={props.styles.pdfPageReferencePopoverImage}
+                minHeight={230}
+                maxHeight={440}
+              />
             ) : (
               <View style={props.styles.pdfPageReferencePopoverFallback}>
                 <MaterialCommunityIcons name={activePageReference.type === 'pdf' ? 'file-pdf-box' : 'image-outline'} size={24} color="#6D7BD9" />
@@ -1193,9 +1233,13 @@ export function PdfPreview(props: {
               </Pressable>
             </View>
             {incomingAssetImage ? (
-              <View style={props.styles.pdfIncomingCaptureImageFrame}>
-                <Image source={incomingAssetImage} style={props.styles.pdfIncomingCaptureImage} resizeMode="contain" fadeDuration={0} />
-              </View>
+              <AdaptiveReferenceImage
+                source={incomingAssetImage}
+                frameStyle={props.styles.pdfIncomingCaptureImageFrame}
+                imageStyle={props.styles.pdfIncomingCaptureImage}
+                minHeight={240}
+                maxHeight={460}
+              />
             ) : null}
             <View style={props.styles.pdfIncomingCaptureAnswer}>
               <View style={props.styles.pdfIncomingCaptureAnswerHeader}>
