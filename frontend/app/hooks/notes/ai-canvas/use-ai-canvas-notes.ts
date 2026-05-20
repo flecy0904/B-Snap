@@ -111,7 +111,7 @@ export function useAiCanvasNotes({
       applyActiveNote(detail);
     } catch {
       if (detailRequestIdRef.current !== requestId) return;
-      setError('AI Canvas Note瑜?遺덈윭?ㅼ? 紐삵뻽?듬땲??');
+      setError('AI 캔버스 노트를 불러오지 못했습니다.');
     } finally {
       if (detailRequestIdRef.current === requestId) setLoading(false);
     }

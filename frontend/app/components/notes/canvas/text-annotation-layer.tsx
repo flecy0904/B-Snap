@@ -48,6 +48,9 @@ function MovableTextAnnotationBox(props: {
 
   const activateBox = () => {
     props.onActivate(props.annotation.id);
+    setTimeout(() => {
+      inputRef.current?.focus();
+    }, 0);
   };
 
   const moveResponder = React.useMemo(() => PanResponder.create({
