@@ -3,6 +3,7 @@ import type { BackendChatMessage, BackendChatSession } from '../../../services/b
 
 export function useAiChatDerivedState(params: {
   studyDocumentId: number | null;
+  currentBackendNoteId: number | null;
   chatSessionByDocument: Record<number, number>;
   viewingAiChatSessionId: number | null;
   aiMessagesBySession: Record<number, BackendChatMessage[]>;
@@ -23,9 +24,9 @@ export function useAiChatDerivedState(params: {
       ?? null
     : null;
   const aiChatReadOnly = Boolean(
-    params.studyDocumentId
-    && activeAiChatSession
-    && activeAiChatSession.note_id !== params.studyDocumentId,
+    activeAiChatSession
+    && params.currentBackendNoteId
+    && activeAiChatSession.note_id !== params.currentBackendNoteId,
   );
   const selectionPreviewUri = params.studyDocumentId
     ? params.selectionPreviewByDocument[params.studyDocumentId] ?? null

@@ -1,5 +1,5 @@
 import React, { createContext, useContext } from 'react';
-import type { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
+import type { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { useNotesGlobalContext } from '../workspace/notes-global-context';
 
 export type CanvasState = {
@@ -9,6 +9,7 @@ export type CanvasState = {
   penWidth: number;
   brushType: InkBrush;
   linePattern: InkLinePattern;
+  selectionMode: InkSelectionMode;
   brushSettings: InkBrushSettings;
   inkStrokes: InkStroke[];
   textAnnotations: InkTextAnnotation[];
@@ -25,6 +26,7 @@ export type CanvasActions = {
   setPenWidth: (width: number) => void;
   setBrushType: (brush: InkBrush) => void;
   setLinePattern: (pattern: InkLinePattern) => void;
+  setSelectionMode: (mode: InkSelectionMode) => void;
   setBrushSettings: (settings: Partial<InkBrushSettings>) => void;
   setSelectionRect: (rect: SelectionRect | null) => void;
   setSelectionPreviewUri: (uri: string | null) => void;
@@ -37,6 +39,9 @@ export type CanvasActions = {
   addTextAnnotation: (point: InkPoint) => void;
   updateTextAnnotation: (id: string, text: string) => void;
   removeTextAnnotation: (id: string) => void;
+  moveTextAnnotation: (id: string, x: number, y: number) => void;
+  resizeTextAnnotation: (id: string, width: number, height: number) => void;
+  eraseInkAtPoint: (point: InkPoint, radius: number, snapshot?: boolean) => boolean;
   deleteSelectedStrokes: () => void;
   changeSelectedStrokesColor: (color: string) => void;
   duplicateSelectedStrokes: () => void;
@@ -57,6 +62,7 @@ export function CanvasProvider({ children }: { children: React.ReactNode }) {
     penWidth: globalContext.penWidth,
     brushType: globalContext.brushType,
     linePattern: globalContext.linePattern,
+    selectionMode: globalContext.selectionMode ?? 'rect',
     brushSettings: globalContext.brushSettings,
     inkStrokes: globalContext.inkStrokes ?? [],
     textAnnotations: globalContext.textAnnotations ?? [],
@@ -70,6 +76,7 @@ export function CanvasProvider({ children }: { children: React.ReactNode }) {
     setPenWidth: globalContext.onChangePenWidth,
     setBrushType: globalContext.onChangeBrushType,
     setLinePattern: globalContext.onChangeLinePattern,
+    setSelectionMode: globalContext.onChangeSelectionMode,
     setBrushSettings: globalContext.onChangeBrushSettings,
     setSelectionRect: globalContext.onSelectionChange,
     setSelectionPreviewUri: globalContext.onSelectionPreviewChange,
@@ -82,6 +89,9 @@ export function CanvasProvider({ children }: { children: React.ReactNode }) {
     addTextAnnotation: globalContext.onAddTextAnnotation,
     updateTextAnnotation: globalContext.onUpdateTextAnnotation,
     removeTextAnnotation: globalContext.onRemoveTextAnnotation,
+    moveTextAnnotation: globalContext.onMoveTextAnnotation,
+    resizeTextAnnotation: globalContext.onResizeTextAnnotation,
+    eraseInkAtPoint: globalContext.onEraseInkAtPoint,
     deleteSelectedStrokes: globalContext.deleteSelectedStrokes,
     changeSelectedStrokesColor: globalContext.changeSelectedStrokesColor,
     duplicateSelectedStrokes: globalContext.duplicateSelectedStrokes,

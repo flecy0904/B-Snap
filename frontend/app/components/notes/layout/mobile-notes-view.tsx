@@ -18,7 +18,7 @@ import {
 } from '../shared/capture-assets';
 import type { BackendChatMessage, BackendChatSession, BackendClassInsight } from '../../../services/backend-api';
 import { AiAnswer, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NotebookPage, NoteEntry, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../../types';
-import { InkBrush, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
+import { InkBrush, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { cleanAiDisplayText, darkenHex, getDocumentPageLabel, isSameDocumentPage } from '../../../ui-helpers';
 
 const PEN_COLORS = ['#1F2937', '#2563EB', '#7C3AED', '#D9485F', '#F59E0B', '#16A34A'];
@@ -27,7 +27,6 @@ const PEN_WIDTHS = [2, 3, 4, 6, 8, 10];
 const HIGHLIGHT_WIDTHS = [10, 12, 14, 18, 22, 26];
 const PEN_BRUSHES: Array<{ label: string; value: InkBrush }> = [
   { label: '볼펜', value: 'ballpoint' },
-  { label: '만년필', value: 'fountain' },
   { label: '연필', value: 'pencil' },
   { label: '마커', value: 'marker' },
 ];
@@ -87,6 +86,7 @@ export function MobileNotesView(props: {
   penWidth: number;
   brushType: InkBrush;
   linePattern: InkLinePattern;
+  selectionMode: InkSelectionMode;
   inkStrokes: InkStroke[];
   textAnnotations: InkTextAnnotation[];
   inkByDocument: Record<number, InkStroke[]>;
@@ -132,6 +132,7 @@ export function MobileNotesView(props: {
   onChangePenWidth: (width: number) => void;
   onChangeBrushType: (brush: InkBrush) => void;
   onChangeLinePattern: (pattern: InkLinePattern) => void;
+  onChangeSelectionMode: (mode: InkSelectionMode) => void;
   onToggleAiPanel: () => void;
   onChangeAiQuestion: (value: string) => void;
   onChangeAiChatScope: (scope: 'note' | 'all') => void;
@@ -151,6 +152,9 @@ export function MobileNotesView(props: {
   onAddTextAnnotation: (point: InkPoint) => void;
   onUpdateTextAnnotation: (id: string, text: string) => void;
   onRemoveTextAnnotation: (id: string) => void;
+  onMoveTextAnnotation: (id: string, x: number, y: number) => void;
+  onResizeTextAnnotation: (id: string, width: number, height: number) => void;
+  onEraseInkAtPoint: (point: InkPoint, radius: number, snapshot?: boolean) => boolean;
   onAcceptIncomingAsset: () => void;
   onArchiveIncomingAsset: () => void;
   onDismissIncomingAsset: () => void;
@@ -691,6 +695,7 @@ export function MobileNotesView(props: {
               penWidth={props.penWidth}
               brushType={props.brushType}
               linePattern={props.linePattern}
+              selectionMode={props.selectionMode}
               inkStrokes={props.inkByDocument[props.studyDocument.id] ?? props.inkStrokes}
               textAnnotations={props.textAnnotationsByDocument[props.studyDocument.id] ?? props.textAnnotations}
               textAnnotationVariant={phoneViewerOnly ? 'marker' : undefined}
@@ -700,6 +705,9 @@ export function MobileNotesView(props: {
               onAddTextAnnotation={props.onAddTextAnnotation}
               onUpdateTextAnnotation={props.onUpdateTextAnnotation}
               onRemoveTextAnnotation={props.onRemoveTextAnnotation}
+              onMoveTextAnnotation={props.onMoveTextAnnotation}
+              onResizeTextAnnotation={props.onResizeTextAnnotation}
+              onEraseInkAtPoint={props.onEraseInkAtPoint}
               onSelectionChange={props.onSelectionChange}
               onMoveSelection={props.onMoveSelection}
               onDocumentLoaded={props.onUpdateStudyDocumentPageCount}

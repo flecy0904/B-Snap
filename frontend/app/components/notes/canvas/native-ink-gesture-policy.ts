@@ -37,6 +37,11 @@ function isNativeDrawingTool(tool: InkTool) {
     || tool === 'ellipse';
 }
 
+function isNativeStylusOnlyTool(tool: InkTool) {
+  'worklet';
+  return isNativeDrawingTool(tool) || tool === 'erase';
+}
+
 function isNativeStylusPointer(pointerType: string | number | undefined) {
   'worklet';
   if (pointerType === 1) return true;
@@ -67,6 +72,7 @@ export function shouldActivateNativeInkGesture(
   'worklet';
   const pointerCount = (event as NativeInkTouchEvent).numberOfTouches ?? (event as NativeInkGestureEvent).numberOfPointers;
   if ((pointerCount ?? 1) > 1) return false;
-  if (isNativeDrawingTool(tool)) return Boolean(fingerDrawingEnabled) || isNativeStylusEvent(event);
-  return tool === 'select' || tool === 'erase' || tool === 'text';
+  if (tool === 'select') return isNativeStylusEvent(event);
+  if (isNativeStylusOnlyTool(tool)) return Boolean(fingerDrawingEnabled) || isNativeStylusEvent(event);
+  return tool === 'text';
 }

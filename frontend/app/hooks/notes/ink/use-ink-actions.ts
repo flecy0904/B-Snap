@@ -2,7 +2,7 @@ import { useRef } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import type { DocumentPageView, GeneratedWorkspacePage, StudyDocumentEntry } from '../../../types';
 import type { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
-import { findInkStrokesInRect, scaleInkStrokeToPageSize } from '../../../ui-helpers';
+import { findInkStrokesInLasso, findInkStrokesInRect, scaleInkStrokeToPageSize } from '../../../ui-helpers';
 import { findLastIndex, isInkStrokeOnPage, scopeInkStrokeToPage } from './ink-helpers';
 
 type SetState<T> = Dispatch<SetStateAction<T>>;
@@ -35,6 +35,7 @@ export function useInkActions(params: {
   setGeneratedPagesByDocument?: SetState<Record<number, GeneratedWorkspacePage[]>>;
   setActivePageByDocument?: SetState<Record<number, DocumentPageView>>;
   setSelectionByDocument: SetState<Record<number, SelectionRect | null>>;
+  setSelectionPreviewByDocument: SetState<Record<number, string | null>>;
   setInkTool: SetState<InkTool>;
   setWorkspaceFeedback: SetState<string | null>;
   onMarkPageDirty?: (documentId: number, pageNumber: number) => void;
@@ -71,6 +72,9 @@ export function useInkActions(params: {
       params.selectionRect.pageWidth && params.selectionRect.pageHeight
         ? pageStrokes.map((stroke) => scaleInkStrokeToPageSize(stroke, params.selectionRect!.pageWidth!, params.selectionRect!.pageHeight!))
         : pageStrokes;
+    if (params.selectionRect.path && params.selectionRect.path.length > 2) {
+      return new Set(findInkStrokesInLasso(hitTestStrokes, params.selectionRect.path));
+    }
     return new Set(findInkStrokesInRect(hitTestStrokes, params.selectionRect));
   };
 
@@ -124,6 +128,70 @@ export function useInkActions(params: {
     left.y + left.height >= right.y
   );
 
+  const distanceToSegment = (point: InkPoint, start: InkPoint, end: InkPoint) => {
+    const dx = end.x - start.x;
+    const dy = end.y - start.y;
+    if (dx === 0 && dy === 0) return Math.hypot(point.x - start.x, point.y - start.y);
+    const t = Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / (dx * dx + dy * dy)));
+    return Math.hypot(point.x - (start.x + t * dx), point.y - (start.y + t * dy));
+  };
+
+  const isStrokeOnPointPage = (stroke: InkStroke, point: InkPoint) => {
+    if (point.generatedPageId) return stroke.generatedPageId === point.generatedPageId;
+    if (stroke.generatedPageId) return false;
+    const targetPage = point.pageNumber ?? params.currentPdfPage;
+    return !stroke.pageNumber || stroke.pageNumber === targetPage;
+  };
+
+  const splitStrokeByEraser = (stroke: InkStroke, point: InkPoint, radius: number): InkStroke[] | null => {
+    if (!isStrokeOnPointPage(stroke, point)) return null;
+    const erased = stroke.points.map((strokePoint, index) => {
+      if (Math.hypot(strokePoint.x - point.x, strokePoint.y - point.y) <= radius) return true;
+      const previous = stroke.points[index - 1];
+      if (previous && distanceToSegment(point, previous, strokePoint) <= radius) return true;
+      const next = stroke.points[index + 1];
+      if (next && distanceToSegment(point, strokePoint, next) <= radius) return true;
+      return false;
+    });
+
+    if (!erased.some(Boolean)) return null;
+
+    const chunks: InkPoint[][] = [];
+    let currentChunk: InkPoint[] = [];
+    stroke.points.forEach((strokePoint, index) => {
+      if (erased[index]) {
+        if (currentChunk.length > 1) chunks.push(currentChunk);
+        currentChunk = [];
+        return;
+      }
+      currentChunk.push(strokePoint);
+    });
+    if (currentChunk.length > 1) chunks.push(currentChunk);
+
+    return chunks.map((chunk, index) => ({
+      ...stroke,
+      id: `${stroke.id}-erase-${Date.now()}-${index}`,
+      points: chunk,
+    }));
+  };
+
+  const eraseStrokesAtPoint = (strokes: InkStroke[], point: InkPoint, radius: number) => {
+    let changed = false;
+    const nextStrokes: InkStroke[] = [];
+
+    strokes.forEach((stroke) => {
+      const split = splitStrokeByEraser(stroke, point, radius);
+      if (!split) {
+        nextStrokes.push(stroke);
+        return;
+      }
+      changed = true;
+      nextStrokes.push(...split);
+    });
+
+    return changed ? nextStrokes : strokes;
+  };
+
   const getSelectedTextAnnotationIds = () => {
     if (!params.selectionRect) return new Set<string>();
     return new Set(
@@ -136,6 +204,7 @@ export function useInkActions(params: {
   const clearCurrentSelection = () => {
     if (!params.studyDocumentId) return;
     params.setSelectionByDocument((current) => ({ ...current, [params.studyDocumentId!]: null }));
+    params.setSelectionPreviewByDocument((current) => ({ ...current, [params.studyDocumentId!]: null }));
   };
 
   const markPageDirty = (pageNumber?: number | null) => {
@@ -355,7 +424,8 @@ export function useInkActions(params: {
       generatedPageId,
       x: anchorX,
       y: anchorY,
-      width: 180,
+      width: 220,
+      height: 96,
       text: '',
       anchorRect: anchoredSelection,
       pageWidth: anchoredSelection?.pageWidth ?? point.pageWidth,
@@ -412,6 +482,82 @@ export function useInkActions(params: {
       [params.studyDocumentId!]: [],
     }));
     markCurrentPageDirty();
+  };
+
+  const moveTextAnnotation = (annotationId: string, x: number, y: number) => {
+    if (!params.studyDocumentId) return;
+    const targetAnnotation = (params.textAnnotationsByDocument[params.studyDocumentId] ?? []).find((annotation) => annotation.id === annotationId);
+    params.setTextAnnotationsByDocument((current) => {
+      const annotations = current[params.studyDocumentId!] ?? [];
+      return {
+        ...current,
+        [params.studyDocumentId!]: annotations.map((annotation) => {
+          if (annotation.id !== annotationId) return annotation;
+          const nextX = Math.max(0, Math.min(annotation.pageWidth ? Math.max(0, annotation.pageWidth - annotation.width) : x, x));
+          const nextY = Math.max(0, Math.min(annotation.pageHeight ? Math.max(0, annotation.pageHeight - (annotation.height ?? 72)) : y, y));
+          const dx = nextX - annotation.x;
+          const dy = nextY - annotation.y;
+          return {
+            ...annotation,
+            x: nextX,
+            y: nextY,
+            anchorRect: annotation.anchorRect
+              ? {
+                  ...annotation.anchorRect,
+                  x: annotation.anchorRect.x + dx,
+                  y: annotation.anchorRect.y + dy,
+                }
+              : annotation.anchorRect,
+          };
+        }),
+      };
+    });
+    if (!targetAnnotation?.generatedPageId) markPageDirty(targetAnnotation?.pageNumber ?? params.currentPdfPage);
+  };
+
+  const resizeTextAnnotation = (annotationId: string, width: number, height: number) => {
+    if (!params.studyDocumentId) return;
+    const targetAnnotation = (params.textAnnotationsByDocument[params.studyDocumentId] ?? []).find((annotation) => annotation.id === annotationId);
+    params.setTextAnnotationsByDocument((current) => {
+      const annotations = current[params.studyDocumentId!] ?? [];
+      return {
+        ...current,
+        [params.studyDocumentId!]: annotations.map((annotation) => {
+          if (annotation.id !== annotationId) return annotation;
+          const maxWidth = annotation.pageWidth ? Math.max(96, annotation.pageWidth - annotation.x) : width;
+          const maxHeight = annotation.pageHeight ? Math.max(56, annotation.pageHeight - annotation.y) : height;
+          return {
+            ...annotation,
+            width: Math.max(96, Math.min(maxWidth, width)),
+            height: Math.max(56, Math.min(maxHeight, height)),
+          };
+        }),
+      };
+    });
+    if (!targetAnnotation?.generatedPageId) markPageDirty(targetAnnotation?.pageNumber ?? params.currentPdfPage);
+  };
+
+  const eraseInkAtPoint = (point: InkPoint, radius: number, snapshot = false) => {
+    if (!params.studyDocumentId) return false;
+    const currentStrokes = params.inkByDocument[params.studyDocumentId] ?? [];
+    const preview = eraseStrokesAtPoint(currentStrokes, point, radius);
+    if (preview === currentStrokes) return false;
+    if (snapshot) pushInkHistorySnapshot();
+    params.setInkByDocument((current) => {
+      const strokes = current[params.studyDocumentId!] ?? [];
+      const next = eraseStrokesAtPoint(strokes, point, radius);
+      if (next === strokes) return current;
+      return {
+        ...current,
+        [params.studyDocumentId!]: next,
+      };
+    });
+    params.setRedoInkByDocument((current) => ({
+      ...current,
+      [params.studyDocumentId!]: [],
+    }));
+    markPageDirty(point.generatedPageId ? null : point.pageNumber ?? params.currentPdfPage);
+    return true;
   };
 
   const deleteSelectedStrokes = () => {
@@ -730,6 +876,11 @@ export function useInkActions(params: {
         ...params.selectionRect!,
         x: params.selectionRect!.x + dx,
         y: params.selectionRect!.y + dy,
+        path: params.selectionRect!.path?.map((point) => ({
+          ...point,
+          x: point.x + dx,
+          y: point.y + dy,
+        })),
       },
     }));
     markCurrentPageDirty();
@@ -748,6 +899,9 @@ export function useInkActions(params: {
     addTextAnnotation,
     updateTextAnnotation,
     removeTextAnnotation,
+    moveTextAnnotation,
+    resizeTextAnnotation,
+    eraseInkAtPoint,
     deleteSelectedStrokes,
     changeSelectedStrokesColor,
     duplicateSelectedStrokes,
