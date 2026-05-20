@@ -7,7 +7,7 @@ import Svg, { Path } from 'react-native-svg';
 import { captureRef } from 'react-native-view-shot';
 import { TextAnnotationLayer } from './text-annotation-layer';
 import { InkPath } from './ink-path';
-import { finalizeInkStroke, findHitInkStrokeId, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, shouldAppendInkPoint } from '../../../ui-helpers';
+import { finalizeInkStroke, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, shouldAppendInkPoint } from '../../../ui-helpers';
 import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { useCanvasContext } from './canvas-context';
 import { shouldActivateNativeInkGesture, type NativeGestureStateManager, type NativeInkGestureEvent, type NativeInkTouchEvent } from './native-ink-gesture-policy';
@@ -171,7 +171,6 @@ export function BlankNoteCanvas(props: {
     textAnnotations,
     selectionRect,
     commitInkStroke: onCommitInkStroke,
-    removeInkStroke: onRemoveInkStroke,
     addTextAnnotation: onAddTextAnnotation,
     updateTextAnnotation: onUpdateTextAnnotation,
     removeTextAnnotation: onRemoveTextAnnotation,
@@ -198,6 +197,7 @@ export function BlankNoteCanvas(props: {
   const selectionPreviewTokenRef = useRef(0);
   const textTapRef = useRef<InkPoint | null>(null);
   const captureTargetRef = useRef<View | null>(null);
+  const eraserSnapshotPushedRef = useRef(false);
 
   useEffect(() => {
     if (!shouldPreviewPencilHover(inkTool)) setPencilHover(null);
@@ -242,6 +242,12 @@ export function BlankNoteCanvas(props: {
       setCapturingSelection(false);
     }
   }, [pageSize.height, pageSize.width]);
+
+  const eraseAtPoint = useCallback((point: InkPoint) => {
+    const radius = Math.max(10, penWidth * 2.4);
+    const changed = canvasCtx.eraseInkAtPoint(point, radius, !eraserSnapshotPushedRef.current);
+    if (changed) eraserSnapshotPushedRef.current = true;
+  }, [canvasCtx, penWidth]);
 
   const handleInkGestureStart = useCallback((x: number, y: number) => {
     const point = clampPointToPage(x, y);
@@ -312,16 +318,13 @@ export function BlankNoteCanvas(props: {
       return;
     }
     if (inkTool === 'erase') {
-      const hitStrokeId = findHitInkStrokeId(inkStrokes, point);
-      if (hitStrokeId) onRemoveInkStroke(hitStrokeId);
+      eraseAtPoint(point);
     }
   }, [
     brushSettings,
     brushType,
-    inkStrokes,
     inkTool,
     linePattern,
-    onRemoveInkStroke,
     onSelectionChange,
     onSelectionPreviewChange,
     pageSize,
@@ -329,11 +332,17 @@ export function BlankNoteCanvas(props: {
     penWidth,
     selectionMode,
     selectionRect,
+    eraseAtPoint,
   ]);
 
   const handleInkGestureMove = useCallback((x: number, y: number) => {
-    if (!isDrawingTool(inkTool) && inkTool !== 'select') return;
+    if (!isDrawingTool(inkTool) && inkTool !== 'select' && inkTool !== 'erase') return;
     const point = clampPointToPage(x, y);
+
+    if (inkTool === 'erase') {
+      eraseAtPoint(point);
+      return;
+    }
 
     if (isDrawingTool(inkTool)) {
       const stroke = currentStrokeRef.current;
@@ -403,7 +412,7 @@ export function BlankNoteCanvas(props: {
       draftSelectionRef.current = nextRect;
       setDraftSelection(nextRect);
     }
-  }, [inkTool, pageSize, selectionMode]);
+  }, [eraseAtPoint, inkTool, pageSize, selectionMode]);
 
   const handleInkGestureEnd = useCallback(() => {
     const stroke = currentStrokeRef.current;
@@ -447,6 +456,7 @@ export function BlankNoteCanvas(props: {
     }
     if (inkTool === 'text' && textTapRef.current) onAddTextAnnotation(textTapRef.current);
     currentStrokeRef.current = null;
+    eraserSnapshotPushedRef.current = false;
     textTapRef.current = null;
     setCurrentStroke(null);
   }, [buildSelectionPreview, canvasCtx, inkTool, onAddTextAnnotation, onCommitInkStroke, onSelectionChange, onSelectionPreviewChange]);
@@ -455,6 +465,7 @@ export function BlankNoteCanvas(props: {
     const stroke = currentStrokeRef.current;
     if (stroke && stroke.points.length > 1) onCommitInkStroke(finalizeInkStroke(stroke));
     currentStrokeRef.current = null;
+    eraserSnapshotPushedRef.current = false;
     draftSelectionRef.current = null;
     draftSelectionPathRef.current = [];
     selectionOriginRef.current = null;

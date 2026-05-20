@@ -557,13 +557,20 @@ export function useInkActions(params: {
 
   const eraseInkAtPoint = (point: InkPoint, radius: number, snapshot = false) => {
     if (!params.studyDocumentId) return false;
+    const scopedPoint: InkPoint = {
+      ...point,
+      generatedPageId: point.generatedPageId ?? (params.currentDocumentPage?.kind === 'generated' ? params.currentDocumentPage.pageId : undefined),
+      pageNumber: point.generatedPageId || params.currentDocumentPage?.kind === 'generated'
+        ? point.pageNumber
+        : point.pageNumber ?? (params.currentDocumentPage?.kind === 'pdf' ? params.currentDocumentPage.pageNumber : params.currentPdfPage),
+    };
     const currentStrokes = params.inkByDocument[params.studyDocumentId] ?? [];
-    const preview = eraseStrokesAtPoint(currentStrokes, point, radius);
+    const preview = eraseStrokesAtPoint(currentStrokes, scopedPoint, radius);
     if (preview === currentStrokes) return false;
     if (snapshot) pushInkHistorySnapshot();
     params.setInkByDocument((current) => {
       const strokes = current[params.studyDocumentId!] ?? [];
-      const next = eraseStrokesAtPoint(strokes, point, radius);
+      const next = eraseStrokesAtPoint(strokes, scopedPoint, radius);
       if (next === strokes) return current;
       return {
         ...current,
@@ -574,7 +581,7 @@ export function useInkActions(params: {
       ...current,
       [params.studyDocumentId!]: [],
     }));
-    markPageDirty(point.generatedPageId ? null : point.pageNumber ?? params.currentPdfPage);
+    markPageDirty(scopedPoint.generatedPageId ? null : scopedPoint.pageNumber ?? params.currentPdfPage);
     return true;
   };
 
