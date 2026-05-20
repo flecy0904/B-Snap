@@ -680,6 +680,8 @@ export const notesStyles = {
   inkOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 20, elevation: 20 },
   pencilHoverPreview: { position: 'absolute' as const, borderWidth: 2, backgroundColor: 'rgba(255,255,255,0.18)', opacity: 0.86, zIndex: 31, elevation: 31 },
   pencilHoverPreviewEraser: { backgroundColor: 'rgba(239,68,68,0.08)', borderStyle: 'dashed' as const },
+  pencilHoverLabel: { position: 'absolute' as const, minWidth: 46, height: 24, paddingHorizontal: 9, borderRadius: 999, backgroundColor: 'rgba(17,24,39,0.84)', alignItems: 'center' as const, justifyContent: 'center' as const, zIndex: 32, elevation: 32 },
+  pencilHoverLabelText: { fontSize: 10, lineHeight: 13, fontWeight: '900' as const, color: '#FFFFFF' },
   selectionOverlayRect: { position: 'absolute' as const, borderWidth: 2, borderStyle: 'dashed' as const, borderColor: '#4E8DFF', backgroundColor: 'rgba(78, 141, 255, 0.08)', borderRadius: 8 },
   selectionOverlayLassoBounds: { borderColor: 'rgba(78, 141, 255, 0.34)', backgroundColor: 'transparent' },
   selectionOverlayDraft: { backgroundColor: 'rgba(78, 141, 255, 0.05)' },

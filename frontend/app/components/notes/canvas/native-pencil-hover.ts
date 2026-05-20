@@ -35,3 +35,13 @@ export function getPencilHoverSize(tool: InkTool, penWidth: number) {
   if (tool === 'select') return 18;
   return Math.max(10, penWidth * 3);
 }
+
+export function getPencilHoverToolLabel(tool: InkTool) {
+  if (tool === 'pen') return '필기';
+  if (tool === 'highlight') return '형광펜';
+  if (tool === 'erase') return '지우개';
+  if (tool === 'select') return '선택';
+  if (tool === 'text') return '텍스트';
+  if (tool === 'line' || tool === 'arrow' || tool === 'rect' || tool === 'ellipse') return '도형';
+  return '';
+}
