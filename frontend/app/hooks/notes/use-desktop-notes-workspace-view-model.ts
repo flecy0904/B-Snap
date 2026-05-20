@@ -2,6 +2,7 @@ import React from 'react';
 import { resolvePreviewImage } from '../../preview-images';
 import { CaptureAsset, DocumentPageView, GeneratedWorkspacePage, PageCaptureReference, StudyDocumentEntry, WorkspaceAttachment } from '../../types';
 import { InkTextAnnotation } from '../../ui-types';
+import { derivePreprocessedCropUrl } from '../../ui-helpers';
 
 type SelectedPreview = { source: 'incoming' | 'attachment' | 'inbox' | 'page-reference'; assetId: string } | null;
 
@@ -74,13 +75,21 @@ export function useDesktopNotesWorkspaceViewModel(params: DesktopNotesWorkspaceV
     previewedPageReference?.pageLabel ??
     (previewedAttachment ? '판서+LLM 정리본' : null);
   const previewUri =
+    derivePreprocessedCropUrl(previewedIncoming?.processedUrl) ??
     previewedIncoming?.thumbnailUrl ??
+    previewedIncoming?.processedUrl ??
     (previewedIncoming?.type === 'image' ? previewedIncoming.fileUrl : undefined) ??
+    derivePreprocessedCropUrl(previewedAttachment?.processedUrl) ??
     previewedAttachment?.thumbnailUrl ??
+    previewedAttachment?.processedUrl ??
     (previewedAttachment?.type === 'image' ? previewedAttachment.fileUrl : undefined) ??
+    derivePreprocessedCropUrl(previewedInbox?.processedUrl) ??
     previewedInbox?.thumbnailUrl ??
+    previewedInbox?.processedUrl ??
     (previewedInbox?.type === 'image' ? previewedInbox.fileUrl : undefined) ??
+    derivePreprocessedCropUrl(previewedPageReference?.processedUrl) ??
     previewedPageReference?.thumbnailUrl ??
+    previewedPageReference?.processedUrl ??
     (previewedPageReference?.type === 'image' ? previewedPageReference.fileUrl : undefined);
   const previewImage =
     (previewUri ? { uri: previewUri } : null) ??
@@ -96,8 +105,11 @@ export function useDesktopNotesWorkspaceViewModel(params: DesktopNotesWorkspaceV
   const activeGeneratedAttachment = params.activeGeneratedPage
     ? params.workspaceAttachments.find((value) => value.generatedPageId === params.activeGeneratedPage?.id) ?? null
     : null;
+  const activeGeneratedCropPreviewUri = derivePreprocessedCropUrl(activeGeneratedAttachment?.processedUrl);
   const activeGeneratedPreviewImage =
+    (activeGeneratedCropPreviewUri ? { uri: activeGeneratedCropPreviewUri } : null) ??
     (activeGeneratedAttachment?.thumbnailUrl ? { uri: activeGeneratedAttachment.thumbnailUrl } : null) ??
+    (activeGeneratedAttachment?.processedUrl ? { uri: activeGeneratedAttachment.processedUrl } : null) ??
     (activeGeneratedAttachment?.type === 'image' && activeGeneratedAttachment.fileUrl ? { uri: activeGeneratedAttachment.fileUrl } : null) ??
     resolvePreviewImage(params.activeGeneratedPage?.previewImageKey) ??
     resolvePreviewImage(activeGeneratedAttachment?.previewImageKey) ??

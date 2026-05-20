@@ -3,11 +3,11 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Image, Modal, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { subjects as allSubjects } from '../../../app-defaults';
 import { CaptureAsset, NoteEntry, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject } from '../../../types';
-import { cleanAiDisplayText, darkenHex } from '../../../ui-helpers';
+import { cleanAiDisplayText, darkenHex, derivePreprocessedCropUrl } from '../../../ui-helpers';
 import { PhotoViewerLinkPanel } from './photo-viewer-link-panel';
 
 function getCaptureImageSource(asset: CaptureAsset) {
-  const uri = asset.thumbnailUrl ?? asset.fileUrl ?? asset.previewImageKey;
+  const uri = derivePreprocessedCropUrl(asset.processedUrl) ?? asset.thumbnailUrl ?? asset.processedUrl ?? asset.fileUrl ?? asset.previewImageKey;
   if (uri && (uri.startsWith('http://') || uri.startsWith('https://') || uri.startsWith('file://') || uri.startsWith('data:image/'))) {
     return { uri };
   }

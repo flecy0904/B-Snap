@@ -10,7 +10,7 @@ import { NoteSummaryContent } from '../shared/notes-shared';
 import type { BackendChatMessage, BackendChatSession, BackendClassInsight } from '../../../services/backend-api';
 import { AiAnswer, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NotebookPage, NoteEntry, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../../types';
 import { InkBrush, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
-import { cleanAiDisplayText, darkenHex, getDocumentPageLabel, isSameDocumentPage } from '../../../ui-helpers';
+import { cleanAiDisplayText, darkenHex, derivePreprocessedCropUrl, getDocumentPageLabel, isSameDocumentPage } from '../../../ui-helpers';
 
 const PEN_COLORS = ['#1F2937', '#2563EB', '#7C3AED', '#D9485F', '#F59E0B', '#16A34A'];
 const HIGHLIGHT_COLORS = ['#FDE047', '#FB7185', '#86EFAC', '#67E8F9', '#FDBA74'];
@@ -50,7 +50,7 @@ function formatClassInsightPriority(priority: string) {
 }
 
 function getCaptureImageSource(asset: CaptureAsset) {
-  const uri = asset.thumbnailUrl ?? asset.fileUrl ?? asset.previewImageKey;
+  const uri = derivePreprocessedCropUrl(asset.processedUrl) ?? asset.thumbnailUrl ?? asset.processedUrl ?? asset.fileUrl ?? asset.previewImageKey;
   if (uri && (uri.startsWith('http://') || uri.startsWith('https://') || uri.startsWith('file://') || uri.startsWith('data:image/'))) {
     return { uri };
   }
@@ -240,13 +240,10 @@ export function MobileNotesView(props: {
     }
     setPageListOpen(false);
   };
-  const getReferencePreview = (reference: PageCaptureReference) => (
-    reference.thumbnailUrl
-      ? { uri: reference.thumbnailUrl }
-      : reference.type === 'image' && reference.fileUrl
-        ? { uri: reference.fileUrl }
-        : reference.previewImage ?? null
-  );
+  const getReferencePreview = (reference: PageCaptureReference) => {
+    const uri = derivePreprocessedCropUrl(reference.processedUrl) ?? reference.thumbnailUrl ?? reference.processedUrl ?? (reference.type === 'image' ? reference.fileUrl : undefined);
+    return uri ? { uri } : reference.previewImage ?? null;
+  };
   const toggleSelectionMode = () => {
     props.onChangeInkTool(props.inkTool === 'select' ? 'view' : 'select');
   };

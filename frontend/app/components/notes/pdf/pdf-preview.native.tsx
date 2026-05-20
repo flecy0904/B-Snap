@@ -5,7 +5,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import Svg, { Path } from 'react-native-svg';
 import { captureRef } from 'react-native-view-shot';
 import { TextAnnotationLayer } from '../canvas/text-annotation-layer';
-import { cleanAiDisplayText, findHitInkStrokeId, getInkCenterlinePath, getInkStrokeSvgPath, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize } from '../../../ui-helpers';
+import { cleanAiDisplayText, derivePreprocessedCropUrl, findHitInkStrokeId, getInkCenterlinePath, getInkStrokeSvgPath, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize } from '../../../ui-helpers';
 import { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { CaptureAsset, NotebookPage, PageCaptureReference } from '../../../types';
 import { renderPdfPageToImage, type PdfRenderSource, type RenderedPdfPage } from '../../../services/pdf-page-renderer';
@@ -60,14 +60,20 @@ function isPdfPageNearCurrent(page: NotebookPage, currentPageNumber: number) {
 }
 
 function getReferencePreviewImage(reference: PageCaptureReference) {
+  const cropUrl = derivePreprocessedCropUrl(reference.processedUrl);
+  if (cropUrl) return { uri: cropUrl };
   if (reference.thumbnailUrl) return { uri: reference.thumbnailUrl };
+  if (reference.processedUrl) return { uri: reference.processedUrl };
   if (reference.type === 'image' && reference.fileUrl) return { uri: reference.fileUrl };
   return reference.previewImage ?? null;
 }
 
 function getCaptureAssetPreviewImage(asset: CaptureAsset | null | undefined) {
   if (!asset) return null;
+  const cropUrl = derivePreprocessedCropUrl(asset.processedUrl);
+  if (cropUrl) return { uri: cropUrl };
   if (asset.thumbnailUrl) return { uri: asset.thumbnailUrl };
+  if (asset.processedUrl) return { uri: asset.processedUrl };
   if (asset.type === 'image' && asset.fileUrl) return { uri: asset.fileUrl };
   return asset.previewImage ?? null;
 }

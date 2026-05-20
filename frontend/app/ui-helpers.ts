@@ -94,6 +94,19 @@ export function cleanAiDisplayText(value: string | null | undefined) {
     .trim();
 }
 
+export function derivePreprocessedCropUrl(url: string | null | undefined) {
+  if (!url) return null;
+
+  const marker = '/scan_enhance/';
+  const markerIndex = url.indexOf(marker);
+  if (markerIndex < 0) return null;
+
+  const filename = url.slice(markerIndex + marker.length);
+  if (!filename.endsWith('_crop_enhanced_color.jpg')) return null;
+
+  return `${url.slice(0, markerIndex)}/crop/${filename.replace(/_crop_enhanced_color\.jpg$/, '_crop.jpg')}`;
+}
+
 function distanceToSegment(point: InkPoint, start: InkPoint, end: InkPoint) {
   const dx = end.x - start.x;
   const dy = end.y - start.y;

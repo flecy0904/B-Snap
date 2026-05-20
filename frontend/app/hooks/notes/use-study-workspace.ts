@@ -52,7 +52,7 @@ import { parseNotePageContent, serializeNotePageContent } from './document/note-
 import { useIncomingAssetSubscription } from './workspace/use-incoming-asset-subscription';
 import { useStudyWorkspaceDerivedState } from './workspace/use-study-workspace-derived-state';
 import { useStudyWorkspacePersistence } from './workspace/use-study-workspace-persistence';
-import { cleanAiDisplayText, getDocumentPageLabel, isSameDocumentPage, isShapeTool } from '../../ui-helpers';
+import { cleanAiDisplayText, derivePreprocessedCropUrl, getDocumentPageLabel, isSameDocumentPage, isShapeTool } from '../../ui-helpers';
 import type { InkBrush, InkBrushSettings, InkLinePattern, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../ui-types';
 import type { AiAnswer, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../types';
 
@@ -1395,7 +1395,7 @@ export function useStudyWorkspace(props: {
   );
 
   const resolveAssetUri = (asset: CaptureAsset) => {
-    const uri = asset.fileUrl ?? asset.thumbnailUrl ?? asset.previewImageKey;
+    const uri = derivePreprocessedCropUrl(asset.processedUrl) ?? asset.thumbnailUrl ?? asset.processedUrl ?? asset.fileUrl ?? asset.previewImageKey;
     return (
       uri?.startsWith('http://') ||
       uri?.startsWith('https://') ||

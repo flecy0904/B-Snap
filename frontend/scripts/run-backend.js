@@ -100,7 +100,16 @@ function hasModule(moduleName) {
 }
 
 function ensureRequirements() {
-  if (hasModule("uvicorn") && hasModule("fastapi")) {
+  const requiredModules = [
+    "uvicorn",
+    "fastapi",
+    "cv2",
+    "numpy",
+    "PIL",
+    "pillow_heif",
+    "ultralytics",
+  ];
+  if (requiredModules.every((moduleName) => hasModule(moduleName))) {
     return;
   }
 

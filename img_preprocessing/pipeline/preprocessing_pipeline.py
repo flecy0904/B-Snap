@@ -41,6 +41,7 @@ def preprocess_for_service(
     retina_masks: bool = True,
     segmentation_cropper: YoloSegmentationCropper | None = None,
     save_debug: bool = False,
+    save_scan_metrics: bool = True,
     output_name: str | None = None,
 ) -> dict[str, Any]:
     """Run raw image segmentation crop and return a service-friendly result."""
@@ -94,6 +95,7 @@ def preprocess_for_service(
     scan_enhance_result = _run_scan_enhancement(
         crop_result,
         output_dir=scan_enhance_dir,
+        save_metrics=save_scan_metrics,
     )
 
     result = _build_pipeline_result(
@@ -218,6 +220,7 @@ def _run_scan_enhancement(
     crop_result: dict[str, Any],
     *,
     output_dir: Path,
+    save_metrics: bool = True,
 ) -> dict[str, Any] | None:
     if not crop_result.get("success"):
         return None
@@ -240,6 +243,7 @@ def _run_scan_enhancement(
             crop_path,
             output_dir,
             basename=crop_path.stem,
+            options={"save_metrics": save_metrics},
         )
     except Exception as exc:
         return {
