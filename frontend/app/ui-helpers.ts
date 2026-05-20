@@ -181,6 +181,66 @@ export function isDrawingTool(tool: InkTool) {
   return tool === 'pen' || tool === 'highlight' || isShapeTool(tool);
 }
 
+export function shouldAppendInkPoint(stroke: InkStroke, point: InkPoint) {
+  const lastPoint = stroke.points[stroke.points.length - 1];
+  if (!lastPoint) return true;
+
+  const distance = Math.hypot(point.x - lastPoint.x, point.y - lastPoint.y);
+  const width = Math.max(1, stroke.width);
+  const minDistance = stroke.style === 'highlight'
+    ? Math.max(2, Math.min(4.5, width * 0.18))
+    : Math.max(1.2, Math.min(3, width * 0.12));
+
+  return distance >= minDistance;
+}
+
+function distanceToLine(point: InkPoint, start: InkPoint, end: InkPoint) {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  if (dx === 0 && dy === 0) return Math.hypot(point.x - start.x, point.y - start.y);
+  return Math.abs(dy * point.x - dx * point.y + end.x * start.y - end.y * start.x) / Math.hypot(dx, dy);
+}
+
+function simplifyInkPoints(points: InkPoint[], tolerance: number) {
+  if (points.length <= 2) return points;
+
+  const keep = new Array(points.length).fill(false);
+  keep[0] = true;
+  keep[points.length - 1] = true;
+  const stack: Array<[number, number]> = [[0, points.length - 1]];
+
+  while (stack.length) {
+    const [startIndex, endIndex] = stack.pop()!;
+    let maxDistance = 0;
+    let maxIndex = -1;
+
+    for (let index = startIndex + 1; index < endIndex; index += 1) {
+      const distance = distanceToLine(points[index], points[startIndex], points[endIndex]);
+      if (distance > maxDistance) {
+        maxDistance = distance;
+        maxIndex = index;
+      }
+    }
+
+    if (maxIndex >= 0 && maxDistance > tolerance) {
+      keep[maxIndex] = true;
+      stack.push([startIndex, maxIndex], [maxIndex, endIndex]);
+    }
+  }
+
+  return points.filter((_, index) => keep[index]);
+}
+
+export function finalizeInkStroke(stroke: InkStroke) {
+  if (stroke.style === 'shape' || stroke.points.length < 8) return stroke;
+  const tolerance = stroke.style === 'highlight'
+    ? Math.max(0.8, Math.min(3, stroke.width * 0.08))
+    : Math.max(0.45, Math.min(1.8, stroke.width * 0.06));
+  const points = simplifyInkPoints(stroke.points, tolerance);
+  if (points.length === stroke.points.length) return stroke;
+  return { ...stroke, points };
+}
+
 export function getInkStrokeBounds(stroke: InkStroke): SelectionRect | null {
   if (!stroke.points.length) return null;
   const xs = stroke.points.map((point) => point.x);

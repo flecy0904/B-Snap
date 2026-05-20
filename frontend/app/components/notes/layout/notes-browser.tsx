@@ -5,36 +5,13 @@ import { subjects as allSubjects } from '../../../app-defaults';
 import { CaptureAsset, NoteEntry, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject } from '../../../types';
 import { cleanAiDisplayText, darkenHex } from '../../../ui-helpers';
 import { PhotoViewerLinkPanel } from './photo-viewer-link-panel';
-
-function getCaptureImageSource(asset: CaptureAsset) {
-  const uri = asset.thumbnailUrl ?? asset.fileUrl ?? asset.previewImageKey;
-  if (uri && (uri.startsWith('http://') || uri.startsWith('https://') || uri.startsWith('file://') || uri.startsWith('data:image/'))) {
-    return { uri };
-  }
-  return asset.previewImage ?? null;
-}
-
-function formatCaptureDate(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString('ko-KR', {
-    month: 'numeric',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
-function getCapturePlacementLabel(asset: CaptureAsset, references: PageCaptureReference[]) {
-  const matches = references.filter((reference) => reference.assetId === asset.id);
-  if (!matches.length) return '미연결';
-  const firstLabel = matches[0]?.pageLabel || '연결됨';
-  return matches.length > 1 ? `${firstLabel} 외 ${matches.length - 1}` : firstLabel;
-}
-
-function getCaptureReferences(asset: CaptureAsset, references: PageCaptureReference[]) {
-  return references.filter((reference) => reference.assetId === asset.id);
-}
+import {
+  formatCaptureDate,
+  getCaptureImageSource,
+  getCaptureOriginalImageSource,
+  getCapturePlacementLabel,
+  getCaptureReferences,
+} from '../shared/capture-assets';
 
 export type NotesBrowserProps = {
   styles: any;
@@ -125,7 +102,7 @@ export function NotesBrowser(props: NotesBrowserProps) {
     () => selectedPhotoAssets.find((asset) => asset.id === previewAssetId) ?? null,
     [previewAssetId, selectedPhotoAssets],
   );
-  const previewImageSource = previewAsset ? getCaptureImageSource(previewAsset) : null;
+  const previewImageSource = previewAsset ? getCaptureOriginalImageSource(previewAsset) : null;
   const previewReferences = React.useMemo(
     () => previewAsset ? getCaptureReferences(previewAsset, props.pageCaptureReferences) : [],
     [previewAsset, props.pageCaptureReferences],
