@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useRef, useState, memo } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, memo } from 'react';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { Image, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
@@ -11,6 +11,7 @@ import { finalizeInkStroke, findHitInkStrokeId, isDrawingTool, isShapeTool, reso
 import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { useCanvasContext } from './canvas-context';
 import { shouldActivateNativeInkGesture, type NativeGestureStateManager, type NativeInkGestureEvent, type NativeInkTouchEvent } from './native-ink-gesture-policy';
+import { getPencilHoverPoint, getPencilHoverSize, isStylusHoverEvent, shouldPreviewPencilHover, type PencilHoverPoint } from './native-pencil-hover';
 
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
 
@@ -185,6 +186,7 @@ export function BlankNoteCanvas(props: {
   const [draftSelection, setDraftSelection] = useState<SelectionRect | null>(null);
   const [draftSelectionPath, setDraftSelectionPath] = useState<InkPoint[]>([]);
   const [capturingSelection, setCapturingSelection] = useState(false);
+  const [pencilHover, setPencilHover] = useState<PencilHoverPoint | null>(null);
   const currentStrokeRef = useRef<InkStroke | null>(null);
   const selectionOriginRef = useRef<InkPoint | null>(null);
   const selectionMoveOriginRef = useRef<InkPoint | null>(null);
@@ -196,6 +198,10 @@ export function BlankNoteCanvas(props: {
   const selectionPreviewTokenRef = useRef(0);
   const textTapRef = useRef<InkPoint | null>(null);
   const captureTargetRef = useRef<View | null>(null);
+
+  useEffect(() => {
+    if (!shouldPreviewPencilHover(inkTool)) setPencilHover(null);
+  }, [inkTool]);
 
   const clampPointToPage = (x: number, y: number): InkPoint => ({
     x: Math.max(0, Math.min(pageSize.width || 1000, x)),
@@ -495,11 +501,27 @@ export function BlankNoteCanvas(props: {
       }),
     [fingerDrawingEnabled, handleInkGestureCancel, handleInkGestureEnd, handleInkGestureMove, handleInkGestureStart, inkTool],
   );
+  const handlePencilHoverMove = useCallback((event: unknown) => {
+    if (!shouldPreviewPencilHover(inkTool) || !isStylusHoverEvent(event)) return;
+    const point = getPencilHoverPoint(event);
+    if (!point) return;
+    if (point.x < 0 || point.y < 0 || point.x > pageSize.width || point.y > pageSize.height) return;
+    setPencilHover(point);
+  }, [inkTool, pageSize.height, pageSize.width]);
+  const hoverHandlers = useMemo(() => ({
+    onPointerEnter: handlePencilHoverMove,
+    onPointerMove: handlePencilHoverMove,
+    onPointerLeave: () => setPencilHover(null),
+    onPointerCancel: () => setPencilHover(null),
+  } as any), [handlePencilHoverMove]);
+  const hoverSize = getPencilHoverSize(inkTool, penWidth);
+  const hoverVisible = pencilHover && shouldPreviewPencilHover(inkTool);
 
   return (
     <View style={[props.styles.blankNoteCanvasCard, { paddingVertical: 0, borderWidth: 0 }]}>
       <GestureDetector gesture={inkGesture}>
         <View
+          {...hoverHandlers}
           ref={captureTargetRef}
           collapsable={false}
           style={[props.styles.blankNotePage, { flex: 1, width: '100%', height: '100%', borderRadius: 20, borderWidth: 0, elevation: 0 }]}
@@ -536,6 +558,23 @@ export function BlankNoteCanvas(props: {
           {!capturingSelection && !draftSelection && selectionRect ? <SelectionOverlay rect={selectionRect} styles={props.styles} /> : null}
           {!capturingSelection && draftSelectionPath.length > 1 ? <SelectionLassoOverlay points={draftSelectionPath} /> : null}
           {!capturingSelection && draftSelection ? <SelectionOverlay rect={draftSelection} styles={props.styles} draft /> : null}
+          {hoverVisible ? (
+            <View
+              pointerEvents="none"
+              style={[
+                props.styles.pencilHoverPreview,
+                inkTool === 'erase' && props.styles.pencilHoverPreviewEraser,
+                {
+                  left: pencilHover.x - hoverSize / 2,
+                  top: pencilHover.y - hoverSize / 2,
+                  width: hoverSize,
+                  height: hoverSize,
+                  borderRadius: hoverSize / 2,
+                  borderColor: inkTool === 'erase' ? '#EF4444' : penColor,
+                },
+              ]}
+            />
+          ) : null}
         </View>
       </GestureDetector>
     </View>
