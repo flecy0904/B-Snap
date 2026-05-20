@@ -557,7 +557,7 @@ export function BlankNoteCanvas(props: {
 
           {!capturingSelection && !draftSelection && selectionRect ? <SelectionOverlay rect={selectionRect} styles={props.styles} /> : null}
           {!capturingSelection && draftSelectionPath.length > 1 ? <SelectionLassoOverlay points={draftSelectionPath} /> : null}
-          {!capturingSelection && draftSelection ? <SelectionOverlay rect={draftSelection} styles={props.styles} draft /> : null}
+          {!capturingSelection && draftSelection && draftSelection.mode !== 'lasso' ? <SelectionOverlay rect={draftSelection} styles={props.styles} draft /> : null}
           {hoverVisible ? (
             <View
               pointerEvents="none"
