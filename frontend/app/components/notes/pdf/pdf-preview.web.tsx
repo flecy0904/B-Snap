@@ -811,7 +811,7 @@ export function PdfPreview(props: {
                 <MaterialCommunityIcons name="star-four-points" size={14} color="#5F79FF" />
                 <Text style={props.styles.pdfPageReferencePopoverAnswerTitle}>AI 설명</Text>
               </View>
-              <Text style={props.styles.pdfPageReferencePopoverAnswerText} numberOfLines={5}>
+              <Text style={props.styles.pdfPageReferencePopoverAnswerText} numberOfLines={7}>
                 {cleanAiDisplayText(activePageReference.aiSummary || activePageReference.summary)}
               </Text>
             </View>
@@ -864,7 +864,7 @@ export function PdfPreview(props: {
             </View>
             {incomingAssetImage ? (
               <View style={props.styles.pdfIncomingCaptureImageFrame}>
-                <Image source={incomingAssetImage} style={props.styles.pdfIncomingCaptureImage} resizeMode="cover" />
+                <Image source={incomingAssetImage} style={props.styles.pdfIncomingCaptureImage} resizeMode="contain" />
               </View>
             ) : null}
             <View style={props.styles.pdfIncomingCaptureAnswer}>
@@ -872,7 +872,7 @@ export function PdfPreview(props: {
                 <MaterialCommunityIcons name="star-four-points" size={13} color="#5F79FF" />
                 <Text style={props.styles.pdfIncomingCaptureAnswerTitle}>AI 설명</Text>
               </View>
-              <Text style={props.styles.pdfIncomingCaptureAnswerText} numberOfLines={4}>{incomingAssetSummary}</Text>
+              <Text style={props.styles.pdfIncomingCaptureAnswerText} numberOfLines={6}>{incomingAssetSummary}</Text>
             </View>
             <View style={props.styles.pdfIncomingCaptureActions}>
               <Pressable style={props.styles.pdfIncomingCapturePrimaryAction} onPress={props.onAcceptIncomingAsset}>
