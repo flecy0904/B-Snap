@@ -24,8 +24,8 @@
 		1A8A6D484FDCB23401C836DE /* ExpoModulesProvider.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ExpoModulesProvider.swift; path = "Pods/Target Support Files/Pods-BSNAP/ExpoModulesProvider.swift"; sourceTree = "<group>"; };
 		59386F7E1CB0637CFBEEDD94 /* PrivacyInfo.xcprivacy */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xml; name = PrivacyInfo.xcprivacy; path = BSNAP/PrivacyInfo.xcprivacy; sourceTree = "<group>"; };
 		5D83D3A4A2894C49AB3E4437 /* Pods-BSNAP.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-BSNAP.debug.xcconfig"; path = "Target Support Files/Pods-BSNAP/Pods-BSNAP.debug.xcconfig"; sourceTree = "<group>"; };
-		AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = SplashScreen.storyboard; path = BSNAP/SplashScreen.storyboard; sourceTree = "<group>"; };
 		A7A0F1022E0A4B6C8D9E1002 /* PdfPageRendererModule.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; name = PdfPageRendererModule.m; path = BSNAP/PdfPageRendererModule.m; sourceTree = "<group>"; };
+		AA286B85B6C04FC6940260E9 /* SplashScreen.storyboard */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = file.storyboard; name = SplashScreen.storyboard; path = BSNAP/SplashScreen.storyboard; sourceTree = "<group>"; };
 		BB2F792C24A3F905000567C9 /* Expo.plist */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = text.plist.xml; path = Expo.plist; sourceTree = "<group>"; };
 		C4330F3CC22DD2C96868AA0A /* libPods-BSNAP.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = "libPods-BSNAP.a"; sourceTree = BUILT_PRODUCTS_DIR; };
 		D21265084440016B62B3BDD1 /* Pods-BSNAP.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-BSNAP.release.xcconfig"; path = "Target Support Files/Pods-BSNAP/Pods-BSNAP.release.xcconfig"; sourceTree = "<group>"; };
@@ -348,7 +348,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 2PPB9V5N35;
+				DEVELOPMENT_TEAM = J44467K7H6;
 				ENABLE_BITCODE = NO;
 				GCC_PREPROCESSOR_DEFINITIONS = (
 					"$(inherited)",
@@ -389,7 +389,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = 2PPB9V5N35;
+				DEVELOPMENT_TEAM = J44467K7H6;
 				INFOPLIST_FILE = BSNAP/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.1;
 				LD_RUNPATH_SEARCH_PATHS = (
