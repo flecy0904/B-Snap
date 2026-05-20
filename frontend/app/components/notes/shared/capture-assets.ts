@@ -25,32 +25,25 @@ function getPersistedLocalImageUri(asset: Pick<CaptureAsset, 'previewImageKey'> 
   return asset.previewImageKey?.startsWith('file://') ? asset.previewImageKey : undefined;
 }
 
+function getCapturePreviewUri(asset: Pick<CaptureAsset, 'fileUrl' | 'processedUrl' | 'thumbnailUrl' | 'previewImageKey'>) {
+  return derivePreprocessedCropUrl(asset.processedUrl)
+    ?? asset.thumbnailUrl
+    ?? asset.processedUrl
+    ?? asset.fileUrl
+    ?? getPersistedLocalImageUri(asset)
+    ?? asset.previewImageKey;
+}
+
 export function getCaptureImageSource(asset: CaptureAsset) {
-  return buildImageSource(
-    derivePreprocessedCropUrl(asset.processedUrl)
-      ?? asset.thumbnailUrl
-      ?? asset.processedUrl
-      ?? asset.fileUrl
-      ?? getPersistedLocalImageUri(asset)
-      ?? asset.previewImageKey,
-    asset.previewImage,
-  );
+  return buildImageSource(getCapturePreviewUri(asset), asset.previewImage);
 }
 
 export function getCaptureOriginalImageSource(asset: CaptureAsset) {
-  return buildImageSource(asset.fileUrl ?? asset.thumbnailUrl ?? asset.processedUrl ?? getPersistedLocalImageUri(asset) ?? asset.previewImageKey, asset.previewImage);
+  return buildImageSource(getCapturePreviewUri(asset), asset.previewImage);
 }
 
 export function getPageCaptureReferenceImageSource(reference: PageCaptureReference) {
-  return buildImageSource(
-    derivePreprocessedCropUrl(reference.processedUrl)
-      ?? reference.thumbnailUrl
-      ?? reference.processedUrl
-      ?? reference.fileUrl
-      ?? getPersistedLocalImageUri(reference)
-      ?? reference.previewImageKey,
-    reference.previewImage,
-  );
+  return buildImageSource(getCapturePreviewUri(reference), reference.previewImage);
 }
 
 export function formatCaptureDate(value: string) {
