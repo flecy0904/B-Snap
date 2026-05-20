@@ -12,3 +12,8 @@ PyMuPDF==1.24.14
 PyJWT==2.10.1
 pwdlib[argon2]==0.2.1
 email-validator==2.3.0
+numpy
+opencv-python-headless
+Pillow
+pillow-heif
+ultralytics

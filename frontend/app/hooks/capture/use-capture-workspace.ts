@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { Alert } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
@@ -9,18 +10,45 @@ import type { CaptureAsset, Subject } from '../../types';
 import { buildEmptyStudyWorkspaceState, loadStudyWorkspaceState, saveStudyWorkspaceState } from '../../storage/local-workspace-store';
 import { cleanAiDisplayText } from '../../ui-helpers';
 
+type UploadResult = Awaited<ReturnType<typeof uploadBackendFile>>;
+type PreprocessingFallbackChoice = 'continue' | 'use-original' | 'cancel';
+
 function getCaptureErrorMessage(error: unknown, fallback: string) {
   if (error instanceof BackendApiError && error.detail) return error.detail;
   return fallback;
 }
 
-function applyUploadAnalysis(asset: CaptureAsset, upload: Awaited<ReturnType<typeof uploadBackendFile>>) {
-  asset.processedUrl = upload.processed_url ?? asset.processedUrl;
+function applyUploadAnalysis(asset: CaptureAsset, upload: UploadResult, options?: { useOriginalImage?: boolean }) {
+  if (options?.useOriginalImage) {
+    asset.processedUrl = undefined;
+    asset.thumbnailUrl = upload.url ?? asset.fileUrl ?? asset.thumbnailUrl;
+  } else {
+    asset.processedUrl = upload.processed_url ?? asset.processedUrl;
+    asset.thumbnailUrl = upload.thumbnail_url ?? asset.thumbnailUrl;
+  }
   if (!upload.analysis) return asset;
   asset.analysisStatus = upload.analysis.status === 'failed' ? 'failed' : upload.analysis.status === 'pending' ? 'pending' : 'ready';
   asset.analysisSummary = cleanAiDisplayText(upload.analysis.summary ?? asset.summary);
   asset.analysisKeywords = upload.analysis.keywords?.filter(Boolean) ?? asset.analysisKeywords;
   return asset;
+}
+
+function resolvePreprocessingFallbackChoice(upload: UploadResult | null): Promise<PreprocessingFallbackChoice> {
+  if (upload?.preprocessing?.detail_code !== 'segmentation_mask_not_found') {
+    return Promise.resolve('continue');
+  }
+
+  return new Promise((resolve) => {
+    Alert.alert(
+      '사진에서 판서 영역을 찾지 못했어요.',
+      '원본 이미지를 사용할까요?',
+      [
+        { text: '아니오', style: 'cancel', onPress: () => resolve('cancel') },
+        { text: '네', onPress: () => resolve('use-original') },
+      ],
+      { cancelable: false },
+    );
+  });
 }
 
 const CAPTURE_FILE_DIR = `${FileSystem.documentDirectory ?? ''}bsnap-captures/`;
@@ -138,7 +166,7 @@ export function useCaptureWorkspace(props: {
         fallbackExtension: 'jpg',
       });
       let previewUri = picked.uri;
-      let backendUpload: Awaited<ReturnType<typeof uploadBackendFile>> | null = null;
+      let backendUpload: UploadResult | null = null;
       if (isBackendApiEnabled()) {
         backendUpload = await uploadBackendFile({
           uri: picked.uri,
@@ -146,6 +174,11 @@ export function useCaptureWorkspace(props: {
           type: picked.mimeType || 'image/jpeg',
         });
         previewUri = backendUpload.url;
+      }
+      const fallbackChoice = await resolvePreprocessingFallbackChoice(backendUpload);
+      if (fallbackChoice === 'cancel') {
+        setCaptureFeedback('촬영을 취소했습니다.');
+        return;
       }
       const newAsset = createCaptureAsset({
         subjectId: subject.id,
@@ -158,7 +191,7 @@ export function useCaptureWorkspace(props: {
       newAsset.fileUrl = previewUri;
       newAsset.thumbnailUrl = previewUri;
       newAsset.previewImageKey = localFileUri ?? newAsset.previewImageKey;
-      if (backendUpload) applyUploadAnalysis(newAsset, backendUpload);
+      if (backendUpload) applyUploadAnalysis(newAsset, backendUpload, { useOriginalImage: fallbackChoice === 'use-original' });
       
       await pushAsset(newAsset);
     } catch (error) {
@@ -203,7 +236,7 @@ export function useCaptureWorkspace(props: {
         fallbackExtension: 'jpg',
       });
       let previewUri = picked.uri;
-      let backendUpload: Awaited<ReturnType<typeof uploadBackendFile>> | null = null;
+      let backendUpload: UploadResult | null = null;
       if (isBackendApiEnabled()) {
         backendUpload = await uploadBackendFile({
           uri: picked.uri,
@@ -211,6 +244,11 @@ export function useCaptureWorkspace(props: {
           type: picked.mimeType || 'image/jpeg',
         });
         previewUri = backendUpload.url;
+      }
+      const fallbackChoice = await resolvePreprocessingFallbackChoice(backendUpload);
+      if (fallbackChoice === 'cancel') {
+        setCaptureFeedback('이미지 저장을 취소했습니다.');
+        return;
       }
       const newAsset = createCaptureAsset({
         subjectId: subject.id,
@@ -223,7 +261,7 @@ export function useCaptureWorkspace(props: {
       newAsset.fileUrl = previewUri;
       newAsset.thumbnailUrl = previewUri;
       newAsset.previewImageKey = localFileUri ?? newAsset.previewImageKey;
-      if (backendUpload) applyUploadAnalysis(newAsset, backendUpload);
+      if (backendUpload) applyUploadAnalysis(newAsset, backendUpload, { useOriginalImage: fallbackChoice === 'use-original' });
       
       await pushAsset(newAsset);
     } catch (error) {
@@ -261,7 +299,7 @@ export function useCaptureWorkspace(props: {
         fallbackExtension: 'pdf',
       });
       let previewUri = picked.uri;
-      let backendUpload: Awaited<ReturnType<typeof uploadBackendFile>> | null = null;
+      let backendUpload: UploadResult | null = null;
       if (isBackendApiEnabled()) {
         backendUpload = await uploadBackendFile({
           uri: picked.uri,

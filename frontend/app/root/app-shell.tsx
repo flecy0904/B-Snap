@@ -12,6 +12,7 @@ import { DesktopProfile, MobileProfile } from '../screens/profile';
 import { DesktopSchedule, MobileSchedule } from '../screens/schedule';
 import { resolvePreviewImage } from '../preview-images';
 import { C, S } from '../styles';
+import { derivePreprocessedCropUrl } from '../ui-helpers';
 import type { TabKey } from '../types';
 import type { AuthUser } from './types';
 
@@ -52,7 +53,7 @@ export function AppShell(props: {
 
   const bannerAsset = wide && tab !== 'capture' ? notesState.activeIncomingBanner : null;
   const bannerSubject = bannerAsset ? scheduleState.semesterSubjects.find((item) => item.id === bannerAsset.subjectId) ?? null : null;
-  const bannerAssetUri = bannerAsset?.thumbnailUrl ?? (bannerAsset?.type === 'image' ? bannerAsset.fileUrl : undefined);
+  const bannerAssetUri = derivePreprocessedCropUrl(bannerAsset?.processedUrl) ?? bannerAsset?.thumbnailUrl ?? bannerAsset?.processedUrl ?? (bannerAsset?.type === 'image' ? bannerAsset.fileUrl : undefined);
   const bannerPreviewImage = bannerAsset 
     ? (bannerAssetUri
         ? { uri: bannerAssetUri }

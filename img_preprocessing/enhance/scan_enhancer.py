@@ -30,6 +30,7 @@ class ScanEnhanceOptions:
     enable_denoise: bool = True
     enable_sharpen: bool = True
     save_outputs: bool = True
+    save_metrics: bool = True
     image_type: str | None = None
     clahe_clip_limit: float = 2.0
     clahe_tile_grid_size: tuple[int, int] = (8, 8)
@@ -363,7 +364,7 @@ def save_preprocess_outputs(
     safe_name = _safe_basename(basename)
     enhanced_color_path = output_root / f"{safe_name}_enhanced_color.jpg"
     ocr_bw_path = output_root / f"{safe_name}_ocr_bw.png"
-    metrics_path = output_root / f"{safe_name}_metrics.json"
+    metrics_path = output_root / f"{safe_name}_metrics.json" if opts.save_metrics else None
 
     write_errors: list[str] = []
     if not cv2.imwrite(
@@ -377,14 +378,15 @@ def save_preprocess_outputs(
 
     result.enhanced_color_path = str(enhanced_color_path)
     result.ocr_bw_path = str(ocr_bw_path)
-    result.metrics_path = str(metrics_path)
+    result.metrics_path = str(metrics_path) if metrics_path is not None else None
     result.metrics["output_files"] = {
         "enhanced_color": result.enhanced_color_path,
         "ocr_bw": result.ocr_bw_path,
-        "metrics": result.metrics_path,
     }
     result.metrics["write_error"] = "; ".join(write_errors) if write_errors else None
-    metrics_path.write_text(json.dumps(result.metrics, ensure_ascii=False, indent=2), encoding="utf-8")
+    if metrics_path is not None:
+        result.metrics["output_files"]["metrics"] = result.metrics_path
+        metrics_path.write_text(json.dumps(result.metrics, ensure_ascii=False, indent=2), encoding="utf-8")
     return result
 
 

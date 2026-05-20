@@ -106,6 +106,24 @@ def test_output_dir_writes_expected_files(tmp_path: Path) -> None:
     assert result.metrics_path == str(tmp_path / "unit_test_board_metrics.json")
 
 
+def test_output_dir_can_skip_metrics_file(tmp_path: Path) -> None:
+    result = preprocess_after_yolo_crop(
+        _whiteboard(),
+        output_dir=tmp_path,
+        basename="unit test board",
+        options=ScanEnhanceOptions(save_metrics=False),
+    )
+
+    assert (tmp_path / "unit_test_board_enhanced_color.jpg").exists()
+    assert (tmp_path / "unit_test_board_ocr_bw.png").exists()
+    assert not (tmp_path / "unit_test_board_metrics.json").exists()
+    assert result.metrics_path is None
+    assert result.metrics["output_files"] == {
+        "enhanced_color": str(tmp_path / "unit_test_board_enhanced_color.jpg"),
+        "ocr_bw": str(tmp_path / "unit_test_board_ocr_bw.png"),
+    }
+
+
 def test_preprocess_image_file_reads_input_and_writes_outputs(tmp_path: Path) -> None:
     input_path = tmp_path / "warped.jpg"
     assert cv2.imwrite(str(input_path), _whiteboard())

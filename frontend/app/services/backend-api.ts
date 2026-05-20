@@ -164,6 +164,19 @@ export type BackendUpload = {
   thumbnail_url?: string | null;
   url: string;
   processed_url?: string | null;
+  preprocessing?: {
+    status?: 'completed' | 'fallback' | string;
+    fallback_used?: boolean | null;
+    source?: string | null;
+    detail_code?: string | null;
+    failure_stage?: string | null;
+    message?: string | null;
+    segmentation_error?: string | null;
+    detections?: number | null;
+    image_size?: string | null;
+    write_error?: string | null;
+    fallback_url?: string | null;
+  } | null;
   analysis?: {
     status?: 'pending' | 'ready' | 'failed' | string;
     summary?: string | null;
