@@ -8,7 +8,7 @@ import Svg, { Path } from 'react-native-svg';
 import { captureRef } from 'react-native-view-shot';
 import { InkPath } from '../canvas/ink-path';
 import { TextAnnotationLayer } from '../canvas/text-annotation-layer';
-import { getPencilHoverPoint, getPencilHoverSize, isStylusHoverEvent, shouldPreviewPencilHover, type PencilHoverPoint } from '../canvas/native-pencil-hover';
+import { getPencilHoverPoint, getPencilHoverSize, getPencilHoverToolLabel, isStylusHoverEvent, shouldPreviewPencilHover, type PencilHoverPoint } from '../canvas/native-pencil-hover';
 import { shouldActivateNativeInkGesture, type NativeGestureStateManager, type NativeInkGestureEvent, type NativeInkTouchEvent } from '../canvas/native-ink-gesture-policy';
 import { getCaptureOriginalImageSource, getPageCaptureReferenceImageSource } from '../shared/capture-assets';
 import { cleanAiDisplayText, finalizeInkStroke, findHitInkStrokeId, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize, shouldAppendInkPoint } from '../../../ui-helpers';
@@ -1104,6 +1104,7 @@ export function PdfPreview(props: {
     } as any;
     const hoverSize = getPencilHoverSize(props.inkTool, props.penWidth);
     const hoverVisible = pencilHover?.pageKey === pageKey && shouldPreviewPencilHover(props.inkTool);
+    const hoverToolLabel = getPencilHoverToolLabel(props.inkTool);
 
     return (
       <View
@@ -1263,21 +1264,37 @@ export function PdfPreview(props: {
           <View {...hoverHandlers} pointerEvents={props.inkTool === 'view' ? 'none' : 'auto'} style={props.styles.inkOverlay} />
         </GestureDetector>
         {hoverVisible ? (
-          <View
-            pointerEvents="none"
-            style={[
-              props.styles.pencilHoverPreview,
-              props.inkTool === 'erase' && props.styles.pencilHoverPreviewEraser,
-              {
-                left: pencilHover.x - hoverSize / 2,
-                top: pencilHover.y - hoverSize / 2,
-                width: hoverSize,
-                height: hoverSize,
-                borderRadius: hoverSize / 2,
-                borderColor: props.inkTool === 'erase' ? '#EF4444' : props.penColor,
-              },
-            ]}
-          />
+          <>
+            <View
+              pointerEvents="none"
+              style={[
+                props.styles.pencilHoverPreview,
+                props.inkTool === 'erase' && props.styles.pencilHoverPreviewEraser,
+                {
+                  left: pencilHover.x - hoverSize / 2,
+                  top: pencilHover.y - hoverSize / 2,
+                  width: hoverSize,
+                  height: hoverSize,
+                  borderRadius: hoverSize / 2,
+                  borderColor: props.inkTool === 'erase' ? '#EF4444' : props.penColor,
+                },
+              ]}
+            />
+            {hoverToolLabel ? (
+              <View
+                pointerEvents="none"
+                style={[
+                  props.styles.pencilHoverLabel,
+                  {
+                    left: Math.min(Math.max(6, pencilHover.x + hoverSize / 2 + 8), Math.max(6, viewerWidth - 76)),
+                    top: Math.min(Math.max(6, pencilHover.y - hoverSize / 2 - 2), Math.max(6, viewerHeight - 30)),
+                  },
+                ]}
+              >
+                <Text style={props.styles.pencilHoverLabelText}>{hoverToolLabel}</Text>
+              </View>
+            ) : null}
+          </>
         ) : null}
       </View>
     );

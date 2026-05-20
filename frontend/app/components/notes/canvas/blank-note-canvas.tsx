@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, memo } from 'react';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
-import { Image, View } from 'react-native';
+import { Image, Text, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { runOnJS } from 'react-native-reanimated';
 import Svg, { Path } from 'react-native-svg';
@@ -11,7 +11,7 @@ import { finalizeInkStroke, isDrawingTool, isShapeTool, resolveInkStrokeAppearan
 import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { useCanvasContext } from './canvas-context';
 import { shouldActivateNativeInkGesture, type NativeGestureStateManager, type NativeInkGestureEvent, type NativeInkTouchEvent } from './native-ink-gesture-policy';
-import { getPencilHoverPoint, getPencilHoverSize, isStylusHoverEvent, shouldPreviewPencilHover, type PencilHoverPoint } from './native-pencil-hover';
+import { getPencilHoverPoint, getPencilHoverSize, getPencilHoverToolLabel, isStylusHoverEvent, shouldPreviewPencilHover, type PencilHoverPoint } from './native-pencil-hover';
 
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
 
@@ -527,6 +527,7 @@ export function BlankNoteCanvas(props: {
   } as any), [handlePencilHoverMove]);
   const hoverSize = getPencilHoverSize(inkTool, penWidth);
   const hoverVisible = pencilHover && shouldPreviewPencilHover(inkTool);
+  const hoverToolLabel = getPencilHoverToolLabel(inkTool);
 
   return (
     <View style={[props.styles.blankNoteCanvasCard, { paddingVertical: 0, borderWidth: 0 }]}>
@@ -570,21 +571,37 @@ export function BlankNoteCanvas(props: {
           {!capturingSelection && draftSelectionPath.length > 1 ? <SelectionLassoOverlay points={draftSelectionPath} /> : null}
           {!capturingSelection && draftSelection && draftSelection.mode !== 'lasso' ? <SelectionOverlay rect={draftSelection} styles={props.styles} draft /> : null}
           {hoverVisible ? (
-            <View
-              pointerEvents="none"
-              style={[
-                props.styles.pencilHoverPreview,
-                inkTool === 'erase' && props.styles.pencilHoverPreviewEraser,
-                {
-                  left: pencilHover.x - hoverSize / 2,
-                  top: pencilHover.y - hoverSize / 2,
-                  width: hoverSize,
-                  height: hoverSize,
-                  borderRadius: hoverSize / 2,
-                  borderColor: inkTool === 'erase' ? '#EF4444' : penColor,
-                },
-              ]}
-            />
+            <>
+              <View
+                pointerEvents="none"
+                style={[
+                  props.styles.pencilHoverPreview,
+                  inkTool === 'erase' && props.styles.pencilHoverPreviewEraser,
+                  {
+                    left: pencilHover.x - hoverSize / 2,
+                    top: pencilHover.y - hoverSize / 2,
+                    width: hoverSize,
+                    height: hoverSize,
+                    borderRadius: hoverSize / 2,
+                    borderColor: inkTool === 'erase' ? '#EF4444' : penColor,
+                  },
+                ]}
+              />
+              {hoverToolLabel ? (
+                <View
+                  pointerEvents="none"
+                  style={[
+                    props.styles.pencilHoverLabel,
+                    {
+                      left: Math.min(Math.max(6, pencilHover.x + hoverSize / 2 + 8), Math.max(6, pageSize.width - 76)),
+                      top: Math.min(Math.max(6, pencilHover.y - hoverSize / 2 - 2), Math.max(6, pageSize.height - 30)),
+                    },
+                  ]}
+                >
+                  <Text style={props.styles.pencilHoverLabelText}>{hoverToolLabel}</Text>
+                </View>
+              ) : null}
+            </>
           ) : null}
         </View>
       </GestureDetector>
