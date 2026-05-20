@@ -120,6 +120,14 @@ function ensureRequirements() {
   }
 }
 
+function ensureDatabaseSchema() {
+  log("Ensuring backend database schema...");
+  const ok = run(venvPython, ["-m", "backend.scripts.init_db"]);
+  if (!ok) {
+    fail("Failed to initialize backend database schema.");
+  }
+}
+
 function startBackend() {
   const enableReload = process.argv.includes("--reload");
   const uvicornArgs = ["-m", "uvicorn", "backend.app.main:app", "--host", "0.0.0.0", "--port", "8000"];
@@ -165,4 +173,5 @@ if (!existsSync(venvPython)) {
 }
 ensurePip();
 ensureRequirements();
+ensureDatabaseSchema();
 startBackend();

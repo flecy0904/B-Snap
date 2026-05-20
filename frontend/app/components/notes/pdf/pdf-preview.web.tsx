@@ -1,60 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { GestureResponderEvent, Image, Pressable, ScrollView, Text, useWindowDimensions, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import Svg, { Path } from 'react-native-svg';
+import Svg from 'react-native-svg';
+import { InkPath } from '../canvas/ink-path';
 import { TextAnnotationLayer } from '../canvas/text-annotation-layer';
-import { cleanAiDisplayText, derivePreprocessedCropUrl, findHitInkStrokeId, getInkCenterlinePath, getInkStrokeSvgPath, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize } from '../../../ui-helpers';
+import { hasMultipleTouches, shouldCaptureInkPointer, shouldUsePrimaryPointer } from '../canvas/ink-input-policy';
+import { getCaptureOriginalImageSource, getPageCaptureReferenceImageSource } from '../shared/capture-assets';
+import { cleanAiDisplayText, finalizeInkStroke, findHitInkStrokeId, getInkCenterlinePath, getInkStrokeSvgPath, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize, shouldAppendInkPoint } from '../../../ui-helpers';
 import { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { CaptureAsset, NotebookPage, PageCaptureReference } from '../../../types';
-
-function InkPath({ stroke, draft = false }: { stroke: InkStroke; draft?: boolean }) {
-  if (stroke.linePattern && stroke.linePattern !== 'solid' && stroke.style !== 'highlight' && stroke.style !== 'shape') {
-    const centerlinePath = getInkCenterlinePath(stroke.points);
-    if (!centerlinePath) return null;
-    const dashArray = stroke.linePattern === 'dotted' ? `${Math.max(1, stroke.width * 0.45)} ${Math.max(6, stroke.width * 2)}` : `${Math.max(8, stroke.width * 3)} ${Math.max(5, stroke.width * 1.8)}`;
-    return (
-      <Path
-        key={stroke.id}
-        d={centerlinePath}
-        fill="none"
-        stroke={stroke.color}
-        strokeWidth={stroke.width}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeDasharray={dashArray}
-      />
-    );
-  }
-
-  const path = getInkStrokeSvgPath(stroke, !draft);
-  if (!path) return null;
-
-  if (stroke.style === 'shape') {
-    const dashArray = stroke.linePattern && stroke.linePattern !== 'solid'
-      ? stroke.linePattern === 'dotted'
-        ? `${Math.max(1, stroke.width * 0.45)} ${Math.max(6, stroke.width * 2)}`
-        : `${Math.max(8, stroke.width * 3)} ${Math.max(5, stroke.width * 1.8)}`
-      : undefined;
-    return (
-      <Path
-        key={stroke.id}
-        d={path}
-        fill="none"
-        stroke={stroke.color}
-        strokeWidth={stroke.width}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeDasharray={dashArray}
-      />
-    );
-  }
-
-  if (stroke.style === 'highlight') {
-    return <Path key={stroke.id} d={path} fill={stroke.color} opacity={0.72} />;
-  }
-
-  return <Path key={stroke.id} d={path} fill={stroke.color} />;
-}
 
 function NotebookPaperBackground({ page }: { page: NotebookPage }) {
   const isSummary = page.kind === 'summary';
@@ -110,9 +64,7 @@ type PdfJsLib = {
   getDocument: (source: PdfJsDocumentSource) => { promise: Promise<PdfJsDocument>; destroy?: () => void };
 };
 type PageFrame = { width: number; height: number };
-type WebGestureNativeEvent = GestureResponderEvent['nativeEvent'] & { buttons?: number };
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
-type ResponderStartPoint = { x: number; y: number } | null;
 const PDF_RENDER_PAGE_RADIUS = 2;
 
 function getPriorityPageNumbers(currentPage: number, pageCount: number) {
@@ -128,25 +80,6 @@ function getPriorityPageNumbers(currentPage: number, pageCount: number) {
   return pageNumbers;
 }
 
-function getReferencePreviewImage(reference: PageCaptureReference) {
-  const cropUrl = derivePreprocessedCropUrl(reference.processedUrl);
-  if (cropUrl) return { uri: cropUrl };
-  if (reference.thumbnailUrl) return { uri: reference.thumbnailUrl };
-  if (reference.processedUrl) return { uri: reference.processedUrl };
-  if (reference.type === 'image' && reference.fileUrl) return { uri: reference.fileUrl };
-  return reference.previewImage ?? null;
-}
-
-function getCaptureAssetPreviewImage(asset: CaptureAsset | null | undefined) {
-  if (!asset) return null;
-  const cropUrl = derivePreprocessedCropUrl(asset.processedUrl);
-  if (cropUrl) return { uri: cropUrl };
-  if (asset.thumbnailUrl) return { uri: asset.thumbnailUrl };
-  if (asset.processedUrl) return { uri: asset.processedUrl };
-  if (asset.type === 'image' && asset.fileUrl) return { uri: asset.fileUrl };
-  return asset.previewImage ?? null;
-}
-
 function getCaptureAssetSummary(asset: CaptureAsset | null | undefined) {
   if (!asset) return '';
   return cleanAiDisplayText(asset.analysisSummary || asset.summary);
@@ -160,28 +93,23 @@ declare global {
 
 let pdfJsLoaderPromise: Promise<PdfJsLib> | null = null;
 
-function isPrimaryPointerEvent(event: GestureResponderEvent) {
-  const nativeEvent = event.nativeEvent as WebGestureNativeEvent;
-  return nativeEvent.buttons === undefined || nativeEvent.buttons === 1;
+function shouldLockScrollForTool(tool: InkTool, fingerDrawingEnabled: boolean | undefined) {
+  return tool === 'select'
+    || tool === 'erase'
+    || tool === 'text'
+    || Boolean(fingerDrawingEnabled && isDrawingTool(tool));
 }
 
-function isLikelyStylusEvent(event: GestureResponderEvent) {
-  const nativeEvent = event.nativeEvent as any;
-  const pointerType = nativeEvent.pointerType ?? nativeEvent.touchType;
-  return pointerType === 'pen' || pointerType === 'stylus' || pointerType === 'pencil';
+function shouldCaptureToolStart(tool: InkTool, event: GestureResponderEvent, fingerDrawingEnabled: boolean | undefined) {
+  if (!shouldUsePrimaryPointer(event)) return false;
+  if (isDrawingTool(tool)) return shouldCaptureInkPointer(event, Boolean(fingerDrawingEnabled));
+  return tool === 'select' || tool === 'erase' || tool === 'text';
 }
 
-function shouldCaptureDrawingMove(event: GestureResponderEvent, startPoint: ResponderStartPoint) {
-  if (isLikelyStylusEvent(event)) return true;
-  if (!startPoint) return false;
-  const dx = event.nativeEvent.locationX - startPoint.x;
-  const dy = event.nativeEvent.locationY - startPoint.y;
-  if (Math.hypot(dx, dy) < 8) return false;
-  return Math.abs(dx) > Math.abs(dy) * 1.18;
-}
-
-function isInkCaptureTool(tool: InkTool) {
-  return isDrawingTool(tool) || tool === 'select' || tool === 'erase';
+function shouldCaptureToolMove(tool: InkTool, event: GestureResponderEvent, fingerDrawingEnabled: boolean | undefined) {
+  if (!shouldUsePrimaryPointer(event)) return false;
+  if (isDrawingTool(tool)) return shouldCaptureInkPointer(event, Boolean(fingerDrawingEnabled));
+  return tool === 'select' || tool === 'erase';
 }
 
 function isPdfUri(uri: string | undefined) {
@@ -400,11 +328,10 @@ export function PdfPreview(props: {
   const selectionResizeStartRectRef = useRef<SelectionRect | null>(null);
   const draftSelectionRef = useRef<SelectionRect | null>(null);
   const textTapRef = useRef<InkPoint | null>(null);
-  const responderStartPointRef = useRef<ResponderStartPoint>(null);
   const canvasRefs = useRef<Record<number, HTMLCanvasElement | null>>({});
   const scrollingProgrammaticallyRef = useRef(false);
   const suppressNextScrollSyncRef = useRef(false);
-  const inkInputLocksScroll = Boolean(props.fingerDrawingEnabled && isInkCaptureTool(props.inkTool));
+  const inkInputLocksScroll = shouldLockScrollForTool(props.inkTool, props.fingerDrawingEnabled);
   const scrollEnabled = !inkInputLocksScroll;
 
   const pdfUri = useMemo(() => {
@@ -770,11 +697,11 @@ export function PdfPreview(props: {
     const pageReferences = getPageCaptureReferences(page);
     const activePageReference = pageReferences.find((reference) => reference.id === openReferenceId) ?? null;
     const activeReferenceIndex = activePageReference ? pageReferences.findIndex((reference) => reference.id === activePageReference.id) : -1;
-    const activeReferenceImage = activePageReference ? getReferencePreviewImage(activePageReference) : null;
+    const activeReferenceImage = activePageReference ? getPageCaptureReferenceImageSource(activePageReference) : null;
     const imageReferenceCount = pageReferences.filter((reference) => reference.type === 'image').length;
     const referenceButtonLabel = imageReferenceCount > 0 ? `사진 ${imageReferenceCount}` : `자료 ${pageReferences.length}`;
     const incomingAsset = active ? props.incomingAssetSuggestion : null;
-    const incomingAssetImage = getCaptureAssetPreviewImage(incomingAsset);
+    const incomingAssetImage = incomingAsset ? getCaptureOriginalImageSource(incomingAsset) : null;
     const incomingAssetSummary = getCaptureAssetSummary(incomingAsset);
 
     return (
@@ -928,19 +855,15 @@ export function PdfPreview(props: {
         <View
           style={[props.styles.inkOverlay, { pointerEvents: props.inkTool === 'view' ? 'none' : 'auto' }]}
           onStartShouldSetResponder={(event) => {
-            responderStartPointRef.current = { x: event.nativeEvent.locationX, y: event.nativeEvent.locationY };
-            if (event.nativeEvent.touches && event.nativeEvent.touches.length > 1) return false;
-            if (!isPrimaryPointerEvent(event)) return false;
-            if (isInkCaptureTool(props.inkTool) && (props.fingerDrawingEnabled || isLikelyStylusEvent(event))) return true;
-            return props.inkTool === 'text';
+            if (hasMultipleTouches(event)) return false;
+            return shouldCaptureToolStart(props.inkTool, event, props.fingerDrawingEnabled);
           }}
           onMoveShouldSetResponder={(event) => {
-            if (event.nativeEvent.touches && event.nativeEvent.touches.length > 1) return false;
-            if (!isPrimaryPointerEvent(event)) return false;
-            if (isInkCaptureTool(props.inkTool)) {
-              return props.fingerDrawingEnabled || shouldCaptureDrawingMove(event, responderStartPointRef.current);
+            if (hasMultipleTouches(event)) return false;
+            if (isDrawingTool(props.inkTool)) {
+              return shouldCaptureToolMove(props.inkTool, event, props.fingerDrawingEnabled);
             }
-            return false;
+            return shouldCaptureToolMove(props.inkTool, event, props.fingerDrawingEnabled);
           }}
           onResponderGrant={(event) => {
             beginInteraction(page);
@@ -1026,8 +949,7 @@ export function PdfPreview(props: {
                 setCurrentStroke(nextStroke);
                 return;
               }
-              const lastPoint = stroke.points[stroke.points.length - 1];
-              if (Math.hypot(point.x - lastPoint.x, point.y - lastPoint.y) < 1.2) return;
+              if (!shouldAppendInkPoint(stroke, point)) return;
               const nextStroke = { ...stroke, points: [...stroke.points, point] };
               currentStrokeRef.current = nextStroke;
               setCurrentStroke(nextStroke);
@@ -1073,15 +995,14 @@ export function PdfPreview(props: {
           }}
           onResponderRelease={() => {
             const stroke = currentStrokeRef.current;
-            if (stroke && stroke.points.length > 1) props.onCommitInkStroke(stroke);
+            if (stroke && stroke.points.length > 1) props.onCommitInkStroke(finalizeInkStroke(stroke));
             finishSelection(page);
             currentStrokeRef.current = null;
-            responderStartPointRef.current = null;
             setCurrentStroke(null);
           }}
           onResponderTerminate={() => {
             const stroke = currentStrokeRef.current;
-            if (stroke && stroke.points.length > 1) props.onCommitInkStroke(stroke);
+            if (stroke && stroke.points.length > 1) props.onCommitInkStroke(finalizeInkStroke(stroke));
             currentStrokeRef.current = null;
             draftSelectionRef.current = null;
             selectionOriginRef.current = null;
@@ -1090,7 +1011,6 @@ export function PdfPreview(props: {
             selectionResizeCornerRef.current = null;
             selectionResizeStartRectRef.current = null;
             textTapRef.current = null;
-            responderStartPointRef.current = null;
             setDraftSelection(null);
             setCurrentStroke(null);
           }}
@@ -1121,7 +1041,7 @@ export function PdfPreview(props: {
         style={{ width: '100%', maxHeight: viewerHeight }}
         contentContainerStyle={{ alignItems: 'center', paddingTop: 18, paddingBottom: 36 }}
         scrollEnabled={scrollEnabled}
-        scrollEventThrottle={80}
+        scrollEventThrottle={16}
         onScroll={handleScroll}
         showsVerticalScrollIndicator
       >

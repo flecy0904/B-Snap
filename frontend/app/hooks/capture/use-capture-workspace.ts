@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Alert } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
+import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import { subjects as fallbackSubjects } from '../../app-defaults';
 import { createCaptureAsset, useSyncBridge, useSyncBridgeStatus } from '../use-sync-bridge';
@@ -48,6 +49,36 @@ function resolvePreprocessingFallbackChoice(upload: UploadResult | null): Promis
       { cancelable: false },
     );
   });
+}
+
+const CAPTURE_FILE_DIR = `${FileSystem.documentDirectory ?? ''}bsnap-captures/`;
+
+function getFileExtension(fileName: string | null | undefined, mimeType: string | null | undefined, fallback: string) {
+  const nameExtension = fileName?.match(/\.([a-z0-9]+)$/i)?.[1];
+  if (nameExtension) return nameExtension.toLowerCase();
+  if (mimeType?.includes('png')) return 'png';
+  if (mimeType?.includes('webp')) return 'webp';
+  if (mimeType?.includes('pdf')) return 'pdf';
+  return fallback;
+}
+
+async function persistPickedFileUri(file: {
+  uri: string;
+  fileName?: string | null;
+  mimeType?: string | null;
+  fallbackExtension: string;
+}) {
+  if (!FileSystem.documentDirectory || !file.uri.startsWith('file://')) return null;
+  const extension = getFileExtension(file.fileName, file.mimeType, file.fallbackExtension);
+  const targetUri = `${CAPTURE_FILE_DIR}${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${extension}`;
+
+  try {
+    await FileSystem.makeDirectoryAsync(CAPTURE_FILE_DIR, { intermediates: true });
+    await FileSystem.copyAsync({ from: file.uri, to: targetUri });
+    return targetUri;
+  } catch {
+    return null;
+  }
 }
 
 export function useCaptureWorkspace(props: {
@@ -128,6 +159,12 @@ export function useCaptureWorkspace(props: {
       }
 
       const picked = result.assets[0];
+      const localFileUri = await persistPickedFileUri({
+        uri: picked.uri,
+        fileName: picked.fileName,
+        mimeType: picked.mimeType,
+        fallbackExtension: 'jpg',
+      });
       let previewUri = picked.uri;
       let backendUpload: UploadResult | null = null;
       if (isBackendApiEnabled()) {
@@ -153,6 +190,7 @@ export function useCaptureWorkspace(props: {
       
       newAsset.fileUrl = previewUri;
       newAsset.thumbnailUrl = previewUri;
+      newAsset.previewImageKey = localFileUri ?? newAsset.previewImageKey;
       if (backendUpload) applyUploadAnalysis(newAsset, backendUpload, { useOriginalImage: fallbackChoice === 'use-original' });
       
       await pushAsset(newAsset);
@@ -191,6 +229,12 @@ export function useCaptureWorkspace(props: {
       }
 
       const picked = result.assets[0];
+      const localFileUri = await persistPickedFileUri({
+        uri: picked.uri,
+        fileName: picked.fileName,
+        mimeType: picked.mimeType,
+        fallbackExtension: 'jpg',
+      });
       let previewUri = picked.uri;
       let backendUpload: UploadResult | null = null;
       if (isBackendApiEnabled()) {
@@ -216,6 +260,7 @@ export function useCaptureWorkspace(props: {
       
       newAsset.fileUrl = previewUri;
       newAsset.thumbnailUrl = previewUri;
+      newAsset.previewImageKey = localFileUri ?? newAsset.previewImageKey;
       if (backendUpload) applyUploadAnalysis(newAsset, backendUpload, { useOriginalImage: fallbackChoice === 'use-original' });
       
       await pushAsset(newAsset);
@@ -247,6 +292,12 @@ export function useCaptureWorkspace(props: {
       }
 
       const picked = result.assets[0];
+      const localFileUri = await persistPickedFileUri({
+        uri: picked.uri,
+        fileName: picked.name,
+        mimeType: picked.mimeType,
+        fallbackExtension: 'pdf',
+      });
       let previewUri = picked.uri;
       let backendUpload: UploadResult | null = null;
       if (isBackendApiEnabled()) {
@@ -266,6 +317,7 @@ export function useCaptureWorkspace(props: {
       });
       
       newAsset.fileUrl = previewUri;
+      newAsset.previewImageKey = localFileUri ?? newAsset.previewImageKey;
       if (backendUpload) applyUploadAnalysis(newAsset, backendUpload);
       
       await pushAsset(newAsset);

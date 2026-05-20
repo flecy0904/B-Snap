@@ -2,15 +2,24 @@ import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import BottomSheet, { BottomSheetBackdrop, BottomSheetScrollView, type BottomSheetBackdropProps } from '@gorhom/bottom-sheet';
 import { ActivityIndicator, Image, Modal, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
-import { isClassInsightTargetDocument } from '../../../hooks/notes/class-insight';
+import { isClassInsightQuestion, isClassInsightTargetDocument } from '../../../hooks/notes/class-insight';
 import { AiResponseContent } from '../ai/ai-response-content';
 import { PdfPreview } from '../pdf/pdf-preview';
 import { BlankNoteCanvas } from '../canvas/blank-note-canvas';
 import { NoteSummaryContent } from '../shared/notes-shared';
+import { PhotoViewerLinkPanel } from './photo-viewer-link-panel';
+import {
+  formatCaptureDate,
+  getCaptureImageSource,
+  getCaptureOriginalImageSource,
+  getCapturePlacementLabel,
+  getCaptureReferences,
+  getPageCaptureReferenceImageSource,
+} from '../shared/capture-assets';
 import type { BackendChatMessage, BackendChatSession, BackendClassInsight } from '../../../services/backend-api';
 import { AiAnswer, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NotebookPage, NoteEntry, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../../types';
 import { InkBrush, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
-import { cleanAiDisplayText, darkenHex, derivePreprocessedCropUrl, getDocumentPageLabel, isSameDocumentPage } from '../../../ui-helpers';
+import { cleanAiDisplayText, darkenHex, getDocumentPageLabel, isSameDocumentPage } from '../../../ui-helpers';
 
 const PEN_COLORS = ['#1F2937', '#2563EB', '#7C3AED', '#D9485F', '#F59E0B', '#16A34A'];
 const HIGHLIGHT_COLORS = ['#FDE047', '#FB7185', '#86EFAC', '#67E8F9', '#FDBA74'];
@@ -30,6 +39,15 @@ const LINE_PATTERNS: Array<{ label: string; value: InkLinePattern }> = [
   { label: '점선', value: 'dotted' },
   { label: '대시', value: 'dashed' },
 ];
+const CLASS_INSIGHT_QUICK_PROMPTS = [
+  { label: '중요 페이지', question: '시험에 나올만한 중요 페이지 추천해줘' },
+  { label: '다음 순위', question: '다음 순위 중요 페이지도 더 알려줘' },
+  { label: '복습 순서', question: '이 PDF에서 먼저 복습할 순서 알려줘' },
+] as const;
+const DEFAULT_AI_QUICK_PROMPTS = [
+  { label: '핵심 3개', question: '여기서 중요한 개념 3개만 알려줘' },
+  { label: '시험 관점', question: '시험 대비 관점으로 설명해줘' },
+] as const;
 const MOBILE_HANDWRITING_TOOLS: Array<{ value: InkTool; icon: React.ComponentProps<typeof MaterialCommunityIcons>['name'] }> = [
   { value: 'view', icon: 'cursor-default-outline' },
   { value: 'pen', icon: 'pencil-outline' },
@@ -47,36 +65,6 @@ function formatClassInsightPriority(priority: string) {
   if (priority === 'very-high') return '매우 높음';
   if (priority === 'high') return '높음';
   return '중간';
-}
-
-function getCaptureImageSource(asset: CaptureAsset) {
-  const uri = derivePreprocessedCropUrl(asset.processedUrl) ?? asset.thumbnailUrl ?? asset.processedUrl ?? asset.fileUrl ?? asset.previewImageKey;
-  if (uri && (uri.startsWith('http://') || uri.startsWith('https://') || uri.startsWith('file://') || uri.startsWith('data:image/'))) {
-    return { uri };
-  }
-  return asset.previewImage ?? null;
-}
-
-function formatCaptureDate(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return value;
-  return date.toLocaleString('ko-KR', {
-    month: 'numeric',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
-function getCapturePlacementLabel(asset: CaptureAsset, references: PageCaptureReference[]) {
-  const matches = references.filter((reference) => reference.assetId === asset.id);
-  if (!matches.length) return '미연결';
-  const firstLabel = matches[0]?.pageLabel || '연결됨';
-  return matches.length > 1 ? `${firstLabel} 외 ${matches.length - 1}` : firstLabel;
-}
-
-function getCaptureReferences(asset: CaptureAsset, references: PageCaptureReference[]) {
-  return references.filter((reference) => reference.assetId === asset.id);
 }
 
 export function MobileNotesView(props: {
@@ -240,10 +228,7 @@ export function MobileNotesView(props: {
     }
     setPageListOpen(false);
   };
-  const getReferencePreview = (reference: PageCaptureReference) => {
-    const uri = derivePreprocessedCropUrl(reference.processedUrl) ?? reference.thumbnailUrl ?? reference.processedUrl ?? (reference.type === 'image' ? reference.fileUrl : undefined);
-    return uri ? { uri } : reference.previewImage ?? null;
-  };
+  const getReferencePreview = (reference: PageCaptureReference) => getPageCaptureReferenceImageSource(reference);
   const toggleSelectionMode = () => {
     props.onChangeInkTool(props.inkTool === 'select' ? 'view' : 'select');
   };
@@ -293,19 +278,40 @@ export function MobileNotesView(props: {
     () => currentSubjectPhotoAssets.find((asset) => asset.id === previewAssetId) ?? null,
     [currentSubjectPhotoAssets, previewAssetId],
   );
-  const previewImageSource = previewAsset ? getCaptureImageSource(previewAsset) : null;
+  const previewImageSource = previewAsset ? getCaptureOriginalImageSource(previewAsset) : null;
   const previewReferences = previewAsset ? getCaptureReferences(previewAsset, props.allPageCaptureReferences) : [];
   const previewPrimaryReference = previewReferences[0] ?? null;
+  const linkableDocuments = React.useMemo(() => {
+    if (!previewAsset) return [];
+    return props.allStudyDocuments
+      .filter((document) => document.subjectId === previewAsset.subjectId && document.type !== 'image' && document.pageCount > 0)
+      .sort((left, right) => (left.id === previewPrimaryReference?.documentId ? -1 : right.id === previewPrimaryReference?.documentId ? 1 : right.id - left.id));
+  }, [previewAsset, previewPrimaryReference?.documentId, props.allStudyDocuments]);
+  const selectedLinkDocument = React.useMemo(
+    () => linkableDocuments.find((document) => document.id === previewPrimaryReference?.documentId) ?? linkableDocuments[0] ?? null,
+    [linkableDocuments, previewPrimaryReference?.documentId],
+  );
+  const selectedLinkInitialPageNumber = previewPrimaryReference?.page.kind === 'pdf' ? previewPrimaryReference.page.pageNumber : 1;
   const aiSuggestionPrompts = React.useMemo(() => {
-    const basePrompts = ['여기서 중요한 개념 3개만 알려줘', '시험 대비 관점으로 설명해줘'];
     return isClassInsightTargetDocument(props.studyDocument, props.subject)
-      ? ['시험에 나올만한 중요 페이지 추천해줘', ...basePrompts]
-      : ['이 그래프 의미 뭐야?', ...basePrompts];
+      ? CLASS_INSIGHT_QUICK_PROMPTS
+      : [{ label: '그래프 의미', question: '이 그래프 의미 뭐야?' }, ...DEFAULT_AI_QUICK_PROMPTS];
   }, [props.studyDocument, props.subject]);
+  const showAiSuggestionPrompts = Boolean(
+    aiSuggestionPrompts.length
+    && !props.aiQuestion.trim()
+    && !props.aiMessages.length
+    && !props.aiChatReadOnly,
+  );
+  const shouldShowClassInsightPages = React.useMemo(() => (
+    isClassInsightQuestion(props.aiQuestion)
+    || isClassInsightQuestion(props.aiAnswer?.question ?? '')
+  ), [props.aiAnswer?.question, props.aiQuestion]);
   const classInsightPages = React.useMemo(() => {
+    if (!shouldShowClassInsightPages) return [];
     if (!isClassInsightTargetDocument(props.studyDocument, props.subject)) return [];
     return (props.classInsight?.pages ?? []).slice(0, 3);
-  }, [props.classInsight?.pages, props.studyDocument, props.subject]);
+  }, [props.classInsight?.pages, props.studyDocument, props.subject, shouldShowClassInsightPages]);
 
   React.useEffect(() => {
     if (recoverableCount === 0) setRecoveryOpen(false);
@@ -448,12 +454,6 @@ export function MobileNotesView(props: {
         ) : (
         <View style={props.styles.mobileDocToolbar}>
           <View style={props.styles.mobileDocTools}>
-            <Pressable
-              style={[props.styles.mobileDocToolButton, props.fingerDrawingEnabled && props.styles.inkToolButtonActive]}
-              onPress={props.onToggleFingerDrawing}
-            >
-              <MaterialCommunityIcons name="gesture-tap" size={18} color={props.fingerDrawingEnabled ? props.blueColor : '#7D8797'} />
-            </Pressable>
             <View style={props.styles.mobileInkToolCluster}>
               {MOBILE_HANDWRITING_TOOLS.map((tool) => {
                 const isBrush = tool.value === 'pen' || tool.value === 'highlight';
@@ -470,6 +470,15 @@ export function MobileNotesView(props: {
                       ]}
                       onPress={() => {
                         if (isBrush) {
+                          if (tool.value === 'highlight') {
+                            props.onChangeBrushType('highlighter');
+                            if (!HIGHLIGHT_WIDTHS.includes(props.penWidth)) props.onChangePenWidth(18);
+                            props.onChangeLinePattern('solid');
+                          }
+                          if (tool.value === 'pen' && props.brushType === 'highlighter') {
+                            props.onChangeBrushType('ballpoint');
+                            if (!PEN_WIDTHS.includes(props.penWidth)) props.onChangePenWidth(3);
+                          }
                           props.onChangeInkTool(tool.value);
                           setActiveBrushPopover((current) => (current === tool.value ? null : (tool.value as 'pen' | 'highlight')));
                           return;
@@ -815,9 +824,13 @@ export function MobileNotesView(props: {
                 <Text style={props.styles.aiStateTitle}>선택 영역</Text>
                 <Text style={props.styles.aiStateBody}>{props.selectionRect ? `${Math.round(props.selectionRect.width)} × ${Math.round(props.selectionRect.height)} 영역 선택됨` : '아직 선택된 영역이 없습니다'}</Text>
               </View>
-              {aiSuggestionPrompts.map((prompt) => (
-                <Pressable key={prompt} style={props.styles.aiSuggestionChip} onPress={() => props.onChangeAiQuestion(prompt)}><Text style={props.styles.aiSuggestionText}>{prompt}</Text></Pressable>
-              ))}
+              {showAiSuggestionPrompts ? (
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+                  {aiSuggestionPrompts.map((prompt) => (
+                    <Pressable key={prompt.label} style={props.styles.aiSuggestionChip} onPress={() => props.onChangeAiQuestion(prompt.question)}><Text style={props.styles.aiSuggestionText}>{prompt.label}</Text></Pressable>
+                  ))}
+                </ScrollView>
+              ) : null}
               {classInsightPages.length ? (
                 <View style={props.styles.aiClassInsightStrip}>
                   <View style={props.styles.aiClassInsightHeader}>
@@ -1181,6 +1194,17 @@ export function MobileNotesView(props: {
                       ) : (
                         <Text style={props.styles.photoViewerInfoValue}>아직 노트 페이지에 연결되지 않았습니다.</Text>
                       )}
+                      <PhotoViewerLinkPanel
+                        styles={props.styles}
+                        assetId={previewAsset.id}
+                        documents={linkableDocuments}
+                        initialDocumentId={selectedLinkDocument?.id ?? null}
+                        initialPageNumber={selectedLinkInitialPageNumber}
+                        onLink={(assetId, documentId, pageNumber) => {
+                          props.onLinkCaptureAssetToPage(assetId, documentId, pageNumber);
+                          setPreviewAssetId(null);
+                        }}
+                      />
                     </View>
                     <View style={props.styles.photoViewerInfoCard}>
                       <View style={props.styles.photoViewerInfoHeader}>

@@ -60,6 +60,10 @@ const CLASS_INSIGHT_SCOPE_TERMS = [
   'part',
 ];
 const IMPORTANT_NOTE_KEYWORDS = ['시험', '중요', '암기', '별표', '나온다', '나올', '퀴즈', '중간', '기말', '외우', '필수', '강조', '체크', '복습', '정리', '공식', '주의'];
+const CLASS_INSIGHT_MORE_TERMS = ['더', '추가', '다음', '이어서', '나머지', '순위', '전체', '많이', '많은', '10개', '열개', 'twelve', 'more', 'next', 'additional', 'rank'];
+const DEFAULT_RECOMMENDATION_LIMIT = 5;
+const EXTENDED_RECOMMENDATION_LIMIT = 10;
+const MAX_RECOMMENDATION_LIMIT = 12;
 
 type PageSignal = {
   pageNumber: number;
@@ -118,7 +122,7 @@ export function isClassInsightTargetDocument(document: StudyDocumentEntry | null
   });
 }
 
-function isClassInsightQuestion(question: string) {
+export function isClassInsightQuestion(question: string) {
   const normalized = normalize(question);
   if (!normalized) return false;
   if (CLASS_INSIGHT_DIRECT_PHRASES.some((phrase) => normalized.includes(normalize(phrase)))) return true;
@@ -263,7 +267,22 @@ function scoreSignal(signal: PageSignal) {
   return Math.max(localScore, signal.aggregateScore ?? 0);
 }
 
-function rankSignals(signals: PageSignal[], pageCount: number) {
+function getRecommendationLimit(question: string, pageCount: number) {
+  const normalized = normalize(question);
+  const explicitNumber = normalized.match(/(\d{1,2})\s*(?:개|페이지|쪽|page|pages)?/)?.[1];
+  if (explicitNumber) {
+    const requested = Number(explicitNumber);
+    if (Number.isFinite(requested) && requested > DEFAULT_RECOMMENDATION_LIMIT) {
+      return Math.min(MAX_RECOMMENDATION_LIMIT, pageCount, Math.max(DEFAULT_RECOMMENDATION_LIMIT, requested));
+    }
+  }
+
+  const wantsMore = CLASS_INSIGHT_MORE_TERMS.some((term) => normalized.includes(normalize(term)));
+  if (wantsMore) return Math.min(MAX_RECOMMENDATION_LIMIT, pageCount, EXTENDED_RECOMMENDATION_LIMIT);
+  return Math.min(DEFAULT_RECOMMENDATION_LIMIT, pageCount);
+}
+
+function rankSignals(signals: PageSignal[], pageCount: number, limit: number) {
   const signalMap = new Map<number, PageSignal>();
   const ensure = (pageNumber: number) => {
     const normalizedPage = Math.max(1, Math.min(pageCount, pageNumber));
@@ -284,7 +303,7 @@ function rankSignals(signals: PageSignal[], pageCount: number) {
     })
     .filter((signal) => signal.importanceScore >= 35)
     .sort((left, right) => right.importanceScore - left.importanceScore)
-    .slice(0, 5);
+    .slice(0, limit);
 }
 
 function formatPriority(priority: RankedPageSignal['priority']) {
@@ -325,6 +344,7 @@ export function buildClassInsightContext(params: {
   if (!isClassInsightTargetDocument(params.studyDocument, params.subject)) return null;
 
   const pageCount = Math.max(1, params.studyDocument?.pageCount ?? 1);
+  const recommendationLimit = getRecommendationLimit(params.question, pageCount);
   const aggregateSignals = buildAggregateSignals(params.classInsight, pageCount);
   const liveSignals = buildLiveSignals({
     pageCount,
@@ -334,7 +354,7 @@ export function buildClassInsightContext(params: {
     pageCaptureReferences: params.pageCaptureReferences,
     generatedPages: params.generatedPages,
   });
-  const rankedSignals = rankSignals([...aggregateSignals, ...liveSignals], pageCount);
+  const rankedSignals = rankSignals([...aggregateSignals, ...liveSignals], pageCount, recommendationLimit);
   if (!rankedSignals.length) return null;
 
   const pageLines = rankedSignals.map((signal) => (
@@ -349,6 +369,7 @@ export function buildClassInsightContext(params: {
     'Use it only to decide which pages to recommend and why.',
     'Do not mention classmates, student counts, bookmark counts, highlight counts, hidden signals, data collection, or this internal context.',
     'Answer naturally as a study assistant, with page recommendations and concise reasons.',
+    `Recommend up to ${recommendationLimit} pages. If the user asks for more or next-ranked pages, include lower-ranked pages after the strongest pages.`,
     '',
     'Recommended page priorities:',
     ...pageLines,

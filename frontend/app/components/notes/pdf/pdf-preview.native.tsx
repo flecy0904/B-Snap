@@ -1,41 +1,28 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
-import { FlatList, GestureResponderEvent, Image, NativeScrollEvent, NativeSyntheticEvent, Pressable, Text, useWindowDimensions, View } from 'react-native';
+import { FlatList, Image, NativeScrollEvent, NativeSyntheticEvent, Pressable, Text, useWindowDimensions, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import Svg, { Path } from 'react-native-svg';
+import { Gesture, GestureDetector } from 'react-native-gesture-handler';
+import { runOnJS } from 'react-native-reanimated';
+import Svg from 'react-native-svg';
 import { captureRef } from 'react-native-view-shot';
+import { InkPath } from '../canvas/ink-path';
 import { TextAnnotationLayer } from '../canvas/text-annotation-layer';
-import { cleanAiDisplayText, derivePreprocessedCropUrl, findHitInkStrokeId, getInkCenterlinePath, getInkStrokeSvgPath, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize } from '../../../ui-helpers';
+import { shouldActivateNativeInkGesture, type NativeGestureStateManager, type NativeInkGestureEvent, type NativeInkTouchEvent } from '../canvas/native-ink-gesture-policy';
+import { getCaptureOriginalImageSource, getPageCaptureReferenceImageSource } from '../shared/capture-assets';
+import { cleanAiDisplayText, finalizeInkStroke, findHitInkStrokeId, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize, shouldAppendInkPoint } from '../../../ui-helpers';
 import { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { CaptureAsset, NotebookPage, PageCaptureReference } from '../../../types';
 import { renderPdfPageToImage, type PdfRenderSource, type RenderedPdfPage } from '../../../services/pdf-page-renderer';
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
-type ResponderStartPoint = { x: number; y: number } | null;
 const PDF_RENDER_PAGE_RADIUS = 3;
 const PDF_RENDER_CACHE_RADIUS = 3;
 
-function hasMultipleTouches(event: GestureResponderEvent) {
-  return Boolean(event.nativeEvent.touches && event.nativeEvent.touches.length > 1);
-}
-
-function isLikelyStylusEvent(event: GestureResponderEvent) {
-  const nativeEvent = event.nativeEvent as any;
-  const touch = nativeEvent.changedTouches?.[0] ?? nativeEvent.touches?.[0] ?? null;
-  const pointerType = nativeEvent.pointerType ?? nativeEvent.touchType ?? touch?.pointerType ?? touch?.touchType ?? touch?.type;
-  return pointerType === 'pen' || pointerType === 'stylus' || pointerType === 'pencil';
-}
-
-function shouldCaptureDrawingMove(event: GestureResponderEvent, startPoint: ResponderStartPoint) {
-  if (isLikelyStylusEvent(event)) return true;
-  if (!startPoint) return false;
-  const dx = event.nativeEvent.locationX - startPoint.x;
-  const dy = event.nativeEvent.locationY - startPoint.y;
-  if (Math.hypot(dx, dy) < 8) return false;
-  return Math.abs(dx) > Math.abs(dy) * 1.18;
-}
-
-function isInkCaptureTool(tool: InkTool) {
-  return isDrawingTool(tool) || tool === 'select' || tool === 'erase';
+function shouldLockScrollForTool(tool: InkTool, fingerDrawingEnabled: boolean | undefined) {
+  return tool === 'select'
+    || tool === 'erase'
+    || tool === 'text'
+    || Boolean(fingerDrawingEnabled && isDrawingTool(tool));
 }
 
 function getNotebookPageKey(page: NotebookPage) {
@@ -59,77 +46,9 @@ function isPdfPageNearCurrent(page: NotebookPage, currentPageNumber: number) {
     && Math.abs(page.pageNumber - currentPageNumber) <= PDF_RENDER_PAGE_RADIUS;
 }
 
-function getReferencePreviewImage(reference: PageCaptureReference) {
-  const cropUrl = derivePreprocessedCropUrl(reference.processedUrl);
-  if (cropUrl) return { uri: cropUrl };
-  if (reference.thumbnailUrl) return { uri: reference.thumbnailUrl };
-  if (reference.processedUrl) return { uri: reference.processedUrl };
-  if (reference.type === 'image' && reference.fileUrl) return { uri: reference.fileUrl };
-  return reference.previewImage ?? null;
-}
-
-function getCaptureAssetPreviewImage(asset: CaptureAsset | null | undefined) {
-  if (!asset) return null;
-  const cropUrl = derivePreprocessedCropUrl(asset.processedUrl);
-  if (cropUrl) return { uri: cropUrl };
-  if (asset.thumbnailUrl) return { uri: asset.thumbnailUrl };
-  if (asset.processedUrl) return { uri: asset.processedUrl };
-  if (asset.type === 'image' && asset.fileUrl) return { uri: asset.fileUrl };
-  return asset.previewImage ?? null;
-}
-
 function getCaptureAssetSummary(asset: CaptureAsset | null | undefined) {
   if (!asset) return '';
   return cleanAiDisplayText(asset.analysisSummary || asset.summary);
-}
-
-function InkPath({ stroke, draft = false }: { stroke: InkStroke; draft?: boolean }) {
-  if (stroke.linePattern && stroke.linePattern !== 'solid' && stroke.style !== 'highlight' && stroke.style !== 'shape') {
-    const centerlinePath = getInkCenterlinePath(stroke.points);
-    if (!centerlinePath) return null;
-    const dashArray = stroke.linePattern === 'dotted' ? `${Math.max(1, stroke.width * 0.45)} ${Math.max(6, stroke.width * 2)}` : `${Math.max(8, stroke.width * 3)} ${Math.max(5, stroke.width * 1.8)}`;
-    return (
-      <Path
-        key={stroke.id}
-        d={centerlinePath}
-        fill="none"
-        stroke={stroke.color}
-        strokeWidth={stroke.width}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeDasharray={dashArray}
-      />
-    );
-  }
-
-  const path = getInkStrokeSvgPath(stroke, !draft);
-  if (!path) return null;
-
-  if (stroke.style === 'shape') {
-    const dashArray = stroke.linePattern && stroke.linePattern !== 'solid'
-      ? stroke.linePattern === 'dotted'
-        ? `${Math.max(1, stroke.width * 0.45)} ${Math.max(6, stroke.width * 2)}`
-        : `${Math.max(8, stroke.width * 3)} ${Math.max(5, stroke.width * 1.8)}`
-      : undefined;
-    return (
-      <Path
-        key={stroke.id}
-        d={path}
-        fill="none"
-        stroke={stroke.color}
-        strokeWidth={stroke.width}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeDasharray={dashArray}
-      />
-    );
-  }
-
-  if (stroke.style === 'highlight') {
-    return <Path key={stroke.id} d={path} fill={stroke.color} opacity={0.72} />;
-  }
-
-  return <Path key={stroke.id} d={path} fill={stroke.color} />;
 }
 
 function NotebookPaperBackground({ page }: { page: NotebookPage }) {
@@ -268,7 +187,7 @@ export function PdfPreview(props: {
   const [pdfPageSize, setPdfPageSize] = useState<{ width: number; height: number } | null>(null);
   const pageAspectRatio = pdfPageSize ? Math.max(0.45, Math.min(3.2, pdfPageSize.width / pdfPageSize.height)) : 16 / 9;
   const viewerHeight = Math.round(viewerWidth / pageAspectRatio);
-  const pageGap = 14;
+  const pageGap = 10;
   const [documentPageCount, setDocumentPageCount] = useState(Math.max(1, props.page));
   const [currentStroke, setCurrentStroke] = useState<InkStroke | null>(null);
   const [draftSelection, setDraftSelection] = useState<SelectionRect | null>(null);
@@ -289,7 +208,6 @@ export function PdfPreview(props: {
   const selectionResizeStartRectRef = useRef<SelectionRect | null>(null);
   const draftSelectionRef = useRef<SelectionRect | null>(null);
   const textTapRef = useRef<InkPoint | null>(null);
-  const responderStartPointRef = useRef<ResponderStartPoint>(null);
   const pageCaptureRefs = useRef<Record<string, View | null>>({});
   const listRef = useRef<FlatList<NotebookPage> | null>(null);
   const scrollStateRef = useRef({
@@ -377,7 +295,7 @@ export function PdfPreview(props: {
   const getPdfRenderCacheKey = useCallback((pageNumber: number) => (
     `${pdfSourceKey}:${pageNumber}:${Math.round(viewerWidth)}`
   ), [pdfSourceKey, viewerWidth]);
-  const inkInputLocksScroll = Boolean(props.fingerDrawingEnabled && isInkCaptureTool(props.inkTool));
+  const inkInputLocksScroll = shouldLockScrollForTool(props.inkTool, props.fingerDrawingEnabled);
   const scrollEnabled = !inkInputLocksScroll;
   const [visiblePageKeys, setVisiblePageKeys] = useState<Set<string>>(() => new Set([getNotebookPageKey(pageItems[0])]));
   const visiblePdfPageNumbers = useMemo(() => {
@@ -704,12 +622,226 @@ export function PdfPreview(props: {
     const pageReferences = shouldRenderInteractiveLayers ? getPageCaptureReferences(page) : [];
     const activePageReference = pageReferences.find((reference) => reference.id === openReferenceId) ?? null;
     const activeReferenceIndex = activePageReference ? pageReferences.findIndex((reference) => reference.id === activePageReference.id) : -1;
-    const activeReferenceImage = activePageReference ? getReferencePreviewImage(activePageReference) : null;
+    const activeReferenceImage = activePageReference ? getPageCaptureReferenceImageSource(activePageReference) : null;
     const imageReferenceCount = pageReferences.filter((reference) => reference.type === 'image').length;
     const referenceButtonLabel = imageReferenceCount > 0 ? `사진 ${imageReferenceCount}` : `자료 ${pageReferences.length}`;
     const incomingAsset = currentPage ? props.incomingAssetSuggestion : null;
-    const incomingAssetImage = getCaptureAssetPreviewImage(incomingAsset);
+    const incomingAssetImage = incomingAsset ? getCaptureOriginalImageSource(incomingAsset) : null;
     const incomingAssetSummary = getCaptureAssetSummary(incomingAsset);
+
+    const handleInkGestureStart = (x: number, y: number) => {
+      beginInteraction(page);
+      const point = clampPointToPage(page, x, y, props.inkTool === 'text' ? 'annotate' : 'draw');
+
+      if (isDrawingTool(props.inkTool)) {
+        const appearance = isShapeTool(props.inkTool)
+          ? resolveShapeStrokeAppearance(props.penColor, props.penWidth)
+          : resolveInkStrokeAppearance(props.inkTool, props.penColor, props.penWidth, props.brushType);
+        const stroke: InkStroke = {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          color: appearance.color,
+          width: appearance.width,
+          style: isShapeTool(props.inkTool) ? 'shape' : props.inkTool === 'highlight' ? 'highlight' : 'pen',
+          brush: isShapeTool(props.inkTool) ? undefined : props.brushType,
+          brushSettings: isShapeTool(props.inkTool) ? undefined : props.brushSettings,
+          linePattern: props.linePattern,
+          shape: isShapeTool(props.inkTool) ? props.inkTool : undefined,
+          pageNumber: page.pageNumber,
+          generatedPageId: page.generatedPageId,
+          pageWidth: viewerWidth,
+          pageHeight: viewerHeight,
+          points: [point],
+        };
+        currentStrokeRef.current = stroke;
+        setCurrentStroke(stroke);
+        return;
+      }
+
+      if (props.inkTool === 'select') {
+        const currentSelection = isCurrentNotebookPage(page) ? scaleSelectionRectToPageSize(props.selectionRect, viewerWidth, viewerHeight) : null;
+        const resizeCorner = getResizeCorner(currentSelection, point);
+        if (currentSelection && resizeCorner) {
+          selectionResizeCornerRef.current = resizeCorner;
+          selectionResizeStartRectRef.current = currentSelection;
+          draftSelectionRef.current = currentSelection;
+          setDraftSelection(currentSelection);
+          return;
+        }
+        if (
+          currentSelection &&
+          point.x >= currentSelection.x &&
+          point.x <= currentSelection.x + currentSelection.width &&
+          point.y >= currentSelection.y &&
+          point.y <= currentSelection.y + currentSelection.height
+        ) {
+          selectionMoveOriginRef.current = point;
+          selectionMoveStartRectRef.current = currentSelection;
+          draftSelectionRef.current = currentSelection;
+          setDraftSelection(currentSelection);
+          return;
+        }
+        props.onSelectionChange(null);
+        props.onSelectionPreviewChange?.(null);
+        selectionOriginRef.current = point;
+        const rect = { x: point.x, y: point.y, width: 0, height: 0, pageWidth: point.pageWidth, pageHeight: point.pageHeight };
+        draftSelectionRef.current = rect;
+        setDraftSelection(rect);
+        return;
+      }
+
+      if (props.inkTool === 'text') {
+        textTapRef.current = point;
+        return;
+      }
+
+      if (props.inkTool === 'erase') {
+        const hitSourceStrokes = pageStrokesForView.length ? pageStrokesForView : getPageStrokesForView(page);
+        const hitStrokeId = findHitInkStrokeId(hitSourceStrokes, point);
+        if (hitStrokeId) props.onRemoveInkStroke(hitStrokeId);
+      }
+    };
+
+    const handleInkGestureMove = (x: number, y: number) => {
+      const point = clampPointToPage(page, x, y);
+
+      if (isDrawingTool(props.inkTool)) {
+        const stroke = currentStrokeRef.current;
+        if (!stroke) return;
+        if (stroke.style === 'shape') {
+          const nextStroke = { ...stroke, points: [stroke.points[0], point] };
+          currentStrokeRef.current = nextStroke;
+          setCurrentStroke(nextStroke);
+          return;
+        }
+        if (!shouldAppendInkPoint(stroke, point)) return;
+        const nextStroke = { ...stroke, points: [...stroke.points, point] };
+        currentStrokeRef.current = nextStroke;
+        setCurrentStroke(nextStroke);
+        return;
+      }
+
+      if (props.inkTool === 'select') {
+        const resizeCorner = selectionResizeCornerRef.current;
+        const resizeStartRect = selectionResizeStartRectRef.current;
+        if (resizeCorner && resizeStartRect) {
+          const rect = resizeRectFromCorner(resizeStartRect, resizeCorner, point);
+          draftSelectionRef.current = rect;
+          setDraftSelection(rect);
+          return;
+        }
+        const moveOrigin = selectionMoveOriginRef.current;
+        const moveStartRect = selectionMoveStartRectRef.current;
+        if (moveOrigin && moveStartRect) {
+          const rect = {
+            ...moveStartRect,
+            x: moveStartRect.x + point.x - moveOrigin.x,
+            y: moveStartRect.y + point.y - moveOrigin.y,
+            pageWidth: point.pageWidth,
+            pageHeight: point.pageHeight,
+          };
+          draftSelectionRef.current = rect;
+          setDraftSelection(rect);
+          return;
+        }
+        const origin = selectionOriginRef.current;
+        if (!origin) return;
+        const rect = {
+          x: Math.min(origin.x, point.x),
+          y: Math.min(origin.y, point.y),
+          width: Math.abs(point.x - origin.x),
+          height: Math.abs(point.y - origin.y),
+          pageWidth: point.pageWidth,
+          pageHeight: point.pageHeight,
+        };
+        draftSelectionRef.current = rect;
+        setDraftSelection(rect);
+      }
+    };
+
+    const handleInkGestureEnd = () => {
+      const stroke = currentStrokeRef.current;
+      if (stroke && stroke.points.length > 1) props.onCommitInkStroke(finalizeInkStroke(stroke));
+
+      if (props.inkTool === 'select') {
+        const rect = draftSelectionRef.current;
+        const moveOrigin = selectionMoveOriginRef.current;
+        const moveStartRect = selectionMoveStartRectRef.current;
+        const resizeCorner = selectionResizeCornerRef.current;
+        const resizeStartRect = selectionResizeStartRectRef.current;
+        draftSelectionRef.current = null;
+        selectionOriginRef.current = null;
+        selectionMoveOriginRef.current = null;
+        selectionMoveStartRectRef.current = null;
+        selectionResizeCornerRef.current = null;
+        selectionResizeStartRectRef.current = null;
+        setDraftSelection(null);
+        if (rect && resizeCorner && resizeStartRect) {
+          props.onResizeSelection?.(rect);
+        } else if (rect && moveOrigin && moveStartRect) {
+          const dx = rect.x - moveStartRect.x;
+          const dy = rect.y - moveStartRect.y;
+          if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) props.onMoveSelection?.(dx, dy);
+        } else if (rect && rect.width > 24 && rect.height > 24) {
+          void buildSelectionPreview(page, rect).then((uri) => {
+            props.onSelectionChange(rect);
+            props.onSelectionPreviewChange?.(uri);
+          });
+        }
+      }
+
+      if (props.inkTool === 'text' && textTapRef.current) props.onAddTextAnnotation(textTapRef.current);
+      currentStrokeRef.current = null;
+      textTapRef.current = null;
+      setCurrentStroke(null);
+    };
+
+    const handleInkGestureCancel = () => {
+      const stroke = currentStrokeRef.current;
+      if (stroke && stroke.points.length > 1) props.onCommitInkStroke(finalizeInkStroke(stroke));
+      currentStrokeRef.current = null;
+      draftSelectionRef.current = null;
+      selectionOriginRef.current = null;
+      selectionMoveOriginRef.current = null;
+      selectionMoveStartRectRef.current = null;
+      selectionResizeCornerRef.current = null;
+      selectionResizeStartRectRef.current = null;
+      textTapRef.current = null;
+      setDraftSelection(null);
+      setCurrentStroke(null);
+    };
+
+    const gestureInkTool = props.inkTool;
+    const gestureFingerDrawingEnabled = props.fingerDrawingEnabled;
+    const inkGesture = Gesture.Pan()
+      .enabled(gestureInkTool !== 'view')
+      .manualActivation(true)
+      .minDistance(0)
+      .shouldCancelWhenOutside(false)
+      .cancelsTouchesInView(false)
+      .onTouchesDown((event: NativeInkTouchEvent, state: NativeGestureStateManager) => {
+        'worklet';
+        if (shouldActivateNativeInkGesture(gestureInkTool, event, gestureFingerDrawingEnabled)) {
+          state.activate();
+        } else {
+          state.fail();
+        }
+      })
+      .onStart((event: NativeInkGestureEvent) => {
+        'worklet';
+        runOnJS(handleInkGestureStart)(event.x, event.y);
+      })
+      .onUpdate((event: NativeInkGestureEvent) => {
+        'worklet';
+        runOnJS(handleInkGestureMove)(event.x, event.y);
+      })
+      .onEnd(() => {
+        'worklet';
+        runOnJS(handleInkGestureEnd)();
+      })
+      .onFinalize((_, success) => {
+        'worklet';
+        if (!success) runOnJS(handleInkGestureCancel)();
+      });
 
     return (
       <View
@@ -857,203 +989,9 @@ export function PdfPreview(props: {
           </View>
         ) : null}
 
-        <View
-          pointerEvents={props.inkTool === 'view' ? 'none' : 'auto'}
-          style={props.styles.inkOverlay}
-          onStartShouldSetResponder={(event) => {
-            responderStartPointRef.current = { x: event.nativeEvent.locationX, y: event.nativeEvent.locationY };
-            if (hasMultipleTouches(event)) return false;
-            if (isInkCaptureTool(props.inkTool) && (props.fingerDrawingEnabled || isLikelyStylusEvent(event))) return true;
-            return props.inkTool === 'text';
-          }}
-          onMoveShouldSetResponder={(event) => {
-            if (hasMultipleTouches(event)) return false;
-            if (isInkCaptureTool(props.inkTool)) {
-              return props.fingerDrawingEnabled || shouldCaptureDrawingMove(event, responderStartPointRef.current);
-            }
-            return false;
-          }}
-          onResponderGrant={(event) => {
-            beginInteraction(page);
-            const point = clampPointToPage(page, event.nativeEvent.locationX, event.nativeEvent.locationY, props.inkTool === 'text' ? 'annotate' : 'draw');
-
-            if (isDrawingTool(props.inkTool)) {
-              const appearance = isShapeTool(props.inkTool)
-                ? resolveShapeStrokeAppearance(props.penColor, props.penWidth)
-                : resolveInkStrokeAppearance(props.inkTool, props.penColor, props.penWidth, props.brushType);
-              const stroke: InkStroke = {
-                id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-                color: appearance.color,
-                width: appearance.width,
-                style: isShapeTool(props.inkTool) ? 'shape' : props.inkTool === 'highlight' ? 'highlight' : 'pen',
-                brush: isShapeTool(props.inkTool) ? undefined : props.brushType,
-                brushSettings: isShapeTool(props.inkTool) ? undefined : props.brushSettings,
-                linePattern: props.linePattern,
-                shape: isShapeTool(props.inkTool) ? props.inkTool : undefined,
-                pageNumber: page.pageNumber,
-                generatedPageId: page.generatedPageId,
-                pageWidth: viewerWidth,
-                pageHeight: viewerHeight,
-                points: [point],
-              };
-              currentStrokeRef.current = stroke;
-              setCurrentStroke(stroke);
-              return;
-            }
-
-            if (props.inkTool === 'select') {
-              const currentSelection = isCurrentNotebookPage(page) ? scaleSelectionRectToPageSize(props.selectionRect, viewerWidth, viewerHeight) : null;
-              const resizeCorner = getResizeCorner(currentSelection, point);
-              if (currentSelection && resizeCorner) {
-                selectionResizeCornerRef.current = resizeCorner;
-                selectionResizeStartRectRef.current = currentSelection;
-                draftSelectionRef.current = currentSelection;
-                setDraftSelection(currentSelection);
-                return;
-              }
-              if (
-                currentSelection &&
-                point.x >= currentSelection.x &&
-                point.x <= currentSelection.x + currentSelection.width &&
-                point.y >= currentSelection.y &&
-                point.y <= currentSelection.y + currentSelection.height
-              ) {
-                selectionMoveOriginRef.current = point;
-                selectionMoveStartRectRef.current = currentSelection;
-                draftSelectionRef.current = currentSelection;
-                setDraftSelection(currentSelection);
-                return;
-              }
-              props.onSelectionChange(null);
-              props.onSelectionPreviewChange?.(null);
-              selectionOriginRef.current = point;
-              const rect = { x: point.x, y: point.y, width: 0, height: 0, pageWidth: point.pageWidth, pageHeight: point.pageHeight };
-              draftSelectionRef.current = rect;
-              setDraftSelection(rect);
-              return;
-            }
-
-            if (props.inkTool === 'text') {
-              textTapRef.current = point;
-              return;
-            }
-
-            if (props.inkTool === 'erase') {
-              const hitSourceStrokes = pageStrokesForView.length ? pageStrokesForView : getPageStrokesForView(page);
-              const hitStrokeId = findHitInkStrokeId(hitSourceStrokes, point);
-              if (hitStrokeId) props.onRemoveInkStroke(hitStrokeId);
-            }
-          }}
-          onResponderMove={(event) => {
-            const point = clampPointToPage(page, event.nativeEvent.locationX, event.nativeEvent.locationY);
-
-            if (isDrawingTool(props.inkTool)) {
-              const stroke = currentStrokeRef.current;
-              if (!stroke) return;
-              if (stroke.style === 'shape') {
-                const nextStroke = { ...stroke, points: [stroke.points[0], point] };
-                currentStrokeRef.current = nextStroke;
-                setCurrentStroke(nextStroke);
-                return;
-              }
-              const lastPoint = stroke.points[stroke.points.length - 1];
-              if (Math.hypot(point.x - lastPoint.x, point.y - lastPoint.y) < 1.2) return;
-              const nextStroke = { ...stroke, points: [...stroke.points, point] };
-              currentStrokeRef.current = nextStroke;
-              setCurrentStroke(nextStroke);
-              return;
-            }
-
-            if (props.inkTool === 'select') {
-              const resizeCorner = selectionResizeCornerRef.current;
-              const resizeStartRect = selectionResizeStartRectRef.current;
-              if (resizeCorner && resizeStartRect) {
-                const rect = resizeRectFromCorner(resizeStartRect, resizeCorner, point);
-                draftSelectionRef.current = rect;
-                setDraftSelection(rect);
-                return;
-              }
-              const moveOrigin = selectionMoveOriginRef.current;
-              const moveStartRect = selectionMoveStartRectRef.current;
-              if (moveOrigin && moveStartRect) {
-                const rect = {
-                  ...moveStartRect,
-                  x: moveStartRect.x + point.x - moveOrigin.x,
-                  y: moveStartRect.y + point.y - moveOrigin.y,
-                  pageWidth: point.pageWidth,
-                  pageHeight: point.pageHeight,
-                };
-                draftSelectionRef.current = rect;
-                setDraftSelection(rect);
-                return;
-              }
-              const origin = selectionOriginRef.current;
-              if (!origin) return;
-              const rect = {
-                x: Math.min(origin.x, point.x),
-                y: Math.min(origin.y, point.y),
-                width: Math.abs(point.x - origin.x),
-                height: Math.abs(point.y - origin.y),
-                pageWidth: point.pageWidth,
-                pageHeight: point.pageHeight,
-              };
-              draftSelectionRef.current = rect;
-              setDraftSelection(rect);
-            }
-          }}
-          onResponderRelease={() => {
-            const stroke = currentStrokeRef.current;
-            if (stroke && stroke.points.length > 1) props.onCommitInkStroke(stroke);
-
-            if (props.inkTool === 'select') {
-              const rect = draftSelectionRef.current;
-              const moveOrigin = selectionMoveOriginRef.current;
-              const moveStartRect = selectionMoveStartRectRef.current;
-              const resizeCorner = selectionResizeCornerRef.current;
-              const resizeStartRect = selectionResizeStartRectRef.current;
-              draftSelectionRef.current = null;
-              selectionOriginRef.current = null;
-              selectionMoveOriginRef.current = null;
-              selectionMoveStartRectRef.current = null;
-              selectionResizeCornerRef.current = null;
-              selectionResizeStartRectRef.current = null;
-              setDraftSelection(null);
-              if (rect && resizeCorner && resizeStartRect) {
-                props.onResizeSelection?.(rect);
-              } else if (rect && moveOrigin && moveStartRect) {
-                const dx = rect.x - moveStartRect.x;
-                const dy = rect.y - moveStartRect.y;
-                if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) props.onMoveSelection?.(dx, dy);
-              } else if (rect && rect.width > 24 && rect.height > 24) {
-                void buildSelectionPreview(page, rect).then((uri) => {
-                  props.onSelectionChange(rect);
-                  props.onSelectionPreviewChange?.(uri);
-                });
-              }
-            }
-
-            if (props.inkTool === 'text' && textTapRef.current) props.onAddTextAnnotation(textTapRef.current);
-            currentStrokeRef.current = null;
-            textTapRef.current = null;
-            responderStartPointRef.current = null;
-            setCurrentStroke(null);
-          }}
-          onResponderTerminate={() => {
-            const stroke = currentStrokeRef.current;
-            if (stroke && stroke.points.length > 1) props.onCommitInkStroke(stroke);
-            currentStrokeRef.current = null;
-            draftSelectionRef.current = null;
-            selectionOriginRef.current = null;
-            selectionMoveOriginRef.current = null;
-            selectionMoveStartRectRef.current = null;
-            selectionResizeCornerRef.current = null;
-            selectionResizeStartRectRef.current = null;
-            textTapRef.current = null;
-            responderStartPointRef.current = null;
-            setDraftSelection(null);
-            setCurrentStroke(null);
-          }}
-        />
+        <GestureDetector gesture={inkGesture}>
+          <View pointerEvents={props.inkTool === 'view' ? 'none' : 'auto'} style={props.styles.inkOverlay} />
+        </GestureDetector>
       </View>
     );
   };
@@ -1081,12 +1019,12 @@ export function PdfPreview(props: {
         onScroll={handleScroll}
         onScrollEndDrag={handleScroll}
         onMomentumScrollEnd={handleScroll}
-        scrollEventThrottle={32}
+        scrollEventThrottle={16}
         showsVerticalScrollIndicator
         initialNumToRender={2}
-        maxToRenderPerBatch={1}
-        updateCellsBatchingPeriod={48}
-        windowSize={3}
+        maxToRenderPerBatch={2}
+        updateCellsBatchingPeriod={32}
+        windowSize={5}
         removeClippedSubviews
         onScrollToIndexFailed={(info) => {
           setTimeout(() => {

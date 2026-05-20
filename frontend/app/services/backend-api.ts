@@ -7,6 +7,9 @@ type RequestOptions = {
   timeoutMs?: number;
 };
 
+const DEFAULT_REQUEST_TIMEOUT_MS = 12000;
+const AI_MESSAGE_TIMEOUT_MS = 60000;
+
 let backendAuthToken: string | null = null;
 
 export function setBackendAuthToken(token: string | null) {
@@ -207,7 +210,19 @@ function getBackendUrl() {
 
 export function resolveBackendAssetUrl(url: string | null | undefined) {
   if (!url) return null;
-  if (/^https?:\/\//i.test(url) || url.startsWith('file://')) return url;
+  if (/^https?:\/\//i.test(url)) {
+    try {
+      const parsed = new URL(url);
+      if (parsed.pathname.startsWith('/uploads/')) {
+        const baseUrl = getBackendUrl();
+        if (baseUrl) return `${baseUrl.replace(/\/$/, '')}${parsed.pathname}${parsed.search}`;
+      }
+    } catch {
+      return url;
+    }
+    return url;
+  }
+  if (url.startsWith('file://')) return url;
 
   const baseUrl = getBackendUrl();
   if (!baseUrl) return url;
@@ -230,7 +245,7 @@ async function request<T>(path: string, options: RequestOptions = {}): Promise<T
 
   let response: Response;
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? 12000);
+  const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS);
   try {
     response = await fetch(`${baseUrl}${path}`, {
       method: options.method ?? 'GET',
@@ -461,8 +476,8 @@ export function listBackendNotePages(noteId: number) {
   ));
 }
 
-export function getBackendClassInsight(noteId: number) {
-  return request<BackendClassInsight>(`/notes/${noteId}/class-insights`);
+export function getBackendClassInsight(noteId: number, limit = 12) {
+  return request<BackendClassInsight>(`/notes/${noteId}/class-insights?limit=${limit}`);
 }
 
 export async function createBackendNote(payload: {
@@ -718,6 +733,7 @@ export async function sendBackendAiMessage(payload: {
 }) {
   return request<BackendAiMessageResponse>(`/chat-sessions/${payload.sessionId}/ai-messages`, {
     method: 'POST',
+    timeoutMs: AI_MESSAGE_TIMEOUT_MS,
     body: {
       content: payload.content,
       model: payload.model ?? null,

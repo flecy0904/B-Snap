@@ -1,5 +1,6 @@
 import base64
 import json
+import logging
 import mimetypes
 import re
 from typing import Any
@@ -14,6 +15,9 @@ from backend.app.services.prompts.ai_canvas import AI_CANVAS_EDIT_INSTRUCTIONS
 from backend.app.services.prompts.chat_title import CHAT_TITLE_INSTRUCTIONS
 from backend.app.services.prompts.note_assistant import NOTE_CHAT_INSTRUCTIONS
 from backend.app.services.prompts.vision import CAPTURE_IMAGE_ANALYSIS_INSTRUCTIONS
+
+
+logger = logging.getLogger(__name__)
 
 
 def build_note_context(note: dict, pages: list[dict], current_page_number: int | None = None) -> str:
@@ -362,10 +366,12 @@ def generate_text_response(
             input=input_items,
         )
     except OpenAIError as exc:
+        logger.exception("OpenAI request failed: model=%s", selected_model)
         raise HTTPException(status_code=502, detail="OpenAI request failed") from exc
 
     answer = response.output_text.strip()
     if not answer:
+        logger.warning("OpenAI returned an empty response: model=%s", selected_model)
         raise HTTPException(status_code=502, detail="OpenAI returned an empty response")
     return answer
 
@@ -396,10 +402,12 @@ def _generate_gemini_text_response(
             config=types.GenerateContentConfig(system_instruction=instructions),
         )
     except Exception as exc:
+        logger.exception("Gemini request failed: model=%s", selected_model)
         raise HTTPException(status_code=502, detail="Gemini request failed") from exc
 
     answer = (response.text or "").strip()
     if not answer:
+        logger.warning("Gemini returned an empty response: model=%s", selected_model)
         raise HTTPException(status_code=502, detail="Gemini returned an empty response")
     return answer
 
