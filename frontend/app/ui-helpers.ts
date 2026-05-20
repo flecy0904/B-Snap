@@ -350,7 +350,7 @@ export function findInkStrokesInRect(strokes: InkStroke[], rect: { x: number; y:
   return selectedIds;
 }
 
-function isPointInPolygon(point: InkPoint, polygon: InkPoint[]) {
+export function isPointInPolygon(point: InkPoint, polygon: InkPoint[]) {
   if (polygon.length < 3) return false;
   let inside = false;
   for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
