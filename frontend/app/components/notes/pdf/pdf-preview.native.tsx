@@ -704,6 +704,7 @@ export function PdfPreview(props: {
     const pageKey = getNotebookPageKey(page);
     const draftForView = draftSelectionPageKey === pageKey ? draftSelection : null;
     const draftLassoForView = draftSelectionPageKey === pageKey ? draftSelectionPath : [];
+    const draftRectForView = draftForView?.mode === 'lasso' ? null : draftForView;
     const hasHighlight = pageStrokes.some((stroke) => stroke.style === 'highlight') || ((page.generatedPageId ? currentStroke?.generatedPageId === page.generatedPageId : currentStroke?.pageNumber === page.pageNumber) && currentStroke?.style === 'highlight');
     const hasInk = pageStrokes.some((stroke) => stroke.style !== 'highlight') || ((page.generatedPageId ? currentStroke?.generatedPageId === page.generatedPageId : currentStroke?.pageNumber === page.pageNumber) && currentStroke?.style !== 'highlight' && currentStroke);
     const hasTextAnnotations = pageTextAnnotations.length > 0;
@@ -739,7 +740,7 @@ export function PdfPreview(props: {
 
         {!capturingSelection && !draftForView && selectionForView ? <SelectionOverlay rect={selectionForView} styles={props.styles} /> : null}
         {!capturingSelection && draftLassoForView.length > 1 ? <SelectionLassoOverlay points={draftLassoForView} /> : null}
-        {!capturingSelection && draftForView ? <SelectionOverlay rect={draftForView} styles={props.styles} draft /> : null}
+        {!capturingSelection && draftRectForView ? <SelectionOverlay rect={draftRectForView} styles={props.styles} draft /> : null}
       </>
     );
   };

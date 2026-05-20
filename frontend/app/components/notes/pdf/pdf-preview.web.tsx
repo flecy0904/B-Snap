@@ -1053,7 +1053,7 @@ export function PdfPreview(props: {
             {(page.generatedPageId ? currentStroke?.generatedPageId === page.generatedPageId : currentStroke?.pageNumber === page.pageNumber) && currentStroke?.style !== 'highlight' && currentStroke ? <InkPath stroke={currentStroke} draft /> : null}
           </Svg>
           {!draftSelectionStyle && selectionRectStyle ? <SelectionOverlay rect={selectionRectStyle} styles={props.styles} /> : null}
-          {draftSelectionStyle ? <SelectionOverlay rect={draftSelectionStyle} styles={props.styles} draft /> : null}
+          {draftSelectionStyle && draftSelectionStyle.mode !== 'lasso' ? <SelectionOverlay rect={draftSelectionStyle} styles={props.styles} draft /> : null}
         </View>
       </View>
     );
