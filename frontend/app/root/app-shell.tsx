@@ -210,6 +210,7 @@ export function AppShell(props: {
                   penWidth={notesState.penWidth}
                   brushType={notesState.brushType}
                   linePattern={notesState.linePattern}
+                  selectionMode={notesState.selectionMode}
                   brushSettings={notesState.brushSettings}
                   inkStrokes={notesState.inkStrokes}
                   textAnnotations={notesState.textAnnotations}
@@ -263,6 +264,7 @@ export function AppShell(props: {
                   onChangePenWidth={notesState.changePenWidth}
                   onChangeBrushType={notesState.changeBrushType}
                   onChangeLinePattern={notesState.changeLinePattern}
+                  onChangeSelectionMode={notesState.changeSelectionMode}
                   onChangeBrushSettings={notesState.changeBrushSettings}
                   onToggleAiPanel={notesState.toggleAiPanel}
                   onChangeAiPanelMode={notesState.setAiPanelMode}
@@ -276,6 +278,7 @@ export function AppShell(props: {
                   onStartNewAiChatSession={notesState.startNewAiChatSession}
                   onCreateAiChatSession={notesState.createAiChatSession}
                   onRequestAiAnswer={notesState.requestAiAnswer}
+                  onAskAiAboutSelection={notesState.askAiAboutSelection}
                   onInsertAiAnswerPage={notesState.insertAiAnswerPage}
                   onSelectionChange={notesState.changeSelection}
                   onSelectionPreviewChange={notesState.changeSelectionPreview}
@@ -295,6 +298,9 @@ export function AppShell(props: {
                   onAddTextAnnotation={notesState.addTextAnnotation}
                   onUpdateTextAnnotation={notesState.updateTextAnnotation}
                   onRemoveTextAnnotation={notesState.removeTextAnnotation}
+                  onMoveTextAnnotation={notesState.moveTextAnnotation}
+                  onResizeTextAnnotation={notesState.resizeTextAnnotation}
+                  onEraseInkAtPoint={notesState.eraseInkAtPoint}
                   onAcceptIncomingAsset={notesState.acceptIncomingAsset}
                   onArchiveIncomingAsset={notesState.archiveIncomingAsset}
                   onDismissIncomingAsset={notesState.dismissIncomingAsset}
@@ -437,6 +443,7 @@ export function AppShell(props: {
                   penWidth={notesState.penWidth}
                   brushType={notesState.brushType}
                   linePattern={notesState.linePattern}
+                  selectionMode={notesState.selectionMode}
                   inkStrokes={notesState.inkStrokes}
                   textAnnotations={notesState.textAnnotations}
                   inkByDocument={notesState.inkByDocument}
@@ -483,6 +490,7 @@ export function AppShell(props: {
                   onChangePenWidth={notesState.changePenWidth}
                   onChangeBrushType={notesState.changeBrushType}
                   onChangeLinePattern={notesState.changeLinePattern}
+                  onChangeSelectionMode={notesState.changeSelectionMode}
                   onToggleAiPanel={notesState.toggleAiPanel}
                   onChangeAiQuestion={notesState.setAiQuestion}
                   onChangeAiChatScope={notesState.setAiChatScope}
@@ -493,6 +501,7 @@ export function AppShell(props: {
                   onStartNewAiChatSession={notesState.startNewAiChatSession}
                   onCreateAiChatSession={notesState.createAiChatSession}
                   onRequestAiAnswer={notesState.requestAiAnswer}
+                  onAskAiAboutSelection={notesState.askAiAboutSelection}
                   onInsertAiAnswerPage={notesState.insertAiAnswerPage}
                   onSelectionChange={notesState.changeSelection}
                   onSelectionPreviewChange={notesState.changeSelectionPreview}
@@ -507,6 +516,9 @@ export function AppShell(props: {
                   onAddTextAnnotation={notesState.addTextAnnotation}
                   onUpdateTextAnnotation={notesState.updateTextAnnotation}
                   onRemoveTextAnnotation={notesState.removeTextAnnotation}
+                  onMoveTextAnnotation={notesState.moveTextAnnotation}
+                  onResizeTextAnnotation={notesState.resizeTextAnnotation}
+                  onEraseInkAtPoint={notesState.eraseInkAtPoint}
                   onAcceptIncomingAsset={notesState.acceptIncomingAsset}
                   onArchiveIncomingAsset={notesState.archiveIncomingAsset}
                   onDismissIncomingAsset={notesState.dismissIncomingAsset}

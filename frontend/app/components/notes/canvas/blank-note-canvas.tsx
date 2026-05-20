@@ -3,7 +3,7 @@ import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { Image, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { runOnJS } from 'react-native-reanimated';
-import Svg from 'react-native-svg';
+import Svg, { Path } from 'react-native-svg';
 import { captureRef } from 'react-native-view-shot';
 import { TextAnnotationLayer } from './text-annotation-layer';
 import { InkPath } from './ink-path';
@@ -44,8 +44,62 @@ function resizeRectFromCorner(source: SelectionRect, corner: ResizeCorner, point
   };
 }
 
+function getSelectionRectFromDrag(origin: InkPoint, point: InkPoint): SelectionRect {
+  return {
+    x: Math.min(origin.x, point.x),
+    y: Math.min(origin.y, point.y),
+    width: Math.abs(point.x - origin.x),
+    height: Math.abs(point.y - origin.y),
+    mode: 'rect',
+    pageWidth: point.pageWidth,
+    pageHeight: point.pageHeight,
+  };
+}
+
+function getSelectionRectFromPoints(points: InkPoint[]): SelectionRect | null {
+  if (points.length < 2) return null;
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  const reference = points[0];
+  return {
+    x: Math.max(0, Math.min(...xs)),
+    y: Math.max(0, Math.min(...ys)),
+    width: Math.max(1, Math.max(...xs) - Math.min(...xs)),
+    height: Math.max(1, Math.max(...ys) - Math.min(...ys)),
+    mode: 'lasso',
+    path: points,
+    pageWidth: reference.pageWidth,
+    pageHeight: reference.pageHeight,
+  };
+}
+
+function getLassoPath(points: InkPoint[]) {
+  if (!points.length) return '';
+  return points
+    .map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`)
+    .join(' ');
+}
+
 function SelectionOverlay(props: { rect: SelectionRect; styles: any; draft?: boolean }) {
   const handleOffset = -7;
+  const lassoPath = props.rect.path && props.rect.path.length > 2 ? getLassoPath(props.rect.path) : '';
+  if (lassoPath) {
+    return (
+      <Svg width="100%" height="100%" pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0 }}>
+        <Path
+          d={`${lassoPath} Z`}
+          fill="rgba(78, 141, 255, 0.06)"
+          stroke="#2563EB"
+          strokeWidth={2}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeDasharray="7 5"
+          opacity={props.draft ? 0.88 : 0.96}
+        />
+      </Svg>
+    );
+  }
+
   return (
     <View pointerEvents="none" style={[props.styles.selectionOverlayRect, props.draft && props.styles.selectionOverlayDraft, { left: props.rect.x, top: props.rect.y, width: props.rect.width, height: props.rect.height }]}>
       {(['nw', 'ne', 'sw', 'se'] as const).map((corner) => (
@@ -61,6 +115,24 @@ function SelectionOverlay(props: { rect: SelectionRect; styles: any; draft?: boo
         />
       ))}
     </View>
+  );
+}
+
+function SelectionLassoOverlay(props: { points: InkPoint[] }) {
+  if (props.points.length < 2) return null;
+  return (
+    <Svg width="100%" height="100%" pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0 }}>
+      <Path
+        d={getLassoPath(props.points)}
+        fill="none"
+        stroke="#2563EB"
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeDasharray="7 5"
+        opacity={0.9}
+      />
+    </Svg>
   );
 }
 
@@ -91,6 +163,7 @@ export function BlankNoteCanvas(props: {
     penWidth,
     brushType,
     linePattern,
+    selectionMode,
     brushSettings,
     inkStrokes,
     textAnnotations,
@@ -100,6 +173,8 @@ export function BlankNoteCanvas(props: {
     addTextAnnotation: onAddTextAnnotation,
     updateTextAnnotation: onUpdateTextAnnotation,
     removeTextAnnotation: onRemoveTextAnnotation,
+    moveTextAnnotation: onMoveTextAnnotation,
+    resizeTextAnnotation: onResizeTextAnnotation,
     setSelectionRect: onSelectionChange,
     setSelectionPreviewUri: onSelectionPreviewChange,
   } = canvasCtx;
@@ -107,6 +182,7 @@ export function BlankNoteCanvas(props: {
   const [pageSize, setPageSize] = useState({ width: 0, height: 0 });
   const [currentStroke, setCurrentStroke] = useState<InkStroke | null>(null);
   const [draftSelection, setDraftSelection] = useState<SelectionRect | null>(null);
+  const [draftSelectionPath, setDraftSelectionPath] = useState<InkPoint[]>([]);
   const [capturingSelection, setCapturingSelection] = useState(false);
   const currentStrokeRef = useRef<InkStroke | null>(null);
   const selectionOriginRef = useRef<InkPoint | null>(null);
@@ -115,6 +191,8 @@ export function BlankNoteCanvas(props: {
   const selectionResizeCornerRef = useRef<ResizeCorner | null>(null);
   const selectionResizeStartRectRef = useRef<SelectionRect | null>(null);
   const draftSelectionRef = useRef<SelectionRect | null>(null);
+  const draftSelectionPathRef = useRef<InkPoint[]>([]);
+  const selectionPreviewTokenRef = useRef(0);
   const textTapRef = useRef<InkPoint | null>(null);
   const captureTargetRef = useRef<View | null>(null);
 
@@ -189,6 +267,8 @@ export function BlankNoteCanvas(props: {
         selectionResizeCornerRef.current = resizeCorner;
         selectionResizeStartRectRef.current = currentSelection;
         draftSelectionRef.current = currentSelection;
+        draftSelectionPathRef.current = [];
+        setDraftSelectionPath([]);
         setDraftSelection(currentSelection);
         return;
       }
@@ -202,13 +282,19 @@ export function BlankNoteCanvas(props: {
         selectionMoveOriginRef.current = point;
         selectionMoveStartRectRef.current = currentSelection;
         draftSelectionRef.current = currentSelection;
+        draftSelectionPathRef.current = [];
+        setDraftSelectionPath([]);
         setDraftSelection(currentSelection);
         return;
       }
+      selectionPreviewTokenRef.current += 1;
       onSelectionChange?.(null);
       onSelectionPreviewChange?.(null);
       selectionOriginRef.current = point;
-      const rect = { x: point.x, y: point.y, width: 0, height: 0, pageWidth: point.pageWidth, pageHeight: point.pageHeight };
+      const initialPath = selectionMode === 'lasso' ? [point] : [];
+      draftSelectionPathRef.current = initialPath;
+      setDraftSelectionPath(initialPath);
+      const rect = { x: point.x, y: point.y, width: 0, height: 0, mode: selectionMode, pageWidth: point.pageWidth, pageHeight: point.pageHeight };
       draftSelectionRef.current = rect;
       setDraftSelection(rect);
       return;
@@ -234,6 +320,7 @@ export function BlankNoteCanvas(props: {
     pageSize,
     penColor,
     penWidth,
+    selectionMode,
     selectionRect,
   ]);
 
@@ -270,10 +357,19 @@ export function BlankNoteCanvas(props: {
       const moveOrigin = selectionMoveOriginRef.current;
       const moveStartRect = selectionMoveStartRectRef.current;
       if (moveOrigin && moveStartRect) {
+        const dx = point.x - moveOrigin.x;
+        const dy = point.y - moveOrigin.y;
         const nextRect = {
           ...moveStartRect,
-          x: moveStartRect.x + point.x - moveOrigin.x,
-          y: moveStartRect.y + point.y - moveOrigin.y,
+          x: moveStartRect.x + dx,
+          y: moveStartRect.y + dy,
+          path: moveStartRect.path?.map((pathPoint) => ({
+            ...pathPoint,
+            x: pathPoint.x + dx,
+            y: pathPoint.y + dy,
+            pageWidth: point.pageWidth,
+            pageHeight: point.pageHeight,
+          })),
           pageWidth: point.pageWidth,
           pageHeight: point.pageHeight,
         };
@@ -283,18 +379,24 @@ export function BlankNoteCanvas(props: {
       }
       const origin = selectionOriginRef.current;
       if (!origin) return;
-      const nextRect = {
-        x: Math.min(origin.x, point.x),
-        y: Math.min(origin.y, point.y),
-        width: Math.abs(point.x - origin.x),
-        height: Math.abs(point.y - origin.y),
-        pageWidth: point.pageWidth,
-        pageHeight: point.pageHeight,
-      };
+      if (selectionMode === 'rect') {
+        const nextRect = getSelectionRectFromDrag(origin, point);
+        draftSelectionRef.current = nextRect;
+        setDraftSelection(nextRect);
+        return;
+      }
+      const currentPath = draftSelectionPathRef.current;
+      const lastPoint = currentPath[currentPath.length - 1];
+      const nextPath = !lastPoint || Math.hypot(lastPoint.x - point.x, lastPoint.y - point.y) > 5
+        ? [...currentPath, point]
+        : currentPath;
+      draftSelectionPathRef.current = nextPath;
+      setDraftSelectionPath(nextPath);
+      const nextRect = getSelectionRectFromPoints(nextPath) ?? getSelectionRectFromDrag(origin, point);
       draftSelectionRef.current = nextRect;
       setDraftSelection(nextRect);
     }
-  }, [inkTool, pageSize]);
+  }, [inkTool, pageSize, selectionMode]);
 
   const handleInkGestureEnd = useCallback(() => {
     const stroke = currentStrokeRef.current;
@@ -310,16 +412,28 @@ export function BlankNoteCanvas(props: {
       selectionMoveStartRectRef.current = null;
       selectionResizeCornerRef.current = null;
       selectionResizeStartRectRef.current = null;
+      draftSelectionPathRef.current = [];
       setDraftSelection(null);
+      setDraftSelectionPath([]);
       if (resized && rect && rect.width > 24 && rect.height > 24) {
         canvasCtx.resizeSelectedStrokesToRect(rect);
+        onSelectionPreviewChange?.(null);
+        selectionPreviewTokenRef.current += 1;
       } else if (rect && moveOrigin && moveStartRect) {
         const dx = rect.x - moveStartRect.x;
         const dy = rect.y - moveStartRect.y;
         if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) canvasCtx.nudgeSelectedStrokes(dx, dy);
+        if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
+          onSelectionPreviewChange?.(null);
+          selectionPreviewTokenRef.current += 1;
+        }
       } else if (rect && rect.width > 24 && rect.height > 24) {
+        onSelectionChange?.(rect);
+        onSelectionPreviewChange?.(null);
+        const token = selectionPreviewTokenRef.current + 1;
+        selectionPreviewTokenRef.current = token;
         void buildSelectionPreview(rect).then((uri) => {
-          onSelectionChange?.(rect);
+          if (selectionPreviewTokenRef.current !== token) return;
           onSelectionPreviewChange?.(uri);
         });
       }
@@ -335,6 +449,7 @@ export function BlankNoteCanvas(props: {
     if (stroke && stroke.points.length > 1) onCommitInkStroke(finalizeInkStroke(stroke));
     currentStrokeRef.current = null;
     draftSelectionRef.current = null;
+    draftSelectionPathRef.current = [];
     selectionOriginRef.current = null;
     selectionMoveOriginRef.current = null;
     selectionMoveStartRectRef.current = null;
@@ -342,6 +457,7 @@ export function BlankNoteCanvas(props: {
     selectionResizeStartRectRef.current = null;
     textTapRef.current = null;
     setDraftSelection(null);
+    setDraftSelectionPath([]);
     setCurrentStroke(null);
   }, [onCommitInkStroke]);
 
@@ -406,6 +522,8 @@ export function BlankNoteCanvas(props: {
             annotations={textAnnotations}
             styles={props.styles}
             onChangeText={onUpdateTextAnnotation}
+            onMove={onMoveTextAnnotation}
+            onResize={onResizeTextAnnotation}
             onRemove={onRemoveTextAnnotation}
           />
 
@@ -415,6 +533,7 @@ export function BlankNoteCanvas(props: {
           </Svg>
 
           {!capturingSelection && !draftSelection && selectionRect ? <SelectionOverlay rect={selectionRect} styles={props.styles} /> : null}
+          {!capturingSelection && draftSelectionPath.length > 1 ? <SelectionLassoOverlay points={draftSelectionPath} /> : null}
           {!capturingSelection && draftSelection ? <SelectionOverlay rect={draftSelection} styles={props.styles} draft /> : null}
         </View>
       </GestureDetector>

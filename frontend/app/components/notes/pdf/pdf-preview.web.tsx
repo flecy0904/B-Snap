@@ -1,13 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { GestureResponderEvent, Image, Pressable, ScrollView, Text, useWindowDimensions, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import Svg from 'react-native-svg';
+import Svg, { Path } from 'react-native-svg';
 import { InkPath } from '../canvas/ink-path';
 import { TextAnnotationLayer } from '../canvas/text-annotation-layer';
 import { hasMultipleTouches, shouldCaptureInkPointer, shouldUsePrimaryPointer } from '../canvas/ink-input-policy';
 import { getCaptureOriginalImageSource, getPageCaptureReferenceImageSource } from '../shared/capture-assets';
 import { cleanAiDisplayText, finalizeInkStroke, findHitInkStrokeId, getInkCenterlinePath, getInkStrokeSvgPath, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize, shouldAppendInkPoint } from '../../../ui-helpers';
-import { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
+import { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { CaptureAsset, NotebookPage, PageCaptureReference } from '../../../types';
 
 function NotebookPaperBackground({ page }: { page: NotebookPage }) {
@@ -95,7 +95,6 @@ let pdfJsLoaderPromise: Promise<PdfJsLib> | null = null;
 
 function shouldLockScrollForTool(tool: InkTool, fingerDrawingEnabled: boolean | undefined) {
   return tool === 'select'
-    || tool === 'erase'
     || tool === 'text'
     || Boolean(fingerDrawingEnabled && isDrawingTool(tool));
 }
@@ -103,13 +102,15 @@ function shouldLockScrollForTool(tool: InkTool, fingerDrawingEnabled: boolean | 
 function shouldCaptureToolStart(tool: InkTool, event: GestureResponderEvent, fingerDrawingEnabled: boolean | undefined) {
   if (!shouldUsePrimaryPointer(event)) return false;
   if (isDrawingTool(tool)) return shouldCaptureInkPointer(event, Boolean(fingerDrawingEnabled));
-  return tool === 'select' || tool === 'erase' || tool === 'text';
+  if (tool === 'erase') return shouldCaptureInkPointer(event, Boolean(fingerDrawingEnabled));
+  return tool === 'select' || tool === 'text';
 }
 
 function shouldCaptureToolMove(tool: InkTool, event: GestureResponderEvent, fingerDrawingEnabled: boolean | undefined) {
   if (!shouldUsePrimaryPointer(event)) return false;
   if (isDrawingTool(tool)) return shouldCaptureInkPointer(event, Boolean(fingerDrawingEnabled));
-  return tool === 'select' || tool === 'erase';
+  if (tool === 'erase') return shouldCaptureInkPointer(event, Boolean(fingerDrawingEnabled));
+  return tool === 'select';
 }
 
 function isPdfUri(uri: string | undefined) {
@@ -146,8 +147,33 @@ function resizeRectFromCorner(source: SelectionRect, corner: ResizeCorner, point
   };
 }
 
+function getLassoPath(points: InkPoint[]) {
+  if (!points.length) return '';
+  return points
+    .map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`)
+    .join(' ');
+}
+
 function SelectionOverlay(props: { rect: SelectionRect; styles: any; draft?: boolean }) {
   const handleOffset = -7;
+  const lassoPath = props.rect.path && props.rect.path.length > 2 ? getLassoPath(props.rect.path) : '';
+  if (lassoPath) {
+    return (
+      <Svg width="100%" height="100%" pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0 }}>
+        <Path
+          d={`${lassoPath} Z`}
+          fill="rgba(78, 141, 255, 0.06)"
+          stroke="#2563EB"
+          strokeWidth={2}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeDasharray="7 5"
+          opacity={props.draft ? 0.88 : 0.96}
+        />
+      </Svg>
+    );
+  }
+
   return (
     <View style={[props.styles.selectionOverlayRect, props.draft && props.styles.selectionOverlayDraft, { left: props.rect.x, top: props.rect.y, width: props.rect.width, height: props.rect.height, pointerEvents: 'none' }]}>
       {(['nw', 'ne', 'sw', 'se'] as const).map((corner) => (
@@ -278,6 +304,7 @@ export function PdfPreview(props: {
   penWidth: number;
   brushType: InkBrush;
   linePattern: InkLinePattern;
+  selectionMode?: InkSelectionMode;
   brushSettings?: InkBrushSettings;
   inkStrokes: InkStroke[];
   textAnnotations: InkTextAnnotation[];
@@ -288,6 +315,9 @@ export function PdfPreview(props: {
   onAddTextAnnotation: (point: InkPoint) => void;
   onUpdateTextAnnotation: (id: string, text: string) => void;
   onRemoveTextAnnotation: (id: string) => void;
+  onMoveTextAnnotation: (id: string, x: number, y: number) => void;
+  onResizeTextAnnotation: (id: string, width: number, height: number) => void;
+  onEraseInkAtPoint?: (point: InkPoint, radius: number, snapshot?: boolean) => boolean;
   onSelectionChange: (rect: SelectionRect | null) => void;
   onMoveSelection?: (dx: number, dy: number) => void;
   onResizeSelection?: (rect: SelectionRect) => void;
@@ -736,6 +766,8 @@ export function PdfPreview(props: {
           annotations={pageTextAnnotationsForView}
           styles={props.styles}
           onChangeText={props.onUpdateTextAnnotation}
+          onMove={props.onMoveTextAnnotation}
+          onResize={props.onResizeTextAnnotation}
           onRemove={props.onRemoveTextAnnotation}
           variant={props.textAnnotationVariant}
         />
