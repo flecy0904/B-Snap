@@ -8,6 +8,7 @@ import Svg, { Path } from 'react-native-svg';
 import { captureRef } from 'react-native-view-shot';
 import { InkPath } from '../canvas/ink-path';
 import { TextAnnotationLayer } from '../canvas/text-annotation-layer';
+import { getPencilHoverPoint, getPencilHoverSize, isStylusHoverEvent, shouldPreviewPencilHover, type PencilHoverPoint } from '../canvas/native-pencil-hover';
 import { shouldActivateNativeInkGesture, type NativeGestureStateManager, type NativeInkGestureEvent, type NativeInkTouchEvent } from '../canvas/native-ink-gesture-policy';
 import { getCaptureOriginalImageSource, getPageCaptureReferenceImageSource } from '../shared/capture-assets';
 import { cleanAiDisplayText, finalizeInkStroke, findHitInkStrokeId, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize, shouldAppendInkPoint } from '../../../ui-helpers';
@@ -276,6 +277,7 @@ export function PdfPreview(props: {
   const [capturingSelection, setCapturingSelection] = useState(false);
   const [pageIndicatorVisible, setPageIndicatorVisible] = useState(false);
   const [inkGestureActive, setInkGestureActive] = useState(false);
+  const [pencilHover, setPencilHover] = useState<(PencilHoverPoint & { pageKey: string }) | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [renderedPdfPages, setRenderedPdfPages] = useState<Record<string, RenderedPdfPage>>({});
   const [openReferenceId, setOpenReferenceId] = useState<string | null>(null);
@@ -526,6 +528,10 @@ export function PdfPreview(props: {
       return next;
     });
   }, [props.activeGeneratedPageId, props.page, pageItems]);
+
+  useEffect(() => {
+    if (!shouldPreviewPencilHover(props.inkTool)) setPencilHover(null);
+  }, [props.inkTool]);
 
   const clampPointToPage = (page: NotebookPage, x: number, y: number, mode: 'draw' | 'annotate' = 'draw'): InkPoint => ({
     x: Math.max(0, Math.min(viewerWidth - (mode === 'annotate' ? 180 : 0), x)),
@@ -1047,6 +1053,20 @@ export function PdfPreview(props: {
         'worklet';
         if (!success) runOnJS(handleInkGestureCancel)();
       });
+    const handlePencilHoverMove = (event: unknown) => {
+      if (!shouldPreviewPencilHover(props.inkTool) || !isStylusHoverEvent(event)) return;
+      const point = getPencilHoverPoint(event);
+      if (!point || !isPointInsidePage(point.x, point.y)) return;
+      setPencilHover({ pageKey, ...point });
+    };
+    const hoverHandlers = {
+      onPointerEnter: handlePencilHoverMove,
+      onPointerMove: handlePencilHoverMove,
+      onPointerLeave: () => setPencilHover((current) => (current?.pageKey === pageKey ? null : current)),
+      onPointerCancel: () => setPencilHover((current) => (current?.pageKey === pageKey ? null : current)),
+    } as any;
+    const hoverSize = getPencilHoverSize(props.inkTool, props.penWidth);
+    const hoverVisible = pencilHover?.pageKey === pageKey && shouldPreviewPencilHover(props.inkTool);
 
     return (
       <View
@@ -1195,8 +1215,25 @@ export function PdfPreview(props: {
         ) : null}
 
         <GestureDetector gesture={inkGesture}>
-          <View pointerEvents={props.inkTool === 'view' ? 'none' : 'auto'} style={props.styles.inkOverlay} />
+          <View {...hoverHandlers} pointerEvents={props.inkTool === 'view' ? 'none' : 'auto'} style={props.styles.inkOverlay} />
         </GestureDetector>
+        {hoverVisible ? (
+          <View
+            pointerEvents="none"
+            style={[
+              props.styles.pencilHoverPreview,
+              props.inkTool === 'erase' && props.styles.pencilHoverPreviewEraser,
+              {
+                left: pencilHover.x - hoverSize / 2,
+                top: pencilHover.y - hoverSize / 2,
+                width: hoverSize,
+                height: hoverSize,
+                borderRadius: hoverSize / 2,
+                borderColor: props.inkTool === 'erase' ? '#EF4444' : props.penColor,
+              },
+            ]}
+          />
+        ) : null}
       </View>
     );
   };

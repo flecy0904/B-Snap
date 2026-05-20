@@ -678,6 +678,8 @@ export const notesStyles = {
   pdfIncomingCaptureSecondaryText: { fontSize: 11, lineHeight: 15, fontWeight: '900' as const, color: '#687386' },
   pdfViewer: { flex: 1, backgroundColor: '#FFFFFF', zIndex: 0 },
   inkOverlay: { ...StyleSheet.absoluteFillObject, zIndex: 20, elevation: 20 },
+  pencilHoverPreview: { position: 'absolute' as const, borderWidth: 2, backgroundColor: 'rgba(255,255,255,0.18)', opacity: 0.86, zIndex: 31, elevation: 31 },
+  pencilHoverPreviewEraser: { backgroundColor: 'rgba(239,68,68,0.08)', borderStyle: 'dashed' as const },
   selectionOverlayRect: { position: 'absolute' as const, borderWidth: 2, borderStyle: 'dashed' as const, borderColor: '#4E8DFF', backgroundColor: 'rgba(78, 141, 255, 0.08)', borderRadius: 8 },
   selectionOverlayLassoBounds: { borderColor: 'rgba(78, 141, 255, 0.34)', backgroundColor: 'transparent' },
   selectionOverlayDraft: { backgroundColor: 'rgba(78, 141, 255, 0.05)' },
