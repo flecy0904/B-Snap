@@ -17,6 +17,7 @@ import { renderPdfPageToImage, type PdfRenderSource, type RenderedPdfPage } from
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
 const PDF_RENDER_PAGE_RADIUS = 3;
 const PDF_RENDER_CACHE_RADIUS = 3;
+const PDF_RENDER_JS_CACHE_LIMIT = 11;
 
 function shouldLockScrollForTool(tool: InkTool, fingerDrawingEnabled: boolean | undefined) {
   return tool === 'select'
@@ -194,6 +195,7 @@ export function PdfPreview(props: {
   const [capturingSelection, setCapturingSelection] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [renderedPdfPages, setRenderedPdfPages] = useState<Record<string, RenderedPdfPage>>({});
+  const [cachedRenderedPdfPages, setCachedRenderedPdfPages] = useState<Record<string, RenderedPdfPage>>({});
   const [openReferenceId, setOpenReferenceId] = useState<string | null>(null);
   const currentStrokeRef = useRef<InkStroke | null>(null);
   const reportedDocumentPageCountRef = useRef(documentPageCount);
@@ -309,12 +311,41 @@ export function PdfPreview(props: {
   }, [pageItems, visiblePageKeys]);
   const flatListExtraData = useMemo(() => ({
     activeGeneratedPageId: props.activeGeneratedPageId,
+    cachedRenderedPdfPages,
     page: props.page,
     pdfSourceKey,
+    renderedPdfPages,
     viewerHeight,
     viewerWidth,
     visiblePageKeys,
-  }), [props.activeGeneratedPageId, props.page, pdfSourceKey, viewerHeight, viewerWidth, visiblePageKeys]);
+  }), [cachedRenderedPdfPages, props.activeGeneratedPageId, props.page, pdfSourceKey, renderedPdfPages, viewerHeight, viewerWidth, visiblePageKeys]);
+
+  const rememberRenderedPdfPage = useCallback((cacheKey: string, renderedPage: RenderedPdfPage) => {
+    setCachedRenderedPdfPages((current) => {
+      const existing = current[cacheKey];
+      const next = { ...current };
+      delete next[cacheKey];
+      next[cacheKey] = renderedPage;
+
+      const entries = Object.entries(next);
+      while (entries.length > PDF_RENDER_JS_CACHE_LIMIT) {
+        const [oldestKey] = entries.shift()!;
+        delete next[oldestKey];
+      }
+
+      if (
+        existing?.uri === renderedPage.uri
+        && existing.width === renderedPage.width
+        && existing.height === renderedPage.height
+        && existing.pageNumber === renderedPage.pageNumber
+        && existing.pageCount === renderedPage.pageCount
+        && Object.keys(current).length === Object.keys(next).length
+      ) {
+        return current;
+      }
+      return next;
+    });
+  }, []);
 
   useEffect(() => {
     setLoadError(null);
@@ -324,6 +355,7 @@ export function PdfPreview(props: {
     pdfRenderGenerationRef.current += 1;
     pdfRenderRequestsRef.current.clear();
     setRenderedPdfPages({});
+    setCachedRenderedPdfPages({});
     setVisiblePageKeys(new Set([getNotebookPageKey(pageItems[0])]));
     visiblePageKeysRef.current = '';
     suppressNextAutoScrollRef.current = false;
@@ -371,6 +403,7 @@ export function PdfPreview(props: {
             reportedDocumentPageCountRef.current = renderedPage.pageCount;
             props.onDocumentLoaded?.(renderedPage.pageCount);
           }
+          rememberRenderedPdfPage(cacheKey, renderedPage);
           setRenderedPdfPages((current) => (
             current[cacheKey] ? current : { ...current, [cacheKey]: renderedPage }
           ));
@@ -383,7 +416,7 @@ export function PdfPreview(props: {
           pdfRenderRequestsRef.current.delete(cacheKey);
         });
     });
-  }, [getPdfRenderCacheKey, pdfPagesToRender, props.file, props.onDocumentLoaded, renderedPdfPages, viewerWidth]);
+  }, [getPdfRenderCacheKey, pdfPagesToRender, props.file, props.onDocumentLoaded, rememberRenderedPdfPage, renderedPdfPages, viewerWidth]);
 
   useEffect(() => {
     const keysToKeep = new Set<string>();
@@ -618,7 +651,9 @@ export function PdfPreview(props: {
     const pageStrokesForView = shouldRenderInteractiveLayers ? getPageStrokesForView(page) : [];
     const pageTextAnnotationsForView = shouldRenderInteractiveLayers ? getPageTextAnnotationsForView(page) : [];
     const shouldRenderPdfPage = shouldRenderPdfContent(page, visiblePage);
-    const renderedPdfPage = page.pageNumber ? renderedPdfPages[getPdfRenderCacheKey(page.pageNumber)] : null;
+    const renderedPdfPage = page.pageNumber
+      ? renderedPdfPages[getPdfRenderCacheKey(page.pageNumber)] ?? cachedRenderedPdfPages[getPdfRenderCacheKey(page.pageNumber)]
+      : null;
     const pageReferences = shouldRenderInteractiveLayers ? getPageCaptureReferences(page) : [];
     const activePageReference = pageReferences.find((reference) => reference.id === openReferenceId) ?? null;
     const activeReferenceIndex = activePageReference ? pageReferences.findIndex((reference) => reference.id === activePageReference.id) : -1;
