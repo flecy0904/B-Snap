@@ -2,7 +2,7 @@ import { useRef } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import type { DocumentPageView, GeneratedWorkspacePage, StudyDocumentEntry } from '../../../types';
 import type { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
-import { findInkStrokesInLasso, findInkStrokesInRect, scaleInkStrokeToPageSize } from '../../../ui-helpers';
+import { findInkStrokesInLasso, findInkStrokesInRect, isPointInPolygon, scaleInkStrokeToPageSize } from '../../../ui-helpers';
 import { findLastIndex, isInkStrokeOnPage, scopeInkStrokeToPage } from './ink-helpers';
 
 type SetState<T> = Dispatch<SetStateAction<T>>;
@@ -194,6 +194,24 @@ export function useInkActions(params: {
 
   const getSelectedTextAnnotationIds = () => {
     if (!params.selectionRect) return new Set<string>();
+    const selectionPath = params.selectionRect.path;
+    if (selectionPath && selectionPath.length > 2) {
+      return new Set(
+        getPageTextAnnotationsForSelection()
+          .filter((annotation) => {
+            const rect = getAnnotationSelectionRect(annotation);
+            const points: InkPoint[] = [
+              { x: rect.x, y: rect.y },
+              { x: rect.x + rect.width, y: rect.y },
+              { x: rect.x + rect.width, y: rect.y + rect.height },
+              { x: rect.x, y: rect.y + rect.height },
+              { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 },
+            ];
+            return points.some((point) => isPointInPolygon(point, selectionPath));
+          })
+          .map((annotation) => annotation.id),
+      );
+    }
     return new Set(
       getPageTextAnnotationsForSelection()
         .filter((annotation) => rectsOverlap(getAnnotationSelectionRect(annotation), params.selectionRect!))

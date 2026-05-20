@@ -159,7 +159,8 @@ function getLassoPath(points: InkPoint[]) {
 function SelectionOverlay(props: { rect: SelectionRect; styles: any; draft?: boolean }) {
   const handleOffset = -7;
   const lassoPath = props.rect.path && props.rect.path.length > 2 ? getLassoPath(props.rect.path) : '';
-  if (lassoPath) {
+  if (props.rect.mode === 'lasso') {
+    if (!lassoPath) return null;
     return (
       <Svg width="100%" height="100%" pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0 }}>
         <Path

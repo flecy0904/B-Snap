@@ -46,7 +46,9 @@ function MovableTextAnnotationBox(props: {
   };
 
   const moveResponder = React.useMemo(() => PanResponder.create({
+    onStartShouldSetPanResponderCapture: () => Boolean(props.onMove),
     onStartShouldSetPanResponder: () => Boolean(props.onMove),
+    onMoveShouldSetPanResponderCapture: (_event, gesture) => Boolean(props.onMove) && (Math.abs(gesture.dx) > 2 || Math.abs(gesture.dy) > 2),
     onMoveShouldSetPanResponder: (_event, gesture) => Boolean(props.onMove) && (Math.abs(gesture.dx) > 2 || Math.abs(gesture.dy) > 2),
     onPanResponderGrant: () => {
       props.onActivate(props.annotation.id);
@@ -65,10 +67,14 @@ function MovableTextAnnotationBox(props: {
         startFrameRef.current.y + gesture.dy,
       );
     },
+    onPanResponderTerminationRequest: () => false,
+    onShouldBlockNativeResponder: () => true,
   }), [props.annotation.id, props.onActivate, props.onMove]);
 
   const resizeResponder = React.useMemo(() => PanResponder.create({
+    onStartShouldSetPanResponderCapture: () => Boolean(props.onResize),
     onStartShouldSetPanResponder: () => Boolean(props.onResize),
+    onMoveShouldSetPanResponderCapture: (_event, gesture) => Boolean(props.onResize) && (Math.abs(gesture.dx) > 2 || Math.abs(gesture.dy) > 2),
     onMoveShouldSetPanResponder: (_event, gesture) => Boolean(props.onResize) && (Math.abs(gesture.dx) > 2 || Math.abs(gesture.dy) > 2),
     onPanResponderGrant: () => {
       props.onActivate(props.annotation.id);
@@ -87,12 +93,18 @@ function MovableTextAnnotationBox(props: {
         Math.max(MIN_TEXT_BOX_HEIGHT, startFrameRef.current.height + gesture.dy),
       );
     },
+    onPanResponderTerminationRequest: () => false,
+    onShouldBlockNativeResponder: () => true,
   }), [props.annotation.id, props.onActivate, props.onResize]);
 
   const height = props.annotation.height ?? 88;
 
   return (
     <View
+      onStartShouldSetResponder={() => true}
+      onMoveShouldSetResponder={() => true}
+      onResponderGrant={activateInput}
+      onResponderTerminationRequest={() => false}
       style={[
         props.styles.textAnnotationCard,
         props.active && props.styles.textAnnotationCardActive,
