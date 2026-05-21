@@ -1,5 +1,5 @@
 import type { ImageSourcePropType } from 'react-native';
-import type { CaptureAsset, PageCaptureReference } from '../../../types';
+import type { CaptureAsset, PageCaptureReference, StudyDocumentEntry } from '../../../types';
 import { resolveBackendAssetUrl } from '../../../services/backend-api';
 import { derivePreprocessedCropUrl } from '../../../ui-helpers';
 
@@ -75,4 +75,19 @@ export function getCapturePlacementLabel(asset: CaptureAsset, references: PageCa
   if (!matches.length) return '미연결';
   const firstLabel = matches[0]?.pageLabel || '연결됨';
   return matches.length > 1 ? `${firstLabel} 외 ${matches.length - 1}` : firstLabel;
+}
+
+export function getCaptureLibraryContextLabel(
+  asset: CaptureAsset,
+  references: PageCaptureReference[],
+  documents: StudyDocumentEntry[],
+) {
+  const matches = getCaptureReferences(asset, references);
+  if (!matches.length) return '연결된 PDF 없음';
+
+  const first = matches[0];
+  const documentTitle = documents.find((document) => document.id === first.documentId)?.title ?? '연결된 PDF';
+  const pageLabel = first.pageLabel || '페이지 연결';
+  const extra = matches.length > 1 ? ` 외 ${matches.length - 1}` : '';
+  return `${documentTitle} · ${pageLabel}${extra}`;
 }

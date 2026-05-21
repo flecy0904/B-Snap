@@ -1,5 +1,5 @@
 import React from 'react';
-import { PanResponder, Pressable, Text, TextInput, View } from 'react-native';
+import { PanResponder, Pressable, Text, TextInput, View, type GestureResponderEvent } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { InkTextAnnotation } from '../../../ui-types';
 import { isLikelyStylusEvent, shouldUsePrimaryPointer } from './ink-input-policy';
@@ -62,6 +62,15 @@ function MovableTextAnnotationBox(props: {
     setTimeout(() => {
       inputRef.current?.focus();
     }, 0);
+  };
+
+  const stopEvent = (event?: GestureResponderEvent) => {
+    event?.stopPropagation?.();
+  };
+
+  const removeBox = (event?: GestureResponderEvent) => {
+    stopEvent(event);
+    props.onRemove(props.annotation.id);
   };
 
   const shouldEditFrame = React.useCallback((event: any) => (
@@ -147,22 +156,27 @@ function MovableTextAnnotationBox(props: {
         <View style={props.styles.textAnnotationFrameToolbar}>
           <View
             style={props.styles.textAnnotationMoveHandle}
+            onStartShouldSetResponder={() => true}
+            onResponderGrant={(event) => {
+              stopEvent(event);
+              props.onActivate(props.annotation.id);
+            }}
             onTouchStart={() => props.onActivate(props.annotation.id)}
             {...moveResponder.panHandlers}
           >
             <MaterialCommunityIcons name="drag-horizontal-variant" size={17} color="#4B5565" />
+            <Text style={props.styles.textAnnotationMoveHandleText}>이동</Text>
           </View>
           <Pressable
             hitSlop={12}
             style={props.styles.textAnnotationDelete}
+            onStartShouldSetResponder={() => true}
+            onResponderRelease={removeBox}
             onPressIn={(event) => {
-              event.stopPropagation?.();
+              stopEvent(event);
               props.onActivate(props.annotation.id);
             }}
-            onPress={(event) => {
-              event.stopPropagation?.();
-              props.onRemove(props.annotation.id);
-            }}
+            onPress={removeBox}
           >
             <MaterialCommunityIcons name="close" size={14} color="#EF4444" />
           </Pressable>
@@ -173,10 +187,12 @@ function MovableTextAnnotationBox(props: {
         value={props.annotation.text}
         onFocus={() => props.onActivate(props.annotation.id)}
         onPressIn={activateInput}
+        onTouchEnd={() => inputRef.current?.focus()}
         onChangeText={(text) => props.onChangeText(props.annotation.id, text)}
         placeholder="텍스트 입력"
         placeholderTextColor="#9AA4B5"
         multiline
+        blurOnSubmit={false}
         scrollEnabled
         textAlignVertical="top"
         style={[
@@ -189,6 +205,11 @@ function MovableTextAnnotationBox(props: {
       {props.active ? (
         <View
           style={props.styles.textAnnotationResizeHandle}
+          onStartShouldSetResponder={() => true}
+          onResponderGrant={(event) => {
+            stopEvent(event);
+            props.onActivate(props.annotation.id);
+          }}
           onTouchStart={() => props.onActivate(props.annotation.id)}
           {...resizeResponder.panHandlers}
         >
