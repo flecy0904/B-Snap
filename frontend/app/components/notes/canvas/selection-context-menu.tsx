@@ -32,7 +32,7 @@ export function SelectionContextMenu(props: {
   const top = clamp(nearTop, 8, Math.max(8, props.pageHeight - 104));
 
   return (
-    <View pointerEvents="box-none" style={[props.styles.selectionContextMenu, { left, top, width: menuWidth }]}>
+    <View pointerEvents="auto" style={[props.styles.selectionContextMenu, { left, top, width: menuWidth }]}>
       <View style={props.styles.selectionContextActionRow}>
         <Pressable
           disabled={!props.onAskAi}
@@ -50,14 +50,15 @@ export function SelectionContextMenu(props: {
           <MaterialCommunityIcons name="content-copy" size={14} color="#455062" />
           <Text style={props.styles.selectionContextButtonText}>복사</Text>
         </Pressable>
-        <Pressable
-          disabled={!props.onMoveHint}
-          style={props.styles.selectionContextButton}
-          onPress={props.onMoveHint}
-        >
-          <MaterialCommunityIcons name="cursor-move" size={14} color="#455062" />
-          <Text style={props.styles.selectionContextButtonText}>이동</Text>
-        </Pressable>
+        {props.onMoveHint ? (
+          <Pressable
+            style={props.styles.selectionContextButton}
+            onPress={props.onMoveHint}
+          >
+            <MaterialCommunityIcons name="cursor-move" size={14} color="#455062" />
+            <Text style={props.styles.selectionContextButtonText}>이동</Text>
+          </Pressable>
+        ) : null}
         <Pressable
           disabled={!props.onDelete}
           style={[props.styles.selectionContextButton, props.styles.selectionContextButtonDanger]}

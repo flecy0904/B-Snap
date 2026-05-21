@@ -678,6 +678,7 @@ export function MobileNotesView(props: MobileNotesViewProps) {
               onDismissIncomingAsset={props.onDismissIncomingAsset}
               onOpenPageCaptureReference={props.onOpenPageCaptureReference}
               onAskAiAboutPageCaptureReference={props.onAskAiAboutPageCaptureReference}
+              onChangeInkTool={props.onChangeInkTool}
               styles={props.styles}
             />
           ) : props.activeGeneratedPage?.pageKind === 'memo' && phoneViewerOnly ? (

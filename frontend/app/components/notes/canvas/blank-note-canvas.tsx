@@ -8,11 +8,12 @@ import { captureRef } from 'react-native-view-shot';
 import { TextAnnotationLayer } from './text-annotation-layer';
 import { InkPath } from './ink-path';
 import { SelectionContextMenu } from './selection-context-menu';
+import { PencilHoverQuickPalette } from './pencil-hover-quick-palette';
 import { finalizeInkStroke, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, shouldAppendInkPoint } from '../../../ui-helpers';
 import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { useCanvasContext } from './canvas-context';
 import { shouldActivateNativeInkGesture, type NativeGestureStateManager, type NativeInkGestureEvent, type NativeInkTouchEvent } from './native-ink-gesture-policy';
-import { getPencilHoverPoint, getPencilHoverSize, getPencilHoverToolLabel, isStylusHoverEvent, shouldPreviewPencilHover, type PencilHoverPoint } from './native-pencil-hover';
+import { getPencilEraserRadius, getPencilHoverPoint, getPencilHoverSize, getPencilHoverToolLabel, isStylusHoverEvent, shouldPreviewPencilHover, type PencilHoverPoint } from './native-pencil-hover';
 import { useDesktopNotesWorkspaceContext } from '../workspace/notes-workspace-context';
 
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
@@ -252,7 +253,7 @@ export function BlankNoteCanvas(props: {
   }, [pageSize.height, pageSize.width]);
 
   const eraseAtPoint = useCallback((point: InkPoint) => {
-    const radius = Math.max(10, penWidth * 2.4);
+    const radius = getPencilEraserRadius(penWidth, canvasCtx.eraserMode);
     const changed = canvasCtx.eraseInkAtPoint(point, radius, !eraserSnapshotPushedRef.current, canvasCtx.eraserMode);
     if (changed) eraserSnapshotPushedRef.current = true;
   }, [canvasCtx, penWidth]);
@@ -533,9 +534,9 @@ export function BlankNoteCanvas(props: {
     onPointerLeave: () => setPencilHover(null),
     onPointerCancel: () => setPencilHover(null),
   } as any), [handlePencilHoverMove]);
-  const hoverSize = getPencilHoverSize(inkTool, penWidth);
+  const hoverSize = getPencilHoverSize(inkTool, penWidth, canvasCtx.eraserMode);
   const hoverVisible = pencilHover && shouldPreviewPencilHover(inkTool);
-  const hoverToolLabel = getPencilHoverToolLabel(inkTool);
+  const hoverToolLabel = getPencilHoverToolLabel(inkTool, canvasCtx.eraserMode);
 
   return (
     <View style={[props.styles.blankNoteCanvasCard, { paddingVertical: 0, borderWidth: 0 }]}>
@@ -621,6 +622,15 @@ export function BlankNoteCanvas(props: {
                   <Text style={props.styles.pencilHoverLabelText}>{hoverToolLabel}</Text>
                 </View>
               ) : null}
+              <PencilHoverQuickPalette
+                x={pencilHover.x}
+                y={pencilHover.y}
+                pageWidth={pageSize.width}
+                pageHeight={pageSize.height}
+                activeTool={inkTool}
+                styles={props.styles}
+                onSelectTool={canvasCtx.setInkTool}
+              />
             </>
           ) : null}
         </View>

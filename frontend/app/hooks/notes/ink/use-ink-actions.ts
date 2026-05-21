@@ -162,16 +162,29 @@ export function useInkActions(params: {
     chunk.push(point);
   };
 
+  const getChunkLength = (points: InkPoint[]) => {
+    let length = 0;
+    for (let index = 1; index < points.length; index += 1) {
+      length += Math.hypot(points[index].x - points[index - 1].x, points[index].y - points[index - 1].y);
+    }
+    return length;
+  };
+
+  const shouldKeepErasedChunk = (stroke: InkStroke, points: InkPoint[]) => (
+    points.length > 1 && getChunkLength(points) >= Math.max(3, stroke.width * 0.45)
+  );
+
   const splitStrokeByEraser = (stroke: InkStroke, point: InkPoint, radius: number): InkStroke[] | null => {
     if (!isStrokeOnPointPage(stroke, point)) return null;
+    const hitRadius = radius + Math.max(1, stroke.width) * 0.45;
     if (stroke.points.length <= 1) {
-      if (stroke.points[0] && Math.hypot(stroke.points[0].x - point.x, stroke.points[0].y - point.y) <= radius) return [];
+      if (stroke.points[0] && Math.hypot(stroke.points[0].x - point.x, stroke.points[0].y - point.y) <= hitRadius) return [];
       return null;
     }
     if (!stroke.points.some((strokePoint, index) => {
-      if (Math.hypot(strokePoint.x - point.x, strokePoint.y - point.y) <= radius) return true;
+      if (Math.hypot(strokePoint.x - point.x, strokePoint.y - point.y) <= hitRadius) return true;
       const previous = stroke.points[index - 1];
-      return Boolean(previous && distanceToSegment(point, previous, strokePoint) <= radius);
+      return Boolean(previous && distanceToSegment(point, previous, strokePoint) <= hitRadius);
     })) {
       return null;
     }
@@ -182,7 +195,7 @@ export function useInkActions(params: {
 
     stroke.points.forEach((strokePoint, index) => {
       if (index === 0) {
-        if (Math.hypot(strokePoint.x - point.x, strokePoint.y - point.y) > radius) {
+        if (Math.hypot(strokePoint.x - point.x, strokePoint.y - point.y) > hitRadius) {
           currentChunk.push(strokePoint);
         } else {
           changed = true;
@@ -198,16 +211,16 @@ export function useInkActions(params: {
         const samplePoint = sampleIndex === sampleCount
           ? strokePoint
           : interpolateStrokePoint(previous, strokePoint, sampleIndex / sampleCount);
-        if (Math.hypot(samplePoint.x - point.x, samplePoint.y - point.y) <= radius) {
+        if (Math.hypot(samplePoint.x - point.x, samplePoint.y - point.y) <= hitRadius) {
           changed = true;
-          if (currentChunk.length > 1) chunks.push(currentChunk);
+          if (shouldKeepErasedChunk(stroke, currentChunk)) chunks.push(currentChunk);
           currentChunk = [];
           continue;
         }
         appendChunkPoint(currentChunk, samplePoint);
       }
     });
-    if (currentChunk.length > 1) chunks.push(currentChunk);
+    if (shouldKeepErasedChunk(stroke, currentChunk)) chunks.push(currentChunk);
     if (!changed) return null;
 
     const timestamp = Date.now();
@@ -232,6 +245,19 @@ export function useInkActions(params: {
     const nextStrokes: InkStroke[] = [];
 
     strokes.forEach((stroke) => {
+      if (stroke.style === 'shape') {
+        const hitShape = findHitInkStrokeId(
+          isStrokeOnPointPage(stroke, point) ? [stroke] : [],
+          point,
+          radius,
+        );
+        if (hitShape) {
+          changed = true;
+          return;
+        }
+        nextStrokes.push(stroke);
+        return;
+      }
       const split = splitStrokeByEraser(stroke, point, radius);
       if (!split) {
         nextStrokes.push(stroke);
