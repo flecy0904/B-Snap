@@ -6,8 +6,8 @@
   "scripts": {
     "backend": "node scripts/run-backend.js",
     "backend:dev": "node scripts/run-backend.js --reload",
-    "start": "expo start --dev-client",
-    "start:reset": "expo start --dev-client -c",
+    "start": "expo start --dev-client --scheme bsnap",
+    "start:reset": "expo start --dev-client -c --scheme bsnap",
     "web": "expo start --web",
     "android": "node scripts/run-android.js",
     "ios": "react-native run-ios --no-packager",

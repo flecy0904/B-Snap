@@ -2,6 +2,7 @@
   "expo": {
     "name": "B-SNAP",
     "slug": "b-snap",
+    "scheme": "bsnap",
     "version": "1.0.0",
     "orientation": "default",
     "icon": "./assets/icon.png",

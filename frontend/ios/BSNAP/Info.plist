@@ -27,6 +27,7 @@
 		<dict>
 			<key>CFBundleURLSchemes</key>
 			<array>
+				<string>bsnap</string>
 				<string>com.anonymous.b-snap</string>
 			</array>
 		</dict>
