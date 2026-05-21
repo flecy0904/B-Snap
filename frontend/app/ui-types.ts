@@ -34,6 +34,7 @@ export type InkTextAnnotation = {
   y: number;
   width: number;
   height?: number;
+  color?: string;
   text: string;
   anchorRect?: SelectionRect | null;
 } & InkPageSize;

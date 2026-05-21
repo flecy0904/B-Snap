@@ -6,6 +6,9 @@ import { findHitInkStrokeId, findInkStrokesInLasso, findInkStrokesInRect, isPoin
 import { findLastIndex, isInkStrokeOnPage, scopeInkStrokeToPage } from './ink-helpers';
 
 type SetState<T> = Dispatch<SetStateAction<T>>;
+
+const clamp = (value: number, min: number, max: number) => Math.max(min, Math.min(max, value));
+
 export type WorkspaceEditSnapshot = {
   inkStrokes: InkStroke[];
   textAnnotations: InkTextAnnotation[];
@@ -115,7 +118,7 @@ export function useInkActions(params: {
           x: annotation.x,
           y: annotation.y,
           width: annotation.width,
-          height: 96,
+          height: annotation.height ?? 96,
           pageWidth: annotation.pageWidth,
           pageHeight: annotation.pageHeight,
         })
@@ -659,6 +662,7 @@ export function useInkActions(params: {
     if (!params.studyDocumentId || !params.selectionRect) return;
     const currentStrokes = params.inkByDocument[params.studyDocumentId] ?? [];
     const selectedStrokeIds = getSelectedStrokeIds();
+    const selectedTextAnnotationIds = getSelectedTextAnnotationIds();
 
     const nextStrokes = currentStrokes.map((stroke) => {
       if (selectedStrokeIds.has(stroke.id)) {
@@ -669,14 +673,22 @@ export function useInkActions(params: {
       return stroke;
     });
 
-    if (selectedStrokeIds.size > 0) {
+    if (selectedStrokeIds.size > 0 || selectedTextAnnotationIds.size > 0) {
       pushInkHistorySnapshot();
       params.setInkByDocument((current) => ({
         ...current,
         [params.studyDocumentId!]: nextStrokes,
       }));
+      params.setTextAnnotationsByDocument((current) => ({
+        ...current,
+        [params.studyDocumentId!]: (current[params.studyDocumentId!] ?? []).map((annotation) => (
+          selectedTextAnnotationIds.has(annotation.id)
+            ? { ...annotation, color }
+            : annotation
+        )),
+      }));
       markCurrentPageDirty();
-      params.setWorkspaceFeedback(`선택한 ${selectedStrokeIds.size}개의 필기 색상을 변경했습니다.`);
+      params.setWorkspaceFeedback(`선택한 객체 ${selectedStrokeIds.size + selectedTextAnnotationIds.size}개의 색상을 변경했습니다.`);
     }
     clearCurrentSelection();
     params.setInkTool('view');
@@ -746,6 +758,11 @@ export function useInkActions(params: {
             ...params.selectionRect,
             x: params.selectionRect.x + offset,
             y: params.selectionRect.y + offset,
+            path: params.selectionRect.path?.map((point) => ({
+              ...point,
+              x: point.x + offset,
+              y: point.y + offset,
+            })),
           }
         : null,
     }));
@@ -902,6 +919,17 @@ export function useInkActions(params: {
     const selectedStrokeIds = getSelectedStrokeIds();
     const selectedTextAnnotationIds = getSelectedTextAnnotationIds();
     if (!selectedStrokeIds.size && !selectedTextAnnotationIds.size) return;
+    const pageWidth = params.selectionRect.pageWidth;
+    const pageHeight = params.selectionRect.pageHeight;
+    const boundedX = pageWidth
+      ? clamp(params.selectionRect.x + dx, 0, Math.max(0, pageWidth - params.selectionRect.width))
+      : params.selectionRect.x + dx;
+    const boundedY = pageHeight
+      ? clamp(params.selectionRect.y + dy, 0, Math.max(0, pageHeight - params.selectionRect.height))
+      : params.selectionRect.y + dy;
+    const moveDx = boundedX - params.selectionRect.x;
+    const moveDy = boundedY - params.selectionRect.y;
+    if (Math.abs(moveDx) < 0.5 && Math.abs(moveDy) < 0.5) return;
 
     pushInkHistorySnapshot();
     params.setInkByDocument((current) => ({
@@ -914,8 +942,8 @@ export function useInkActions(params: {
           ...stroke,
           points: stroke.points.map((point) => ({
             ...point,
-            x: point.x + dx * widthScale,
-            y: point.y + dy * heightScale,
+            x: point.x + moveDx * widthScale,
+            y: point.y + moveDy * heightScale,
           })),
         };
       }),
@@ -926,13 +954,13 @@ export function useInkActions(params: {
         selectedTextAnnotationIds.has(annotation.id)
           ? {
               ...annotation,
-              x: annotation.x + dx,
-              y: annotation.y + dy,
+              x: annotation.x + moveDx,
+              y: annotation.y + moveDy,
               anchorRect: annotation.anchorRect
                 ? {
                     ...annotation.anchorRect,
-                    x: annotation.anchorRect.x + dx,
-                    y: annotation.anchorRect.y + dy,
+                    x: annotation.anchorRect.x + moveDx,
+                    y: annotation.anchorRect.y + moveDy,
                   }
                 : annotation.anchorRect,
             }
@@ -947,12 +975,12 @@ export function useInkActions(params: {
       ...current,
       [params.studyDocumentId!]: {
         ...params.selectionRect!,
-        x: params.selectionRect!.x + dx,
-        y: params.selectionRect!.y + dy,
+        x: params.selectionRect!.x + moveDx,
+        y: params.selectionRect!.y + moveDy,
         path: params.selectionRect!.path?.map((point) => ({
           ...point,
-          x: point.x + dx,
-          y: point.y + dy,
+          x: point.x + moveDx,
+          y: point.y + moveDy,
         })),
       },
     }));

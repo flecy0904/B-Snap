@@ -203,6 +203,11 @@ function SelectionOverlay(props: { rect: SelectionRect; styles: any; draft?: boo
         <Path
           d={`${lassoPath} Z`}
           fill="rgba(78, 141, 255, 0.06)"
+          stroke="none"
+        />
+        <Path
+          d={lassoPath}
+          fill="none"
           stroke="#2563EB"
           strokeWidth={2}
           strokeLinecap="round"

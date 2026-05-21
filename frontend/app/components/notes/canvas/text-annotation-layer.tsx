@@ -199,6 +199,7 @@ function MovableTextAnnotationBox(props: {
           props.styles.textAnnotationInput,
           {
             minHeight: Math.max(32, height - (props.active ? 46 : 16)),
+            color: props.annotation.color ?? '#111827',
           },
         ]}
       />
