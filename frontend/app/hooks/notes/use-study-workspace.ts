@@ -13,7 +13,6 @@ import {
   listBackendFolders,
   listBackendNotes,
   updateBackendNote,
-  BackendApiError,
   type BackendClassInsight,
   type BackendChatSession,
   type BackendChatMessage,
@@ -28,8 +27,6 @@ import {
   DEFAULT_PEN_COLOR,
   HIGHLIGHT_BRUSH_COLORS,
   PEN_BRUSH_COLORS,
-  buildGeneratedSummary,
-  buildWorkspaceAttachment,
 } from './workspace/helpers';
 import { getAiBackendErrorMessage } from './ai/ai-errors';
 import { useAiChatActions } from './ai/use-ai-chat-actions';
@@ -44,12 +41,13 @@ import { normalizeDocumentFile } from './document/document-file-utils';
 import { useBackendNotePageSync } from './document/use-backend-note-page-sync';
 import { confirmDeleteAction } from './ui/confirm-delete-action';
 import { useInkActions, type WorkspaceEditSnapshot } from './ink/use-ink-actions';
+import { useCaptureAssetActions } from './capture/use-capture-asset-actions';
 import { usePageCaptureReferenceActions } from './capture/use-page-capture-references';
 import { serializeNotePageContent } from './document/note-page-content';
 import { useIncomingAssetSubscription } from './workspace/use-incoming-asset-subscription';
 import { useStudyWorkspaceDerivedState } from './workspace/use-study-workspace-derived-state';
 import { useStudyWorkspacePersistence } from './workspace/use-study-workspace-persistence';
-import { derivePreprocessedCropUrl, isSameDocumentPage, isShapeTool } from '../../ui-helpers';
+import { isSameDocumentPage, isShapeTool } from '../../ui-helpers';
 import type { InkBrush, InkBrushSettings, InkLinePattern, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../ui-types';
 import type { AiAnswer, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../types';
 
@@ -1011,197 +1009,30 @@ export function useStudyWorkspace(props: {
     setSelectionPreviewByDocument((current) => ({ ...current, [studyDocumentId]: uri }));
   };
 
-  const updateAssetStatus = (assetId: string, nextStatus: CaptureAsset['status']) => {
-    setCaptureAssetsBySubject((current) => {
-      const next = { ...current };
-
-      Object.keys(next).forEach((key) => {
-        const subjectAssets = next[Number(key)] ?? [];
-        next[Number(key)] = subjectAssets.map((asset) => (asset.id === assetId ? { ...asset, status: nextStatus } : asset));
-      });
-
-      return next;
-    });
-  };
-
-  const findCaptureAssetById = (assetId: string) => (
-    Object.values(captureAssetsBySubject)
-      .flat()
-      .find((asset) => asset.id === assetId) ?? null
-  );
-
-  const resolveAssetUri = (asset: CaptureAsset) => {
-    const uri = derivePreprocessedCropUrl(asset.processedUrl) ?? asset.thumbnailUrl ?? asset.processedUrl ?? asset.fileUrl ?? asset.previewImageKey;
-    return (
-      uri?.startsWith('http://') ||
-      uri?.startsWith('https://') ||
-      uri?.startsWith('file://') ||
-      uri?.startsWith('data:image/') ||
-      uri?.startsWith('data:application/pdf')
-        ? uri
-        : null
-    );
-  };
-
-  const createImageNoteFromAsset = async (asset: CaptureAsset) => {
-    if (asset.type !== 'image') return false;
-    const imageUrl = resolveAssetUri(asset);
-    if (!imageUrl) {
-      setWorkspaceFeedback('이미지 파일 URL을 찾지 못했습니다.');
-      return false;
-    }
-
-    const targetSubject = availableSubjects.find((value) => value.id === asset.subjectId)
-      ?? subject
-      ?? availableSubjects[0]
-      ?? null;
-    if (!targetSubject) return false;
-
-    if (isBackendApiEnabled()) {
-      try {
-        const folder = await ensureFolderForSubject({ name: targetSubject.name, color: targetSubject.color });
-        const backendNote = await createBackendNote({
-          folderId: folder.id,
-          title: asset.title,
-          summary: asset.summary,
-        });
-        const backendPage = await createBackendNotePage({
-          noteId: backendNote.id,
-          pageNumber: 1,
-          content: serializeNotePageContent({ inkStrokes: [], textAnnotations: [] }),
-          imageUrl,
-        });
-        setBackendPageIdsByDocument((current) => ({
-          ...current,
-          [backendNote.id]: {
-            ...(current[backendNote.id] ?? {}),
-            1: backendPage.id,
-          },
-        }));
-        const document: StudyDocumentEntry = {
-          id: backendNote.id,
-          backendNoteId: backendNote.id,
-          subjectId: targetSubject.id,
-          title: backendNote.title,
-          type: 'image',
-          updatedAt: '방금 전',
-          pageCount: 1,
-          preview: backendNote.summary ?? '이미지로 만든 노트입니다.',
-          file: { uri: imageUrl },
-          remoteFileUrl: imageUrl,
-          backendSyncStatus: 'synced',
-        };
-        openCreatedStudyDocument(document, '이미지를 새 노트 페이지로 저장했습니다.');
-        updateAssetStatus(asset.id, 'accepted');
-        return true;
-      } catch (error) {
-        setWorkspaceFeedback(
-          error instanceof BackendApiError && error.detail
-            ? error.detail
-            : '이미지 노트 저장에 실패했습니다.',
-        );
-        return false;
-      }
-    }
-
-    const document: StudyDocumentEntry = {
-      id: Date.now(),
-      subjectId: targetSubject.id,
-      title: asset.title,
-      type: 'image',
-      updatedAt: '방금 전',
-      pageCount: 1,
-      preview: asset.summary,
-      file: { uri: imageUrl },
-      localFileUri: imageUrl,
-      backendSyncStatus: 'local',
-    };
-    openCreatedStudyDocument(document, '이미지를 새 노트로 만들었습니다.');
-    updateAssetStatus(asset.id, 'accepted');
-    return true;
-  };
-
-  const persistAssetForCurrentDocument = async (asset: CaptureAsset) => {
-    if (!studyDocumentId || !isBackendApiEnabled() || !backendPageIdsByDocument[studyDocumentId]) return;
-    const backendNoteId = getStudyDocumentBackendNoteId(studyDocument);
-    if (!backendNoteId) return;
-    const assetUrl = resolveAssetUri(asset);
-    if (!assetUrl) return;
-
-    const existingPageNumbers = Object.keys(backendPageIdsByDocument[studyDocumentId]).map(Number).filter(Number.isFinite);
-    const nextPageNumber = Math.max(0, ...existingPageNumbers) + 1;
-    try {
-      const backendPage = await createBackendNotePage({
-        noteId: backendNoteId,
-        pageNumber: nextPageNumber,
-        content: serializeNotePageContent({ inkStrokes: [], textAnnotations: [] }),
-        imageUrl: assetUrl,
-      });
-      setBackendPageIdsByDocument((current) => ({
-        ...current,
-        [studyDocumentId]: {
-          ...(current[studyDocumentId] ?? {}),
-          [backendPage.page_number]: backendPage.id,
-        },
-      }));
-    } catch {
-      setWorkspaceFeedback('이미지 페이지 저장에 실패했습니다. backend 연결을 확인해주세요.');
-    }
-  };
-
-  const insertAssetIntoWorkspace = async (asset: CaptureAsset) => {
-    if (!studyDocumentId) {
-      await createImageNoteFromAsset(asset);
-      return;
-    }
-
-    if (asset.type === 'image') {
-      void persistAssetForCurrentDocument(asset);
-    }
-
-    const insertAfterPage = currentPdfPageByDocument[studyDocumentId] ?? 1;
-    const generatedPageId = `generated-page-${asset.id}-${Date.now()}`;
-    const generatedPage: GeneratedWorkspacePage = {
-      id: generatedPageId,
-      documentId: studyDocumentId,
-      sourceAssetId: asset.id,
-      pageKind: 'summary',
-      title: asset.title,
-      createdAt: new Date().toISOString(),
-      insertAfterPage,
-      status: 'generating',
-      previewImageKey: asset.previewImageKey,
-      previewImage: asset.previewImage,
-      fileUrl: asset.fileUrl,
-      thumbnailUrl: asset.thumbnailUrl,
-      ...buildGeneratedSummary(asset, availableSubjects),
-    };
-
-    setAttachmentsByDocument((current) => ({
-      ...current,
-      [studyDocumentId]: [buildWorkspaceAttachment(asset, generatedPageId), ...(current[studyDocumentId] ?? [])],
-    }));
-    setGeneratedPagesByDocument((current) => ({
-      ...current,
-      [studyDocumentId]: [generatedPage, ...(current[studyDocumentId] ?? [])],
-    }));
-    setActivePageByDocument((current) => ({
-      ...current,
-      [studyDocumentId]: { kind: 'generated', pageId: generatedPageId },
-    }));
-    updateAssetStatus(asset.id, 'accepted');
-    setWorkspaceFeedback(asset.type === 'image' ? '이미지를 백엔드 페이지로 저장하고 정리본을 생성하고 있습니다.' : '다음 페이지 정리본을 생성하고 있습니다.');
-
-    setTimeout(() => {
-      setGeneratedPagesByDocument((current) => ({
-        ...current,
-        [studyDocumentId]: (current[studyDocumentId] ?? []).map((value) =>
-          value.id === generatedPageId ? { ...value, status: 'ready' } : value,
-        ),
-      }));
-      setWorkspaceFeedback('다음 페이지 정리본이 준비됐습니다.');
-    }, 1600);
-  };
+  const {
+    updateAssetStatus,
+    findCaptureAssetById,
+    createImageNoteFromAsset,
+    removeCaptureAsset,
+  } = useCaptureAssetActions({
+    availableSubjects,
+    subject,
+    studyDocumentId,
+    studyDocument,
+    currentPdfPageByDocument,
+    backendPageIdsByDocument,
+    captureAssetsBySubject,
+    setCaptureAssetsBySubject,
+    setAttachmentsByDocument,
+    setGeneratedPagesByDocument,
+    setPageCaptureReferencesByDocument,
+    setActivePageByDocument,
+    setBackendPageIdsByDocument,
+    setIncomingAssetSuggestion,
+    setIncomingBannerQueue,
+    setWorkspaceFeedback,
+    openCreatedStudyDocument,
+  });
 
   const clearSelectionForCurrentDocument = useCallback(() => {
     if (!studyDocumentId) return;
@@ -1339,48 +1170,6 @@ export function useStudyWorkspace(props: {
       setIncomingAssetSuggestion(null);
     }
     setWorkspaceFeedback('inbox에서 자료를 삭제했습니다.');
-  };
-
-  const removeCaptureAsset = (assetId: string) => {
-    setCaptureAssetsBySubject((current) => {
-      const next: Record<number, CaptureAsset[]> = {};
-
-      Object.keys(current).forEach((key) => {
-        next[Number(key)] = (current[Number(key)] ?? []).filter((asset) => asset.id !== assetId);
-      });
-
-      return next;
-    });
-    setIncomingBannerQueue((current) => current.filter((asset) => asset.id !== assetId));
-    setIncomingAssetSuggestion((current) => (current?.id === assetId ? null : current));
-    setAttachmentsByDocument((current) => {
-      const next: Record<number, WorkspaceAttachment[]> = {};
-
-      Object.keys(current).forEach((key) => {
-        next[Number(key)] = (current[Number(key)] ?? []).filter((attachment) => attachment.assetId !== assetId);
-      });
-
-      return next;
-    });
-    setPageCaptureReferencesByDocument((current) => {
-      const next: Record<number, PageCaptureReference[]> = {};
-
-      Object.keys(current).forEach((key) => {
-        next[Number(key)] = (current[Number(key)] ?? []).filter((reference) => reference.assetId !== assetId);
-      });
-
-      return next;
-    });
-    setGeneratedPagesByDocument((current) => {
-      const next: Record<number, GeneratedWorkspacePage[]> = {};
-
-      Object.keys(current).forEach((key) => {
-        next[Number(key)] = (current[Number(key)] ?? []).filter((page) => page.sourceAssetId !== assetId);
-      });
-
-      return next;
-    });
-    setWorkspaceFeedback('Photo 라이브러리에서 원본 사진을 삭제했습니다.');
   };
 
   const removeWorkspaceAttachment = (attachmentId: string) => {
