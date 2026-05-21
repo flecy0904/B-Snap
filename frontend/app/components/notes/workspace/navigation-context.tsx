@@ -62,7 +62,7 @@ export function NavigationProvider({ children }: { children: React.ReactNode }) 
     deletedStudyDocumentIds: global.deletedStudyDocumentIds ?? [],
     workspaceFeedback: global.workspaceFeedback ?? null,
     workspaceHydrated: global.workspaceHydrated ?? true,
-    localPersistenceError: global.localPersistenceError ?? false,
+    localPersistenceError: Boolean(global.localPersistenceError),
 
     onOpenSubject: global.onOpenSubject,
     onOpenNote: global.onOpenNote,
