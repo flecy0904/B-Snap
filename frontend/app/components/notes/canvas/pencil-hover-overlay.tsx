@@ -2,6 +2,7 @@ import React from 'react';
 import { Text, View } from 'react-native';
 import type { InkTool } from '../../../ui-types';
 import { PencilHoverQuickPalette } from './pencil-hover-quick-palette';
+import { usePencilQuickPaletteTrigger } from './use-pencil-quick-palette-trigger';
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
@@ -20,6 +21,8 @@ export function PencilHoverOverlay(props: {
   styles: any;
   onSelectTool?: (tool: InkTool) => void;
 }) {
+  const quickPaletteVisible = usePencilQuickPaletteTrigger(Boolean(props.onSelectTool));
+
   return (
     <>
       <View
@@ -51,7 +54,7 @@ export function PencilHoverOverlay(props: {
           <Text style={props.styles.pencilHoverLabelText}>{props.label}</Text>
         </View>
       ) : null}
-      {props.onSelectTool ? (
+      {props.onSelectTool && quickPaletteVisible ? (
         <PencilHoverQuickPalette
           x={props.x}
           y={props.y}

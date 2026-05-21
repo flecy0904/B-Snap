@@ -39,6 +39,7 @@ import { usePageCaptureReferenceActions } from './capture/use-page-capture-refer
 import { useIncomingAssetSubscription } from './workspace/use-incoming-asset-subscription';
 import { useStudyWorkspaceDerivedState } from './workspace/use-study-workspace-derived-state';
 import { useStudyWorkspacePersistence } from './workspace/use-study-workspace-persistence';
+import { usePencilInteractionFeedback } from './workspace/use-pencil-interaction-feedback';
 import { isSameDocumentPage, isShapeTool } from '../../ui-helpers';
 import type { InkBrush, InkBrushSettings, InkEraserMode, InkLinePattern, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../ui-types';
 import type { AiAnswer, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../types';
@@ -295,6 +296,11 @@ export function useStudyWorkspace(props: {
     const timer = setTimeout(() => setWorkspaceFeedback(null), 2200);
     return () => clearTimeout(timer);
   }, [workspaceFeedback]);
+
+  usePencilInteractionFeedback({
+    enabled: noteWorkspaceMode === 'note' && Boolean(studyDocumentId),
+    onFeedback: setWorkspaceFeedback,
+  });
 
   useEffect(() => {
     if (!activeIncomingBanner) return;
