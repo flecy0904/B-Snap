@@ -18,7 +18,7 @@ import {
 } from '../shared/capture-assets';
 import type { BackendChatMessage, BackendChatSession, BackendClassInsight } from '../../../services/backend-api';
 import { AiAnswer, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NotebookPage, NoteEntry, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../../types';
-import { InkBrush, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
+import { InkBrush, InkEraserMode, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { cleanAiDisplayText, darkenHex, getDocumentPageLabel, isSameDocumentPage } from '../../../ui-helpers';
 
 const PEN_COLORS = ['#1F2937', '#2563EB', '#7C3AED', '#D9485F', '#F59E0B', '#16A34A'];
@@ -86,6 +86,7 @@ export function MobileNotesView(props: {
   penWidth: number;
   brushType: InkBrush;
   linePattern: InkLinePattern;
+  eraserMode: InkEraserMode;
   selectionMode: InkSelectionMode;
   inkStrokes: InkStroke[];
   textAnnotations: InkTextAnnotation[];
@@ -132,6 +133,7 @@ export function MobileNotesView(props: {
   onChangePenWidth: (width: number) => void;
   onChangeBrushType: (brush: InkBrush) => void;
   onChangeLinePattern: (pattern: InkLinePattern) => void;
+  onChangeEraserMode: (mode: InkEraserMode) => void;
   onChangeSelectionMode: (mode: InkSelectionMode) => void;
   onToggleAiPanel: () => void;
   onChangeAiQuestion: (value: string) => void;
@@ -154,7 +156,7 @@ export function MobileNotesView(props: {
   onRemoveTextAnnotation: (id: string) => void;
   onMoveTextAnnotation: (id: string, x: number, y: number) => void;
   onResizeTextAnnotation: (id: string, width: number, height: number) => void;
-  onEraseInkAtPoint: (point: InkPoint, radius: number, snapshot?: boolean) => boolean;
+  onEraseInkAtPoint: (point: InkPoint, radius: number, snapshot?: boolean, mode?: InkEraserMode) => boolean;
   onAcceptIncomingAsset: () => void;
   onArchiveIncomingAsset: () => void;
   onDismissIncomingAsset: () => void;
@@ -695,6 +697,7 @@ export function MobileNotesView(props: {
               penWidth={props.penWidth}
               brushType={props.brushType}
               linePattern={props.linePattern}
+              eraserMode={props.eraserMode}
               selectionMode={props.selectionMode}
               inkStrokes={props.inkByDocument[props.studyDocument.id] ?? props.inkStrokes}
               textAnnotations={props.textAnnotationsByDocument[props.studyDocument.id] ?? props.textAnnotations}

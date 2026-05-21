@@ -1,8 +1,8 @@
 import { useRef } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import type { DocumentPageView, GeneratedWorkspacePage, StudyDocumentEntry } from '../../../types';
-import type { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
-import { findInkStrokesInLasso, findInkStrokesInRect, isPointInPolygon, scaleInkStrokeToPageSize } from '../../../ui-helpers';
+import type { InkEraserMode, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
+import { findHitInkStrokeId, findInkStrokesInLasso, findInkStrokesInRect, isPointInPolygon, scaleInkStrokeToPageSize } from '../../../ui-helpers';
 import { findLastIndex, isInkStrokeOnPage, scopeInkStrokeToPage } from './ink-helpers';
 
 type SetState<T> = Dispatch<SetStateAction<T>>;
@@ -214,7 +214,16 @@ export function useInkActions(params: {
     }));
   };
 
-  const eraseStrokesAtPoint = (strokes: InkStroke[], point: InkPoint, radius: number) => {
+  const eraseStrokesAtPoint = (strokes: InkStroke[], point: InkPoint, radius: number, mode: InkEraserMode = 'partial') => {
+    if (mode === 'stroke') {
+      const hitStrokeId = findHitInkStrokeId(
+        strokes.filter((stroke) => isStrokeOnPointPage(stroke, point)),
+        point,
+        radius,
+      );
+      return hitStrokeId ? strokes.filter((stroke) => stroke.id !== hitStrokeId) : strokes;
+    }
+
     let changed = false;
     const nextStrokes: InkStroke[] = [];
 
@@ -594,7 +603,7 @@ export function useInkActions(params: {
     if (!targetAnnotation?.generatedPageId) markPageDirty(targetAnnotation?.pageNumber ?? params.currentPdfPage);
   };
 
-  const eraseInkAtPoint = (point: InkPoint, radius: number, snapshot = false) => {
+  const eraseInkAtPoint = (point: InkPoint, radius: number, snapshot = false, mode: InkEraserMode = 'partial') => {
     if (!params.studyDocumentId) return false;
     const scopedPoint: InkPoint = {
       ...point,
@@ -604,12 +613,12 @@ export function useInkActions(params: {
         : point.pageNumber ?? (params.currentDocumentPage?.kind === 'pdf' ? params.currentDocumentPage.pageNumber : params.currentPdfPage),
     };
     const currentStrokes = params.inkByDocument[params.studyDocumentId] ?? [];
-    const preview = eraseStrokesAtPoint(currentStrokes, scopedPoint, radius);
+    const preview = eraseStrokesAtPoint(currentStrokes, scopedPoint, radius, mode);
     if (preview === currentStrokes) return false;
     if (snapshot) pushInkHistorySnapshot();
     params.setInkByDocument((current) => {
       const strokes = current[params.studyDocumentId!] ?? [];
-      const next = eraseStrokesAtPoint(strokes, scopedPoint, radius);
+      const next = eraseStrokesAtPoint(strokes, scopedPoint, radius, mode);
       if (next === strokes) return current;
       return {
         ...current,
