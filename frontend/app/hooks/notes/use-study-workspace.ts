@@ -1,10 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import * as DocumentPicker from 'expo-document-picker';
 import {
-  createBackendNote,
-  createBackendNotePage,
-  deleteBackendNote,
-  ensureFolderForSubject,
   getBackendClassInsight,
   isBackendApiEnabled,
   listAllBackendChatSessions,
@@ -18,8 +13,6 @@ import {
   type BackendChatMessage,
 } from '../../services/backend-api';
 import {
-  buildEmptyStudyWorkspaceState,
-  clearStudyWorkspaceState,
   type PersistedStudyWorkspaceState,
 } from '../../storage/local-workspace-store';
 import {
@@ -35,15 +28,14 @@ import { useAiCanvasNotes } from './ai-canvas/use-ai-canvas-notes';
 import { buildClassInsightContext } from './class-insight';
 import { addUniqueId, removeId, upsertStudyDocument } from './document/collection-helpers';
 import { getStudyDocumentBackendNoteId } from './document/backend-sync';
+import { useStudyDocumentActions } from './document/use-study-document-actions';
 import { useDocumentPageActions } from './document/use-document-page-actions';
-import { createLocalStudyDocumentId, persistPickedPdfAsset, readPdfPageCount } from './document/pdf-local-import';
 import { normalizeDocumentFile } from './document/document-file-utils';
 import { useBackendNotePageSync } from './document/use-backend-note-page-sync';
 import { confirmDeleteAction } from './ui/confirm-delete-action';
 import { useInkActions, type WorkspaceEditSnapshot } from './ink/use-ink-actions';
 import { useCaptureAssetActions } from './capture/use-capture-asset-actions';
 import { usePageCaptureReferenceActions } from './capture/use-page-capture-references';
-import { serializeNotePageContent } from './document/note-page-content';
 import { useIncomingAssetSubscription } from './workspace/use-incoming-asset-subscription';
 import { useStudyWorkspaceDerivedState } from './workspace/use-study-workspace-derived-state';
 import { useStudyWorkspacePersistence } from './workspace/use-study-workspace-persistence';
@@ -506,115 +498,6 @@ export function useStudyWorkspace(props: {
     setNoteDetailTab('original');
   };
 
-  const openStudyDocument = (id: number | null) => {
-    if (id === null) {
-      setStudyDocumentId(null);
-      setInkTool('view');
-      setAiPanelOpen(false);
-      return;
-    }
-
-    const selected = allStudyDocuments.find((value) => value.id === id);
-    if (!selected) return;
-
-    props.onOpenNotesTab();
-    setSubjectId(selected.subjectId);
-    setNoteId(null);
-    setStudyDocumentId(id);
-    setViewingAiChatSessionId(null);
-    setChatSessionByDocument((current) => {
-      const next = { ...current };
-      const lastSessionId = lastChatSessionByDocument[id];
-      if (lastSessionId) next[id] = lastSessionId;
-      else delete next[id];
-      return next;
-    });
-    setInkTool('view');
-    setActivePageByDocument((current) => ({
-      ...current,
-      [id]: current[id] ?? { kind: 'pdf', pageNumber: currentPdfPageByDocument[id] ?? 1 },
-    }));
-  };
-
-  const openCreatedStudyDocument = (document: StudyDocumentEntry, feedback: string) => {
-    setUserStudyDocuments((current) => [document, ...current]);
-    props.onOpenNotesTab();
-    setSubjectId(document.subjectId);
-    setNoteId(null);
-    setStudyDocumentId(document.id);
-    setNoteWorkspaceMode('note');
-    setInkTool('view');
-    setAiPanelOpen(false);
-    setWorkspaceFeedback(feedback);
-    setCurrentPdfPageByDocument((current) => ({
-      ...current,
-      [document.id]: 1,
-    }));
-    setActivePageByDocument((current) => ({
-      ...current,
-      [document.id]: { kind: 'pdf', pageNumber: 1 },
-    }));
-  };
-
-  const createBlankNote = async () => {
-    const targetSubjectId = subjectId ?? availableSubjects[0]?.id ?? null;
-    if (!targetSubjectId) return;
-
-    const targetSubject = availableSubjects.find((value) => value.id === targetSubjectId);
-    if (!targetSubject) return;
-
-    if (isBackendApiEnabled()) {
-      try {
-        const folder = await ensureFolderForSubject({ name: targetSubject.name, color: targetSubject.color });
-        const backendNote = await createBackendNote({
-          folderId: folder.id,
-          title: `${targetSubject.name} 새 노트`,
-          summary: '빈 노트',
-        });
-        const backendPage = await createBackendNotePage({
-          noteId: backendNote.id,
-          pageNumber: 1,
-          content: serializeNotePageContent({ inkStrokes: [], textAnnotations: [] }),
-        });
-        setBackendPageIdsByDocument((current) => ({
-          ...current,
-          [backendNote.id]: {
-            ...(current[backendNote.id] ?? {}),
-            1: backendPage.id,
-          },
-        }));
-        const document: StudyDocumentEntry = {
-          id: backendNote.id,
-          backendNoteId: backendNote.id,
-          subjectId: targetSubjectId,
-          title: backendNote.title,
-          type: 'blank',
-          updatedAt: '방금 전',
-          pageCount: 1,
-          preview: backendNote.summary ?? '새 빈 노트입니다.',
-          backendSyncStatus: 'synced',
-        };
-        openCreatedStudyDocument(document, '새 빈 노트를 백엔드에 저장했습니다.');
-        return;
-      } catch {
-        setWorkspaceFeedback('백엔드 저장에 실패해 이 기기에만 빈 노트를 만들었습니다.');
-      }
-    }
-
-    const document: StudyDocumentEntry = {
-      id: Date.now(),
-      subjectId: targetSubjectId,
-      title: `${targetSubject?.name ?? '수업'} 새 노트`,
-      type: 'blank',
-      updatedAt: '방금 전',
-      pageCount: 1,
-      preview: '새로 만든 빈 필기 노트입니다.',
-      backendSyncStatus: 'local',
-    };
-
-    openCreatedStudyDocument(document, '새 빈 노트를 만들었습니다.');
-  };
-
   const requestDeleteNote = (id: number) => {
     const target = visibleNotes.find((value) => value.id === id);
     if (!target) return;
@@ -634,117 +517,61 @@ export function useStudyWorkspace(props: {
     });
   };
 
-  const requestDeleteStudyDocument = (id: number) => {
-    const target = allStudyDocuments.find((value) => value.id === id);
-    if (!target) return;
-    const backendNoteId = getStudyDocumentBackendNoteId(target);
-    const isBackendDocument = isBackendApiEnabled() && Boolean(backendNoteId);
-
-    confirmDeleteAction({
-      title: 'Note 삭제',
-      message: isBackendDocument
-        ? `"${target.title}" Note 문서와 이 문서에 남긴 필기를 백엔드에서도 삭제할까요?`
-        : `"${target.title}" Note 문서와 이 문서에 남긴 필기를 삭제할까요?`,
-      confirmText: '삭제',
-      onConfirm: () => {
-        if (isBackendDocument) {
-          void deleteBackendNote(backendNoteId!)
-            .then(() => {
-              setUserStudyDocuments((current) => current.filter((document) => document.id !== id));
-              setBackendPageIdsByDocument((current) => {
-                const next = { ...current };
-                delete next[id];
-                return next;
-              });
-              setInkByDocument((current) => {
-                const next = { ...current };
-                delete next[id];
-                return next;
-              });
-              setRedoInkByDocument((current) => {
-                const next = { ...current };
-                delete next[id];
-                return next;
-              });
-              setTextAnnotationsByDocument((current) => {
-                const next = { ...current };
-                delete next[id];
-                return next;
-              });
-              setBookmarksByDocument((current) => {
-                const next = { ...current };
-                delete next[id];
-                return next;
-              });
-              setAttachmentsByDocument((current) => {
-                const next = { ...current };
-                delete next[id];
-                return next;
-              });
-              setGeneratedPagesByDocument((current) => {
-                const next = { ...current };
-                delete next[id];
-                return next;
-              });
-              setCurrentPdfPageByDocument((current) => {
-                const next = { ...current };
-                delete next[id];
-                return next;
-              });
-              setActivePageByDocument((current) => {
-                const next = { ...current };
-                delete next[id];
-                return next;
-              });
-              setChatSessionByDocument((current) => {
-                const next = { ...current };
-                delete next[id];
-                return next;
-              });
-              setLastChatSessionByDocument((current) => {
-                const next = { ...current };
-                delete next[id];
-                return next;
-              });
-              setChatSessionsByDocument((current) => {
-                const next = { ...current };
-                delete next[id];
-                return next;
-              });
-              setAllChatSessions((current) => current.filter((session) => session.note_id !== backendNoteId));
-
-              if (studyDocumentId === id) {
-                setStudyDocumentId(null);
-                setInkTool('view');
-                setAiPanelOpen(false);
-                setIncomingAssetSuggestion(null);
-                setAiAnswer(null);
-                setAiError(null);
-                setAiLoading(false);
-              }
-              setWorkspaceFeedback('Note 문서를 백엔드에서 삭제했습니다.');
-            })
-            .catch(() => {
-              setWorkspaceFeedback('백엔드 노트 삭제에 실패했습니다. 다시 시도해주세요.');
-            });
-          return;
-        }
-
-        setDeletedStudyDocumentIds((current) => addUniqueId(current, id));
-
-        if (studyDocumentId === id) {
-          setStudyDocumentId(null);
-          setInkTool('view');
-          setAiPanelOpen(false);
-          setIncomingAssetSuggestion(null);
-          setAiAnswer(null);
-          setAiError(null);
-          setAiLoading(false);
-        }
-        setWorkspaceFeedback('Note 문서를 삭제했습니다.');
-      },
-    });
-  };
+  const {
+    openStudyDocument,
+    openCreatedStudyDocument,
+    createBlankNote,
+    requestDeleteStudyDocument,
+    restoreStudyDocument,
+    uploadPdfDocument,
+    resetNotes,
+    resetLocalWorkspaceData,
+    backToNoteList,
+  } = useStudyDocumentActions({
+    wide: props.wide,
+    subjectId,
+    studyDocumentId,
+    availableSubjects,
+    allStudyDocuments,
+    deletedStudyDocuments,
+    currentPdfPageByDocument,
+    lastChatSessionByDocument,
+    onOpenNotesTab: props.onOpenNotesTab,
+    syncPdfDocumentToBackend,
+    setSubjectId,
+    setNoteId,
+    setQuery,
+    setNoteDetailTab,
+    setNoteWorkspaceMode,
+    setStudyDocumentId,
+    setInkTool,
+    setAiPanelOpen,
+    setViewingAiChatSessionId,
+    setChatSessionByDocument,
+    setLastChatSessionByDocument,
+    setChatSessionsByDocument,
+    setAllChatSessions,
+    setCurrentPdfPageByDocument,
+    setActivePageByDocument,
+    setUserStudyDocuments,
+    setDeletedNoteIds,
+    setDeletedStudyDocumentIds,
+    setBackendPageIdsByDocument,
+    setInkByDocument,
+    setRedoInkByDocument,
+    setTextAnnotationsByDocument,
+    setBookmarksByDocument,
+    setAttachmentsByDocument,
+    setPageCaptureReferencesByDocument,
+    setGeneratedPagesByDocument,
+    setCaptureAssetsBySubject,
+    setIncomingAssetSuggestion,
+    setIncomingBannerQueue,
+    setAiAnswer,
+    setAiError,
+    setAiLoading,
+    setWorkspaceFeedback,
+  });
 
   const restoreNote = (id: number) => {
     const target = deletedNotes.find((value) => value.id === id);
@@ -754,16 +581,6 @@ export function useStudyWorkspace(props: {
     setNoteWorkspaceMode('photo');
     setSubjectId(target.subjectId);
     setWorkspaceFeedback('Photo를 복구했습니다.');
-  };
-
-  const restoreStudyDocument = (id: number) => {
-    const target = deletedStudyDocuments.find((value) => value.id === id);
-    if (!target) return;
-
-    setDeletedStudyDocumentIds((current) => removeId(current, id));
-    setNoteWorkspaceMode('note');
-    setSubjectId(target.subjectId);
-    setWorkspaceFeedback('Note 문서를 복구했습니다.');
   };
 
   const renameStudyDocument = (id: number, title: string) => {
@@ -806,91 +623,6 @@ export function useStudyWorkspace(props: {
     return true;
   };
 
-  const uploadPdfDocument = async () => {
-    const targetSubjectId = subjectId ?? availableSubjects[0]?.id ?? null;
-    if (!targetSubjectId) return;
-
-    try {
-      const result = await DocumentPicker.getDocumentAsync({
-        type: 'application/pdf',
-        multiple: false,
-        copyToCacheDirectory: true,
-      });
-
-      if (result.canceled || !result.assets.length) {
-        setWorkspaceFeedback('PDF 업로드를 취소했습니다.');
-        return;
-      }
-
-      const picked = result.assets[0];
-      const targetSubject = availableSubjects.find((value) => value.id === targetSubjectId);
-      if (!targetSubject) return;
-      setWorkspaceFeedback('PDF를 이 기기에 저장하는 중입니다.');
-      const localPdfFileUri = await persistPickedPdfAsset(picked);
-      const localPageCount = await readPdfPageCount(picked, localPdfFileUri);
-      const localDocumentId = createLocalStudyDocumentId();
-      const localDocument: StudyDocumentEntry = {
-        id: localDocumentId,
-        subjectId: targetSubjectId,
-        title: picked.name || `${targetSubject.name} PDF`,
-        type: 'pdf',
-        updatedAt: '방금 전',
-        pageCount: localPageCount,
-        preview: isBackendApiEnabled()
-          ? '이 기기에서 바로 열고 백엔드 동기화 중입니다.'
-          : '이 기기에 저장된 PDF입니다.',
-        file: { uri: localPdfFileUri },
-        localFileUri: localPdfFileUri,
-        backendSyncStatus: isBackendApiEnabled() ? 'syncing' : 'local',
-      };
-
-      openCreatedStudyDocument(
-        localDocument,
-        isBackendApiEnabled() ? 'PDF를 열었습니다. 백엔드 동기화 중입니다.' : 'PDF 파일을 업로드했습니다.',
-      );
-
-      if (isBackendApiEnabled()) {
-        void syncPdfDocumentToBackend(localDocument, targetSubject);
-      }
-    } catch {
-      setWorkspaceFeedback('PDF 파일을 가져오지 못했습니다.');
-    }
-  };
-
-  const resetNotes = () => {
-    setNoteId(null);
-    setStudyDocumentId(null);
-    setQuery('');
-    setNoteDetailTab('original');
-    setInkTool('view');
-    setAiPanelOpen(false);
-    if (!props.wide) setSubjectId(null);
-  };
-
-  const resetLocalWorkspaceData = async () => {
-    const emptyState = buildEmptyStudyWorkspaceState();
-    setUserStudyDocuments(emptyState.userStudyDocuments);
-    setDeletedNoteIds(emptyState.deletedNoteIds);
-    setDeletedStudyDocumentIds(emptyState.deletedStudyDocumentIds);
-    setCaptureAssetsBySubject(emptyState.captureAssetsBySubject);
-    setAttachmentsByDocument(emptyState.attachmentsByDocument);
-    setGeneratedPagesByDocument(emptyState.generatedPagesByDocument);
-    setInkByDocument(emptyState.inkByDocument);
-    setRedoInkByDocument({});
-    setTextAnnotationsByDocument(emptyState.textAnnotationsByDocument);
-    setCurrentPdfPageByDocument(emptyState.currentPdfPageByDocument);
-    setActivePageByDocument(emptyState.activePageByDocument);
-    setBookmarksByDocument(emptyState.bookmarksByDocument);
-    setIncomingAssetSuggestion(null);
-    setIncomingBannerQueue([]);
-    setStudyDocumentId(null);
-    setAiAnswer(null);
-    setAiError(null);
-    setAiLoading(false);
-    await clearStudyWorkspaceState();
-    setWorkspaceFeedback('로컬 작업 데이터를 초기화했습니다.');
-  };
-
   const changeNoteWorkspaceMode = (next: NoteWorkspaceMode) => {
     setNoteWorkspaceMode(next);
     setNoteId(null);
@@ -904,14 +636,6 @@ export function useStudyWorkspace(props: {
     setSubjectId(null);
     setQuery('');
     setNoteDetailTab('original');
-  };
-
-  const backToNoteList = () => {
-    setNoteId(null);
-    setStudyDocumentId(null);
-    setAiPanelOpen(false);
-    setInkTool('view');
-    setIncomingAssetSuggestion(null);
   };
 
   const changeInkTool = (tool: InkTool) => {
