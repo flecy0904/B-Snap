@@ -11,6 +11,9 @@
 
 RCT_EXPORT_MODULE(BsnPdfPageRenderer)
 
+static NSInteger const BsnPdfCacheMetadataVersion = 1;
+static NSString * const BsnPdfCacheMetadataKind = @"base";
+
 + (BOOL)requiresMainQueueSetup
 {
   return NO;
@@ -41,6 +44,21 @@ RCT_EXPORT_METHOD(renderPage:(NSString *)fileUri
   NSInteger safeTargetWidth = MAX(1, targetWidth.integerValue);
 
   @try {
+    NSString *outputPath = [self outputPathForFileUri:fileUri pageNumber:requestedPageNumber targetWidth:safeTargetWidth];
+    NSDictionary<NSString *, id> *sourceFingerprint = [self sourceFingerprintForFileUri:fileUri];
+    NSDictionary<NSString *, id> *cachedResult = sourceFingerprint != nil
+      ? [self cachedPageResultAtPath:outputPath
+                          pageNumber:requestedPageNumber
+                         targetWidth:safeTargetWidth
+                   sourceFingerprint:sourceFingerprint
+                            pageCount:nil]
+      : nil;
+    if (cachedResult != nil) {
+      [self prunePageImageCacheAtDirectory:outputPath.stringByDeletingLastPathComponent activePath:outputPath];
+      resolve(cachedResult);
+      return;
+    }
+
     NSURL *fileURL = [self fileURLFromString:fileUri];
     if (fileURL == nil) {
       reject(@"PDF_RENDER_INVALID_URI", @"Only local file PDF URIs are supported.", nil);
@@ -61,6 +79,17 @@ RCT_EXPORT_METHOD(renderPage:(NSString *)fileUri
     NSInteger pageCount = document.pageCount;
     if (requestedPageNumber > pageCount) {
       reject(@"PDF_RENDER_PAGE_OUT_OF_RANGE", @"PDF pageNumber exceeds page count.", nil);
+      return;
+    }
+
+    NSDictionary<NSString *, id> *fallbackCachedResult = [self cachedPageResultAtPath:outputPath
+                                                                            pageNumber:requestedPageNumber
+                                                                           targetWidth:safeTargetWidth
+                                                                     sourceFingerprint:sourceFingerprint
+                                                                            pageCount:@(pageCount)];
+    if (fallbackCachedResult != nil) {
+      [self prunePageImageCacheAtDirectory:outputPath.stringByDeletingLastPathComponent activePath:outputPath];
+      resolve(fallbackCachedResult);
       return;
     }
 
@@ -115,7 +144,6 @@ RCT_EXPORT_METHOD(renderPage:(NSString *)fileUri
       return;
     }
 
-    NSString *outputPath = [self outputPathForFileUri:fileUri pageNumber:requestedPageNumber targetWidth:bitmapWidth];
     NSString *temporaryPath = [NSString stringWithFormat:@"%@.%@.tmp", outputPath, [NSUUID UUID].UUIDString];
     NSString *outputDirectory = outputPath.stringByDeletingLastPathComponent;
     NSError *directoryError = nil;
@@ -151,6 +179,13 @@ RCT_EXPORT_METHOD(renderPage:(NSString *)fileUri
       return;
     }
 
+    [self writeCacheMetadataAtPath:outputPath
+                        pageNumber:requestedPageNumber
+                         pageCount:pageCount
+                       targetWidth:bitmapWidth
+                             width:bitmapWidth
+                            height:bitmapHeight
+                 sourceFingerprint:sourceFingerprint];
     [self prunePageImageCacheAtDirectory:outputDirectory activePath:outputPath];
 
     NSURL *outputURL = [NSURL fileURLWithPath:outputPath];
@@ -194,6 +229,141 @@ RCT_EXPORT_METHOD(renderPage:(NSString *)fileUri
   return [[cacheDirectory URLByAppendingPathComponent:@"bsnap-pdf-pages" isDirectory:YES] URLByAppendingPathComponent:[NSString stringWithFormat:@"%@.png", cacheKey]].path;
 }
 
+- (NSDictionary<NSString *, id> *)sourceFingerprintForFileUri:(NSString *)fileUri
+{
+  NSURL *fileURL = [self fileURLFromString:fileUri];
+  if (fileURL == nil || !fileURL.isFileURL) return nil;
+
+  NSFileManager *fileManager = [NSFileManager defaultManager];
+  NSDictionary<NSFileAttributeKey, id> *attributes = [fileManager attributesOfItemAtPath:fileURL.path error:nil];
+  if (attributes == nil) return nil;
+
+  NSNumber *fileSize = attributes[NSFileSize];
+  NSDate *modifiedAt = attributes[NSFileModificationDate];
+  if (fileSize == nil || modifiedAt == nil) return nil;
+
+  return @{
+    @"key": [self sha1:fileURL.path],
+    @"size": fileSize,
+    @"modifiedAt": @((long long)(modifiedAt.timeIntervalSince1970 * 1000)),
+  };
+}
+
+- (NSString *)metadataPathForOutputPath:(NSString *)outputPath
+{
+  NSString *directory = outputPath.stringByDeletingLastPathComponent;
+  NSString *baseName = outputPath.lastPathComponent.stringByDeletingPathExtension;
+  return [directory stringByAppendingPathComponent:[NSString stringWithFormat:@"%@.json", baseName]];
+}
+
+- (NSDictionary<NSString *, id> *)cachedPageResultAtPath:(NSString *)outputPath
+                                              pageNumber:(NSInteger)pageNumber
+                                             targetWidth:(NSInteger)targetWidth
+                                       sourceFingerprint:(NSDictionary<NSString *, id> *)sourceFingerprint
+                                               pageCount:(NSNumber *)pageCount
+{
+  NSFileManager *fileManager = [NSFileManager defaultManager];
+  NSString *metadataPath = [self metadataPathForOutputPath:outputPath];
+  if (![fileManager fileExistsAtPath:outputPath] || ![fileManager fileExistsAtPath:metadataPath]) {
+    return nil;
+  }
+
+  NSData *metadataData = [NSData dataWithContentsOfFile:metadataPath];
+  if (metadataData == nil) return nil;
+
+  NSError *jsonError = nil;
+  NSDictionary<NSString *, id> *metadata = [NSJSONSerialization JSONObjectWithData:metadataData options:0 error:&jsonError];
+  if (jsonError != nil || ![metadata isKindOfClass:NSDictionary.class]) return nil;
+
+  if ([metadata[@"version"] integerValue] != BsnPdfCacheMetadataVersion) return nil;
+  if (![metadata[@"kind"] isEqualToString:BsnPdfCacheMetadataKind]) return nil;
+  if ([metadata[@"pageNumber"] integerValue] != pageNumber) return nil;
+  if ([metadata[@"pageCount"] integerValue] <= 0) return nil;
+  if (pageCount != nil && [metadata[@"pageCount"] integerValue] != pageCount.integerValue) return nil;
+  if ([metadata[@"targetWidth"] integerValue] != targetWidth) return nil;
+  if (![self isSourceFingerprintValidInMetadata:metadata
+                              sourceFingerprint:sourceFingerprint
+                               allowLegacyCache:pageCount != nil]) return nil;
+
+  UIImage *image = [UIImage imageWithContentsOfFile:outputPath];
+  if (image == nil) return nil;
+  NSInteger width = (NSInteger)llround(image.size.width * image.scale);
+  NSInteger height = (NSInteger)llround(image.size.height * image.scale);
+  if (width <= 0 || height <= 0) return nil;
+  if (width != [metadata[@"width"] integerValue] || height != [metadata[@"height"] integerValue]) return nil;
+
+  NSMutableDictionary<NSString *, id> *nextMetadata = [metadata mutableCopy];
+  long long now = (long long)(NSDate.date.timeIntervalSince1970 * 1000);
+  nextMetadata[@"lastAccessedAt"] = @(now);
+  if (sourceFingerprint != nil) {
+    nextMetadata[@"sourceKey"] = sourceFingerprint[@"key"];
+    nextMetadata[@"sourceSize"] = sourceFingerprint[@"size"];
+    nextMetadata[@"sourceModifiedAt"] = sourceFingerprint[@"modifiedAt"];
+  }
+  NSData *nextData = [NSJSONSerialization dataWithJSONObject:nextMetadata options:0 error:nil];
+  if (nextData != nil) {
+    [nextData writeToFile:metadataPath atomically:YES];
+  }
+  [fileManager setAttributes:@{ NSFileModificationDate: NSDate.date } ofItemAtPath:outputPath error:nil];
+
+  NSURL *outputURL = [NSURL fileURLWithPath:outputPath];
+  NSDictionary<NSFileAttributeKey, id> *attributes = [fileManager attributesOfItemAtPath:outputPath error:nil];
+  NSDate *modifiedAt = attributes[NSFileModificationDate];
+  NSString *outputUri = [NSString stringWithFormat:@"%@?v=%@", outputURL.absoluteString, @((long long)(modifiedAt.timeIntervalSince1970 * 1000))];
+
+  return @{
+    @"uri": outputUri,
+    @"width": @(width),
+    @"height": @(height),
+    @"pageNumber": @(pageNumber),
+    @"pageCount": metadata[@"pageCount"],
+  };
+}
+
+- (BOOL)isSourceFingerprintValidInMetadata:(NSDictionary<NSString *, id> *)metadata
+                         sourceFingerprint:(NSDictionary<NSString *, id> *)sourceFingerprint
+                          allowLegacyCache:(BOOL)allowLegacyCache
+{
+  if (sourceFingerprint == nil) return YES;
+  if (metadata[@"sourceKey"] == nil && metadata[@"sourceSize"] == nil && metadata[@"sourceModifiedAt"] == nil) {
+    return allowLegacyCache;
+  }
+  return [metadata[@"sourceKey"] isEqualToString:sourceFingerprint[@"key"]]
+    && [metadata[@"sourceSize"] longLongValue] == [sourceFingerprint[@"size"] longLongValue]
+    && [metadata[@"sourceModifiedAt"] longLongValue] == [sourceFingerprint[@"modifiedAt"] longLongValue];
+}
+
+- (void)writeCacheMetadataAtPath:(NSString *)outputPath
+                       pageNumber:(NSInteger)pageNumber
+                        pageCount:(NSInteger)pageCount
+                      targetWidth:(NSInteger)targetWidth
+                            width:(NSInteger)width
+                           height:(NSInteger)height
+                sourceFingerprint:(NSDictionary<NSString *, id> *)sourceFingerprint
+{
+  long long now = (long long)(NSDate.date.timeIntervalSince1970 * 1000);
+  NSMutableDictionary<NSString *, id> *metadata = [@{
+    @"version": @(BsnPdfCacheMetadataVersion),
+    @"kind": BsnPdfCacheMetadataKind,
+    @"pageNumber": @(pageNumber),
+    @"pageCount": @(pageCount),
+    @"targetWidth": @(targetWidth),
+    @"width": @(width),
+    @"height": @(height),
+    @"createdAt": @(now),
+    @"lastAccessedAt": @(now),
+  } mutableCopy];
+  if (sourceFingerprint != nil) {
+    metadata[@"sourceKey"] = sourceFingerprint[@"key"];
+    metadata[@"sourceSize"] = sourceFingerprint[@"size"];
+    metadata[@"sourceModifiedAt"] = sourceFingerprint[@"modifiedAt"];
+  }
+  NSData *data = [NSJSONSerialization dataWithJSONObject:metadata options:0 error:nil];
+  if (data != nil) {
+    [data writeToFile:[self metadataPathForOutputPath:outputPath] atomically:YES];
+  }
+}
+
 - (void)prunePageImageCacheAtDirectory:(NSString *)directoryPath activePath:(NSString *)activePath
 {
   static NSInteger const maxCachedPageImages = 11;
@@ -226,6 +396,7 @@ RCT_EXPORT_METHOD(renderPage:(NSString *)fileUri
       keptCount += 1;
       continue;
     }
+    [fileManager removeItemAtPath:[self metadataPathForOutputPath:path] error:nil];
     [fileManager removeItemAtPath:path error:nil];
   }
 }

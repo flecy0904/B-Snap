@@ -1,6 +1,7 @@
 package com.anonymous.bsnap
 
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Matrix
 import android.graphics.pdf.PdfRenderer
@@ -11,6 +12,7 @@ import com.facebook.react.bridge.Promise
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.net.URLDecoder
@@ -22,6 +24,14 @@ import kotlin.math.roundToInt
 class PdfPageRendererModule(private val reactContext: ReactApplicationContext) :
   ReactContextBaseJavaModule(reactContext) {
 
+  private data class SourceFingerprint(
+    val key: String,
+    val size: Long,
+    val modifiedAt: Long
+  )
+
+  private val cacheMetadataVersion = 1
+  private val cacheMetadataKind = "base"
   private val maxCachedPageImages = 11
 
   override fun getName(): String = "BsnPdfPageRenderer"
@@ -45,11 +55,31 @@ class PdfPageRendererModule(private val reactContext: ReactApplicationContext) :
     var bitmap: Bitmap? = null
 
     try {
+      val outputFile = getOutputFile(fileUri, pageNumber, safeTargetWidth)
+      val sourceFingerprint = getSourceFingerprint(fileUri)
+      val cachedResult = if (sourceFingerprint != null) {
+        readCachedPageResult(outputFile, pageNumber, safeTargetWidth, sourceFingerprint)
+      } else {
+        null
+      }
+      if (cachedResult != null) {
+        prunePageImageCache(outputFile)
+        promise.resolve(cachedResult)
+        return
+      }
+
       descriptor = openPdfDescriptor(fileUri)
       renderer = PdfRenderer(descriptor)
 
       if (pageNumber > renderer.pageCount) {
         promise.reject("PDF_RENDER_PAGE_OUT_OF_RANGE", "PDF pageNumber exceeds page count.")
+        return
+      }
+
+      val fallbackCachedResult = readCachedPageResult(outputFile, pageNumber, safeTargetWidth, sourceFingerprint, renderer.pageCount)
+      if (fallbackCachedResult != null) {
+        prunePageImageCache(outputFile)
+        promise.resolve(fallbackCachedResult)
         return
       }
 
@@ -68,7 +98,6 @@ class PdfPageRendererModule(private val reactContext: ReactApplicationContext) :
       }
       page.render(bitmap, null, renderMatrix, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
 
-      val outputFile = getOutputFile(fileUri, pageNumber, bitmapWidth)
       val temporaryOutputFile = getTemporaryOutputFile(outputFile)
       outputFile.parentFile?.mkdirs()
       temporaryOutputFile.delete()
@@ -84,6 +113,7 @@ class PdfPageRendererModule(private val reactContext: ReactApplicationContext) :
         if (!temporaryOutputFile.renameTo(outputFile)) {
           throw IllegalStateException("Cannot commit cached PDF page image.")
         }
+        writeCacheMetadata(outputFile, pageNumber, renderer.pageCount, bitmapWidth, bitmapHeight, sourceFingerprint)
         prunePageImageCache(outputFile)
       } catch (error: Exception) {
         temporaryOutputFile.delete()
@@ -130,14 +160,130 @@ class PdfPageRendererModule(private val reactContext: ReactApplicationContext) :
     return ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
   }
 
+  private fun getSourceFingerprint(fileUri: String): SourceFingerprint? {
+    val file = getLocalPdfFile(fileUri) ?: return null
+    if (!file.exists()) return null
+    return SourceFingerprint(
+      key = sha1(file.absolutePath),
+      size = file.length(),
+      modifiedAt = file.lastModified()
+    )
+  }
+
+  private fun getLocalPdfFile(fileUri: String): File? {
+    val uri = Uri.parse(fileUri)
+    val path = when (uri.scheme) {
+      "file" -> uri.path
+      null, "" -> fileUri
+      else -> null
+    } ?: return null
+    return File(URLDecoder.decode(path, "UTF-8"))
+  }
+
   private fun getOutputFile(fileUri: String, pageNumber: Int, targetWidth: Int): File {
     val cacheDir = File(reactContext.cacheDir, "bsnap-pdf-pages")
     val key = sha1("$fileUri:$pageNumber:$targetWidth")
     return File(cacheDir, "$key.png")
   }
 
+  private fun getMetadataFile(outputFile: File): File {
+    return File(outputFile.parentFile, "${outputFile.nameWithoutExtension}.json")
+  }
+
   private fun getTemporaryOutputFile(outputFile: File): File {
     return File(outputFile.parentFile, "${outputFile.name}.${UUID.randomUUID()}.tmp")
+  }
+
+  private fun readCachedPageResult(
+    outputFile: File,
+    pageNumber: Int,
+    targetWidth: Int,
+    sourceFingerprint: SourceFingerprint?,
+    expectedPageCount: Int? = null
+  ) = try {
+    val metadataFile = getMetadataFile(outputFile)
+    if (!outputFile.isFile || !metadataFile.isFile) {
+      null
+    } else {
+      val metadata = JSONObject(metadataFile.readText())
+      val valid = metadata.optInt("version") == cacheMetadataVersion
+        && metadata.optString("kind") == cacheMetadataKind
+        && metadata.optInt("pageNumber") == pageNumber
+        && metadata.optInt("pageCount") > 0
+        && metadata.optInt("targetWidth") == targetWidth
+        && (expectedPageCount == null || metadata.optInt("pageCount") == expectedPageCount)
+        && isSourceFingerprintValid(metadata, sourceFingerprint, expectedPageCount != null)
+      if (!valid) {
+        null
+      } else {
+        val bounds = BitmapFactory.Options().apply {
+          inJustDecodeBounds = true
+        }
+        BitmapFactory.decodeFile(outputFile.absolutePath, bounds)
+        val width = bounds.outWidth
+        val height = bounds.outHeight
+        if (width <= 0 || height <= 0 || width != metadata.optInt("width") || height != metadata.optInt("height")) {
+          null
+        } else {
+          val now = System.currentTimeMillis()
+          metadata.put("lastAccessedAt", now)
+          if (sourceFingerprint != null) {
+            metadata.put("sourceKey", sourceFingerprint.key)
+            metadata.put("sourceSize", sourceFingerprint.size)
+            metadata.put("sourceModifiedAt", sourceFingerprint.modifiedAt)
+          }
+          metadataFile.writeText(metadata.toString())
+          outputFile.setLastModified(now)
+          Arguments.createMap().apply {
+            putString("uri", "${Uri.fromFile(outputFile)}?v=${outputFile.lastModified()}")
+            putInt("width", width)
+            putInt("height", height)
+            putInt("pageNumber", pageNumber)
+            putInt("pageCount", metadata.optInt("pageCount"))
+          }
+        }
+      }
+    }
+  } catch (_: Exception) {
+    null
+  }
+
+  private fun isSourceFingerprintValid(metadata: JSONObject, sourceFingerprint: SourceFingerprint?, allowLegacyCache: Boolean): Boolean {
+    if (sourceFingerprint == null) return true
+    if (!metadata.has("sourceKey") && !metadata.has("sourceSize") && !metadata.has("sourceModifiedAt")) {
+      return allowLegacyCache
+    }
+    return metadata.optString("sourceKey") == sourceFingerprint.key
+      && metadata.optLong("sourceSize") == sourceFingerprint.size
+      && metadata.optLong("sourceModifiedAt") == sourceFingerprint.modifiedAt
+  }
+
+  private fun writeCacheMetadata(
+    outputFile: File,
+    pageNumber: Int,
+    pageCount: Int,
+    width: Int,
+    height: Int,
+    sourceFingerprint: SourceFingerprint?
+  ) {
+    val now = System.currentTimeMillis()
+    val metadata = JSONObject().apply {
+      put("version", cacheMetadataVersion)
+      put("kind", cacheMetadataKind)
+      put("pageNumber", pageNumber)
+      put("pageCount", pageCount)
+      put("targetWidth", width)
+      put("width", width)
+      put("height", height)
+      put("createdAt", now)
+      put("lastAccessedAt", now)
+      if (sourceFingerprint != null) {
+        put("sourceKey", sourceFingerprint.key)
+        put("sourceSize", sourceFingerprint.size)
+        put("sourceModifiedAt", sourceFingerprint.modifiedAt)
+      }
+    }
+    getMetadataFile(outputFile).writeText(metadata.toString())
   }
 
   private fun prunePageImageCache(activeOutputFile: File) {
@@ -153,6 +299,7 @@ class PdfPageRendererModule(private val reactContext: ReactApplicationContext) :
       .sortedByDescending { it.lastModified() }
       .drop(maxCachedPageImages - 1)
       .forEach { file ->
+        getMetadataFile(file).delete()
         file.delete()
       }
   }
