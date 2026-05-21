@@ -143,34 +143,73 @@ export function useInkActions(params: {
     return !stroke.pageNumber || stroke.pageNumber === targetPage;
   };
 
+  const interpolateStrokePoint = (start: InkPoint, end: InkPoint, ratio: number): InkPoint => ({
+    x: start.x + (end.x - start.x) * ratio,
+    y: start.y + (end.y - start.y) * ratio,
+    pageNumber: end.pageNumber ?? start.pageNumber,
+    generatedPageId: end.generatedPageId ?? start.generatedPageId,
+    pageWidth: end.pageWidth ?? start.pageWidth,
+    pageHeight: end.pageHeight ?? start.pageHeight,
+  });
+
+  const appendChunkPoint = (chunk: InkPoint[], point: InkPoint) => {
+    const previous = chunk[chunk.length - 1];
+    if (previous && Math.hypot(previous.x - point.x, previous.y - point.y) < 0.75) return;
+    chunk.push(point);
+  };
+
   const splitStrokeByEraser = (stroke: InkStroke, point: InkPoint, radius: number): InkStroke[] | null => {
     if (!isStrokeOnPointPage(stroke, point)) return null;
-    const erased = stroke.points.map((strokePoint, index) => {
+    if (stroke.points.length <= 1) {
+      if (stroke.points[0] && Math.hypot(stroke.points[0].x - point.x, stroke.points[0].y - point.y) <= radius) return [];
+      return null;
+    }
+    if (!stroke.points.some((strokePoint, index) => {
       if (Math.hypot(strokePoint.x - point.x, strokePoint.y - point.y) <= radius) return true;
       const previous = stroke.points[index - 1];
-      if (previous && distanceToSegment(point, previous, strokePoint) <= radius) return true;
-      const next = stroke.points[index + 1];
-      if (next && distanceToSegment(point, strokePoint, next) <= radius) return true;
-      return false;
-    });
+      return Boolean(previous && distanceToSegment(point, previous, strokePoint) <= radius);
+    })) {
+      return null;
+    }
 
-    if (!erased.some(Boolean)) return null;
-
+    let changed = false;
     const chunks: InkPoint[][] = [];
     let currentChunk: InkPoint[] = [];
+
     stroke.points.forEach((strokePoint, index) => {
-      if (erased[index]) {
-        if (currentChunk.length > 1) chunks.push(currentChunk);
-        currentChunk = [];
+      if (index === 0) {
+        if (Math.hypot(strokePoint.x - point.x, strokePoint.y - point.y) > radius) {
+          currentChunk.push(strokePoint);
+        } else {
+          changed = true;
+        }
         return;
       }
-      currentChunk.push(strokePoint);
+
+      const previous = stroke.points[index - 1];
+      const segmentLength = Math.hypot(strokePoint.x - previous.x, strokePoint.y - previous.y);
+      const sampleCount = Math.max(1, Math.ceil(segmentLength / Math.max(3, radius / 2)));
+
+      for (let sampleIndex = 1; sampleIndex <= sampleCount; sampleIndex += 1) {
+        const samplePoint = sampleIndex === sampleCount
+          ? strokePoint
+          : interpolateStrokePoint(previous, strokePoint, sampleIndex / sampleCount);
+        if (Math.hypot(samplePoint.x - point.x, samplePoint.y - point.y) <= radius) {
+          changed = true;
+          if (currentChunk.length > 1) chunks.push(currentChunk);
+          currentChunk = [];
+          continue;
+        }
+        appendChunkPoint(currentChunk, samplePoint);
+      }
     });
     if (currentChunk.length > 1) chunks.push(currentChunk);
+    if (!changed) return null;
 
+    const timestamp = Date.now();
     return chunks.map((chunk, index) => ({
       ...stroke,
-      id: `${stroke.id}-erase-${Date.now()}-${index}`,
+      id: `${stroke.id}-erase-${timestamp}-${index}`,
       points: chunk,
     }));
   };
