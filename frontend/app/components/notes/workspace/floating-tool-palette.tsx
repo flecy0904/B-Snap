@@ -1,139 +1,32 @@
 import React from 'react';
-import { PanResponder, Pressable, ScrollView, Text, View } from 'react-native';
+import { Pressable, ScrollView, Text, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import Svg, { Path } from 'react-native-svg';
-import type { InkBrush, InkBrushSettings, InkLinePattern, InkSelectionMode, InkTool } from '../../../ui-types';
+import type { InkBrushSettings, InkSelectionMode, InkTool } from '../../../ui-types';
 import { useCanvasContext } from '../canvas/canvas-context';
+import { InkSlider } from './ink-slider';
+import {
+  ADVANCED_CONTROLS,
+  BRUSH_LABELS,
+  FAVORITE_HIGHLIGHT_COLORS,
+  FAVORITE_PEN_COLORS,
+  HIGHLIGHT_COLORS,
+  HIGHLIGHT_WIDTHS,
+  LINE_PATTERNS,
+  PEN_BRUSHES,
+  PEN_COLORS,
+  PEN_WIDTHS,
+  PREVIEW_PATH,
+  QUICK_HIGHLIGHT_WIDTHS,
+  QUICK_PEN_WIDTHS,
+  SELECTION_MODES,
+  SHAPE_TOOLS,
+  clamp,
+  isShapeTool,
+  type DetailAnchor,
+  type DetailMode,
+} from './ink-toolbar-options';
 import { useDesktopNotesWorkspaceContext } from './notes-workspace-context';
-
-type DetailMode = 'pen' | 'highlight' | 'shape';
-type DetailAnchor = InkBrush | 'shape' | null;
-
-const SHAPE_TOOLS: Array<{ tool: InkTool; icon: React.ComponentProps<typeof MaterialCommunityIcons>['name'] }> = [
-  { tool: 'line', icon: 'vector-line' },
-  { tool: 'arrow', icon: 'arrow-top-right' },
-  { tool: 'rect', icon: 'rectangle-outline' },
-  { tool: 'ellipse', icon: 'circle-outline' },
-];
-
-const PEN_BRUSHES: Array<{ brush: Exclude<InkBrush, 'highlighter'>; label: string; icon: React.ComponentProps<typeof MaterialCommunityIcons>['name'] }> = [
-  { brush: 'ballpoint', label: '볼펜', icon: 'pencil-outline' },
-  { brush: 'pencil', label: '연필', icon: 'lead-pencil' },
-  { brush: 'marker', label: '마커', icon: 'marker' },
-];
-
-const FAVORITE_PEN_COLORS = ['#111827', '#E11D48', '#2563EB', '#FFFFFF'];
-const FAVORITE_HIGHLIGHT_COLORS = ['#FDE047', '#FB7185', '#86EFAC', '#9FD1EE'];
-const PEN_COLORS = [...FAVORITE_PEN_COLORS, '#F5AFC8', '#8DBA98', '#C4B5FD'];
-const HIGHLIGHT_COLORS = [...FAVORITE_HIGHLIGHT_COLORS, '#FDBA74', '#C4B5FD'];
-const PEN_WIDTHS = [2, 3, 4, 6, 8, 10];
-const HIGHLIGHT_WIDTHS = [10, 12, 16, 20, 24, 30];
-const QUICK_PEN_WIDTHS = [2, 4, 8];
-const QUICK_HIGHLIGHT_WIDTHS = [12, 18, 24];
-const LINE_PATTERNS: Array<{ pattern: InkLinePattern; label: string }> = [
-  { pattern: 'solid', label: '실선' },
-  { pattern: 'dotted', label: '점선' },
-];
-const SELECTION_MODES: Array<{ mode: InkSelectionMode; label: string; icon: React.ComponentProps<typeof MaterialCommunityIcons>['name'] }> = [
-  { mode: 'rect', label: '네모', icon: 'selection-drag' },
-  { mode: 'lasso', label: '올가미', icon: 'lasso' },
-];
-const BRUSH_LABELS: Record<InkBrush, string> = {
-  ballpoint: '볼펜',
-  fountain: '볼펜',
-  pencil: '연필',
-  marker: '마커',
-  highlighter: '형광펜',
-};
-const ADVANCED_CONTROLS: Array<{ key: keyof InkBrushSettings; label: string; hint?: string }> = [
-  { key: 'stability', label: '손떨림 보정', hint: '낮으면 펜슬 움직임 그대로, 높으면 선이 더 매끈해져요.' },
-  { key: 'sharpness', label: '끝 처리' },
-  { key: 'pressure', label: '압력 반응' },
-  { key: 'density', label: '농도' },
-];
-const PREVIEW_PATH = 'M 22 50 C 72 18 116 22 154 50 S 218 58 238 28';
-
-function isShapeTool(tool: InkTool) {
-  return tool === 'line' || tool === 'arrow' || tool === 'rect' || tool === 'ellipse';
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, value));
-}
-
-function snapValue(value: number, min: number, max: number, step: number) {
-  return clamp(Math.round((value - min) / step) * step + min, min, max);
-}
-
-function InkSlider(props: {
-  value: number;
-  min: number;
-  max: number;
-  step: number;
-  accent?: string;
-  onChange: (value: number) => void;
-}) {
-  const trackRef = React.useRef<View>(null);
-  const trackLeftRef = React.useRef(0);
-  const trackWidthRef = React.useRef(1);
-  const accent = props.accent ?? '#1684FF';
-  const percent = ((props.value - props.min) / Math.max(1, props.max - props.min)) * 100;
-
-  const measureTrack = React.useCallback((afterMeasure?: () => void) => {
-    trackRef.current?.measureInWindow((x, _y, width) => {
-      trackLeftRef.current = x;
-      trackWidthRef.current = Math.max(1, width);
-      afterMeasure?.();
-    });
-  }, []);
-
-  const setFromPageX = React.useCallback((pageX: number) => {
-    const ratio = clamp((pageX - trackLeftRef.current) / trackWidthRef.current, 0, 1);
-    const next = props.min + ratio * (props.max - props.min);
-    props.onChange(snapValue(next, props.min, props.max, props.step));
-  }, [props]);
-
-  const panResponder = React.useMemo(() => PanResponder.create({
-    onStartShouldSetPanResponder: () => true,
-    onMoveShouldSetPanResponder: () => true,
-    onPanResponderGrant: (event) => {
-      const pageX = event.nativeEvent.pageX;
-      measureTrack(() => setFromPageX(pageX));
-    },
-    onPanResponderMove: (_event, gesture) => setFromPageX(gesture.moveX),
-  }), [measureTrack, setFromPageX]);
-
-  return (
-    <View
-      ref={trackRef}
-      style={{ flex: 1, height: 28, justifyContent: 'center' }}
-      onLayout={() => measureTrack()}
-      {...panResponder.panHandlers}
-    >
-      <View style={{ height: 8, borderRadius: 99, backgroundColor: '#E6E7EA', overflow: 'hidden' }}>
-        <View style={{ height: 8, borderRadius: 99, width: `${clamp(percent, 0, 100)}%`, backgroundColor: accent }} />
-      </View>
-      <View
-        style={{
-          position: 'absolute',
-          left: `${clamp(percent, 0, 100)}%`,
-          marginLeft: -11,
-          width: 22,
-          height: 22,
-          borderRadius: 99,
-          backgroundColor: '#FFFFFF',
-          borderWidth: 1,
-          borderColor: '#DCE3EF',
-          shadowColor: '#64748B',
-          shadowOpacity: 0.16,
-          shadowRadius: 6,
-          shadowOffset: { width: 0, height: 3 },
-          elevation: 4,
-        }}
-      />
-    </View>
-  );
-}
 
 export function FloatingToolPalette() {
   const workspaceContext = useDesktopNotesWorkspaceContext();
@@ -176,7 +69,7 @@ export function FloatingToolPalette() {
   }, [workspaceContext]);
 
   const setBrushSetting = (key: keyof InkBrushSettings, value: number) => {
-    canvasContext.setBrushSettings({ [key]: Math.max(0, Math.min(100, value)) });
+    canvasContext.setBrushSettings({ [key]: clamp(value, 0, 100) });
   };
 
   const activatePrimaryPen = () => {
