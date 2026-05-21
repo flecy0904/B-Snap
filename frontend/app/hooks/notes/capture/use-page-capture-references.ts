@@ -40,6 +40,7 @@ type PageCaptureReferenceActionsParams = {
   requestAiAnswerForQuestion: (question: string, options?: {
     selectionImageUri?: string | null;
     pageNumber?: number | null;
+    source?: 'general' | 'selection' | 'photo' | 'class-insight';
   }) => Promise<void>;
 };
 
@@ -287,6 +288,7 @@ export function usePageCaptureReferenceActions(params: PageCaptureReferenceActio
     void params.requestAiAnswerForQuestion(question, {
       pageNumber: reference.page.kind === 'pdf' ? reference.page.pageNumber : params.currentPdfPage,
       selectionImageUri: referenceImageUri,
+      source: 'photo',
     });
     params.setWorkspaceFeedback('연결 자료로 AI 채팅을 시작했습니다.');
   }, [params, prepareAiQuestionForPageCaptureReference]);

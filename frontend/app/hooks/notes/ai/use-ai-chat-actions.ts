@@ -17,6 +17,7 @@ import { buildAiChatTitle } from './ai-chat-title';
 import { getAiBackendErrorMessage } from './ai-errors';
 
 type SetState<T> = Dispatch<SetStateAction<T>>;
+type AiQuestionSource = 'general' | 'selection' | 'photo' | 'class-insight';
 
 function isCanvasEditIntent(question: string) {
   const lowerQuestion = question.toLowerCase();
@@ -312,6 +313,7 @@ export function useAiChatActions(params: {
     question?: string;
     selectionImageUri?: string | null;
     pageNumber?: number | null;
+    source?: AiQuestionSource;
   }) => {
     if (!params.studyDocumentId) return;
     if (params.aiChatReadOnly) {
@@ -322,9 +324,13 @@ export function useAiChatActions(params: {
     const selectionRect = params.selectionRect;
     const hasSelection = Boolean(selectionRect || params.selectionPreviewUri);
     const selectionPreviewUri = override?.selectionImageUri ?? params.selectionPreviewUri;
-    const shouldHideSelectionAttachment = Boolean(selectionRect || params.selectionPreviewUri);
+    const requestSource: AiQuestionSource = override?.source
+      ?? (hasSelection ? 'selection' : selectionPreviewUri ? 'photo' : 'general');
+    const shouldHideSelectionAttachment = requestSource === 'selection';
     const question = override?.question?.trim() || params.aiQuestion.trim() || (hasSelection ? '선택한 영역을 설명해줘' : '현재 페이지를 요약해줘');
-    const contextHint = params.buildContextHint?.(question) ?? null;
+    const contextHint = requestSource === 'general' || requestSource === 'class-insight'
+      ? params.buildContextHint?.(question) ?? null
+      : null;
     params.setAiLoading(true);
     params.setAiError(null);
     params.setAiQuestion('');
@@ -462,10 +468,12 @@ export function useAiChatActions(params: {
   const requestAiAnswerForQuestion = async (question: string, options?: {
     selectionImageUri?: string | null;
     pageNumber?: number | null;
+    source?: AiQuestionSource;
   }) => requestAiAnswerInternal({
     question,
     selectionImageUri: options?.selectionImageUri ?? null,
     pageNumber: options?.pageNumber ?? params.currentPageNumber,
+    source: options?.source,
   });
 
   return {

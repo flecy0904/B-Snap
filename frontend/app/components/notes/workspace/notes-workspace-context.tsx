@@ -2,7 +2,7 @@ import React from 'react';
 import type { BackendChatMessage, BackendChatSession, BackendClassInsight } from '../../../services/backend-api';
 import type { UseAiCanvasNotesResult } from '../../../hooks/notes/ai-canvas/use-ai-canvas-notes';
 import { AiAnswer, NoteSummarySection, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NotebookPage, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../../types';
-import { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
+import { InkBrush, InkBrushSettings, InkEraserMode, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { CanvasProvider } from '../canvas/canvas-context';
 import { DocumentProvider } from './document-context';
 import { NavigationProvider } from './navigation-context';
@@ -38,6 +38,7 @@ export type DesktopNotesWorkspaceContextValue = {
   penWidth: number;
   brushType: InkBrush;
   linePattern: InkLinePattern;
+  eraserMode: InkEraserMode;
   selectionMode: InkSelectionMode;
   brushSettings: InkBrushSettings;
   inkStrokes: InkStroke[];
@@ -106,6 +107,7 @@ export type DesktopNotesWorkspaceContextValue = {
   onChangePenWidth: (width: number) => void;
   onChangeBrushType: (brush: InkBrush) => void;
   onChangeLinePattern: (pattern: InkLinePattern) => void;
+  onChangeEraserMode: (mode: InkEraserMode) => void;
   onChangeSelectionMode: (mode: InkSelectionMode) => void;
   onChangeBrushSettings: (settings: Partial<InkBrushSettings>) => void;
   onUndoInk: () => void;
@@ -149,7 +151,7 @@ export type DesktopNotesWorkspaceContextValue = {
   onRemoveTextAnnotation: (id: string) => void;
   onMoveTextAnnotation: (id: string, x: number, y: number) => void;
   onResizeTextAnnotation: (id: string, width: number, height: number) => void;
-  onEraseInkAtPoint: (point: InkPoint, radius: number, snapshot?: boolean) => boolean;
+  onEraseInkAtPoint: (point: InkPoint, radius: number, snapshot?: boolean, mode?: InkEraserMode) => boolean;
   onSelectionChange: (rect: SelectionRect | null) => void;
   onSelectionPreviewChange: (uri: string | null) => void;
   onClearSelection: () => void;

@@ -2,7 +2,7 @@ import React from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import Svg, { Path } from 'react-native-svg';
-import type { InkBrushSettings, InkSelectionMode, InkTool } from '../../../ui-types';
+import type { InkBrushSettings, InkEraserMode, InkSelectionMode, InkTool } from '../../../ui-types';
 import { useCanvasContext } from '../canvas/canvas-context';
 import { InkSlider } from './ink-slider';
 import {
@@ -37,6 +37,7 @@ export function FloatingToolPalette() {
   const [advancedOpen, setAdvancedOpen] = React.useState(false);
   const [colorLibraryOpen, setColorLibraryOpen] = React.useState(false);
   const [selectionModeOpen, setSelectionModeOpen] = React.useState(false);
+  const [eraserModeOpen, setEraserModeOpen] = React.useState(false);
 
   React.useEffect(() => {
     setDetailMode('pen');
@@ -45,6 +46,7 @@ export function FloatingToolPalette() {
     setAdvancedOpen(false);
     setColorLibraryOpen(false);
     setSelectionModeOpen(false);
+    setEraserModeOpen(false);
   }, [workspaceContext.studyDocumentId]);
 
   React.useEffect(() => {
@@ -57,6 +59,7 @@ export function FloatingToolPalette() {
     setAdvancedOpen(false);
     setColorLibraryOpen(false);
     setSelectionModeOpen(false);
+    setEraserModeOpen(false);
   }, []);
 
   const openDetail = React.useCallback((mode: DetailMode, anchor: DetailAnchor) => {
@@ -64,6 +67,7 @@ export function FloatingToolPalette() {
     setDetailAnchor(anchor);
     setDetailOpen(true);
     setSelectionModeOpen(false);
+    setEraserModeOpen(false);
     setColorLibraryOpen(false);
     workspaceContext.setPageListOpen(false);
   }, [workspaceContext]);
@@ -103,6 +107,11 @@ export function FloatingToolPalette() {
     setSelectionModeOpen(false);
   };
 
+  const chooseEraserMode = (mode: InkEraserMode) => {
+    canvasContext.setEraserMode(mode);
+    setEraserModeOpen(false);
+  };
+
   const activateHighlight = () => {
     const alreadyActive = canvasContext.inkTool === 'highlight';
     canvasContext.setBrushType('highlighter');
@@ -120,6 +129,14 @@ export function FloatingToolPalette() {
   const activateTool = (tool: InkTool) => {
     if (tool === 'highlight') {
       activateHighlight();
+      return;
+    }
+    if (tool === 'erase') {
+      const alreadyActive = canvasContext.inkTool === 'erase';
+      canvasContext.setInkTool('erase');
+      closeDetail();
+      setEraserModeOpen(alreadyActive ? (current) => !current : true);
+      workspaceContext.setPageListOpen(false);
       return;
     }
     if (isShapeTool(tool)) {
@@ -388,9 +405,10 @@ export function FloatingToolPalette() {
 
   return (
     <View pointerEvents="box-none" style={workspaceContext.styles.fixedInkToolbarWrap}>
-      {detailOpen || selectionModeOpen ? <Pressable style={workspaceContext.styles.fixedInkDismissLayer} onPress={() => {
+      {detailOpen || selectionModeOpen || eraserModeOpen ? <Pressable style={workspaceContext.styles.fixedInkDismissLayer} onPress={() => {
         closeDetail();
         setSelectionModeOpen(false);
+        setEraserModeOpen(false);
       }} /> : null}
       <View style={workspaceContext.styles.fixedInkToolbar}>
         <View style={workspaceContext.styles.fixedInkToolbarContent}>
@@ -414,7 +432,34 @@ export function FloatingToolPalette() {
             </Pressable>
             {detailOpen && detailAnchor === 'highlighter' ? renderDetailPopover() : null}
           </View>
-          {renderToolButton('erase', 'erase', 'eraser-variant')}
+          <View style={workspaceContext.styles.fixedInkToolAnchor}>
+            <Pressable
+              style={[workspaceContext.styles.fixedInkToolButton, canvasContext.inkTool === 'erase' && workspaceContext.styles.fixedInkToolButtonActive]}
+              onPress={() => activateTool('erase')}
+            >
+              <MaterialCommunityIcons name={canvasContext.eraserMode === 'stroke' ? 'eraser' : 'eraser-variant'} size={20} color={canvasContext.inkTool === 'erase' ? '#2563EB' : '#334155'} />
+            </Pressable>
+            {eraserModeOpen ? (
+              <View style={workspaceContext.styles.fixedSelectionModePopover}>
+                {([
+                  { mode: 'partial' as InkEraserMode, icon: 'eraser-variant' as const, label: '부분' },
+                  { mode: 'stroke' as InkEraserMode, icon: 'gesture-tap' as const, label: '획' },
+                ]).map((item) => {
+                  const active = canvasContext.eraserMode === item.mode;
+                  return (
+                    <Pressable
+                      key={item.mode}
+                      style={[workspaceContext.styles.selectionModeChoice, active && workspaceContext.styles.selectionModeChoiceActive]}
+                      onPress={() => chooseEraserMode(item.mode)}
+                    >
+                      <MaterialCommunityIcons name={item.icon} size={18} color={active ? '#2563EB' : '#475569'} />
+                      <Text style={[workspaceContext.styles.selectionModeChoiceText, active && workspaceContext.styles.selectionModeChoiceTextActive]}>{item.label}</Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            ) : null}
+          </View>
           <View style={workspaceContext.styles.fixedInkToolAnchor}>
             <Pressable
               style={[workspaceContext.styles.fixedInkToolButton, canvasContext.inkTool === 'select' && workspaceContext.styles.fixedInkToolButtonActive]}
@@ -473,52 +518,6 @@ export function FloatingToolPalette() {
         </View>
       </View>
 
-      {canvasContext.selectionRect ? (
-        <View style={workspaceContext.styles.fixedSelectionShelf}>
-          <View style={workspaceContext.styles.selectionActionHeader}>
-            <View>
-              <Text style={workspaceContext.styles.selectionActionTitle}>선택 영역</Text>
-              <Text style={workspaceContext.styles.selectionActionMeta}>
-                {canvasContext.selectionRect.mode === 'lasso' ? '올가미 선택' : '네모 선택'}
-              </Text>
-            </View>
-            <Pressable style={workspaceContext.styles.floatingSelectionButton} onPress={canvasContext.clearCurrentSelection}>
-              <MaterialCommunityIcons name="close" size={16} color="#64748B" />
-            </Pressable>
-          </View>
-          <View style={workspaceContext.styles.selectionActionRow}>
-            <Pressable
-              style={[workspaceContext.styles.selectionActionButton, workspaceContext.styles.selectionActionPrimary]}
-              onPress={workspaceContext.onAskAiAboutSelection}
-            >
-              <MaterialCommunityIcons name="star-four-points" size={15} color="#FFFFFF" />
-              <Text style={workspaceContext.styles.selectionActionPrimaryText}>AI</Text>
-            </Pressable>
-            <Pressable style={workspaceContext.styles.selectionActionButton} onPress={canvasContext.duplicateSelectedStrokes}>
-              <MaterialCommunityIcons name="content-copy" size={15} color="#455062" />
-              <Text style={workspaceContext.styles.selectionActionButtonText}>복제</Text>
-            </Pressable>
-            <Pressable
-              style={[workspaceContext.styles.selectionActionButton, workspaceContext.styles.selectionActionDanger]}
-              onPress={canvasContext.deleteSelectedStrokes}
-            >
-              <MaterialCommunityIcons name="delete-outline" size={15} color="#DC2626" />
-              <Text style={workspaceContext.styles.selectionActionDangerText}>삭제</Text>
-            </Pressable>
-          </View>
-          <View style={workspaceContext.styles.selectionActionColors}>
-            {PEN_COLORS.slice(0, 5).map((color) => (
-              <Pressable
-                key={color}
-                style={workspaceContext.styles.floatingSelectionColorButton}
-                onPress={() => canvasContext.changeSelectedStrokesColor(color)}
-              >
-                <View style={[workspaceContext.styles.floatingSelectionColorDot, { backgroundColor: color }]} />
-              </Pressable>
-            ))}
-          </View>
-        </View>
-      ) : null}
     </View>
   );
 }

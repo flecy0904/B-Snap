@@ -3,6 +3,7 @@ export type InkTool = 'view' | 'pen' | 'highlight' | 'erase' | 'select' | 'text'
 export type InkBrush = 'ballpoint' | 'fountain' | 'pencil' | 'marker' | 'highlighter';
 export type InkLinePattern = 'solid' | 'dotted' | 'dashed';
 export type InkSelectionMode = 'rect' | 'lasso';
+export type InkEraserMode = 'partial' | 'stroke';
 export type InkBrushSettings = {
   stability: number;
   sharpness: number;
@@ -33,6 +34,7 @@ export type InkTextAnnotation = {
   y: number;
   width: number;
   height?: number;
+  color?: string;
   text: string;
   anchorRect?: SelectionRect | null;
 } & InkPageSize;

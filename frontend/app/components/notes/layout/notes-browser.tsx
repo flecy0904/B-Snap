@@ -7,9 +7,9 @@ import { cleanAiDisplayText, darkenHex } from '../../../ui-helpers';
 import { PhotoViewerLinkPanel } from './photo-viewer-link-panel';
 import {
   formatCaptureDate,
+  getCaptureLibraryContextLabel,
   getCaptureImageSource,
   getCaptureOriginalImageSource,
-  getCapturePlacementLabel,
   getCaptureReferences,
 } from '../shared/capture-assets';
 
@@ -216,8 +216,8 @@ export function NotesBrowser(props: NotesBrowserProps) {
                 <View style={props.styles.photoGalleryGrid}>
                   {selectedPhotoAssets.map((asset) => {
                     const imageSource = getCaptureImageSource(asset);
-                    const placementLabel = getCapturePlacementLabel(asset, props.pageCaptureReferences);
-                    const linked = placementLabel !== '미연결';
+                    const contextLabel = getCaptureLibraryContextLabel(asset, props.pageCaptureReferences, props.allStudyDocuments);
+                    const linked = contextLabel !== '연결된 PDF 없음';
                     return (
                       <Pressable key={asset.id} style={props.styles.photoGalleryCard} onPress={() => setPreviewAssetId(asset.id)}>
                         <View style={props.styles.photoGalleryImageWrap}>
@@ -228,18 +228,13 @@ export function NotesBrowser(props: NotesBrowserProps) {
                               <MaterialCommunityIcons name="image-outline" size={28} color="#9AA6B8" />
                             </View>
                           )}
-                          <View style={[props.styles.photoGalleryStatusBadge, linked && props.styles.photoGalleryStatusBadgeLinked]}>
-                            <Text style={[props.styles.photoGalleryStatusBadgeText, linked && props.styles.photoGalleryStatusBadgeTextLinked]}>
-                              {linked ? '연결됨' : '미연결'}
-                            </Text>
-                          </View>
                         </View>
                         <View style={props.styles.photoGalleryCardBody}>
                           <Text style={props.styles.photoGalleryCardMeta} numberOfLines={1}>{formatCaptureDate(asset.createdAt)}</Text>
                           <View style={props.styles.photoGalleryPlacementRow}>
                             <MaterialCommunityIcons name={linked ? 'file-link-outline' : 'link-off'} size={14} color={linked ? '#4F68D2' : '#9AA3B2'} />
                             <Text style={[props.styles.photoGalleryPlacementText, linked && props.styles.photoGalleryPlacementTextLinked]} numberOfLines={1}>
-                              {placementLabel}
+                              {contextLabel}
                             </Text>
                           </View>
                         </View>
