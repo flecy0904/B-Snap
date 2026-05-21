@@ -1,19 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
-import { FlatList, Image, NativeScrollEvent, NativeSyntheticEvent, Pressable, Text, useWindowDimensions, View } from 'react-native';
-import { MaterialCommunityIcons } from '@expo/vector-icons';
+import { FlatList, Image, NativeScrollEvent, NativeSyntheticEvent, Text, useWindowDimensions, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { runOnJS } from 'react-native-reanimated';
-import Svg, { Path } from 'react-native-svg';
 import { captureRef } from 'react-native-view-shot';
-import { InkPath } from '../canvas/ink-path';
-import { TextAnnotationLayer } from '../canvas/text-annotation-layer';
-import { SelectionContextMenu } from '../canvas/selection-context-menu';
-import { PencilHoverQuickPalette } from '../canvas/pencil-hover-quick-palette';
+import { PencilHoverOverlay } from '../canvas/pencil-hover-overlay';
 import { getPencilEraserRadius, getPencilHoverPoint, getPencilHoverSize, getPencilHoverToolLabel, isStylusHoverEvent, shouldPreviewPencilHover, type PencilHoverPoint } from '../canvas/native-pencil-hover';
 import { shouldActivateNativeInkGesture, type NativeGestureStateManager, type NativeInkGestureEvent, type NativeInkTouchEvent } from '../canvas/native-ink-gesture-policy';
-import { getCaptureOriginalImageSource, getPageCaptureReferenceImageSource } from '../shared/capture-assets';
-import { cleanAiDisplayText, doesRectIntersectPolygon, finalizeInkStroke, findHitInkStrokeId, findInkStrokesInLasso, findInkStrokesInRect, isDrawingTool, isPointInSelectionShape, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize, shouldAppendInkPoint } from '../../../ui-helpers';
+import { PdfInkLayers } from './pdf-ink-layers.native';
+import { NotebookPaperBackground, PdfIncomingCapturePopover, PdfPageReferenceCluster, PdfPageReferencePopover } from './pdf-page-popovers.native';
+import { finalizeInkStroke, findHitInkStrokeId, isDrawingTool, isPointInSelectionShape, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize, shouldAppendInkPoint } from '../../../ui-helpers';
 import { InkBrush, InkBrushSettings, InkEraserMode, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { CaptureAsset, NotebookPage, PageCaptureReference } from '../../../types';
 import { renderPdfPageToImage, type PdfRenderSource, type RenderedPdfPage } from '../../../services/pdf-page-renderer';
@@ -45,83 +41,6 @@ function isPdfPageNearCurrent(page: NotebookPage, currentPageNumber: number) {
   return page.kind === 'pdf'
     && typeof page.pageNumber === 'number'
     && Math.abs(page.pageNumber - currentPageNumber) <= PDF_RENDER_PAGE_RADIUS;
-}
-
-function getCaptureAssetSummary(asset: CaptureAsset | null | undefined) {
-  if (!asset) return '';
-  return cleanAiDisplayText(asset.analysisSummary || asset.summary);
-}
-
-function NotebookPaperBackground({ page }: { page: NotebookPage }) {
-  const isSummary = page.kind === 'summary';
-
-  if (!isSummary) {
-    return (
-      <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#FFFFFF' }}>
-        <View style={{ position: 'absolute', top: 0, left: 0, right: 0, height: 1, backgroundColor: '#F2F5FA' }} />
-      </View>
-    );
-  }
-
-  const lines = Array.from({ length: 24 }, (_, index) => index);
-
-  return (
-    <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: '#FFFDF8' }}>
-      <View style={{ position: 'absolute', top: 0, left: 0, bottom: 0, width: 42, backgroundColor: '#FFF4E0', borderRightWidth: 1, borderRightColor: '#F0E5D2' }} />
-      {lines.map((line) => (
-        <View
-          key={line}
-          style={{
-            position: 'absolute',
-            left: 58,
-            right: 40,
-            top: 82 + line * 34,
-            height: 1,
-            backgroundColor: '#F0E5D2',
-          }}
-        />
-      ))}
-      <Text style={{ position: 'absolute', top: 30, left: 58, fontSize: 13, fontWeight: '900', color: '#B7791F' }}>
-        AI 정리 페이지
-      </Text>
-    </View>
-  );
-}
-
-function AdaptiveReferenceImage(props: {
-  source: any;
-  frameStyle: any;
-  imageStyle: any;
-  minHeight?: number;
-  maxHeight?: number;
-}) {
-  const [frameWidth, setFrameWidth] = useState(0);
-  const [aspectRatio, setAspectRatio] = useState<number | null>(null);
-  const minHeight = props.minHeight ?? 220;
-  const maxHeight = props.maxHeight ?? 430;
-  const dynamicHeight = frameWidth > 0 && aspectRatio
-    ? Math.round(Math.max(minHeight, Math.min(maxHeight, frameWidth / aspectRatio)))
-    : undefined;
-
-  return (
-    <View
-      style={[props.frameStyle, dynamicHeight ? { height: dynamicHeight } : null]}
-      onLayout={(event) => setFrameWidth(Math.round(event.nativeEvent.layout.width))}
-    >
-      <Image
-        source={props.source}
-        style={props.imageStyle}
-        resizeMode="contain"
-        fadeDuration={0}
-        onLoad={(event) => {
-          const source = (event.nativeEvent as any)?.source ?? {};
-          const width = Number(source.width);
-          const height = Number(source.height);
-          if (width > 0 && height > 0) setAspectRatio(width / height);
-        }}
-      />
-    </View>
-  );
 }
 
 function getResizeCorner(rect: SelectionRect | null, point: InkPoint): ResizeCorner | null {
@@ -186,104 +105,6 @@ function getSelectionRectFromDrag(origin: InkPoint, point: InkPoint): SelectionR
     pageWidth: point.pageWidth,
     pageHeight: point.pageHeight,
   };
-}
-
-function getLassoPath(points: InkPoint[]) {
-  if (!points.length) return '';
-  return points
-    .map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`)
-    .join(' ');
-}
-
-function SelectionOverlay(props: { rect: SelectionRect; styles: any; draft?: boolean }) {
-  const handleOffset = -7;
-  const lassoPath = props.rect.path && props.rect.path.length > 2 ? getLassoPath(props.rect.path) : '';
-  if (props.rect.mode === 'lasso') {
-    if (!lassoPath) return null;
-    return (
-      <Svg width="100%" height="100%" pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0 }}>
-        <Path
-          d={`${lassoPath} Z`}
-          fill="rgba(78, 141, 255, 0.06)"
-          stroke="none"
-        />
-        <Path
-          d={lassoPath}
-          fill="none"
-          stroke="#2563EB"
-          strokeWidth={2}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeDasharray="7 5"
-          opacity={props.draft ? 0.88 : 0.96}
-        />
-      </Svg>
-    );
-  }
-
-  return (
-    <View pointerEvents="none" style={[props.styles.selectionOverlayRect, props.draft && props.styles.selectionOverlayDraft, { left: props.rect.x, top: props.rect.y, width: props.rect.width, height: props.rect.height }]}>
-      {(['nw', 'ne', 'sw', 'se'] as const).map((corner) => (
-        <View
-          key={corner}
-          style={[
-            props.styles.selectionResizeHandle,
-            {
-              left: corner === 'nw' || corner === 'sw' ? handleOffset : props.rect.width + handleOffset,
-              top: corner === 'nw' || corner === 'ne' ? handleOffset : props.rect.height + handleOffset,
-            },
-          ]}
-        />
-      ))}
-    </View>
-  );
-}
-
-function SelectionLassoOverlay(props: { points: InkPoint[] }) {
-  if (props.points.length < 2) return null;
-  return (
-    <Svg width="100%" height="100%" pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0 }}>
-      <Path
-        d={getLassoPath(props.points)}
-        fill="none"
-        stroke="#2563EB"
-        strokeWidth={2}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeDasharray="7 5"
-        opacity={0.9}
-      />
-    </Svg>
-  );
-}
-
-function getTextAnnotationRect(annotation: InkTextAnnotation): SelectionRect {
-  return annotation.anchorRect ?? {
-    x: annotation.x,
-    y: annotation.y,
-    width: annotation.width,
-    height: annotation.height ?? 96,
-    pageWidth: annotation.pageWidth,
-    pageHeight: annotation.pageHeight,
-  };
-}
-
-function getSelectedObjectCountForView(strokes: InkStroke[], textAnnotations: InkTextAnnotation[], selection: SelectionRect) {
-  const selectedStrokeIds = selection.path && selection.path.length > 2
-    ? findInkStrokesInLasso(strokes, selection.path)
-    : findInkStrokesInRect(strokes, selection);
-  const selectedTextCount = textAnnotations.filter((annotation) => {
-    const rect = getTextAnnotationRect(annotation);
-    return selection.path && selection.path.length > 2
-      ? doesRectIntersectPolygon(rect, selection.path)
-      : (
-          rect.x <= selection.x + selection.width
-          && rect.x + rect.width >= selection.x
-          && rect.y <= selection.y + selection.height
-          && rect.y + rect.height >= selection.y
-        );
-  }).length;
-  return selectedStrokeIds.length + selectedTextCount;
 }
 
 export function PdfPreview(props: {
@@ -811,67 +632,6 @@ export function PdfPreview(props: {
     listRef.current?.scrollToIndex({ index: currentIndex, animated: false });
   }, [props.activeGeneratedPageId, props.page, pageItems]);
 
-  const renderInkLayers = (page: NotebookPage, pageStrokes: InkStroke[], pageTextAnnotations: InkTextAnnotation[], currentPage: boolean) => {
-    const selectionForView = currentPage ? scaleSelectionRectToPageSize(props.selectionRect, viewerWidth, viewerHeight) : null;
-    const selectedObjectCount = selectionForView
-      ? getSelectedObjectCountForView(pageStrokes, pageTextAnnotations, selectionForView)
-      : 0;
-    const pageKey = getNotebookPageKey(page);
-    const draftForView = draftSelectionPageKey === pageKey ? draftSelection : null;
-    const draftLassoForView = draftSelectionPageKey === pageKey ? draftSelectionPath : [];
-    const draftRectForView = draftForView?.mode === 'lasso' ? null : draftForView;
-    const hasHighlight = pageStrokes.some((stroke) => stroke.style === 'highlight') || ((page.generatedPageId ? currentStroke?.generatedPageId === page.generatedPageId : currentStroke?.pageNumber === page.pageNumber) && currentStroke?.style === 'highlight');
-    const hasInk = pageStrokes.some((stroke) => stroke.style !== 'highlight') || ((page.generatedPageId ? currentStroke?.generatedPageId === page.generatedPageId : currentStroke?.pageNumber === page.pageNumber) && currentStroke?.style !== 'highlight' && currentStroke);
-    const hasTextAnnotations = pageTextAnnotations.length > 0;
-    if (!hasHighlight && !hasInk && !hasTextAnnotations && !selectionForView && !draftForView && draftLassoForView.length < 2) return null;
-
-    return (
-      <>
-        {hasHighlight ? (
-          <Svg width="100%" height="100%" pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0 }}>
-            {pageStrokes.filter((stroke) => stroke.style === 'highlight').map((stroke) => <InkPath key={stroke.id} stroke={stroke} />)}
-            {(page.generatedPageId ? currentStroke?.generatedPageId === page.generatedPageId : currentStroke?.pageNumber === page.pageNumber) && currentStroke?.style === 'highlight' ? <InkPath stroke={currentStroke} draft /> : null}
-          </Svg>
-        ) : null}
-
-        {hasTextAnnotations ? (
-          <TextAnnotationLayer
-            annotations={pageTextAnnotations}
-            styles={props.styles}
-            onChangeText={props.onUpdateTextAnnotation}
-            onMove={props.onMoveTextAnnotation}
-            onResize={props.onResizeTextAnnotation}
-            onRemove={props.onRemoveTextAnnotation}
-            variant={props.textAnnotationVariant}
-          />
-        ) : null}
-
-        {hasInk ? (
-          <Svg width="100%" height="100%" pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0 }}>
-            {pageStrokes.filter((stroke) => stroke.style !== 'highlight').map((stroke) => <InkPath key={stroke.id} stroke={stroke} />)}
-            {(page.generatedPageId ? currentStroke?.generatedPageId === page.generatedPageId : currentStroke?.pageNumber === page.pageNumber) && currentStroke?.style !== 'highlight' && currentStroke ? <InkPath stroke={currentStroke} draft /> : null}
-          </Svg>
-        ) : null}
-
-        {!capturingSelection && !draftForView && selectionForView ? <SelectionOverlay rect={selectionForView} styles={props.styles} /> : null}
-        {!capturingSelection && !draftForView && currentPage && selectionForView && selectedObjectCount > 0 ? (
-          <SelectionContextMenu
-            rect={selectionForView}
-            pageWidth={viewerWidth}
-            pageHeight={viewerHeight}
-            styles={props.styles}
-            onAskAi={props.onAskAiAboutSelection}
-            onDuplicate={props.onDuplicateSelection}
-            onDelete={props.onDeleteSelection}
-            onChangeColor={props.onChangeSelectedStrokesColor}
-          />
-        ) : null}
-        {!capturingSelection && draftLassoForView.length > 1 ? <SelectionLassoOverlay points={draftLassoForView} /> : null}
-        {!capturingSelection && draftRectForView ? <SelectionOverlay rect={draftRectForView} styles={props.styles} draft /> : null}
-      </>
-    );
-  };
-
   const renderPage = (page: NotebookPage) => {
     const currentPage = isCurrentNotebookPage(page);
     const pageKey = getNotebookPageKey(page);
@@ -886,12 +646,7 @@ export function PdfPreview(props: {
     const pageReferences = shouldRenderInteractiveLayers ? getPageCaptureReferences(page) : [];
     const activePageReference = pageReferences.find((reference) => reference.id === openReferenceId) ?? null;
     const activeReferenceIndex = activePageReference ? pageReferences.findIndex((reference) => reference.id === activePageReference.id) : -1;
-    const activeReferenceImage = activePageReference ? getPageCaptureReferenceImageSource(activePageReference) : null;
-    const imageReferenceCount = pageReferences.filter((reference) => reference.type === 'image').length;
-    const referenceButtonLabel = imageReferenceCount > 0 ? `사진 ${imageReferenceCount}` : `자료 ${pageReferences.length}`;
     const incomingAsset = currentPage ? props.incomingAssetSuggestion : null;
-    const incomingAssetImage = incomingAsset ? getCaptureOriginalImageSource(incomingAsset) : null;
-    const incomingAssetSummary = getCaptureAssetSummary(incomingAsset);
     const eraseAtPoint = (point: InkPoint) => {
       const radius = getPencilEraserRadius(props.penWidth, props.eraserMode ?? 'partial');
       if (props.onEraseInkAtPoint) {
@@ -1232,174 +987,73 @@ export function PdfPreview(props: {
           <NotebookPaperBackground page={page} />
         )}
 
-        {shouldRenderInteractiveLayers ? renderInkLayers(page, pageStrokesForView, pageTextAnnotationsForView, currentPage) : null}
-
-        {pageReferences.length ? (
-          <View pointerEvents="box-none" style={props.styles.pdfPageReferenceCluster}>
-            <Pressable
-              style={[props.styles.pdfPageReferenceSticker, activePageReference && props.styles.pdfPageReferenceStickerActive]}
-              onPress={() => setOpenReferenceId((current) => (current === pageReferences[0].id ? null : pageReferences[0].id))}
-            >
-              <MaterialCommunityIcons name="image-multiple-outline" size={14} color="#4F68D2" />
-              <Text style={props.styles.pdfPageReferenceStickerText}>{referenceButtonLabel}</Text>
-            </Pressable>
-          </View>
+        {shouldRenderInteractiveLayers ? (
+          <PdfInkLayers
+            page={page}
+            currentPage={currentPage}
+            pageStrokes={pageStrokesForView}
+            pageTextAnnotations={pageTextAnnotationsForView}
+            currentStroke={currentStroke}
+            selectionForView={currentPage ? scaleSelectionRectToPageSize(props.selectionRect, viewerWidth, viewerHeight) : null}
+            draftForView={draftSelectionPageKey === pageKey ? draftSelection : null}
+            draftLassoForView={draftSelectionPageKey === pageKey ? draftSelectionPath : []}
+            draftRectForView={draftSelectionPageKey === pageKey && draftSelection?.mode !== 'lasso' ? draftSelection : null}
+            capturingSelection={capturingSelection}
+            viewerWidth={viewerWidth}
+            viewerHeight={viewerHeight}
+            styles={props.styles}
+            textAnnotationVariant={props.textAnnotationVariant}
+            onUpdateTextAnnotation={props.onUpdateTextAnnotation}
+            onMoveTextAnnotation={props.onMoveTextAnnotation}
+            onResizeTextAnnotation={props.onResizeTextAnnotation}
+            onRemoveTextAnnotation={props.onRemoveTextAnnotation}
+            onAskAiAboutSelection={props.onAskAiAboutSelection}
+            onDuplicateSelection={props.onDuplicateSelection}
+            onDeleteSelection={props.onDeleteSelection}
+            onChangeSelectedStrokesColor={props.onChangeSelectedStrokesColor}
+          />
         ) : null}
 
-        {activePageReference ? (
-          <View style={props.styles.pdfPageReferencePopover}>
-            <View style={props.styles.pdfPageReferencePopoverHeader}>
-              <View style={props.styles.pdfPageReferencePopoverTitleBox}>
-                <Text style={props.styles.pdfPageReferencePopoverLabel}>{activePageReference.pageLabel}</Text>
-                <Text style={props.styles.pdfPageReferencePopoverTitle} numberOfLines={1}>{activePageReference.title}</Text>
-              </View>
-              <Pressable style={props.styles.pdfPageReferencePopoverClose} onPress={() => setOpenReferenceId(null)}>
-                <MaterialCommunityIcons name="close" size={16} color="#6B7280" />
-              </Pressable>
-            </View>
-            {activeReferenceImage ? (
-              <AdaptiveReferenceImage
-                source={activeReferenceImage}
-                frameStyle={props.styles.pdfPageReferencePopoverImageFrame}
-                imageStyle={props.styles.pdfPageReferencePopoverImage}
-                minHeight={280}
-                maxHeight={560}
-              />
-            ) : (
-              <View style={props.styles.pdfPageReferencePopoverFallback}>
-                <MaterialCommunityIcons name={activePageReference.type === 'pdf' ? 'file-pdf-box' : 'image-outline'} size={24} color="#6D7BD9" />
-                <Text style={props.styles.pdfPageReferencePopoverFallbackText}>미리보기 없음</Text>
-              </View>
-            )}
-            <View style={props.styles.pdfPageReferencePopoverAnswer}>
-              <View style={props.styles.pdfPageReferencePopoverAnswerHeader}>
-                <MaterialCommunityIcons name="star-four-points" size={14} color="#5F79FF" />
-                <Text style={props.styles.pdfPageReferencePopoverAnswerTitle}>AI 설명</Text>
-              </View>
-              <Text style={props.styles.pdfPageReferencePopoverAnswerText} numberOfLines={7}>
-                {cleanAiDisplayText(activePageReference.aiSummary || activePageReference.summary)}
-              </Text>
-            </View>
-            <View style={props.styles.pdfPageReferencePopoverActions}>
-              {pageReferences.length > 1 ? (
-                <Pressable
-                  style={props.styles.pdfPageReferencePopoverIconAction}
-                  onPress={() => {
-                    const nextIndex = activeReferenceIndex <= 0 ? pageReferences.length - 1 : activeReferenceIndex - 1;
-                    setOpenReferenceId(pageReferences[nextIndex].id);
-                  }}
-                >
-                  <MaterialCommunityIcons name="chevron-left" size={17} color="#4F68D2" />
-                </Pressable>
-              ) : null}
-              <Pressable
-                style={props.styles.pdfPageReferencePopoverPrimaryAction}
-                onPress={() => props.onAskAiAboutPageCaptureReference?.(activePageReference.id)}
-              >
-                <Text style={props.styles.pdfPageReferencePopoverPrimaryText}>AI로 더 보기</Text>
-              </Pressable>
-              {pageReferences.length > 1 ? (
-                <Pressable
-                  style={props.styles.pdfPageReferencePopoverIconAction}
-                  onPress={() => {
-                    const nextIndex = activeReferenceIndex >= pageReferences.length - 1 ? 0 : activeReferenceIndex + 1;
-                    setOpenReferenceId(pageReferences[nextIndex].id);
-                  }}
-                >
-                  <MaterialCommunityIcons name="chevron-right" size={17} color="#4F68D2" />
-                </Pressable>
-              ) : null}
-            </View>
-          </View>
-        ) : null}
-
-        {incomingAsset ? (
-          <View style={props.styles.pdfIncomingCapturePopover}>
-            <View style={props.styles.pdfIncomingCaptureHeader}>
-              <View style={props.styles.pdfIncomingCaptureIcon}>
-                <MaterialCommunityIcons name={incomingAsset.type === 'image' ? 'camera-outline' : 'file-pdf-box'} size={17} color="#4F68D2" />
-              </View>
-              <View style={props.styles.pdfIncomingCaptureTitleBox}>
-                <Text style={props.styles.pdfIncomingCaptureLabel}>새 {incomingAsset.type === 'image' ? '사진' : '자료'} 도착</Text>
-                <Text style={props.styles.pdfIncomingCaptureTitle} numberOfLines={1}>{incomingAsset.title}</Text>
-              </View>
-              <Pressable style={props.styles.pdfIncomingCaptureClose} onPress={props.onDismissIncomingAsset}>
-                <MaterialCommunityIcons name="close" size={15} color="#6B7280" />
-              </Pressable>
-            </View>
-            {incomingAssetImage ? (
-              <AdaptiveReferenceImage
-                source={incomingAssetImage}
-                frameStyle={props.styles.pdfIncomingCaptureImageFrame}
-                imageStyle={props.styles.pdfIncomingCaptureImage}
-                minHeight={320}
-                maxHeight={600}
-              />
-            ) : null}
-            <View style={props.styles.pdfIncomingCaptureAnswer}>
-              <View style={props.styles.pdfIncomingCaptureAnswerHeader}>
-                <MaterialCommunityIcons name="star-four-points" size={13} color="#5F79FF" />
-                <Text style={props.styles.pdfIncomingCaptureAnswerTitle}>AI 설명</Text>
-              </View>
-              <Text style={props.styles.pdfIncomingCaptureAnswerText} numberOfLines={6}>{incomingAssetSummary}</Text>
-            </View>
-            <View style={props.styles.pdfIncomingCaptureActions}>
-              <Pressable style={props.styles.pdfIncomingCapturePrimaryAction} onPress={props.onAcceptIncomingAsset}>
-                <Text style={props.styles.pdfIncomingCapturePrimaryText}>현재 페이지 연결</Text>
-              </Pressable>
-              <Pressable style={props.styles.pdfIncomingCaptureSecondaryAction} onPress={props.onArchiveIncomingAsset}>
-                <Text style={props.styles.pdfIncomingCaptureSecondaryText}>나중에</Text>
-              </Pressable>
-            </View>
-          </View>
-        ) : null}
+        <PdfPageReferenceCluster
+          references={pageReferences}
+          activeReference={activePageReference}
+          styles={props.styles}
+          onToggleFirstReference={() => setOpenReferenceId((current) => (current === pageReferences[0]?.id ? null : pageReferences[0]?.id ?? null))}
+        />
+        <PdfPageReferencePopover
+          reference={activePageReference}
+          references={pageReferences}
+          activeReferenceIndex={activeReferenceIndex}
+          styles={props.styles}
+          onClose={() => setOpenReferenceId(null)}
+          onSelectReference={setOpenReferenceId}
+          onAskAiAboutPageCaptureReference={props.onAskAiAboutPageCaptureReference}
+        />
+        <PdfIncomingCapturePopover
+          incomingAsset={incomingAsset ?? null}
+          styles={props.styles}
+          onAcceptIncomingAsset={props.onAcceptIncomingAsset}
+          onArchiveIncomingAsset={props.onArchiveIncomingAsset}
+          onDismissIncomingAsset={props.onDismissIncomingAsset}
+        />
 
         <GestureDetector gesture={inkGesture}>
           <View {...hoverHandlers} pointerEvents={props.inkTool === 'view' ? 'none' : 'auto'} style={props.styles.inkOverlay} />
         </GestureDetector>
         {hoverVisible ? (
-          <>
-            <View
-              pointerEvents="none"
-              style={[
-                props.styles.pencilHoverPreview,
-                props.inkTool === 'erase' && props.styles.pencilHoverPreviewEraser,
-                {
-                  left: pencilHover.x - hoverSize / 2,
-                  top: pencilHover.y - hoverSize / 2,
-                  width: hoverSize,
-                  height: hoverSize,
-                  borderRadius: hoverSize / 2,
-                  borderColor: props.inkTool === 'erase' ? '#EF4444' : props.penColor,
-                },
-              ]}
-            />
-            {hoverToolLabel ? (
-              <View
-                pointerEvents="none"
-                style={[
-                  props.styles.pencilHoverLabel,
-                  {
-                    left: Math.min(Math.max(6, pencilHover.x + hoverSize / 2 + 8), Math.max(6, viewerWidth - 76)),
-                    top: Math.min(Math.max(6, pencilHover.y - hoverSize / 2 - 2), Math.max(6, viewerHeight - 30)),
-                  },
-                ]}
-              >
-                <Text style={props.styles.pencilHoverLabelText}>{hoverToolLabel}</Text>
-              </View>
-            ) : null}
-            {props.onChangeInkTool ? (
-              <PencilHoverQuickPalette
-                x={pencilHover.x}
-                y={pencilHover.y}
-                pageWidth={viewerWidth}
-                pageHeight={viewerHeight}
-                activeTool={props.inkTool}
-                styles={props.styles}
-                onSelectTool={props.onChangeInkTool}
-              />
-            ) : null}
-          </>
+          <PencilHoverOverlay
+            x={pencilHover.x}
+            y={pencilHover.y}
+            size={hoverSize}
+            pageWidth={viewerWidth}
+            pageHeight={viewerHeight}
+            borderColor={props.inkTool === 'erase' ? '#EF4444' : props.penColor}
+            label={hoverToolLabel}
+            isEraser={props.inkTool === 'erase'}
+            activeTool={props.inkTool}
+            styles={props.styles}
+            onSelectTool={props.onChangeInkTool}
+          />
         ) : null}
       </View>
     );

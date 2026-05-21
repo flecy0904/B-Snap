@@ -1,14 +1,15 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, memo } from 'react';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
-import { Image, Text, View } from 'react-native';
+import { Image, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { runOnJS } from 'react-native-reanimated';
-import Svg, { Path } from 'react-native-svg';
+import Svg from 'react-native-svg';
 import { captureRef } from 'react-native-view-shot';
 import { TextAnnotationLayer } from './text-annotation-layer';
 import { InkPath } from './ink-path';
 import { SelectionContextMenu } from './selection-context-menu';
-import { PencilHoverQuickPalette } from './pencil-hover-quick-palette';
+import { PencilHoverOverlay } from './pencil-hover-overlay';
+import { SelectionLassoOverlay, SelectionOverlay } from './selection-overlays';
 import { finalizeInkStroke, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, shouldAppendInkPoint } from '../../../ui-helpers';
 import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { useCanvasContext } from './canvas-context';
@@ -75,75 +76,6 @@ function getSelectionRectFromPoints(points: InkPoint[]): SelectionRect | null {
     pageWidth: reference.pageWidth,
     pageHeight: reference.pageHeight,
   };
-}
-
-function getLassoPath(points: InkPoint[]) {
-  if (!points.length) return '';
-  return points
-    .map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`)
-    .join(' ');
-}
-
-function SelectionOverlay(props: { rect: SelectionRect; styles: any; draft?: boolean }) {
-  const handleOffset = -7;
-  const lassoPath = props.rect.path && props.rect.path.length > 2 ? getLassoPath(props.rect.path) : '';
-  if (props.rect.mode === 'lasso') {
-    if (!lassoPath) return null;
-    return (
-      <Svg width="100%" height="100%" pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0 }}>
-        <Path
-          d={`${lassoPath} Z`}
-          fill="rgba(78, 141, 255, 0.06)"
-          stroke="none"
-        />
-        <Path
-          d={lassoPath}
-          fill="none"
-          stroke="#2563EB"
-          strokeWidth={2}
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeDasharray="7 5"
-          opacity={props.draft ? 0.88 : 0.96}
-        />
-      </Svg>
-    );
-  }
-
-  return (
-    <View pointerEvents="none" style={[props.styles.selectionOverlayRect, props.draft && props.styles.selectionOverlayDraft, { left: props.rect.x, top: props.rect.y, width: props.rect.width, height: props.rect.height }]}>
-      {(['nw', 'ne', 'sw', 'se'] as const).map((corner) => (
-        <View
-          key={corner}
-          style={[
-            props.styles.selectionResizeHandle,
-            {
-              left: corner === 'nw' || corner === 'sw' ? handleOffset : props.rect.width + handleOffset,
-              top: corner === 'nw' || corner === 'ne' ? handleOffset : props.rect.height + handleOffset,
-            },
-          ]}
-        />
-      ))}
-    </View>
-  );
-}
-
-function SelectionLassoOverlay(props: { points: InkPoint[] }) {
-  if (props.points.length < 2) return null;
-  return (
-    <Svg width="100%" height="100%" pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0 }}>
-      <Path
-        d={getLassoPath(props.points)}
-        fill="none"
-        stroke="#2563EB"
-        strokeWidth={2}
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeDasharray="7 5"
-        opacity={0.9}
-      />
-    </Svg>
-  );
 }
 
 const StaticStrokes = memo(({ strokes, type }: { strokes: InkStroke[]; type: 'highlight' | 'ink' }) => {
@@ -592,46 +524,19 @@ export function BlankNoteCanvas(props: {
           {!capturingSelection && draftSelectionPath.length > 1 ? <SelectionLassoOverlay points={draftSelectionPath} /> : null}
           {!capturingSelection && draftSelection && draftSelection.mode !== 'lasso' ? <SelectionOverlay rect={draftSelection} styles={props.styles} draft /> : null}
           {hoverVisible ? (
-            <>
-              <View
-                pointerEvents="none"
-                style={[
-                  props.styles.pencilHoverPreview,
-                  inkTool === 'erase' && props.styles.pencilHoverPreviewEraser,
-                  {
-                    left: pencilHover.x - hoverSize / 2,
-                    top: pencilHover.y - hoverSize / 2,
-                    width: hoverSize,
-                    height: hoverSize,
-                    borderRadius: hoverSize / 2,
-                    borderColor: inkTool === 'erase' ? '#EF4444' : penColor,
-                  },
-                ]}
-              />
-              {hoverToolLabel ? (
-                <View
-                  pointerEvents="none"
-                  style={[
-                    props.styles.pencilHoverLabel,
-                    {
-                      left: Math.min(Math.max(6, pencilHover.x + hoverSize / 2 + 8), Math.max(6, pageSize.width - 76)),
-                      top: Math.min(Math.max(6, pencilHover.y - hoverSize / 2 - 2), Math.max(6, pageSize.height - 30)),
-                    },
-                  ]}
-                >
-                  <Text style={props.styles.pencilHoverLabelText}>{hoverToolLabel}</Text>
-                </View>
-              ) : null}
-              <PencilHoverQuickPalette
-                x={pencilHover.x}
-                y={pencilHover.y}
-                pageWidth={pageSize.width}
-                pageHeight={pageSize.height}
-                activeTool={inkTool}
-                styles={props.styles}
-                onSelectTool={canvasCtx.setInkTool}
-              />
-            </>
+            <PencilHoverOverlay
+              x={pencilHover.x}
+              y={pencilHover.y}
+              size={hoverSize}
+              pageWidth={pageSize.width}
+              pageHeight={pageSize.height}
+              borderColor={inkTool === 'erase' ? '#EF4444' : penColor}
+              label={hoverToolLabel}
+              isEraser={inkTool === 'erase'}
+              activeTool={inkTool}
+              styles={props.styles}
+              onSelectTool={canvasCtx.setInkTool}
+            />
           ) : null}
         </View>
       </GestureDetector>
