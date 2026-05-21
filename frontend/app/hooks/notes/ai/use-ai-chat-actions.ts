@@ -61,6 +61,7 @@ export function useAiChatActions(params: {
   setChatSessionsByDocument: SetState<Record<number, BackendChatSession[]>>;
   setAllChatSessions: SetState<BackendChatSession[]>;
   setAiMessagesBySession: SetState<Record<number, BackendChatMessage[]>>;
+  clearSelection?: () => void;
   onRequestCanvasEditFromChat?: (payload: { question: string; answer: string }) => Promise<void>;
   buildContextHint?: (question: string) => string | null;
 }) {
@@ -318,14 +319,18 @@ export function useAiChatActions(params: {
       return;
     }
 
-    const hasSelection = Boolean(params.selectionRect || params.selectionPreviewUri);
+    const selectionRect = params.selectionRect;
+    const hasSelection = Boolean(selectionRect || params.selectionPreviewUri);
     const selectionPreviewUri = override?.selectionImageUri ?? params.selectionPreviewUri;
+    const shouldHideSelectionAttachment = Boolean(selectionRect || params.selectionPreviewUri);
     const question = override?.question?.trim() || params.aiQuestion.trim() || (hasSelection ? '선택한 영역을 설명해줘' : '현재 페이지를 요약해줘');
     const contextHint = params.buildContextHint?.(question) ?? null;
     params.setAiLoading(true);
     params.setAiError(null);
     params.setAiQuestion('');
-    if (selectionPreviewUri) {
+    if (hasSelection) {
+      params.clearSelection?.();
+    } else if (selectionPreviewUri) {
       params.setSelectionPreviewByDocument((current) => ({ ...current, [params.studyDocumentId!]: null }));
     }
     let aiRequestStage: 'chat-session' | 'ai-answer' = 'ai-answer';
@@ -374,7 +379,7 @@ export function useAiChatActions(params: {
         session_id: sessionId,
         role: 'user',
         content: question,
-        selection_image_url: selectionPreviewUri,
+        selection_image_url: shouldHideSelectionAttachment ? null : selectionPreviewUri,
         model: null,
         created_at: new Date().toISOString(),
       };
@@ -389,13 +394,13 @@ export function useAiChatActions(params: {
         content: question,
         selectionImage,
         selectionImageUri: selectionPreviewUri,
-        selectionRect: params.selectionRect,
+        selectionRect,
         pageNumber: override?.pageNumber ?? params.currentPageNumber,
         contextHint,
       });
       const userMessageWithAttachment = {
         ...response.user_message,
-        selection_image_url: selectionPreviewUri,
+        selection_image_url: shouldHideSelectionAttachment ? null : selectionPreviewUri,
       };
       params.setLastChatSessionByDocument((current) => ({
         ...current,

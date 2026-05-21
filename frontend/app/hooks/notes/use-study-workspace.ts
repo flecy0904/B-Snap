@@ -53,7 +53,7 @@ import { useIncomingAssetSubscription } from './workspace/use-incoming-asset-sub
 import { useStudyWorkspaceDerivedState } from './workspace/use-study-workspace-derived-state';
 import { useStudyWorkspacePersistence } from './workspace/use-study-workspace-persistence';
 import { derivePreprocessedCropUrl, isSameDocumentPage, isShapeTool } from '../../ui-helpers';
-import type { InkBrush, InkBrushSettings, InkLinePattern, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../ui-types';
+import type { InkBrush, InkBrushSettings, InkLinePattern, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../ui-types';
 import type { AiAnswer, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../types';
 
 type PendingPageSave = {
@@ -88,11 +88,12 @@ export function useStudyWorkspace(props: {
   const [penWidth, setPenWidth] = useState(3);
   const [brushType, setBrushType] = useState<InkBrush>('ballpoint');
   const [linePattern, setLinePattern] = useState<InkLinePattern>('solid');
+  const [selectionMode, setSelectionMode] = useState<InkSelectionMode>('rect');
   const [brushSettings, setBrushSettings] = useState<InkBrushSettings>({
-    stability: 60,
+    stability: 18,
     sharpness: 50,
     density: 100,
-    pressure: 55,
+    pressure: 35,
   });
   const [inkByDocument, setInkByDocument] = useState<Record<number, InkStroke[]>>({});
   const [redoInkByDocument, setRedoInkByDocument] = useState<Record<number, InkStroke[]>>({});
@@ -281,6 +282,7 @@ export function useStudyWorkspace(props: {
     state: persistedWorkspaceState,
     onHydrate: hydrateWorkspaceState,
   });
+  const studyDocumentBackendNoteId = getStudyDocumentBackendNoteId(studyDocument);
   const {
     activeAiChatSessionId,
     aiChatReadOnly,
@@ -291,6 +293,7 @@ export function useStudyWorkspace(props: {
     currentDocumentHasBackendPages,
   } = useAiChatDerivedState({
     studyDocumentId,
+    currentBackendNoteId: studyDocumentBackendNoteId,
     chatSessionByDocument,
     viewingAiChatSessionId,
     aiMessagesBySession,
@@ -302,7 +305,6 @@ export function useStudyWorkspace(props: {
     backendPageIdsByDocument,
   });
   const currentAiCanvasPageNumber = currentDocumentPage?.kind === 'pdf' ? currentDocumentPage.pageNumber : currentPdfPage;
-  const studyDocumentBackendNoteId = getStudyDocumentBackendNoteId(studyDocument);
   const aiCanvas = useAiCanvasNotes({
     noteId: studyDocumentBackendNoteId,
     enabled: workspaceHydrated && isBackendApiEnabled() && !!studyDocumentBackendNoteId && currentDocumentHasBackendPages,
@@ -1352,8 +1354,17 @@ export function useStudyWorkspace(props: {
   };
 
   const changeLinePattern = (pattern: InkLinePattern) => {
-    setLinePattern(pattern);
+    setLinePattern(pattern === 'dashed' ? 'dotted' : pattern);
     setInkTool((current) => (current !== 'pen' && current !== 'highlight' && !isShapeTool(current) ? 'pen' : current));
+  };
+
+  const changeSelectionMode = (mode: InkSelectionMode) => {
+    setSelectionMode(mode);
+    setInkTool('select');
+    if (studyDocumentId) {
+      setSelectionByDocument((current) => ({ ...current, [studyDocumentId]: null }));
+      setSelectionPreviewByDocument((current) => ({ ...current, [studyDocumentId]: null }));
+    }
   };
 
   const changeBrushSettings = (nextSettings: Partial<InkBrushSettings>) => {
@@ -1570,6 +1581,12 @@ export function useStudyWorkspace(props: {
     }, 1600);
   };
 
+  const clearSelectionForCurrentDocument = useCallback(() => {
+    if (!studyDocumentId) return;
+    setSelectionByDocument((current) => ({ ...current, [studyDocumentId]: null }));
+    setSelectionPreviewByDocument((current) => ({ ...current, [studyDocumentId]: null }));
+  }, [studyDocumentId]);
+
   const {
     selectAiChatSession,
     renameAiChatSession,
@@ -1602,6 +1619,7 @@ export function useStudyWorkspace(props: {
     setChatSessionsByDocument,
     setAllChatSessions,
     setAiMessagesBySession,
+    clearSelection: clearSelectionForCurrentDocument,
     onRequestCanvasEditFromChat: aiCanvas.requestAiEditFromChat,
     buildContextHint: (question) => buildClassInsightContext({
       question,
@@ -1615,6 +1633,21 @@ export function useStudyWorkspace(props: {
       classInsight: currentClassInsight,
     }),
   });
+
+  const askAiAboutSelection = () => {
+    if (!selectionRect && !selectionPreviewUri) {
+      setWorkspaceFeedback('AI에게 물어볼 영역을 먼저 선택해 주세요.');
+      return;
+    }
+
+    setViewingAiChatSessionId(null);
+    setAiPanelOpen(true);
+    setAiPanelMode('floating');
+    setAiQuestion((current) => current.trim() || '이 선택 영역을 설명해줘');
+    setWorkspaceFeedback(selectionPreviewUri
+      ? '선택 영역을 AI 질문창에 첨부했습니다.'
+      : '선택 영역 미리보기를 준비 중입니다. 잠시 후 질문을 보내세요.');
+  };
 
   const {
     linkCaptureAssetToPage,
@@ -1775,6 +1808,9 @@ export function useStudyWorkspace(props: {
     addTextAnnotation,
     updateTextAnnotation,
     removeTextAnnotation,
+    moveTextAnnotation,
+    resizeTextAnnotation,
+    eraseInkAtPoint,
     deleteSelectedStrokes,
     changeSelectedStrokesColor,
     duplicateSelectedStrokes,
@@ -1802,6 +1838,7 @@ export function useStudyWorkspace(props: {
     setGeneratedPagesByDocument,
     setActivePageByDocument,
     setSelectionByDocument,
+    setSelectionPreviewByDocument,
     setInkTool,
     setWorkspaceFeedback,
     onMarkPageDirty: markBackendPageDirty,
@@ -1909,6 +1946,7 @@ export function useStudyWorkspace(props: {
     penWidth,
     brushType,
     linePattern,
+    selectionMode,
     brushSettings,
     inkStrokes,
     textAnnotations,
@@ -1984,6 +2022,7 @@ export function useStudyWorkspace(props: {
     changePenWidth,
     changeBrushType,
     changeLinePattern,
+    changeSelectionMode,
     changeBrushSettings,
     toggleAiPanel: () => setAiPanelOpen((current) => {
       const next = !current;
@@ -2002,6 +2041,7 @@ export function useStudyWorkspace(props: {
     startNewAiChatSession,
     createAiChatSession,
     requestAiAnswer,
+    askAiAboutSelection,
     insertAiAnswerPage,
     changeSelection,
     changeSelectionPreview,
@@ -2015,6 +2055,9 @@ export function useStudyWorkspace(props: {
     addTextAnnotation,
     updateTextAnnotation,
     removeTextAnnotation,
+    moveTextAnnotation,
+    resizeTextAnnotation,
+    eraseInkAtPoint,
     removeInkStroke,
     deleteSelectedStrokes,
     changeSelectedStrokesColor,

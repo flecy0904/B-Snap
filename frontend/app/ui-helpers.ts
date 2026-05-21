@@ -282,6 +282,13 @@ export function scaleSelectionRectToPageSize(rect: SelectionRect | null, pageWid
     y: rect.y * heightScale,
     width: rect.width * widthScale,
     height: rect.height * heightScale,
+    path: rect.path?.map((point) => ({
+      ...point,
+      x: point.x * widthScale,
+      y: point.y * heightScale,
+      pageWidth,
+      pageHeight,
+    })),
     pageWidth,
     pageHeight,
   };
@@ -297,6 +304,7 @@ export function scaleTextAnnotationToPageSize(annotation: InkTextAnnotation, pag
     x: annotation.x * widthScale,
     y: annotation.y * heightScale,
     width: annotation.width * widthScale,
+    height: annotation.height ? annotation.height * heightScale : annotation.height,
     pageWidth,
     pageHeight,
     anchorRect: scaleSelectionRectToPageSize(annotation.anchorRect ?? null, pageWidth, pageHeight),
@@ -335,6 +343,46 @@ export function findInkStrokesInRect(strokes: InkStroke[], rect: { x: number; y:
       }
     }
     if (isInside) {
+      selectedIds.push(stroke.id);
+    }
+  }
+
+  return selectedIds;
+}
+
+export function isPointInPolygon(point: InkPoint, polygon: InkPoint[]) {
+  if (polygon.length < 3) return false;
+  let inside = false;
+  for (let i = 0, j = polygon.length - 1; i < polygon.length; j = i, i += 1) {
+    const current = polygon[i];
+    const previous = polygon[j];
+    const intersects =
+      current.y > point.y !== previous.y > point.y &&
+      point.x < ((previous.x - current.x) * (point.y - current.y)) / Math.max(0.0001, previous.y - current.y) + current.x;
+    if (intersects) inside = !inside;
+  }
+  return inside;
+}
+
+export function findInkStrokesInLasso(strokes: InkStroke[], polygon: InkPoint[]): string[] {
+  if (polygon.length < 3) return [];
+  const selectedIds: string[] = [];
+
+  for (const stroke of strokes) {
+    if (stroke.points.some((point) => isPointInPolygon(point, polygon))) {
+      selectedIds.push(stroke.id);
+      continue;
+    }
+
+    const bounds = getInkStrokeBounds(stroke);
+    if (!bounds) continue;
+    const center = {
+      x: bounds.x + bounds.width / 2,
+      y: bounds.y + bounds.height / 2,
+      pageWidth: bounds.pageWidth,
+      pageHeight: bounds.pageHeight,
+    };
+    if (isPointInPolygon(center, polygon)) {
       selectedIds.push(stroke.id);
     }
   }
@@ -383,10 +431,10 @@ function clampRatio(value: number | undefined, fallback: number) {
 function applyBrushSettings(options: StrokeOptions, settings?: InkBrushSettings): StrokeOptions {
   if (!settings) return options;
 
-  const stability = clampRatio(settings.stability, 0.58);
+  const stability = clampRatio(settings.stability, 0.18);
   const sharpness = clampRatio(settings.sharpness, 0.5);
   const density = clampRatio(settings.density, 1);
-  const pressure = clampRatio(settings.pressure, 0.55);
+  const pressure = clampRatio(settings.pressure, 0.35);
   const taperRatio = 1.25 - sharpness * 0.7;
 
   const applyTaper = (cap: StrokeOptions['start']) => {
@@ -401,8 +449,8 @@ function applyBrushSettings(options: StrokeOptions, settings?: InkBrushSettings)
     ...options,
     size: (options.size ?? 1) * (0.85 + density * 0.28),
     thinning: (options.thinning ?? 0) * (0.35 + pressure * 0.95),
-    smoothing: Math.max(0.2, Math.min(0.98, 0.24 + stability * 0.7)),
-    streamline: Math.max(0.08, Math.min(0.9, 0.14 + stability * 0.72)),
+    smoothing: Math.max(0.12, Math.min(0.72, 0.16 + stability * 0.42)),
+    streamline: Math.max(0.02, Math.min(0.56, 0.03 + stability * 0.34)),
     start: applyTaper(options.start),
     end: applyTaper(options.end),
   };
@@ -463,12 +511,12 @@ function getStrokeOptions(style: InkStroke['style'], width: number, complete: bo
 
   return applyBrushSettings({
     size: Math.max(2, width),
-    thinning: 0.48,
-    smoothing: 0.58,
-    streamline: 0.58,
-    simulatePressure: true,
-    start: { cap: true, taper: 10, easing: (t) => t },
-    end: { cap: true, taper: 10, easing: (t) => t },
+    thinning: 0.08,
+    smoothing: 0.38,
+    streamline: 0.24,
+    simulatePressure: false,
+    start: { cap: true, taper: 0 },
+    end: { cap: true, taper: 0 },
     last: complete,
   }, settings);
 }
