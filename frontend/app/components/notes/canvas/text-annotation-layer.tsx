@@ -2,7 +2,7 @@ import React from 'react';
 import { PanResponder, Pressable, Text, TextInput, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { InkTextAnnotation } from '../../../ui-types';
-import { isLikelyStylusEvent } from './ink-input-policy';
+import { shouldUsePrimaryPointer } from './ink-input-policy';
 
 const MIN_TEXT_BOX_WIDTH = 96;
 const MIN_TEXT_BOX_HEIGHT = 56;
@@ -19,6 +19,7 @@ function MovableTextAnnotationBox(props: {
 }) {
   const inputRef = React.useRef<TextInput | null>(null);
   const annotationRef = React.useRef(props.annotation);
+  const wasActiveRef = React.useRef(props.active);
   const startFrameRef = React.useRef({
     x: props.annotation.x,
     y: props.annotation.y,
@@ -41,6 +42,16 @@ function MovableTextAnnotationBox(props: {
     return undefined;
   }, [props.annotation.id]);
 
+  React.useEffect(() => {
+    if (props.active && !wasActiveRef.current) {
+      const timer = setTimeout(() => inputRef.current?.focus(), 40);
+      wasActiveRef.current = props.active;
+      return () => clearTimeout(timer);
+    }
+    wasActiveRef.current = props.active;
+    return undefined;
+  }, [props.active]);
+
   const activateInput = () => {
     props.onActivate(props.annotation.id);
     inputRef.current?.focus();
@@ -54,13 +65,13 @@ function MovableTextAnnotationBox(props: {
   };
 
   const moveResponder = React.useMemo(() => PanResponder.create({
-    onStartShouldSetPanResponderCapture: (event) => Boolean(props.onMove) && isLikelyStylusEvent(event),
-    onStartShouldSetPanResponder: (event) => Boolean(props.onMove) && isLikelyStylusEvent(event),
+    onStartShouldSetPanResponderCapture: (event) => Boolean(props.onMove) && shouldUsePrimaryPointer(event),
+    onStartShouldSetPanResponder: (event) => Boolean(props.onMove) && shouldUsePrimaryPointer(event),
     onMoveShouldSetPanResponderCapture: (event, gesture) => Boolean(props.onMove)
-      && isLikelyStylusEvent(event)
+      && shouldUsePrimaryPointer(event)
       && (Math.abs(gesture.dx) > 2 || Math.abs(gesture.dy) > 2),
     onMoveShouldSetPanResponder: (event, gesture) => Boolean(props.onMove)
-      && isLikelyStylusEvent(event)
+      && shouldUsePrimaryPointer(event)
       && (Math.abs(gesture.dx) > 2 || Math.abs(gesture.dy) > 2),
     onPanResponderGrant: () => {
       props.onActivate(props.annotation.id);
@@ -84,13 +95,13 @@ function MovableTextAnnotationBox(props: {
   }), [props.annotation.id, props.onActivate, props.onMove]);
 
   const resizeResponder = React.useMemo(() => PanResponder.create({
-    onStartShouldSetPanResponderCapture: (event) => Boolean(props.onResize) && isLikelyStylusEvent(event),
-    onStartShouldSetPanResponder: (event) => Boolean(props.onResize) && isLikelyStylusEvent(event),
+    onStartShouldSetPanResponderCapture: (event) => Boolean(props.onResize) && shouldUsePrimaryPointer(event),
+    onStartShouldSetPanResponder: (event) => Boolean(props.onResize) && shouldUsePrimaryPointer(event),
     onMoveShouldSetPanResponderCapture: (event, gesture) => Boolean(props.onResize)
-      && isLikelyStylusEvent(event)
+      && shouldUsePrimaryPointer(event)
       && (Math.abs(gesture.dx) > 2 || Math.abs(gesture.dy) > 2),
     onMoveShouldSetPanResponder: (event, gesture) => Boolean(props.onResize)
-      && isLikelyStylusEvent(event)
+      && shouldUsePrimaryPointer(event)
       && (Math.abs(gesture.dx) > 2 || Math.abs(gesture.dy) > 2),
     onPanResponderGrant: () => {
       props.onActivate(props.annotation.id);
@@ -130,12 +141,20 @@ function MovableTextAnnotationBox(props: {
     >
       {props.active ? (
         <View style={props.styles.textAnnotationFrameToolbar}>
-          <View style={props.styles.textAnnotationMoveHandle} {...moveResponder.panHandlers}>
+          <View
+            style={props.styles.textAnnotationMoveHandle}
+            onTouchStart={() => props.onActivate(props.annotation.id)}
+            {...moveResponder.panHandlers}
+          >
             <MaterialCommunityIcons name="drag-horizontal-variant" size={17} color="#4B5565" />
           </View>
           <Pressable
             hitSlop={12}
             style={props.styles.textAnnotationDelete}
+            onPressIn={(event) => {
+              event.stopPropagation();
+              props.onActivate(props.annotation.id);
+            }}
             onPress={() => props.onRemove(props.annotation.id)}
           >
             <MaterialCommunityIcons name="close" size={14} color="#EF4444" />
@@ -161,7 +180,11 @@ function MovableTextAnnotationBox(props: {
         ]}
       />
       {props.active ? (
-        <View style={props.styles.textAnnotationResizeHandle} {...resizeResponder.panHandlers}>
+        <View
+          style={props.styles.textAnnotationResizeHandle}
+          onTouchStart={() => props.onActivate(props.annotation.id)}
+          {...resizeResponder.panHandlers}
+        >
           <MaterialCommunityIcons name="resize-bottom-right" size={13} color="#5F79FF" />
         </View>
       ) : (
