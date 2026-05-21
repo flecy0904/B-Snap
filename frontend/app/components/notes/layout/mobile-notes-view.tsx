@@ -1,13 +1,11 @@
 import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import BottomSheet, { BottomSheetBackdrop, BottomSheetScrollView, type BottomSheetBackdropProps } from '@gorhom/bottom-sheet';
-import { ActivityIndicator, Image, Modal, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
-import { isClassInsightQuestion, isClassInsightTargetDocument } from '../../../hooks/notes/class-insight';
-import { AiResponseContent } from '../ai/ai-response-content';
+import { Image, Modal, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { PdfPreview } from '../pdf/pdf-preview';
 import { BlankNoteCanvas } from '../canvas/blank-note-canvas';
 import { NoteSummaryContent } from '../shared/notes-shared';
 import { PhotoViewerLinkPanel } from './photo-viewer-link-panel';
+import { MobileAiSheet } from './mobile-ai-sheet';
 import {
   formatCaptureDate,
   getCaptureImageSource,
@@ -38,15 +36,6 @@ const LINE_PATTERNS: Array<{ label: string; value: InkLinePattern }> = [
   { label: '점선', value: 'dotted' },
   { label: '대시', value: 'dashed' },
 ];
-const CLASS_INSIGHT_QUICK_PROMPTS = [
-  { label: '중요 페이지', question: '시험에 나올만한 중요 페이지 추천해줘' },
-  { label: '다음 순위', question: '다음 순위 중요 페이지도 더 알려줘' },
-  { label: '복습 순서', question: '이 PDF에서 먼저 복습할 순서 알려줘' },
-] as const;
-const DEFAULT_AI_QUICK_PROMPTS = [
-  { label: '핵심 3개', question: '여기서 중요한 개념 3개만 알려줘' },
-  { label: '시험 관점', question: '시험 대비 관점으로 설명해줘' },
-] as const;
 const MOBILE_HANDWRITING_TOOLS: Array<{ value: InkTool; icon: React.ComponentProps<typeof MaterialCommunityIcons>['name'] }> = [
   { value: 'view', icon: 'cursor-default-outline' },
   { value: 'pen', icon: 'pencil-outline' },
@@ -60,13 +49,7 @@ const MOBILE_HANDWRITING_TOOLS: Array<{ value: InkTool; icon: React.ComponentPro
   { value: 'ellipse', icon: 'circle-outline' },
 ];
 
-function formatClassInsightPriority(priority: string) {
-  if (priority === 'very-high') return '매우 높음';
-  if (priority === 'high') return '높음';
-  return '중간';
-}
-
-export function MobileNotesView(props: {
+export type MobileNotesViewProps = {
   subject: Subject | null;
   note: NoteEntry | null;
   studyDocument: StudyDocumentEntry | null;
@@ -192,7 +175,9 @@ export function MobileNotesView(props: {
   onBackToNoteList: () => void;
   styles: any;
   blueColor: string;
-}) {
+};
+
+export function MobileNotesView(props: MobileNotesViewProps) {
   const [inboxPanelOpen, setInboxPanelOpen] = React.useState(false);
   const [subjectActionsOpen, setSubjectActionsOpen] = React.useState(false);
   const [noteActionsOpen, setNoteActionsOpen] = React.useState(false);
@@ -206,14 +191,6 @@ export function MobileNotesView(props: {
   const isBrushTool = props.inkTool === 'pen' || props.inkTool === 'highlight';
 
   const [pageListOpen, setPageListOpen] = React.useState(false);
-  const aiSheetSnapPoints = React.useMemo(() => ['42%', '72%'], []);
-  const renderAiBackdrop = React.useCallback(
-    (backdropProps: BottomSheetBackdropProps) => (
-      <BottomSheetBackdrop {...backdropProps} appearsOnIndex={0} disappearsOnIndex={-1} pressBehavior="close" />
-    ),
-    [],
-  );
-
   React.useEffect(() => {
     if (!isBrushTool) setActiveBrushPopover(null);
   }, [isBrushTool]);
@@ -239,9 +216,6 @@ export function MobileNotesView(props: {
     props.onChangeInkTool(props.inkTool === 'select' ? 'view' : 'select');
   };
 
-  const normalizedQuestion = props.aiAnswer?.question ?? props.aiQuestion.trim();
-  const aiResponseSections = props.aiAnswer?.sections ?? null;
-  const aiResponse = props.aiAnswer?.response ?? (props.selectionRect ? '응답 생성을 누르면 선택 영역 기준으로 AI 답변을 요청합니다.' : '먼저 선택 모드로 문서 영역을 드래그해 주세요.');
   const activeDeletedNotes = React.useMemo(
     () => props.subject ? props.deletedNotes.filter((note) => note.subjectId === props.subject!.id) : props.deletedNotes,
     [props.deletedNotes, props.subject],
@@ -298,27 +272,6 @@ export function MobileNotesView(props: {
     [linkableDocuments, previewPrimaryReference?.documentId],
   );
   const selectedLinkInitialPageNumber = previewPrimaryReference?.page.kind === 'pdf' ? previewPrimaryReference.page.pageNumber : 1;
-  const aiSuggestionPrompts = React.useMemo(() => {
-    return isClassInsightTargetDocument(props.studyDocument, props.subject)
-      ? CLASS_INSIGHT_QUICK_PROMPTS
-      : [{ label: '그래프 의미', question: '이 그래프 의미 뭐야?' }, ...DEFAULT_AI_QUICK_PROMPTS];
-  }, [props.studyDocument, props.subject]);
-  const showAiSuggestionPrompts = Boolean(
-    aiSuggestionPrompts.length
-    && !props.aiQuestion.trim()
-    && !props.aiMessages.length
-    && !props.aiChatReadOnly,
-  );
-  const shouldShowClassInsightPages = React.useMemo(() => (
-    isClassInsightQuestion(props.aiQuestion)
-    || isClassInsightQuestion(props.aiAnswer?.question ?? '')
-  ), [props.aiAnswer?.question, props.aiQuestion]);
-  const classInsightPages = React.useMemo(() => {
-    if (!shouldShowClassInsightPages) return [];
-    if (!isClassInsightTargetDocument(props.studyDocument, props.subject)) return [];
-    return (props.classInsight?.pages ?? []).slice(0, 3);
-  }, [props.classInsight?.pages, props.studyDocument, props.subject, shouldShowClassInsightPages]);
-
   React.useEffect(() => {
     if (recoverableCount === 0) setRecoveryOpen(false);
   }, [recoverableCount]);
@@ -386,7 +339,7 @@ export function MobileNotesView(props: {
   if (props.noteMode === 'note' && props.studyDocument && props.subject) {
     return (
       <View style={props.styles.main}>
-        <View style={[props.styles.centerTopBar, { zIndex: 10 }]}>
+        <View style={[props.styles.centerTopBar, props.styles.mobileDocumentTopBar, { zIndex: 10 }]}>
           <Pressable onPress={props.onBackToNoteList} style={props.styles.navIcon}><Text style={props.styles.navIconText}>{'‹'}</Text></Pressable>
           <View style={[props.styles.noteCenterWrap, props.styles.mobileNoteCenterWrap]}>
             <Text style={props.styles.noteCenterTitle} numberOfLines={1}>{props.subject.name}</Text>
@@ -769,187 +722,24 @@ export function MobileNotesView(props: {
             />
           )}
         </View>
-        {props.aiPanelOpen ? (
-          <BottomSheet
-            index={0}
-            snapPoints={aiSheetSnapPoints}
-            enablePanDownToClose
-            backdropComponent={renderAiBackdrop}
-            onClose={props.onToggleAiPanel}
-            backgroundStyle={props.styles.mobileAiBottomSheetBackground}
-            handleIndicatorStyle={props.styles.mobileAiHandle}
-            style={props.styles.mobileAiBottomSheet}
-          >
-            <View style={props.styles.mobileAiHeader}>
-              <MaterialCommunityIcons name="star-four-points" size={20} color="#5F79FF" />
-              <Pressable style={props.styles.aiPanelClose} onPress={props.onToggleAiPanel}><MaterialCommunityIcons name="close" size={18} color="#7A8394" /></Pressable>
-            </View>
-            <BottomSheetScrollView contentContainerStyle={props.styles.mobileAiScrollContent} showsVerticalScrollIndicator={false}>
-              <View style={props.styles.aiChatHeaderRow}>
-                <Text style={props.styles.aiSectionLabel}>최근 채팅</Text>
-                <Pressable style={props.styles.aiNewChatButton} onPress={props.onCreateAiChatSession} disabled={props.aiLoading}>
-                  <MaterialCommunityIcons name="plus" size={15} color="#5169D8" />
-                  <Text style={props.styles.aiNewChatButtonText}>새 채팅</Text>
-                </Pressable>
-              </View>
-              <View style={props.styles.aiChatScopeTabs}>
-                {[
-                  { value: 'note' as const, label: `현재 노트 (${props.noteAiChatSessions.length})` },
-                  { value: 'all' as const, label: `전체 채팅 (${props.allAiChatSessions.length})` },
-                ].map((tab) => {
-                  const active = props.aiChatScope === tab.value;
-                  return (
-                    <Pressable
-                      key={tab.value}
-                      style={[props.styles.aiChatScopeTab, active && props.styles.aiChatScopeTabActive]}
-                      onPress={() => props.onChangeAiChatScope(tab.value)}
-                    >
-                      <Text style={[props.styles.aiChatScopeTabText, active && props.styles.aiChatScopeTabTextActive]}>{tab.label}</Text>
-                    </Pressable>
-                  );
-                })}
-              </View>
-              {props.aiChatSessions.length ? (
-                <View style={props.styles.aiChatList}>
-                  {props.aiChatSessions.map((session) => {
-                    const active = session.id === props.activeAiChatSessionId;
-                    return (
-                      <Pressable
-                        key={session.id}
-                        style={[props.styles.aiChatListItem, active && props.styles.aiChatListItemActive]}
-                        onPress={() => props.onSelectAiChatSession(session.id)}
-                        disabled={props.aiLoading || active}
-                      >
-                        <Text style={[props.styles.aiChatListItemTitle, active && props.styles.aiChatListItemTitleActive]} numberOfLines={1}>{session.title}</Text>
-                        <Text style={props.styles.aiChatListItemMeta} numberOfLines={1}>{session.model ?? '모델 미선택'}</Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-              ) : (
-                <Pressable style={props.styles.aiEmptyChatButton} onPress={props.onCreateAiChatSession} disabled={props.aiLoading}>
-                  <Text style={props.styles.aiEmptyChatButtonText}>새 채팅 시작</Text>
-                </Pressable>
-              )}
-              <View style={props.styles.aiStateCard}>
-                <Text style={props.styles.aiStateTitle}>선택 영역</Text>
-                <Text style={props.styles.aiStateBody}>{props.selectionRect ? `${Math.round(props.selectionRect.width)} × ${Math.round(props.selectionRect.height)} 영역 선택됨` : '아직 선택된 영역이 없습니다'}</Text>
-              </View>
-              {showAiSuggestionPrompts ? (
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-                  {aiSuggestionPrompts.map((prompt) => (
-                    <Pressable key={prompt.label} style={props.styles.aiSuggestionChip} onPress={() => props.onChangeAiQuestion(prompt.question)}><Text style={props.styles.aiSuggestionText}>{prompt.label}</Text></Pressable>
-                  ))}
-                </ScrollView>
-              ) : null}
-              {classInsightPages.length ? (
-                <View style={props.styles.aiClassInsightStrip}>
-                  <View style={props.styles.aiClassInsightHeader}>
-                    <Text style={props.styles.aiClassInsightTitle}>추천 페이지</Text>
-                    <Text style={props.styles.aiClassInsightMeta}>수업 필기 흐름 기준</Text>
-                  </View>
-                  <View style={props.styles.aiClassInsightChipRow}>
-                    {classInsightPages.map((page) => (
-                      <Pressable
-                        key={page.page_number}
-                        style={props.styles.aiClassInsightChip}
-                        onPress={() => props.onSetCurrentPdfPage(page.page_number)}
-                      >
-                        <Text style={props.styles.aiClassInsightPage}>{page.page_number}p</Text>
-                        <Text style={props.styles.aiClassInsightPriority}>{formatClassInsightPriority(page.priority)}</Text>
-                      </Pressable>
-                    ))}
-                  </View>
-                </View>
-              ) : null}
-              {props.aiChatReadOnly ? (
-                <View style={props.styles.aiReadOnlyNotice}>
-                  <MaterialCommunityIcons name="lock-outline" size={14} color="#5B6472" />
-                  <Text style={props.styles.aiReadOnlyNoticeText}>보고 있는 노트와 연결된 대화방이 아니라서 읽기만 가능합니다.</Text>
-                </View>
-              ) : null}
-              <View style={props.styles.aiInputShell}>
-                <TextInput value={props.aiQuestion} onChangeText={props.onChangeAiQuestion} placeholder="선택한 영역에 대해 물어보세요" placeholderTextColor="#A2AAB8" multiline style={props.styles.aiInput} />
-              </View>
-              <View style={props.styles.aiActionRow}>
-                <Pressable style={props.styles.aiPrimaryButton} onPress={props.onRequestAiAnswer} disabled={props.aiLoading}>
-                  {props.aiLoading ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={props.styles.aiPrimaryButtonText}>응답 생성</Text>}
-                </Pressable>
-                <Pressable style={[props.styles.aiSecondaryButton, !props.aiAnswer && props.styles.aiSecondaryButtonDisabled]} onPress={props.onInsertAiAnswerPage} disabled={!props.aiAnswer}>
-                  <Text style={[props.styles.aiSecondaryButtonText, !props.aiAnswer && props.styles.aiSecondaryButtonTextDisabled]}>정리 페이지로 추가</Text>
-                </Pressable>
-              </View>
-              {props.aiError ? <Text style={props.styles.aiErrorText}>{props.aiError}</Text> : null}
-              {props.aiMessages.length ? (
-                <>
-                  <Text style={props.styles.aiSectionLabel}>채팅 내역</Text>
-                  <View style={props.styles.aiResponseCard}>
-                    {props.aiMessages.map((message) => (
-                      <View key={message.id} style={props.styles.aiResponseSection}>
-                        <Text style={props.styles.aiResponseSectionTitle}>{message.role === 'user' ? '나' : 'AI'}</Text>
-                        {message.role === 'user' ? (
-                          <Text style={props.styles.aiResponseBody}>{message.content}</Text>
-                        ) : (
-                          <AiResponseContent
-                            content={message.content}
-                            pageCount={props.studyDocument?.pageCount}
-                            styles={props.styles}
-                            textStyle={props.styles.aiResponseBody}
-                            linkStyle={props.styles.aiResponsePageLink}
-                            onOpenPage={props.onSetCurrentPdfPage}
-                          />
-                        )}
-                      </View>
-                    ))}
-                  </View>
-                </>
-              ) : null}
-              <View style={props.styles.aiResponseCard}>
-                <Text style={props.styles.aiResponseTitle}>답변</Text>
-                {props.selectionRect && normalizedQuestion ? <View style={props.styles.aiQuestionPill}><Text style={props.styles.aiQuestionPillText}>{normalizedQuestion}</Text></View> : null}
-                {aiResponseSections ? aiResponseSections.map((section, index) => (
-                  <View key={`${section.title}-${index}`} style={[props.styles.aiResponseSection, index === aiResponseSections.length - 1 && props.styles.aiResponseSectionLast]}>
-                    <Text style={props.styles.aiResponseSectionTitle}>{section.title}</Text>
-                    <AiResponseContent
-                      content={section.body}
-                      pageCount={props.studyDocument?.pageCount}
-                      styles={props.styles}
-                      textStyle={props.styles.aiResponseBody}
-                      linkStyle={props.styles.aiResponsePageLink}
-                      onOpenPage={props.onSetCurrentPdfPage}
-                    />
-                  </View>
-                )) : (
-                  <AiResponseContent
-                    content={aiResponse}
-                    pageCount={props.studyDocument?.pageCount}
-                    styles={props.styles}
-                    textStyle={props.styles.aiResponseBody}
-                    linkStyle={props.styles.aiResponsePageLink}
-                    onOpenPage={props.onSetCurrentPdfPage}
-                  />
-                )}
-              </View>
-            </BottomSheetScrollView>
-          </BottomSheet>
-        ) : null}
+        <MobileAiSheet {...props} />
         
         {pageListOpen ? (
-          <View style={{ position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, zIndex: 9999, elevation: 99 }}>
-            <Pressable style={{ position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, backgroundColor: 'rgba(0,0,0,0.1)' }} onPress={() => setPageListOpen(false)} />
-            <View pointerEvents="box-none" style={{ position: 'absolute', top: 96, left: 0, right: 0, bottom: 0, alignItems: 'center' }}>
-              <View style={{ width: 220, maxHeight: 400, backgroundColor: '#FFFFFF', borderRadius: 12, borderWidth: 1, borderColor: '#E6EAF2', shadowColor: '#9098A8', shadowOpacity: 0.16, shadowRadius: 16, shadowOffset: { width: 0, height: 8 }, elevation: 8 }}>
-                <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={true} style={{ padding: 8, maxHeight: 380 }}>
+          <View style={props.styles.mobilePageListOverlay}>
+            <Pressable style={props.styles.mobilePageListScrim} onPress={() => setPageListOpen(false)} />
+            <View pointerEvents="box-none" style={props.styles.mobilePageListAnchor}>
+              <View style={props.styles.mobilePageListPanel}>
+                <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator style={props.styles.mobilePageListScroll}>
                   {props.currentDocumentPages.map((page) => {
                     const isActive = isSameDocumentPage(props.currentDocumentPage, page);
                     const bookmarked = props.bookmarks.some((bookmark) => isSameDocumentPage(bookmark.page, page));
                     return (
                       <Pressable 
                         key={`${page.kind}-${page.kind === 'pdf' ? page.pageNumber : page.pageId}`}
-                        style={{ paddingVertical: 12, paddingHorizontal: 12, borderRadius: 6, backgroundColor: isActive ? '#F0F4FF' : 'transparent' }}
+                        style={[props.styles.mobilePageListItem, isActive && props.styles.mobilePageListItemActive]}
                         onPress={() => navigateToPage(page)}
                       >
-                        <Text style={{ fontSize: 13, fontWeight: isActive ? '800' : '600', color: isActive ? '#4F68D2' : '#556070', textAlign: 'center' }}>
+                        <Text style={[props.styles.mobilePageListText, isActive && props.styles.mobilePageListTextActive]}>
                           {bookmarked ? '★ ' : ''}{getPageLabel(page)}
                         </Text>
                       </Pressable>
