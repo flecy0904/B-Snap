@@ -7,7 +7,6 @@ import {
   listBackendChatSessions,
   listBackendFolders,
   listBackendNotes,
-  updateBackendNote,
   type BackendClassInsight,
   type BackendChatSession,
   type BackendChatMessage,
@@ -26,13 +25,11 @@ import { useAiChatActions } from './ai/use-ai-chat-actions';
 import { useAiChatDerivedState } from './ai/use-ai-chat-derived-state';
 import { useAiCanvasNotes } from './ai-canvas/use-ai-canvas-notes';
 import { buildClassInsightContext } from './class-insight';
-import { addUniqueId, removeId, upsertStudyDocument } from './document/collection-helpers';
 import { getStudyDocumentBackendNoteId } from './document/backend-sync';
 import { useStudyDocumentActions } from './document/use-study-document-actions';
 import { useDocumentPageActions } from './document/use-document-page-actions';
 import { normalizeDocumentFile } from './document/document-file-utils';
 import { useBackendNotePageSync } from './document/use-backend-note-page-sync';
-import { confirmDeleteAction } from './ui/confirm-delete-action';
 import { useInkActions, type WorkspaceEditSnapshot } from './ink/use-ink-actions';
 import { useCaptureAssetActions } from './capture/use-capture-asset-actions';
 import { usePageCaptureReferenceActions } from './capture/use-page-capture-references';
@@ -40,6 +37,8 @@ import { useIncomingAssetSubscription } from './workspace/use-incoming-asset-sub
 import { useStudyWorkspaceDerivedState } from './workspace/use-study-workspace-derived-state';
 import { useStudyWorkspacePersistence } from './workspace/use-study-workspace-persistence';
 import { usePencilInteractionFeedback } from './workspace/use-pencil-interaction-feedback';
+import { useWorkspaceFeedback, useWorkspaceSaveStatus } from './workspace/use-workspace-feedback';
+import { useWorkspaceDocumentIntents } from './workspace/use-workspace-document-intents';
 import { isSameDocumentPage, isShapeTool } from '../../ui-helpers';
 import type { InkBrush, InkBrushSettings, InkEraserMode, InkLinePattern, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../ui-types';
 import type { AiAnswer, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../types';
@@ -91,7 +90,7 @@ export function useStudyWorkspace(props: {
   const [currentPdfPageByDocument, setCurrentPdfPageByDocument] = useState<Record<number, number>>({});
   const [activePageByDocument, setActivePageByDocument] = useState<Record<number, DocumentPageView>>({});
   const [bookmarksByDocument, setBookmarksByDocument] = useState<Record<number, BookmarkedPage[]>>({});
-  const [workspaceFeedback, setWorkspaceFeedback] = useState<string | null>(null);
+  const { workspaceFeedback, setWorkspaceFeedback } = useWorkspaceFeedback();
   const [incomingBannerQueue, setIncomingBannerQueue] = useState<CaptureAsset[]>([]);
   const [aiAnswer, setAiAnswer] = useState<AiAnswer | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
@@ -291,12 +290,6 @@ export function useStudyWorkspace(props: {
   });
   const currentClassInsight = studyDocumentId ? classInsightByDocument[studyDocumentId] ?? null : null;
 
-  useEffect(() => {
-    if (!workspaceFeedback) return;
-    const timer = setTimeout(() => setWorkspaceFeedback(null), 2200);
-    return () => clearTimeout(timer);
-  }, [workspaceFeedback]);
-
   usePencilInteractionFeedback({
     enabled: noteWorkspaceMode === 'note' && Boolean(studyDocumentId),
     onFeedback: setWorkspaceFeedback,
@@ -485,44 +478,33 @@ export function useStudyWorkspace(props: {
       mounted = false;
     };
   }, [aiPanelOpen, currentDocumentHasBackendPages, studyDocument, studyDocumentId, workspaceHydrated]);
-
-
-  const openSubject = (id: number) => {
-    props.onOpenNotesTab();
-    setSubjectId(id);
-    setNoteId(null);
-    setStudyDocumentId(null);
-    setNoteDetailTab('original');
-  };
-
-  const openNote = (id: number) => {
-    const selected = visibleNotes.find((value) => value.id === id);
-    if (!selected) return;
-
-    props.onOpenNotesTab();
-    setSubjectId(selected.subjectId);
-    setNoteId(id);
-    setNoteDetailTab('original');
-  };
-
-  const requestDeleteNote = (id: number) => {
-    const target = visibleNotes.find((value) => value.id === id);
-    if (!target) return;
-
-    confirmDeleteAction({
-      title: 'Photo 삭제',
-      message: `"${target.title}" Photo를 삭제할까요? 삭제 후에는 현재 기기 목록에서 보이지 않습니다.`,
-      confirmText: '삭제',
-      onConfirm: () => {
-        setDeletedNoteIds((current) => addUniqueId(current, id));
-        if (noteId === id) {
-          setNoteId(null);
-          setNoteDetailTab('original');
-        }
-        setWorkspaceFeedback('Photo를 삭제했습니다.');
-      },
-    });
-  };
+  const {
+    openSubject,
+    openNote,
+    requestDeleteNote,
+    restoreNote,
+    renameStudyDocument,
+    changeNoteWorkspaceMode,
+    resetToSubjectList,
+  } = useWorkspaceDocumentIntents({
+    visibleNotes,
+    deletedNotes,
+    allStudyDocuments,
+    deletedStudyDocuments,
+    noteId,
+    onOpenNotesTab: props.onOpenNotesTab,
+    setSubjectId,
+    setNoteId,
+    setQuery,
+    setNoteDetailTab,
+    setNoteWorkspaceMode,
+    setStudyDocumentId,
+    setInkTool,
+    setAiPanelOpen,
+    setDeletedNoteIds,
+    setUserStudyDocuments,
+    setWorkspaceFeedback,
+  });
 
   const {
     openStudyDocument,
@@ -579,71 +561,6 @@ export function useStudyWorkspace(props: {
     setAiLoading,
     setWorkspaceFeedback,
   });
-
-  const restoreNote = (id: number) => {
-    const target = deletedNotes.find((value) => value.id === id);
-    if (!target) return;
-
-    setDeletedNoteIds((current) => removeId(current, id));
-    setNoteWorkspaceMode('photo');
-    setSubjectId(target.subjectId);
-    setWorkspaceFeedback('Photo를 복구했습니다.');
-  };
-
-  const renameStudyDocument = (id: number, title: string) => {
-    const nextTitle = title.trim();
-    if (!nextTitle) {
-      setWorkspaceFeedback('문서 제목을 입력해주세요.');
-      return false;
-    }
-
-    const target = allStudyDocuments.find((value) => value.id === id) ?? deletedStudyDocuments.find((value) => value.id === id);
-    if (!target) return false;
-    const backendNoteId = getStudyDocumentBackendNoteId(target);
-    const isBackendDocument = isBackendApiEnabled() && Boolean(backendNoteId);
-
-    if (isBackendDocument) {
-      void updateBackendNote({ noteId: backendNoteId!, title: nextTitle })
-        .then((updated) => {
-          setUserStudyDocuments((current) => upsertStudyDocument(current, {
-            ...target,
-            backendNoteId: updated.id,
-            title: updated.title,
-            preview: updated.summary ?? target.preview,
-            updatedAt: 'DB 저장됨',
-            backendSyncStatus: 'synced',
-          }));
-          setWorkspaceFeedback('문서 제목을 백엔드에 저장했습니다.');
-        })
-        .catch(() => {
-          setWorkspaceFeedback('노트 제목 저장에 실패했습니다. backend 연결을 확인해주세요.');
-        });
-      return true;
-    }
-
-    setUserStudyDocuments((current) => upsertStudyDocument(current, {
-      ...target,
-      title: nextTitle,
-      updatedAt: '방금 전',
-    }));
-    setWorkspaceFeedback('문서 제목을 수정했습니다.');
-    return true;
-  };
-
-  const changeNoteWorkspaceMode = (next: NoteWorkspaceMode) => {
-    setNoteWorkspaceMode(next);
-    setNoteId(null);
-    setStudyDocumentId(null);
-    setInkTool('view');
-    setAiPanelOpen(false);
-  };
-
-  const resetToSubjectList = () => {
-    setNoteId(null);
-    setSubjectId(null);
-    setQuery('');
-    setNoteDetailTab('original');
-  };
 
   const changeInkTool = (tool: InkTool) => {
     if (tool === 'select' && inkTool === 'select') {
@@ -1068,17 +985,13 @@ export function useStudyWorkspace(props: {
     clearCurrentSelection,
     pushWorkspaceHistorySnapshot,
   });
-  const pageSaveFeedback = failedPageSaveCount ? `필기 저장 실패 ${failedPageSaveCount}건 · 자동 재시도 중` : null;
-  const effectiveWorkspaceFeedback = workspaceFeedback ?? pageSaveFeedback;
-  const documentSaveStatus = failedPageSaveCount
-    ? `저장 실패 ${failedPageSaveCount} · 재시도 중`
-    : savingPageCount
-      ? `저장 중 ${savingPageCount}`
-      : pendingPageSaveCount
-        ? `저장 대기 ${pendingPageSaveCount}`
-        : workspaceHydrated
-          ? '저장됨'
-          : '저장 준비 중';
+  const { effectiveWorkspaceFeedback, documentSaveStatus } = useWorkspaceSaveStatus({
+    workspaceFeedback,
+    failedPageSaveCount,
+    pendingPageSaveCount,
+    savingPageCount,
+    workspaceHydrated,
+  });
 
   return {
     subjectId,
