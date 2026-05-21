@@ -1,4 +1,4 @@
-import { InkTool } from '../../../ui-types';
+import { InkEraserMode, InkTool } from '../../../ui-types';
 
 export type PencilHoverPoint = { x: number; y: number };
 
@@ -29,17 +29,23 @@ export function getPencilHoverPoint(event: unknown): PencilHoverPoint | null {
   return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
 }
 
-export function getPencilHoverSize(tool: InkTool, penWidth: number) {
-  if (tool === 'erase') return Math.max(20, penWidth * 5);
+export function getPencilEraserRadius(penWidth: number, mode: InkEraserMode = 'partial') {
+  return mode === 'stroke'
+    ? Math.max(18, penWidth * 3.2)
+    : Math.max(9, penWidth * 2.1);
+}
+
+export function getPencilHoverSize(tool: InkTool, penWidth: number, eraserMode: InkEraserMode = 'partial') {
+  if (tool === 'erase') return getPencilEraserRadius(penWidth, eraserMode) * 2;
   if (tool === 'highlight') return Math.max(18, penWidth * 2.2);
   if (tool === 'select') return 18;
   return Math.max(10, penWidth * 3);
 }
 
-export function getPencilHoverToolLabel(tool: InkTool) {
+export function getPencilHoverToolLabel(tool: InkTool, eraserMode: InkEraserMode = 'partial') {
   if (tool === 'pen') return '필기';
   if (tool === 'highlight') return '형광펜';
-  if (tool === 'erase') return '지우개';
+  if (tool === 'erase') return eraserMode === 'stroke' ? '획 지우개' : '부분 지우개';
   if (tool === 'select') return '선택';
   if (tool === 'text') return '텍스트';
   if (tool === 'line' || tool === 'arrow' || tool === 'rect' || tool === 'ellipse') return '도형';

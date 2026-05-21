@@ -180,7 +180,7 @@ export function useStudyDocumentActions(params: StudyDocumentActionsParams) {
       else delete next[id];
       return next;
     });
-    params.setInkTool('view');
+    params.setInkTool('pen');
     params.setActivePageByDocument((current) => ({
       ...current,
       [id]: current[id] ?? { kind: 'pdf', pageNumber: params.currentPdfPageByDocument[id] ?? 1 },
@@ -194,7 +194,7 @@ export function useStudyDocumentActions(params: StudyDocumentActionsParams) {
     params.setNoteId(null);
     params.setStudyDocumentId(document.id);
     params.setNoteWorkspaceMode('note');
-    params.setInkTool('view');
+    params.setInkTool('pen');
     params.setAiPanelOpen(false);
     params.setWorkspaceFeedback(feedback);
     params.setCurrentPdfPageByDocument((current) => ({

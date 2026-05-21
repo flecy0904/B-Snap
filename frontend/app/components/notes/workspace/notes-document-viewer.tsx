@@ -84,6 +84,7 @@ export const NotesDocumentViewer = React.memo(function NotesDocumentViewer() {
         onDuplicateSelection={canvasContext.duplicateSelectedStrokes}
         onDeleteSelection={canvasContext.deleteSelectedStrokes}
         onChangeSelectedStrokesColor={canvasContext.changeSelectedStrokesColor}
+        onChangeInkTool={canvasContext.setInkTool}
         onSelectionPreviewChange={canvasContext.setSelectionPreviewUri}
         onPageChanged={documentContext.onSetCurrentPdfPage}
         onOpenGeneratedPage={documentContext.onOpenGeneratedPage}

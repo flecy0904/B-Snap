@@ -9,10 +9,11 @@ import { captureRef } from 'react-native-view-shot';
 import { InkPath } from '../canvas/ink-path';
 import { TextAnnotationLayer } from '../canvas/text-annotation-layer';
 import { SelectionContextMenu } from '../canvas/selection-context-menu';
-import { getPencilHoverPoint, getPencilHoverSize, getPencilHoverToolLabel, isStylusHoverEvent, shouldPreviewPencilHover, type PencilHoverPoint } from '../canvas/native-pencil-hover';
+import { PencilHoverQuickPalette } from '../canvas/pencil-hover-quick-palette';
+import { getPencilEraserRadius, getPencilHoverPoint, getPencilHoverSize, getPencilHoverToolLabel, isStylusHoverEvent, shouldPreviewPencilHover, type PencilHoverPoint } from '../canvas/native-pencil-hover';
 import { shouldActivateNativeInkGesture, type NativeGestureStateManager, type NativeInkGestureEvent, type NativeInkTouchEvent } from '../canvas/native-ink-gesture-policy';
 import { getCaptureOriginalImageSource, getPageCaptureReferenceImageSource } from '../shared/capture-assets';
-import { cleanAiDisplayText, finalizeInkStroke, findHitInkStrokeId, isDrawingTool, isPointInSelectionShape, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize, shouldAppendInkPoint } from '../../../ui-helpers';
+import { cleanAiDisplayText, doesRectIntersectPolygon, finalizeInkStroke, findHitInkStrokeId, findInkStrokesInLasso, findInkStrokesInRect, isDrawingTool, isPointInSelectionShape, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize, shouldAppendInkPoint } from '../../../ui-helpers';
 import { InkBrush, InkBrushSettings, InkEraserMode, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { CaptureAsset, NotebookPage, PageCaptureReference } from '../../../types';
 import { renderPdfPageToImage, type PdfRenderSource, type RenderedPdfPage } from '../../../services/pdf-page-renderer';
@@ -256,6 +257,35 @@ function SelectionLassoOverlay(props: { points: InkPoint[] }) {
   );
 }
 
+function getTextAnnotationRect(annotation: InkTextAnnotation): SelectionRect {
+  return annotation.anchorRect ?? {
+    x: annotation.x,
+    y: annotation.y,
+    width: annotation.width,
+    height: annotation.height ?? 96,
+    pageWidth: annotation.pageWidth,
+    pageHeight: annotation.pageHeight,
+  };
+}
+
+function getSelectedObjectCountForView(strokes: InkStroke[], textAnnotations: InkTextAnnotation[], selection: SelectionRect) {
+  const selectedStrokeIds = selection.path && selection.path.length > 2
+    ? findInkStrokesInLasso(strokes, selection.path)
+    : findInkStrokesInRect(strokes, selection);
+  const selectedTextCount = textAnnotations.filter((annotation) => {
+    const rect = getTextAnnotationRect(annotation);
+    return selection.path && selection.path.length > 2
+      ? doesRectIntersectPolygon(rect, selection.path)
+      : (
+          rect.x <= selection.x + selection.width
+          && rect.x + rect.width >= selection.x
+          && rect.y <= selection.y + selection.height
+          && rect.y + rect.height >= selection.y
+        );
+  }).length;
+  return selectedStrokeIds.length + selectedTextCount;
+}
+
 export function PdfPreview(props: {
   file: number | string | { uri: string };
   page: number;
@@ -287,6 +317,7 @@ export function PdfPreview(props: {
   onDuplicateSelection?: () => void;
   onDeleteSelection?: () => void;
   onChangeSelectedStrokesColor?: (color: string) => void;
+  onChangeInkTool?: (tool: InkTool) => void;
   onSelectionPreviewChange?: (uri: string | null) => void;
   onPageChanged?: (page: number) => void;
   onOpenGeneratedPage?: (pageId: string) => void;
@@ -344,6 +375,7 @@ export function PdfPreview(props: {
   const draftSelectionRef = useRef<SelectionRect | null>(null);
   const draftSelectionPageKeyRef = useRef<string | null>(null);
   const draftSelectionPathRef = useRef<InkPoint[]>([]);
+  const activeInkGesturePageKeyRef = useRef<string | null>(null);
   const selectionPreviewTokenRef = useRef(0);
   const eraserSnapshotPushedRef = useRef(false);
   const erasedStrokeIdsRef = useRef<Set<string>>(new Set());
@@ -781,6 +813,9 @@ export function PdfPreview(props: {
 
   const renderInkLayers = (page: NotebookPage, pageStrokes: InkStroke[], pageTextAnnotations: InkTextAnnotation[], currentPage: boolean) => {
     const selectionForView = currentPage ? scaleSelectionRectToPageSize(props.selectionRect, viewerWidth, viewerHeight) : null;
+    const selectedObjectCount = selectionForView
+      ? getSelectedObjectCountForView(pageStrokes, pageTextAnnotations, selectionForView)
+      : 0;
     const pageKey = getNotebookPageKey(page);
     const draftForView = draftSelectionPageKey === pageKey ? draftSelection : null;
     const draftLassoForView = draftSelectionPageKey === pageKey ? draftSelectionPath : [];
@@ -819,7 +854,7 @@ export function PdfPreview(props: {
         ) : null}
 
         {!capturingSelection && !draftForView && selectionForView ? <SelectionOverlay rect={selectionForView} styles={props.styles} /> : null}
-        {!capturingSelection && !draftForView && currentPage && selectionForView ? (
+        {!capturingSelection && !draftForView && currentPage && selectionForView && selectedObjectCount > 0 ? (
           <SelectionContextMenu
             rect={selectionForView}
             pageWidth={viewerWidth}
@@ -858,7 +893,7 @@ export function PdfPreview(props: {
     const incomingAssetImage = incomingAsset ? getCaptureOriginalImageSource(incomingAsset) : null;
     const incomingAssetSummary = getCaptureAssetSummary(incomingAsset);
     const eraseAtPoint = (point: InkPoint) => {
-      const radius = Math.max(10, props.penWidth * 2.4);
+      const radius = getPencilEraserRadius(props.penWidth, props.eraserMode ?? 'partial');
       if (props.onEraseInkAtPoint) {
         const changed = props.onEraseInkAtPoint(point, radius, !eraserSnapshotPushedRef.current, props.eraserMode ?? 'partial');
         if (changed) eraserSnapshotPushedRef.current = true;
@@ -874,6 +909,7 @@ export function PdfPreview(props: {
 
     const handleInkGestureStart = (x: number, y: number) => {
       if (!isPointInsidePage(x, y)) return;
+      activeInkGesturePageKeyRef.current = pageKey;
       setActiveInkGesture(true);
       beginInteraction(page);
       const point = clampPointToPage(page, x, y, props.inkTool === 'text' ? 'annotate' : 'draw');
@@ -960,6 +996,8 @@ export function PdfPreview(props: {
     };
 
     const handleInkGestureMove = (x: number, y: number) => {
+      if (activeInkGesturePageKeyRef.current !== pageKey) return;
+      if (!isPointInsidePage(x, y)) return;
       const point = clampPointToPage(page, x, y);
 
       if (isDrawingTool(props.inkTool)) {
@@ -1086,6 +1124,7 @@ export function PdfPreview(props: {
       erasedStrokeIdsRef.current.clear();
       currentStrokeRef.current = null;
       textTapRef.current = null;
+      activeInkGesturePageKeyRef.current = null;
       setCurrentStroke(null);
       setActiveInkGesture(false);
     };
@@ -1103,6 +1142,7 @@ export function PdfPreview(props: {
       selectionResizeCornerRef.current = null;
       selectionResizeStartRectRef.current = null;
       textTapRef.current = null;
+      activeInkGesturePageKeyRef.current = null;
       eraserSnapshotPushedRef.current = false;
       erasedStrokeIdsRef.current.clear();
       setDraftSelection(null);
@@ -1156,9 +1196,9 @@ export function PdfPreview(props: {
       onPointerLeave: () => setPencilHover((current) => (current?.pageKey === pageKey ? null : current)),
       onPointerCancel: () => setPencilHover((current) => (current?.pageKey === pageKey ? null : current)),
     } as any;
-    const hoverSize = getPencilHoverSize(props.inkTool, props.penWidth);
+    const hoverSize = getPencilHoverSize(props.inkTool, props.penWidth, props.eraserMode ?? 'partial');
     const hoverVisible = pencilHover?.pageKey === pageKey && shouldPreviewPencilHover(props.inkTool);
-    const hoverToolLabel = getPencilHoverToolLabel(props.inkTool);
+    const hoverToolLabel = getPencilHoverToolLabel(props.inkTool, props.eraserMode ?? 'partial');
 
     return (
       <View
@@ -1347,6 +1387,17 @@ export function PdfPreview(props: {
               >
                 <Text style={props.styles.pencilHoverLabelText}>{hoverToolLabel}</Text>
               </View>
+            ) : null}
+            {props.onChangeInkTool ? (
+              <PencilHoverQuickPalette
+                x={pencilHover.x}
+                y={pencilHover.y}
+                pageWidth={viewerWidth}
+                pageHeight={viewerHeight}
+                activeTool={props.inkTool}
+                styles={props.styles}
+                onSelectTool={props.onChangeInkTool}
+              />
             ) : null}
           </>
         ) : null}
