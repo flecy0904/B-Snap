@@ -1203,8 +1203,8 @@ export function PdfPreview(props: {
                 source={activeReferenceImage}
                 frameStyle={props.styles.pdfPageReferencePopoverImageFrame}
                 imageStyle={props.styles.pdfPageReferencePopoverImage}
-                minHeight={230}
-                maxHeight={440}
+                minHeight={280}
+                maxHeight={560}
               />
             ) : (
               <View style={props.styles.pdfPageReferencePopoverFallback}>
@@ -1273,8 +1273,8 @@ export function PdfPreview(props: {
                 source={incomingAssetImage}
                 frameStyle={props.styles.pdfIncomingCaptureImageFrame}
                 imageStyle={props.styles.pdfIncomingCaptureImage}
-                minHeight={240}
-                maxHeight={460}
+                minHeight={320}
+                maxHeight={600}
               />
             ) : null}
             <View style={props.styles.pdfIncomingCaptureAnswer}>
