@@ -28,7 +28,7 @@ import {
   Subject,
   WorkspaceAttachment,
 } from '../../../types';
-import { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
+import { InkBrush, InkBrushSettings, InkEraserMode, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 
 export type DesktopNotesViewProps = {
   compact: boolean;
@@ -48,6 +48,7 @@ export type DesktopNotesViewProps = {
   penWidth: number;
   brushType: InkBrush;
   linePattern: InkLinePattern;
+  eraserMode: InkEraserMode;
   selectionMode: InkSelectionMode;
   brushSettings: InkBrushSettings;
   inkStrokes: InkStroke[];
@@ -104,6 +105,7 @@ export type DesktopNotesViewProps = {
   onChangePenWidth: (width: number) => void;
   onChangeBrushType: (brush: InkBrush) => void;
   onChangeLinePattern: (pattern: InkLinePattern) => void;
+  onChangeEraserMode: (mode: InkEraserMode) => void;
   onChangeSelectionMode: (mode: InkSelectionMode) => void;
   onChangeBrushSettings: (settings: Partial<InkBrushSettings>) => void;
   onToggleAiPanel: () => void;
@@ -139,7 +141,7 @@ export type DesktopNotesViewProps = {
   onRemoveTextAnnotation: (id: string) => void;
   onMoveTextAnnotation: (id: string, x: number, y: number) => void;
   onResizeTextAnnotation: (id: string, width: number, height: number) => void;
-  onEraseInkAtPoint: (point: InkPoint, radius: number, snapshot?: boolean) => boolean;
+  onEraseInkAtPoint: (point: InkPoint, radius: number, snapshot?: boolean, mode?: InkEraserMode) => boolean;
   onAcceptIncomingAsset: () => void;
   onArchiveIncomingAsset: () => void;
   onDismissIncomingAsset: () => void;
@@ -299,6 +301,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           penWidth: props.penWidth,
           brushType: props.brushType,
           linePattern: props.linePattern,
+          eraserMode: props.eraserMode,
           selectionMode: props.selectionMode,
           brushSettings: props.brushSettings,
           inkStrokes: props.inkStrokes,
@@ -367,6 +370,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           onChangePenWidth: props.onChangePenWidth,
           onChangeBrushType: props.onChangeBrushType,
           onChangeLinePattern: props.onChangeLinePattern,
+          onChangeEraserMode: props.onChangeEraserMode,
           onChangeSelectionMode: props.onChangeSelectionMode,
           onChangeBrushSettings: props.onChangeBrushSettings,
           onUndoInk: props.onUndoInk,

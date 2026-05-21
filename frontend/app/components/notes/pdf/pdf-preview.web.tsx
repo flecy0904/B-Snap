@@ -6,8 +6,8 @@ import { InkPath } from '../canvas/ink-path';
 import { TextAnnotationLayer } from '../canvas/text-annotation-layer';
 import { hasMultipleTouches, shouldCaptureInkPointer, shouldUsePrimaryPointer } from '../canvas/ink-input-policy';
 import { getCaptureOriginalImageSource, getPageCaptureReferenceImageSource } from '../shared/capture-assets';
-import { cleanAiDisplayText, finalizeInkStroke, findHitInkStrokeId, getInkCenterlinePath, getInkStrokeSvgPath, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize, shouldAppendInkPoint } from '../../../ui-helpers';
-import { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
+import { cleanAiDisplayText, finalizeInkStroke, findHitInkStrokeId, getInkCenterlinePath, getInkStrokeSvgPath, isDrawingTool, isPointInSelectionShape, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize, shouldAppendInkPoint } from '../../../ui-helpers';
+import { InkBrush, InkBrushSettings, InkEraserMode, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { CaptureAsset, NotebookPage, PageCaptureReference } from '../../../types';
 
 function NotebookPaperBackground({ page }: { page: NotebookPage }) {
@@ -154,6 +154,7 @@ function isPdfUri(uri: string | undefined) {
 
 function getResizeCorner(rect: SelectionRect | null, point: InkPoint): ResizeCorner | null {
   if (!rect) return null;
+  if (rect.mode === 'lasso') return null;
   const threshold = 24;
   const corners: Array<{ corner: ResizeCorner; x: number; y: number }> = [
     { corner: 'nw', x: rect.x, y: rect.y },
@@ -199,6 +200,11 @@ function SelectionOverlay(props: { rect: SelectionRect; styles: any; draft?: boo
         <Path
           d={`${lassoPath} Z`}
           fill="rgba(78, 141, 255, 0.06)"
+          stroke="none"
+        />
+        <Path
+          d={lassoPath}
+          fill="none"
           stroke="#2563EB"
           strokeWidth={2}
           strokeLinecap="round"
@@ -340,6 +346,7 @@ export function PdfPreview(props: {
   penWidth: number;
   brushType: InkBrush;
   linePattern: InkLinePattern;
+  eraserMode?: InkEraserMode;
   selectionMode?: InkSelectionMode;
   brushSettings?: InkBrushSettings;
   inkStrokes: InkStroke[];
@@ -353,10 +360,14 @@ export function PdfPreview(props: {
   onRemoveTextAnnotation: (id: string) => void;
   onMoveTextAnnotation: (id: string, x: number, y: number) => void;
   onResizeTextAnnotation: (id: string, width: number, height: number) => void;
-  onEraseInkAtPoint?: (point: InkPoint, radius: number, snapshot?: boolean) => boolean;
+  onEraseInkAtPoint?: (point: InkPoint, radius: number, snapshot?: boolean, mode?: InkEraserMode) => boolean;
   onSelectionChange: (rect: SelectionRect | null) => void;
   onMoveSelection?: (dx: number, dy: number) => void;
   onResizeSelection?: (rect: SelectionRect) => void;
+  onAskAiAboutSelection?: () => void;
+  onDuplicateSelection?: () => void;
+  onDeleteSelection?: () => void;
+  onChangeSelectedStrokesColor?: (color: string) => void;
   onSelectionPreviewChange?: (uri: string | null) => void;
   onPageChanged?: (page: number) => void;
   onOpenGeneratedPage?: (pageId: string) => void;
@@ -982,10 +993,7 @@ export function PdfPreview(props: {
               }
               if (
                 currentSelection &&
-                point.x >= currentSelection.x &&
-                point.x <= currentSelection.x + currentSelection.width &&
-                point.y >= currentSelection.y &&
-                point.y <= currentSelection.y + currentSelection.height
+                isPointInSelectionShape(point, currentSelection)
               ) {
                 selectionMoveOriginRef.current = point;
                 selectionMoveStartRectRef.current = currentSelection;

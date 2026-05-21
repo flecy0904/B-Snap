@@ -7,11 +7,13 @@ import Svg, { Path } from 'react-native-svg';
 import { captureRef } from 'react-native-view-shot';
 import { TextAnnotationLayer } from './text-annotation-layer';
 import { InkPath } from './ink-path';
+import { SelectionContextMenu } from './selection-context-menu';
 import { finalizeInkStroke, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, shouldAppendInkPoint } from '../../../ui-helpers';
 import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { useCanvasContext } from './canvas-context';
 import { shouldActivateNativeInkGesture, type NativeGestureStateManager, type NativeInkGestureEvent, type NativeInkTouchEvent } from './native-ink-gesture-policy';
 import { getPencilHoverPoint, getPencilHoverSize, getPencilHoverToolLabel, isStylusHoverEvent, shouldPreviewPencilHover, type PencilHoverPoint } from './native-pencil-hover';
+import { useDesktopNotesWorkspaceContext } from '../workspace/notes-workspace-context';
 
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
 
@@ -91,6 +93,11 @@ function SelectionOverlay(props: { rect: SelectionRect; styles: any; draft?: boo
         <Path
           d={`${lassoPath} Z`}
           fill="rgba(78, 141, 255, 0.06)"
+          stroke="none"
+        />
+        <Path
+          d={lassoPath}
+          fill="none"
           stroke="#2563EB"
           strokeWidth={2}
           strokeLinecap="round"
@@ -158,6 +165,7 @@ export function BlankNoteCanvas(props: {
   styles: any;
 }) {
   const canvasCtx = useCanvasContext();
+  const workspaceContext = useDesktopNotesWorkspaceContext();
   const {
     inkTool,
     fingerDrawingEnabled,
@@ -245,7 +253,7 @@ export function BlankNoteCanvas(props: {
 
   const eraseAtPoint = useCallback((point: InkPoint) => {
     const radius = Math.max(10, penWidth * 2.4);
-    const changed = canvasCtx.eraseInkAtPoint(point, radius, !eraserSnapshotPushedRef.current);
+    const changed = canvasCtx.eraseInkAtPoint(point, radius, !eraserSnapshotPushedRef.current, canvasCtx.eraserMode);
     if (changed) eraserSnapshotPushedRef.current = true;
   }, [canvasCtx, penWidth]);
 
@@ -568,6 +576,18 @@ export function BlankNoteCanvas(props: {
           </Svg>
 
           {!capturingSelection && !draftSelection && selectionRect ? <SelectionOverlay rect={selectionRect} styles={props.styles} /> : null}
+          {!capturingSelection && !draftSelection && selectionRect ? (
+            <SelectionContextMenu
+              rect={selectionRect}
+              pageWidth={pageSize.width}
+              pageHeight={pageSize.height}
+              styles={props.styles}
+              onAskAi={workspaceContext.onAskAiAboutSelection}
+              onDuplicate={canvasCtx.duplicateSelectedStrokes}
+              onDelete={canvasCtx.deleteSelectedStrokes}
+              onChangeColor={canvasCtx.changeSelectedStrokesColor}
+            />
+          ) : null}
           {!capturingSelection && draftSelectionPath.length > 1 ? <SelectionLassoOverlay points={draftSelectionPath} /> : null}
           {!capturingSelection && draftSelection && draftSelection.mode !== 'lasso' ? <SelectionOverlay rect={draftSelection} styles={props.styles} draft /> : null}
           {hoverVisible ? (

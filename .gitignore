@@ -107,3 +107,8 @@ img_preprocessing/target_area_yolo11n/
 !img_preprocessing/crop/best.pt
 *.swp
 *.bak
+
+# ==============================
+# Local Codex working notes
+# ==============================
+docs/codex/

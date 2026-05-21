@@ -40,7 +40,7 @@ import { useIncomingAssetSubscription } from './workspace/use-incoming-asset-sub
 import { useStudyWorkspaceDerivedState } from './workspace/use-study-workspace-derived-state';
 import { useStudyWorkspacePersistence } from './workspace/use-study-workspace-persistence';
 import { isSameDocumentPage, isShapeTool } from '../../ui-helpers';
-import type { InkBrush, InkBrushSettings, InkLinePattern, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../ui-types';
+import type { InkBrush, InkBrushSettings, InkEraserMode, InkLinePattern, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../ui-types';
 import type { AiAnswer, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../types';
 
 export function useStudyWorkspace(props: {
@@ -62,6 +62,7 @@ export function useStudyWorkspace(props: {
   const [penWidth, setPenWidth] = useState(3);
   const [brushType, setBrushType] = useState<InkBrush>('ballpoint');
   const [linePattern, setLinePattern] = useState<InkLinePattern>('solid');
+  const [eraserMode, setEraserMode] = useState<InkEraserMode>('partial');
   const [selectionMode, setSelectionMode] = useState<InkSelectionMode>('rect');
   const [brushSettings, setBrushSettings] = useState<InkBrushSettings>({
     stability: 18,
@@ -702,6 +703,11 @@ export function useStudyWorkspace(props: {
     setInkTool((current) => (current !== 'pen' && current !== 'highlight' && !isShapeTool(current) ? 'pen' : current));
   };
 
+  const changeEraserMode = (mode: InkEraserMode) => {
+    setEraserMode(mode);
+    setInkTool('erase');
+  };
+
   const changeSelectionMode = (mode: InkSelectionMode) => {
     setSelectionMode(mode);
     setInkTool('select');
@@ -1081,6 +1087,7 @@ export function useStudyWorkspace(props: {
     penWidth,
     brushType,
     linePattern,
+    eraserMode,
     selectionMode,
     brushSettings,
     inkStrokes,
@@ -1157,6 +1164,7 @@ export function useStudyWorkspace(props: {
     changePenWidth,
     changeBrushType,
     changeLinePattern,
+    changeEraserMode,
     changeSelectionMode,
     changeBrushSettings,
     toggleAiPanel: () => setAiPanelOpen((current) => {

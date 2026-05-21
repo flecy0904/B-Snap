@@ -1,8 +1,8 @@
 import React from 'react';
-import { PanResponder, Pressable, Text, TextInput, View } from 'react-native';
+import { PanResponder, Pressable, Text, TextInput, View, type GestureResponderEvent } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { InkTextAnnotation } from '../../../ui-types';
-import { shouldUsePrimaryPointer } from './ink-input-policy';
+import { isLikelyStylusEvent, shouldUsePrimaryPointer } from './ink-input-policy';
 
 const MIN_TEXT_BOX_WIDTH = 96;
 const MIN_TEXT_BOX_HEIGHT = 56;
@@ -87,14 +87,27 @@ function MovableTextAnnotationBox(props: {
     }, 0);
   };
 
+  const stopEvent = (event?: GestureResponderEvent) => {
+    event?.stopPropagation?.();
+  };
+
+  const removeBox = (event?: GestureResponderEvent) => {
+    stopEvent(event);
+    props.onRemove(props.annotation.id);
+  };
+
+  const shouldEditFrame = React.useCallback((event: any) => (
+    shouldUsePrimaryPointer(event) && isLikelyStylusEvent(event)
+  ), []);
+
   const moveResponder = React.useMemo(() => PanResponder.create({
-    onStartShouldSetPanResponderCapture: (event) => Boolean(props.onMove) && shouldUsePrimaryPointer(event),
-    onStartShouldSetPanResponder: (event) => Boolean(props.onMove) && shouldUsePrimaryPointer(event),
+    onStartShouldSetPanResponderCapture: (event) => Boolean(props.onMove) && shouldEditFrame(event),
+    onStartShouldSetPanResponder: (event) => Boolean(props.onMove) && shouldEditFrame(event),
     onMoveShouldSetPanResponderCapture: (event, gesture) => Boolean(props.onMove)
-      && shouldUsePrimaryPointer(event)
+      && shouldEditFrame(event)
       && (Math.abs(gesture.dx) > 2 || Math.abs(gesture.dy) > 2),
     onMoveShouldSetPanResponder: (event, gesture) => Boolean(props.onMove)
-      && shouldUsePrimaryPointer(event)
+      && shouldEditFrame(event)
       && (Math.abs(gesture.dx) > 2 || Math.abs(gesture.dy) > 2),
     onPanResponderGrant: () => {
       props.onActivate(props.annotation.id);
@@ -122,16 +135,16 @@ function MovableTextAnnotationBox(props: {
     },
     onPanResponderTerminationRequest: () => false,
     onShouldBlockNativeResponder: () => true,
-  }), [props.annotation.id, props.onActivate, props.onMove]);
+  }), [props.annotation.id, props.onActivate, props.onMove, shouldEditFrame]);
 
   const resizeResponder = React.useMemo(() => PanResponder.create({
-    onStartShouldSetPanResponderCapture: (event) => Boolean(props.onResize) && shouldUsePrimaryPointer(event),
-    onStartShouldSetPanResponder: (event) => Boolean(props.onResize) && shouldUsePrimaryPointer(event),
+    onStartShouldSetPanResponderCapture: (event) => Boolean(props.onResize) && shouldEditFrame(event),
+    onStartShouldSetPanResponder: (event) => Boolean(props.onResize) && shouldEditFrame(event),
     onMoveShouldSetPanResponderCapture: (event, gesture) => Boolean(props.onResize)
-      && shouldUsePrimaryPointer(event)
+      && shouldEditFrame(event)
       && (Math.abs(gesture.dx) > 2 || Math.abs(gesture.dy) > 2),
     onMoveShouldSetPanResponder: (event, gesture) => Boolean(props.onResize)
-      && shouldUsePrimaryPointer(event)
+      && shouldEditFrame(event)
       && (Math.abs(gesture.dx) > 2 || Math.abs(gesture.dy) > 2),
     onPanResponderGrant: () => {
       props.onActivate(props.annotation.id);
@@ -167,7 +180,7 @@ function MovableTextAnnotationBox(props: {
     },
     onPanResponderTerminationRequest: () => false,
     onShouldBlockNativeResponder: () => true,
-  }), [props.annotation.id, props.onActivate, props.onResize]);
+  }), [props.annotation.id, props.onActivate, props.onResize, shouldEditFrame]);
 
   const frame = draftFrame ?? {
     x: props.annotation.x,
@@ -193,19 +206,27 @@ function MovableTextAnnotationBox(props: {
         <View style={props.styles.textAnnotationFrameToolbar}>
           <View
             style={props.styles.textAnnotationMoveHandle}
+            onStartShouldSetResponder={() => true}
+            onResponderGrant={(event) => {
+              stopEvent(event);
+              props.onActivate(props.annotation.id);
+            }}
             onTouchStart={() => props.onActivate(props.annotation.id)}
             {...moveResponder.panHandlers}
           >
             <MaterialCommunityIcons name="drag-horizontal-variant" size={17} color="#4B5565" />
+            <Text style={props.styles.textAnnotationMoveHandleText}>이동</Text>
           </View>
           <Pressable
             hitSlop={12}
             style={props.styles.textAnnotationDelete}
+            onStartShouldSetResponder={() => true}
+            onResponderRelease={removeBox}
             onPressIn={(event) => {
-              event.stopPropagation();
+              stopEvent(event);
               props.onActivate(props.annotation.id);
             }}
-            onPress={() => props.onRemove(props.annotation.id)}
+            onPress={removeBox}
           >
             <MaterialCommunityIcons name="close" size={14} color="#EF4444" />
           </Pressable>
@@ -216,22 +237,30 @@ function MovableTextAnnotationBox(props: {
         value={props.annotation.text}
         onFocus={() => props.onActivate(props.annotation.id)}
         onPressIn={activateInput}
+        onTouchEnd={() => inputRef.current?.focus()}
         onChangeText={(text) => props.onChangeText(props.annotation.id, text)}
         placeholder="텍스트 입력"
         placeholderTextColor="#9AA4B5"
         multiline
+        blurOnSubmit={false}
         scrollEnabled
         textAlignVertical="top"
         style={[
           props.styles.textAnnotationInput,
           {
             minHeight: Math.max(32, frame.height - (props.active ? 46 : 16)),
+            color: props.annotation.color ?? '#111827',
           },
         ]}
       />
       {props.active ? (
         <View
           style={props.styles.textAnnotationResizeHandle}
+          onStartShouldSetResponder={() => true}
+          onResponderGrant={(event) => {
+            stopEvent(event);
+            props.onActivate(props.annotation.id);
+          }}
           onTouchStart={() => props.onActivate(props.annotation.id)}
           {...resizeResponder.panHandlers}
         >
