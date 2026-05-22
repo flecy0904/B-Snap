@@ -20,6 +20,7 @@
     "@gorhom/bottom-sheet": "^5.2.10",
     "expo": "~54.0.33",
     "expo-asset": "~12.0.12",
+    "expo-dev-client": "~6.0.21",
     "expo-document-picker": "~14.0.8",
     "expo-file-system": "~19.0.21",
     "expo-image-manipulator": "~14.0.8",
