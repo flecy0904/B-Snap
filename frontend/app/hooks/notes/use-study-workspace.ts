@@ -39,6 +39,8 @@ import { useStudyWorkspacePersistence } from './workspace/use-study-workspace-pe
 import { usePencilInteractionFeedback } from './workspace/use-pencil-interaction-feedback';
 import { useWorkspaceFeedback, useWorkspaceSaveStatus } from './workspace/use-workspace-feedback';
 import { useWorkspaceDocumentIntents } from './workspace/use-workspace-document-intents';
+import { useWorkspaceCaptureIntents } from './workspace/use-workspace-capture-intents';
+import { useWorkspaceAiIntents } from './workspace/use-workspace-ai-intents';
 import { isSameDocumentPage, isShapeTool } from '../../ui-helpers';
 import type { InkBrush, InkBrushSettings, InkEraserMode, InkLinePattern, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../ui-types';
 import type { AiAnswer, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../types';
@@ -740,20 +742,18 @@ export function useStudyWorkspace(props: {
     }),
   });
 
-  const askAiAboutSelection = () => {
-    if (!selectionRect && !selectionPreviewUri) {
-      setWorkspaceFeedback('AI에게 물어볼 영역을 먼저 선택해 주세요.');
-      return;
-    }
-
-    setViewingAiChatSessionId(null);
-    setAiPanelOpen(true);
-    setAiPanelMode('floating');
-    setAiQuestion((current) => current.trim() || '이 선택 영역을 설명해줘');
-    setWorkspaceFeedback(selectionPreviewUri
-      ? '선택 영역을 AI 질문창에 첨부했습니다.'
-      : '선택 영역 미리보기를 준비 중입니다. 잠시 후 질문을 보내세요.');
-  };
+  const {
+    toggleAiPanel,
+    askAiAboutSelection,
+  } = useWorkspaceAiIntents({
+    selectionRect,
+    selectionPreviewUri,
+    setAiPanelOpen,
+    setAiPanelMode,
+    setAiQuestion,
+    setViewingAiChatSessionId,
+    setWorkspaceFeedback,
+  });
 
   const {
     linkCaptureAssetToPage,
@@ -789,77 +789,41 @@ export function useStudyWorkspace(props: {
     openStudyDocument,
     requestAiAnswerForQuestion,
   });
-
-  const acceptIncomingAsset = () => {
-    if (!incomingAssetSuggestion) return;
-    void linkCaptureAssetToCurrentPage(incomingAssetSuggestion);
-  };
-
-  const archiveIncomingAsset = () => {
-    if (!incomingAssetSuggestion) return;
-    updateAssetStatus(incomingAssetSuggestion.id, 'archived');
-    setWorkspaceFeedback('자료를 보관함으로 넘겼습니다.');
-    setIncomingAssetSuggestion(null);
-  };
-
-  const dismissIncomingAsset = () => {
-    if (!incomingAssetSuggestion) return;
-    updateAssetStatus(incomingAssetSuggestion.id, 'dismissed');
-    setWorkspaceFeedback('이번 제안은 숨겼습니다.');
-    setIncomingAssetSuggestion(null);
-  };
-
-  const insertInboxAsset = (assetId: string) => {
-    const asset = captureInbox.find((value) => value.id === assetId) ?? findCaptureAssetById(assetId);
-    if (!asset) return;
-    void linkCaptureAssetToCurrentPage(asset);
-  };
-
-  const removeInboxAsset = (assetId: string) => {
-    const asset = captureInbox.find((value) => value.id === assetId);
-    if (!asset) return;
-    updateAssetStatus(asset.id, 'dismissed');
-    if (incomingAssetSuggestion?.id === asset.id) {
-      setIncomingAssetSuggestion(null);
-    }
-    setWorkspaceFeedback('inbox에서 자료를 삭제했습니다.');
-  };
-
-  const removeWorkspaceAttachment = (attachmentId: string) => {
-    if (!studyDocumentId) return;
-    const target = (attachmentsByDocument[studyDocumentId] ?? []).find((attachment) => attachment.id === attachmentId);
-    if (!target) return;
-    const linkedGeneratedPage = target.generatedPageId
-      ? (generatedPagesByDocument[studyDocumentId] ?? []).find((page) => page.id === target.generatedPageId) ?? null
-      : null;
-
-    setAttachmentsByDocument((current) => ({
-      ...current,
-      [studyDocumentId]: (current[studyDocumentId] ?? []).filter((attachment) => attachment.id !== attachmentId),
-    }));
-    if (target.generatedPageId) {
-      setGeneratedPagesByDocument((current) => ({
-        ...current,
-        [studyDocumentId]: (current[studyDocumentId] ?? []).filter((page) => page.id !== target.generatedPageId),
-      }));
-      setBookmarksByDocument((current) => ({
-        ...current,
-        [studyDocumentId]: (current[studyDocumentId] ?? []).filter((bookmark) => bookmark.page.kind !== 'generated' || bookmark.page.pageId !== target.generatedPageId),
-      }));
-    }
-    if (linkedGeneratedPage && activePageByDocument[studyDocumentId]?.kind === 'generated' && activePageByDocument[studyDocumentId]?.pageId === linkedGeneratedPage.id) {
-      setActivePageByDocument((current) => ({
-        ...current,
-        [studyDocumentId]: { kind: 'pdf', pageNumber: linkedGeneratedPage.insertAfterPage },
-      }));
-      setCurrentPdfPageByDocument((current) => ({
-        ...current,
-        [studyDocumentId]: linkedGeneratedPage.insertAfterPage,
-      }));
-    }
-    updateAssetStatus(target.assetId, 'archived');
-    setWorkspaceFeedback('추가한 정리 페이지를 삭제했습니다.');
-  };
+  const {
+    acceptIncomingAsset,
+    archiveIncomingAsset,
+    dismissIncomingAsset,
+    insertInboxAsset,
+    removeInboxAsset,
+    removeWorkspaceAttachment,
+    openWorkspaceAttachment,
+    dismissIncomingBanner,
+    openIncomingBanner,
+  } = useWorkspaceCaptureIntents({
+    studyDocumentId,
+    incomingAssetSuggestion,
+    incomingBannerQueue,
+    captureInbox,
+    attachmentsByDocument,
+    generatedPagesByDocument,
+    activePageByDocument,
+    onOpenNotesTab: props.onOpenNotesTab,
+    updateAssetStatus,
+    findCaptureAssetById,
+    linkCaptureAssetToCurrentPage,
+    setSubjectId,
+    setNoteId,
+    setNoteWorkspaceMode,
+    setStudyDocumentId,
+    setIncomingAssetSuggestion,
+    setIncomingBannerQueue,
+    setWorkspaceFeedback,
+    setAttachmentsByDocument,
+    setGeneratedPagesByDocument,
+    setBookmarksByDocument,
+    setActivePageByDocument,
+    setCurrentPdfPageByDocument,
+  });
 
   const {
     pushWorkspaceHistorySnapshot,
@@ -907,33 +871,6 @@ export function useStudyWorkspace(props: {
     setWorkspaceFeedback,
     onMarkPageDirty: markBackendPageDirty,
   });
-
-  const openWorkspaceAttachment = (attachmentId: string) => {
-    if (!studyDocumentId) return;
-    const target = (attachmentsByDocument[studyDocumentId] ?? []).find((attachment) => attachment.id === attachmentId);
-    if (!target?.generatedPageId) return;
-    setActivePageByDocument((current) => ({
-      ...current,
-      [studyDocumentId]: { kind: 'generated', pageId: target.generatedPageId! },
-    }));
-  };
-
-  const dismissIncomingBanner = () => {
-    setIncomingBannerQueue((current) => current.slice(1));
-  };
-
-  const openIncomingBanner = () => {
-    const asset = incomingBannerQueue[0];
-    if (!asset) return;
-
-    props.onOpenNotesTab();
-    setSubjectId(asset.subjectId);
-    setNoteWorkspaceMode(asset.type === 'image' ? 'photo' : 'note');
-    setNoteId(null);
-    setStudyDocumentId(null);
-    setWorkspaceFeedback(asset.type === 'image' ? 'Photo 라이브러리에서 원본 사진을 확인할 수 있습니다.' : 'PDF 자료를 inbox에서 확인할 수 있습니다.');
-    setIncomingBannerQueue((current) => current.slice(1));
-  };
 
   const {
     insertAiAnswerPage,
@@ -1086,11 +1023,7 @@ export function useStudyWorkspace(props: {
     changeEraserMode,
     changeSelectionMode,
     changeBrushSettings,
-    toggleAiPanel: () => setAiPanelOpen((current) => {
-      const next = !current;
-      if (next) setViewingAiChatSessionId(null);
-      return next;
-    }),
+    toggleAiPanel,
     setAiPanelMode,
     setAiQuestion,
     setAiChatScope: changeAiChatScope,
