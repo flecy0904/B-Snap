@@ -55,6 +55,7 @@ export const NotesDocumentViewer = React.memo(function NotesDocumentViewer() {
         brushType={canvasContext.brushType}
         linePattern={canvasContext.linePattern}
         eraserMode={canvasContext.eraserMode}
+        eraserWidth={canvasContext.eraserWidth}
         selectionMode={canvasContext.selectionMode}
         brushSettings={canvasContext.brushSettings}
         inkStrokes={documentInkStrokes}
@@ -118,7 +119,7 @@ export const NotesDocumentViewer = React.memo(function NotesDocumentViewer() {
             <View style={globalContext.styles.generatedPageLayout}>
               <View style={globalContext.styles.generatedPageImageColumn}>
                 {globalContext.activeGeneratedPreviewImage ? (
-                  <Image source={globalContext.activeGeneratedPreviewImage} style={globalContext.styles.generatedPageImage} resizeMode="cover" />
+                  <Image source={globalContext.activeGeneratedPreviewImage} style={globalContext.styles.generatedPageImage} resizeMode="contain" />
                 ) : (
                   <View style={globalContext.styles.generatedPageImageFallback}>
                     <MaterialCommunityIcons name="image-outline" size={32} color="#6D7BD9" />

@@ -70,6 +70,7 @@ export type MobileNotesViewProps = {
   brushType: InkBrush;
   linePattern: InkLinePattern;
   eraserMode: InkEraserMode;
+  eraserWidth: number;
   selectionMode: InkSelectionMode;
   inkStrokes: InkStroke[];
   textAnnotations: InkTextAnnotation[];
@@ -117,6 +118,7 @@ export type MobileNotesViewProps = {
   onChangeBrushType: (brush: InkBrush) => void;
   onChangeLinePattern: (pattern: InkLinePattern) => void;
   onChangeEraserMode: (mode: InkEraserMode) => void;
+  onChangeEraserWidth: (width: number) => void;
   onChangeSelectionMode: (mode: InkSelectionMode) => void;
   onToggleAiPanel: () => void;
   onChangeAiQuestion: (value: string) => void;
@@ -124,8 +126,10 @@ export type MobileNotesViewProps = {
   onSelectAiChatSession: (sessionId: number) => void;
   onCreateAiChatSession: () => void;
   onRequestAiAnswer: () => void;
+  onAskAiAboutSelection: (selectionPreviewUri?: string | null) => void;
   onInsertAiAnswerPage: () => void;
   onSelectionChange: (rect: SelectionRect | null) => void;
+  onSelectionPreviewChange: (uri: string | null) => void;
   onUndoInk: () => void;
   onRedoInk: () => void;
   onClearInk: () => void;
@@ -336,6 +340,96 @@ export function MobileNotesView(props: MobileNotesViewProps) {
     );
   };
 
+  const renderDocumentStage = () => (
+    <View style={[props.styles.mobilePdfStage, phoneViewerOnly && props.styles.mobileViewerStage]}>
+      {props.studyDocument?.type === 'pdf' && props.studyDocument.file ? (
+        <PdfPreview
+          file={props.studyDocument.file}
+          page={props.currentPdfPage}
+          inkTool={phoneViewerOnly ? (props.inkTool === 'select' ? 'select' : 'view') : props.inkTool}
+          fingerDrawingEnabled={props.fingerDrawingEnabled}
+          penColor={props.penColor}
+          penWidth={props.penWidth}
+          brushType={props.brushType}
+          linePattern={props.linePattern}
+          eraserMode={props.eraserMode}
+          eraserWidth={props.eraserWidth}
+          selectionMode={props.selectionMode}
+          inkStrokes={props.inkByDocument[props.studyDocument.id] ?? props.inkStrokes}
+          textAnnotations={props.textAnnotationsByDocument[props.studyDocument.id] ?? props.textAnnotations}
+          textAnnotationVariant={phoneViewerOnly ? 'marker' : undefined}
+          selectionRect={props.selectionRect}
+          onCommitInkStroke={props.onCommitInkStroke}
+          onRemoveInkStroke={props.onRemoveInkStroke}
+          onAddTextAnnotation={props.onAddTextAnnotation}
+          onUpdateTextAnnotation={props.onUpdateTextAnnotation}
+          onRemoveTextAnnotation={props.onRemoveTextAnnotation}
+          onMoveTextAnnotation={props.onMoveTextAnnotation}
+          onResizeTextAnnotation={props.onResizeTextAnnotation}
+          onEraseInkAtPoint={props.onEraseInkAtPoint}
+          onSelectionChange={props.onSelectionChange}
+          onAskAiAboutSelection={props.onAskAiAboutSelection}
+          onSelectionPreviewChange={props.onSelectionPreviewChange}
+          onMoveSelection={props.onMoveSelection}
+          onDocumentLoaded={props.onUpdateStudyDocumentPageCount}
+          onPageChanged={props.onSetCurrentPdfPage}
+          onOpenGeneratedPage={props.onOpenGeneratedPage}
+          notebookPages={props.notebookPages}
+          activeGeneratedPageId={props.currentDocumentPage?.kind === 'generated' ? props.currentDocumentPage.pageId : null}
+          pageCaptureReferences={props.pageCaptureReferences}
+          incomingAssetSuggestion={props.incomingAssetSuggestion}
+          onAcceptIncomingAsset={props.onAcceptIncomingAsset}
+          onArchiveIncomingAsset={props.onArchiveIncomingAsset}
+          onDismissIncomingAsset={props.onDismissIncomingAsset}
+          onOpenPageCaptureReference={props.onOpenPageCaptureReference}
+          onAskAiAboutPageCaptureReference={props.onAskAiAboutPageCaptureReference}
+          onChangeInkTool={props.onChangeInkTool}
+          styles={props.styles}
+        />
+      ) : props.activeGeneratedPage?.pageKind === 'memo' && phoneViewerOnly ? (
+        <View style={props.styles.mobileViewerFallbackCard}>
+          <MaterialCommunityIcons name="notebook-outline" size={24} color="#5F79FF" />
+          <Text style={props.styles.mobileViewerFallbackTitle}>메모 페이지</Text>
+          <Text style={props.styles.mobileViewerFallbackBody}>폰에서는 보기 모드만 지원합니다. 필기 편집은 iPad에서 이어서 할 수 있습니다.</Text>
+        </View>
+      ) : props.activeGeneratedPage?.pageKind === 'memo' ? (
+        <BlankNoteCanvas
+          styles={props.styles}
+        />
+      ) : props.activeGeneratedPage ? (
+        <View style={props.styles.generatedPageCard}>
+          <View style={props.styles.generatedPagePaper}>
+            <ScrollView contentContainerStyle={props.styles.generatedPagePaperContent} showsVerticalScrollIndicator={false}>
+              <Text style={props.styles.generatedSummaryTitle}>{props.activeGeneratedPage.summaryTitle}</Text>
+              <Text style={props.styles.generatedSummaryBody}>{props.activeGeneratedPage.summaryIntro}</Text>
+              {props.activeGeneratedPage.summarySections.map((section, index) => (
+                <View key={`${section.title}-${index}`} style={[props.styles.generatedSummaryCard, index === 1 && props.styles.generatedSummaryCardSoft]}>
+                  <Text style={props.styles.generatedSummaryLabel}>{section.title}</Text>
+                  <Text style={props.styles.generatedSummaryBody}>{section.body}</Text>
+                </View>
+              ))}
+            </ScrollView>
+          </View>
+        </View>
+      ) : props.studyDocument?.type === 'image' && typeof props.studyDocument.file === 'object' ? (
+        <BlankNoteCanvas
+          backgroundImageUri={props.studyDocument.file.uri}
+          styles={props.styles}
+        />
+      ) : phoneViewerOnly ? (
+        <View style={props.styles.mobileViewerFallbackCard}>
+          <MaterialCommunityIcons name="file-document-edit-outline" size={24} color="#5F79FF" />
+          <Text style={props.styles.mobileViewerFallbackTitle}>빈 노트</Text>
+          <Text style={props.styles.mobileViewerFallbackBody}>폰에서는 노트 확인만 지원합니다. 필기 편집은 iPad에서 사용하는 것을 권장합니다.</Text>
+        </View>
+      ) : (
+        <BlankNoteCanvas
+          styles={props.styles}
+        />
+      )}
+    </View>
+  );
+
   if (props.noteMode === 'note' && props.studyDocument && props.subject) {
     return (
       <View style={props.styles.main}>
@@ -535,12 +629,13 @@ export function MobileNotesView(props: MobileNotesViewProps) {
             </View>
           </View>
         ) : null}
-        <View style={props.styles.workspaceSection}>
-          <View style={props.styles.workspaceSectionHeader}>
-            <Text style={props.styles.workspaceSectionTitle}>현재 페이지 자료</Text>
-            <Text style={props.styles.workspaceSectionMeta}>{props.currentPageCaptureReferences.length}건</Text>
-          </View>
-          {props.currentPageCaptureReferences.length ? (
+        {renderDocumentStage()}
+        {props.currentPageCaptureReferences.length ? (
+          <View style={props.styles.workspaceSection}>
+            <View style={props.styles.workspaceSectionHeader}>
+              <Text style={props.styles.workspaceSectionTitle}>현재 페이지 자료</Text>
+              <Text style={props.styles.workspaceSectionMeta}>{props.currentPageCaptureReferences.length}건</Text>
+            </View>
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={props.styles.workspaceCardsRow}>
               {props.currentPageCaptureReferences.map((reference) => {
                 const preview = getReferencePreview(reference);
@@ -568,10 +663,8 @@ export function MobileNotesView(props: MobileNotesViewProps) {
                 );
               })}
             </ScrollView>
-          ) : (
-            <Text style={props.styles.workspaceCardBody}>사진을 찍으면 현재 PDF 페이지에 자료 카드로 연결됩니다.</Text>
-          )}
-        </View>
+          </View>
+        ) : null}
         {props.workspaceAttachments.length ? (
           <View style={props.styles.workspaceSection}>
             <View style={props.styles.workspaceSectionHeader}>
@@ -639,90 +732,6 @@ export function MobileNotesView(props: MobileNotesViewProps) {
             ) : null}
           </View>
         ) : null}
-        <View style={[props.styles.mobilePdfStage, phoneViewerOnly && props.styles.mobileViewerStage]}>
-          {props.studyDocument.type === 'pdf' && props.studyDocument.file ? (
-            <PdfPreview
-              file={props.studyDocument.file}
-              page={props.currentPdfPage}
-              inkTool={phoneViewerOnly ? (props.inkTool === 'select' ? 'select' : 'view') : props.inkTool}
-              fingerDrawingEnabled={props.fingerDrawingEnabled}
-              penColor={props.penColor}
-              penWidth={props.penWidth}
-              brushType={props.brushType}
-              linePattern={props.linePattern}
-              eraserMode={props.eraserMode}
-              selectionMode={props.selectionMode}
-              inkStrokes={props.inkByDocument[props.studyDocument.id] ?? props.inkStrokes}
-              textAnnotations={props.textAnnotationsByDocument[props.studyDocument.id] ?? props.textAnnotations}
-              textAnnotationVariant={phoneViewerOnly ? 'marker' : undefined}
-              selectionRect={props.selectionRect}
-              onCommitInkStroke={props.onCommitInkStroke}
-              onRemoveInkStroke={props.onRemoveInkStroke}
-              onAddTextAnnotation={props.onAddTextAnnotation}
-              onUpdateTextAnnotation={props.onUpdateTextAnnotation}
-              onRemoveTextAnnotation={props.onRemoveTextAnnotation}
-              onMoveTextAnnotation={props.onMoveTextAnnotation}
-              onResizeTextAnnotation={props.onResizeTextAnnotation}
-              onEraseInkAtPoint={props.onEraseInkAtPoint}
-              onSelectionChange={props.onSelectionChange}
-              onMoveSelection={props.onMoveSelection}
-              onDocumentLoaded={props.onUpdateStudyDocumentPageCount}
-              onPageChanged={props.onSetCurrentPdfPage}
-              onOpenGeneratedPage={props.onOpenGeneratedPage}
-              notebookPages={props.notebookPages}
-              activeGeneratedPageId={props.currentDocumentPage?.kind === 'generated' ? props.currentDocumentPage.pageId : null}
-              pageCaptureReferences={props.pageCaptureReferences}
-              incomingAssetSuggestion={props.incomingAssetSuggestion}
-              onAcceptIncomingAsset={props.onAcceptIncomingAsset}
-              onArchiveIncomingAsset={props.onArchiveIncomingAsset}
-              onDismissIncomingAsset={props.onDismissIncomingAsset}
-              onOpenPageCaptureReference={props.onOpenPageCaptureReference}
-              onAskAiAboutPageCaptureReference={props.onAskAiAboutPageCaptureReference}
-              onChangeInkTool={props.onChangeInkTool}
-              styles={props.styles}
-            />
-          ) : props.activeGeneratedPage?.pageKind === 'memo' && phoneViewerOnly ? (
-            <View style={props.styles.mobileViewerFallbackCard}>
-              <MaterialCommunityIcons name="notebook-outline" size={24} color="#5F79FF" />
-              <Text style={props.styles.mobileViewerFallbackTitle}>메모 페이지</Text>
-              <Text style={props.styles.mobileViewerFallbackBody}>폰에서는 보기 모드만 지원합니다. 필기 편집은 iPad에서 이어서 할 수 있습니다.</Text>
-            </View>
-          ) : props.activeGeneratedPage?.pageKind === 'memo' ? (
-            <BlankNoteCanvas
-              styles={props.styles}
-            />
-          ) : props.activeGeneratedPage ? (
-            <View style={props.styles.generatedPageCard}>
-              <View style={props.styles.generatedPagePaper}>
-                <ScrollView contentContainerStyle={props.styles.generatedPagePaperContent} showsVerticalScrollIndicator={false}>
-                  <Text style={props.styles.generatedSummaryTitle}>{props.activeGeneratedPage.summaryTitle}</Text>
-                  <Text style={props.styles.generatedSummaryBody}>{props.activeGeneratedPage.summaryIntro}</Text>
-                  {props.activeGeneratedPage.summarySections.map((section, index) => (
-                    <View key={`${section.title}-${index}`} style={[props.styles.generatedSummaryCard, index === 1 && props.styles.generatedSummaryCardSoft]}>
-                      <Text style={props.styles.generatedSummaryLabel}>{section.title}</Text>
-                      <Text style={props.styles.generatedSummaryBody}>{section.body}</Text>
-                    </View>
-                  ))}
-                </ScrollView>
-              </View>
-            </View>
-          ) : props.studyDocument.type === 'image' && typeof props.studyDocument.file === 'object' ? (
-            <BlankNoteCanvas
-              backgroundImageUri={props.studyDocument.file.uri}
-              styles={props.styles}
-            />
-          ) : phoneViewerOnly ? (
-            <View style={props.styles.mobileViewerFallbackCard}>
-              <MaterialCommunityIcons name="file-document-edit-outline" size={24} color="#5F79FF" />
-              <Text style={props.styles.mobileViewerFallbackTitle}>빈 노트</Text>
-              <Text style={props.styles.mobileViewerFallbackBody}>폰에서는 노트 확인만 지원합니다. 필기 편집은 iPad에서 사용하는 것을 권장합니다.</Text>
-            </View>
-          ) : (
-            <BlankNoteCanvas
-              styles={props.styles}
-            />
-          )}
-        </View>
         <MobileAiSheet {...props} />
         
         {pageListOpen ? (

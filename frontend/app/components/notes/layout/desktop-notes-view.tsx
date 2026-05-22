@@ -49,6 +49,7 @@ export type DesktopNotesViewProps = {
   brushType: InkBrush;
   linePattern: InkLinePattern;
   eraserMode: InkEraserMode;
+  eraserWidth: number;
   selectionMode: InkSelectionMode;
   brushSettings: InkBrushSettings;
   inkStrokes: InkStroke[];
@@ -106,6 +107,7 @@ export type DesktopNotesViewProps = {
   onChangeBrushType: (brush: InkBrush) => void;
   onChangeLinePattern: (pattern: InkLinePattern) => void;
   onChangeEraserMode: (mode: InkEraserMode) => void;
+  onChangeEraserWidth: (width: number) => void;
   onChangeSelectionMode: (mode: InkSelectionMode) => void;
   onChangeBrushSettings: (settings: Partial<InkBrushSettings>) => void;
   onToggleAiPanel: () => void;
@@ -120,7 +122,7 @@ export type DesktopNotesViewProps = {
   onStartNewAiChatSession: () => void;
   onCreateAiChatSession: () => void;
   onRequestAiAnswer: () => void;
-  onAskAiAboutSelection: () => void;
+  onAskAiAboutSelection: (selectionPreviewUri?: string | null) => void;
   onInsertAiAnswerPage: () => void;
   onSelectionChange: (rect: SelectionRect | null) => void;
   onSelectionPreviewChange: (uri: string | null) => void;
@@ -302,6 +304,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           brushType: props.brushType,
           linePattern: props.linePattern,
           eraserMode: props.eraserMode,
+          eraserWidth: props.eraserWidth,
           selectionMode: props.selectionMode,
           brushSettings: props.brushSettings,
           inkStrokes: props.inkStrokes,
@@ -371,6 +374,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           onChangeBrushType: props.onChangeBrushType,
           onChangeLinePattern: props.onChangeLinePattern,
           onChangeEraserMode: props.onChangeEraserMode,
+          onChangeEraserWidth: props.onChangeEraserWidth,
           onChangeSelectionMode: props.onChangeSelectionMode,
           onChangeBrushSettings: props.onChangeBrushSettings,
           onUndoInk: props.onUndoInk,
@@ -432,21 +436,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
         }}
       >
         <View style={props.styles.fill}>
-          {focusMode ? (
-            <View style={props.styles.notebookFocusBar}>
-              <Pressable style={props.styles.notebookFocusBackButton} onPress={() => props.onOpenStudyDocument(null)}>
-                <MaterialCommunityIcons name="chevron-left" size={24} color="#151A22" />
-              </Pressable>
-              <Text style={props.styles.notebookFocusTitle} numberOfLines={1}>{props.studyDocument.title}</Text>
-              <View style={props.styles.notebookSaveStatusPill}>
-                <MaterialCommunityIcons name="cloud-check-outline" size={14} color="#5D6A7C" />
-                <Text style={props.styles.notebookSaveStatusText} numberOfLines={1}>{props.documentSaveStatus}</Text>
-              </View>
-              <Pressable style={[props.styles.notebookFocusBackButton, props.styles.inkToolButtonActive]} onPress={toggleFocusMode}>
-                <MaterialCommunityIcons name="fullscreen-exit" size={18} color="#4F68D2" />
-              </Pressable>
-            </View>
-          ) : (
+          {!focusMode ? (
           <View style={props.styles.notebookTitleBar}>
             <Pressable style={props.styles.notebookTitleButton} onPress={() => props.onOpenStudyDocument(null)}>
               <MaterialCommunityIcons name="chevron-left" size={24} color="#151A22" />
@@ -462,12 +452,15 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
               <Pressable style={props.styles.notebookTitleButton} onPress={startRename}>
                 <MaterialCommunityIcons name="pencil-outline" size={18} color="#4F68D2" />
               </Pressable>
+              <Pressable style={[props.styles.notebookTitleButton, props.styles.inkToolButtonActive]} onPress={toggleFocusMode}>
+                <MaterialCommunityIcons name="fullscreen" size={18} color="#4F68D2" />
+              </Pressable>
               <Pressable style={[props.styles.notebookTitleButton, props.styles.notebookTitleButtonDanger]} onPress={() => props.onDeleteStudyDocument(props.studyDocument!.id)}>
                 <MaterialCommunityIcons name="trash-can-outline" size={18} color="#C04B4B" />
               </Pressable>
             </View>
           </View>
-          )}
+          ) : null}
           {renameOpen && !focusMode ? (
             <View style={props.styles.documentRenamePanel}>
               <TextInput
@@ -488,21 +481,15 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
             </View>
           ) : null}
           <View style={[props.styles.desktopDocumentDetailBody, focusMode && props.styles.desktopDocumentDetailBodyFocus]}>
-            {!focusMode && props.aiPanelMode === 'floating' ? <NotesAiAssistantPanel /> : null}
+            {props.aiPanelMode === 'floating' ? <NotesAiAssistantPanel /> : null}
             <NotesWorkspaceToolbar />
-            {props.workspaceFeedback ? (
-              <View style={props.styles.workspaceToast}>
-                <MaterialCommunityIcons name="check-circle-outline" size={16} color="#4D67D8" />
-                <Text style={props.styles.workspaceToastText}>{props.workspaceFeedback}</Text>
-              </View>
-            ) : null}
             <View style={[props.styles.desktopDocumentSidebarContentRow, focusMode && props.styles.desktopDocumentSidebarContentRowFocus]}>
-              {!focusMode && props.aiPanelMode === 'sidebar' ? <NotesAiAssistantPanel /> : null}
+              {props.aiPanelMode === 'sidebar' ? <NotesAiAssistantPanel /> : null}
               <View style={[props.styles.desktopDocumentViewerPane, focusMode && props.styles.desktopDocumentViewerPaneFocus]}>
                 {!focusMode && workspace.showWorkspaceDock ? <NotesWorkspaceDock /> : null}
                 <NotesDocumentViewer />
               </View>
-              {!focusMode && props.aiCanvas.isOpen ? <NotesAiCanvasPanel /> : null}
+              {props.aiCanvas.isOpen ? <NotesAiCanvasPanel /> : null}
             </View>
           </View>
         </View>

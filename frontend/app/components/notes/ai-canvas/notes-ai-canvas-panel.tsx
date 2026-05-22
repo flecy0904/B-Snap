@@ -1,8 +1,15 @@
 import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, PanResponder, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
 
 import { useDesktopNotesWorkspaceContext } from '../workspace/notes-workspace-context';
+
+const CANVAS_SIDEBAR_MIN_WIDTH = 320;
+const CANVAS_SIDEBAR_DEFAULT_WIDTH = 380;
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
 
 function MarkdownPreview(props: {
   markdown: string;
@@ -56,12 +63,45 @@ function MarkdownPreview(props: {
 export function NotesAiCanvasPanel() {
   const workspace = useDesktopNotesWorkspaceContext();
   const canvas = workspace.aiCanvas;
+  const { width } = useWindowDimensions();
+  const canvasMaxWidth = Math.max(CANVAS_SIDEBAR_MIN_WIDTH, Math.min(760, Math.floor(width * 0.62)));
+  const [canvasWidth, setCanvasWidth] = React.useState(CANVAS_SIDEBAR_DEFAULT_WIDTH);
+  const canvasWidthRef = React.useRef(CANVAS_SIDEBAR_DEFAULT_WIDTH);
   const [titleMenuOpen, setTitleMenuOpen] = React.useState(false);
   const [noteListOpen, setNoteListOpen] = React.useState(false);
   const [renameOpen, setRenameOpen] = React.useState(false);
   const [renameDraft, setRenameDraft] = React.useState('');
   const [renameError, setRenameError] = React.useState<string | null>(null);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = React.useState(false);
+
+  React.useEffect(() => {
+    setCanvasWidth((current) => {
+      const next = clamp(current, CANVAS_SIDEBAR_MIN_WIDTH, canvasMaxWidth);
+      canvasWidthRef.current = next;
+      return next;
+    });
+  }, [canvasMaxWidth]);
+
+  const resizePanResponder = React.useMemo(
+    () => PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, gesture) => Math.abs(gesture.dx) > 3,
+      onPanResponderMove: (_, gesture) => {
+        setCanvasWidth(clamp(canvasWidthRef.current - gesture.dx, CANVAS_SIDEBAR_MIN_WIDTH, canvasMaxWidth));
+      },
+      onPanResponderRelease: (_, gesture) => {
+        const next = clamp(canvasWidthRef.current - gesture.dx, CANVAS_SIDEBAR_MIN_WIDTH, canvasMaxWidth);
+        canvasWidthRef.current = next;
+        setCanvasWidth(next);
+      },
+      onPanResponderTerminate: (_, gesture) => {
+        const next = clamp(canvasWidthRef.current - gesture.dx, CANVAS_SIDEBAR_MIN_WIDTH, canvasMaxWidth);
+        canvasWidthRef.current = next;
+        setCanvasWidth(next);
+      },
+    }),
+    [canvasMaxWidth],
+  );
 
   const closeTitleMenu = () => setTitleMenuOpen(false);
   const startRename = () => {
@@ -95,7 +135,14 @@ export function NotesAiCanvasPanel() {
   };
 
   return (
-    <View style={workspace.styles.aiCanvasPanel}>
+    <View style={[workspace.styles.aiCanvasPanel, { width: canvasWidth }]}>
+      <View style={workspace.styles.aiCanvasResizeHandle} {...resizePanResponder.panHandlers}>
+        <View style={workspace.styles.aiCanvasResizeGrip}>
+          <View style={workspace.styles.aiCanvasResizeDot} />
+          <View style={workspace.styles.aiCanvasResizeDot} />
+          <View style={workspace.styles.aiCanvasResizeDot} />
+        </View>
+      </View>
       <View style={workspace.styles.aiCanvasHeader}>
         <View style={workspace.styles.aiCanvasHeaderTitleWrap}>
           <Text style={workspace.styles.aiCanvasEyebrow}>AI Canvas</Text>
@@ -225,6 +272,7 @@ export function NotesAiCanvasPanel() {
                 style={workspace.styles.aiCanvasEditorScroll}
                 contentContainerStyle={workspace.styles.aiCanvasEditorContent}
                 keyboardShouldPersistTaps="handled"
+                nestedScrollEnabled
                 showsVerticalScrollIndicator
               >
                 {canvas.mode === 'edit' ? (
@@ -253,7 +301,7 @@ export function NotesAiCanvasPanel() {
                 {canvas.aiDraftMarkdown !== null ? (
                   <View style={workspace.styles.aiCanvasAiDraftCard}>
                     <Text style={workspace.styles.aiCanvasAiEditTitle}>AI 수정안 미리보기</Text>
-                    <ScrollView style={workspace.styles.aiCanvasAiDraftPreview} contentContainerStyle={workspace.styles.aiCanvasPreviewContent}>
+                    <ScrollView nestedScrollEnabled style={workspace.styles.aiCanvasAiDraftPreview} contentContainerStyle={workspace.styles.aiCanvasPreviewContent}>
                       <MarkdownPreview markdown={canvas.aiDraftMarkdown} styles={workspace.styles} />
                     </ScrollView>
                     <View style={workspace.styles.aiCanvasFooter}>

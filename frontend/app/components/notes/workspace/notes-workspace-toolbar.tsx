@@ -186,18 +186,11 @@ export const NotesWorkspaceToolbar = React.memo(function NotesWorkspaceToolbar()
           <View style={workspaceContext.styles.inkToolbarDivider} />
 
           <View style={workspaceContext.styles.inkSecondaryCluster}>
-            {/* 자료 및 독(Dock) 열기 버튼 */}
-            <Pressable
-              style={[workspaceContext.styles.inkActionButton, workspaceContext.styles.workspaceDockButton, workspaceContext.showWorkspaceDock && workspaceContext.styles.workspaceDockButtonActive]}
-              onPress={workspaceContext.onToggleWorkspaceDock}
-            >
-              <MaterialCommunityIcons
-                name="image-multiple-outline"
-                size={18}
-                color={workspaceContext.showWorkspaceDock ? '#5A74E8' : workspaceContext.hasWorkspaceDockContent ? '#556EDB' : '#77839A'}
-              />
-              {workspaceContext.hasWorkspaceDockContent ? <View style={workspaceContext.styles.workspaceDockBadge} /> : null}
-            </Pressable>
+            {workspaceContext.focusMode ? (
+              <Pressable style={[workspaceContext.styles.inkActionButton, workspaceContext.styles.inkToolButtonActive]} onPress={workspaceContext.onToggleFocusMode}>
+                <MaterialCommunityIcons name="fullscreen-exit" size={18} color="#4F68D2" />
+              </Pressable>
+            ) : null}
             <Pressable
               style={[workspaceContext.styles.inkActionButton, workspaceContext.styles.aiIconButton, workspaceContext.aiPanelOpen && workspaceContext.styles.aiIconButtonActive]}
               onPress={workspaceContext.onToggleAiPanel}

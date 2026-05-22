@@ -25,10 +25,6 @@ export function useWorkspaceSaveStatus(params: {
   workspaceHydrated: boolean;
 }) {
   return useMemo(() => {
-    const pageSaveFeedback = params.failedPageSaveCount
-      ? `필기 저장 실패 ${params.failedPageSaveCount}건 · 자동 재시도 중`
-      : null;
-    const effectiveWorkspaceFeedback = params.workspaceFeedback ?? pageSaveFeedback;
     const documentSaveStatus = params.failedPageSaveCount
       ? `저장 실패 ${params.failedPageSaveCount} · 재시도 중`
       : params.savingPageCount
@@ -40,7 +36,7 @@ export function useWorkspaceSaveStatus(params: {
             : '저장 준비 중';
 
     return {
-      effectiveWorkspaceFeedback,
+      effectiveWorkspaceFeedback: null,
       documentSaveStatus,
     };
   }, [

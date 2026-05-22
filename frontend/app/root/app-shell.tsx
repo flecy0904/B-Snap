@@ -211,6 +211,7 @@ export function AppShell(props: {
                   brushType={notesState.brushType}
                   linePattern={notesState.linePattern}
                   eraserMode={notesState.eraserMode}
+                  eraserWidth={notesState.eraserWidth}
                   selectionMode={notesState.selectionMode}
                   brushSettings={notesState.brushSettings}
                   inkStrokes={notesState.inkStrokes}
@@ -266,6 +267,7 @@ export function AppShell(props: {
                   onChangeBrushType={notesState.changeBrushType}
                   onChangeLinePattern={notesState.changeLinePattern}
                   onChangeEraserMode={notesState.changeEraserMode}
+                  onChangeEraserWidth={notesState.changeEraserWidth}
                   onChangeSelectionMode={notesState.changeSelectionMode}
                   onChangeBrushSettings={notesState.changeBrushSettings}
                   onToggleAiPanel={notesState.toggleAiPanel}
@@ -446,6 +448,7 @@ export function AppShell(props: {
                   brushType={notesState.brushType}
                   linePattern={notesState.linePattern}
                   eraserMode={notesState.eraserMode}
+                  eraserWidth={notesState.eraserWidth}
                   selectionMode={notesState.selectionMode}
                   inkStrokes={notesState.inkStrokes}
                   textAnnotations={notesState.textAnnotations}
@@ -494,6 +497,7 @@ export function AppShell(props: {
                   onChangeBrushType={notesState.changeBrushType}
                   onChangeLinePattern={notesState.changeLinePattern}
                   onChangeEraserMode={notesState.changeEraserMode}
+                  onChangeEraserWidth={notesState.changeEraserWidth}
                   onChangeSelectionMode={notesState.changeSelectionMode}
                   onToggleAiPanel={notesState.toggleAiPanel}
                   onChangeAiQuestion={notesState.setAiQuestion}
