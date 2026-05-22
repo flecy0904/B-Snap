@@ -1,7 +1,7 @@
 import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import BottomSheet, { BottomSheetBackdrop, BottomSheetScrollView, type BottomSheetBackdropProps } from '@gorhom/bottom-sheet';
-import { ActivityIndicator, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import BottomSheet, { BottomSheetBackdrop, BottomSheetScrollView, BottomSheetTextInput, type BottomSheetBackdropProps } from '@gorhom/bottom-sheet';
+import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
 import { isClassInsightQuestion, isClassInsightTargetDocument } from '../../../hooks/notes/class-insight';
 import { AiResponseContent } from '../ai/ai-response-content';
 import type { MobileNotesViewProps } from './mobile-notes-view';
@@ -10,12 +10,15 @@ const CLASS_INSIGHT_QUICK_PROMPTS = [
   { label: '중요 페이지', question: '시험에 나올만한 중요 페이지 추천해줘' },
   { label: '다음 순위', question: '다음 순위 중요 페이지도 더 알려줘' },
   { label: '복습 순서', question: '이 PDF에서 먼저 복습할 순서 알려줘' },
+  { label: '예상 문제', question: '이 내용에서 시험 예상 문제를 만들어줘' },
+  { label: '암기 포인트', question: '시험 전에 외워야 할 핵심 포인트만 정리해줘' },
 ] as const;
 
 const DEFAULT_AI_QUICK_PROMPTS = [
   { label: '그래프 의미', question: '이 그래프 의미 뭐야?' },
   { label: '핵심 3개', question: '여기서 중요한 개념 3개만 알려줘' },
   { label: '시험 관점', question: '시험 대비 관점으로 설명해줘' },
+  { label: '요약', question: '현재 페이지를 짧게 요약해줘' },
 ] as const;
 
 function formatClassInsightPriority(priority: string) {
@@ -25,7 +28,7 @@ function formatClassInsightPriority(priority: string) {
 }
 
 export function MobileAiSheet(props: MobileNotesViewProps) {
-  const aiSheetSnapPoints = React.useMemo(() => ['50%', '82%'], []);
+  const aiSheetSnapPoints = React.useMemo(() => ['44%', '78%'], []);
   const renderAiBackdrop = React.useCallback(
     (backdropProps: BottomSheetBackdropProps) => (
       <BottomSheetBackdrop {...backdropProps} appearsOnIndex={0} disappearsOnIndex={-1} pressBehavior="close" />
@@ -43,7 +46,6 @@ export function MobileAiSheet(props: MobileNotesViewProps) {
   const showAiSuggestionPrompts = Boolean(
     aiSuggestionPrompts.length
     && !props.aiQuestion.trim()
-    && !props.aiMessages.length
     && !props.aiChatReadOnly,
   );
   const shouldShowClassInsightPages = React.useMemo(() => (
@@ -65,6 +67,8 @@ export function MobileAiSheet(props: MobileNotesViewProps) {
       snapPoints={aiSheetSnapPoints}
       enablePanDownToClose
       backdropComponent={renderAiBackdrop}
+      keyboardBehavior="interactive"
+      keyboardBlurBehavior="restore"
       onClose={props.onToggleAiPanel}
       backgroundStyle={props.styles.mobileAiBottomSheetBackground}
       handleIndicatorStyle={props.styles.mobileAiHandle}
@@ -131,10 +135,10 @@ export function MobileAiSheet(props: MobileNotesViewProps) {
             <Text style={props.styles.aiEmptyChatButtonText}>새 채팅 시작</Text>
           </Pressable>
         )}
-        <View style={props.styles.aiStateCard}>
-          <Text style={props.styles.aiStateTitle}>질문 맥락</Text>
-          <Text style={props.styles.aiStateBody}>
-            {props.selectionRect ? `${Math.round(props.selectionRect.width)} x ${Math.round(props.selectionRect.height)} 선택 영역` : '현재 문서와 페이지 기준'}
+        <View style={props.styles.mobileAiContextRow}>
+          <MaterialCommunityIcons name={props.selectionRect ? 'selection-drag' : 'file-document-outline'} size={14} color="#5F79FF" />
+          <Text style={props.styles.mobileAiContextText} numberOfLines={1}>
+            {props.selectionRect ? `선택 영역 ${Math.round(props.selectionRect.width)} x ${Math.round(props.selectionRect.height)}` : '현재 문서와 페이지 기준'}
           </Text>
         </View>
         {showAiSuggestionPrompts ? (
@@ -168,24 +172,33 @@ export function MobileAiSheet(props: MobileNotesViewProps) {
             <Text style={props.styles.aiReadOnlyNoticeText}>보고 있는 노트와 연결된 대화방이 아니라서 읽기만 가능합니다.</Text>
           </View>
         ) : null}
-        <View style={props.styles.aiInputShell}>
-          <TextInput
+        <View style={props.styles.aiComposerInputShell}>
+          <BottomSheetTextInput
             value={props.aiQuestion}
             onChangeText={props.onChangeAiQuestion}
             placeholder={props.selectionRect ? '선택한 영역에 대해 물어보세요' : '현재 페이지에 대해 물어보세요'}
             placeholderTextColor="#A2AAB8"
             multiline
-            style={props.styles.aiInput}
+            style={props.styles.aiComposerInput}
           />
-        </View>
-        <View style={props.styles.aiActionRow}>
-          <Pressable style={props.styles.aiPrimaryButton} onPress={props.onRequestAiAnswer} disabled={props.aiLoading || props.aiChatReadOnly}>
-            {props.aiLoading ? <ActivityIndicator size="small" color="#FFFFFF" /> : <Text style={props.styles.aiPrimaryButtonText}>응답 생성</Text>}
+          <Pressable
+            style={[props.styles.aiSendButton, (props.aiLoading || props.aiChatReadOnly) && props.styles.aiSendButtonDisabled]}
+            onPress={props.onRequestAiAnswer}
+            disabled={props.aiLoading || props.aiChatReadOnly}
+          >
+            {props.aiLoading ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <MaterialCommunityIcons name="arrow-up" size={18} color="#FFFFFF" />
+            )}
           </Pressable>
-          <Pressable style={[props.styles.aiSecondaryButton, !props.aiAnswer && props.styles.aiSecondaryButtonDisabled]} onPress={props.onInsertAiAnswerPage} disabled={!props.aiAnswer}>
-            <Text style={[props.styles.aiSecondaryButtonText, !props.aiAnswer && props.styles.aiSecondaryButtonTextDisabled]}>정리 페이지로 추가</Text>
-          </Pressable>
         </View>
+        {props.aiAnswer ? (
+          <Pressable style={props.styles.mobileAiInsertButton} onPress={props.onInsertAiAnswerPage}>
+            <MaterialCommunityIcons name="file-document-plus-outline" size={15} color="#5169D8" />
+            <Text style={props.styles.mobileAiInsertButtonText}>정리 페이지로 추가</Text>
+          </Pressable>
+        ) : null}
         {props.aiError ? <Text style={props.styles.aiErrorText}>{props.aiError}</Text> : null}
         {props.aiMessages.length ? (
           <>

@@ -35,10 +35,10 @@ function getCapturePreviewUri(asset: Pick<CaptureAsset, 'fileUrl' | 'processedUr
 }
 
 function getCaptureOriginalUri(asset: Pick<CaptureAsset, 'fileUrl' | 'processedUrl' | 'thumbnailUrl' | 'previewImageKey'> | Pick<PageCaptureReference, 'fileUrl' | 'processedUrl' | 'thumbnailUrl' | 'previewImageKey'>) {
-  return asset.fileUrl
-    ?? getPersistedLocalImageUri(asset)
+  return derivePreprocessedCropUrl(asset.processedUrl)
     ?? asset.thumbnailUrl
-    ?? derivePreprocessedCropUrl(asset.processedUrl)
+    ?? asset.fileUrl
+    ?? getPersistedLocalImageUri(asset)
     ?? asset.processedUrl
     ?? asset.previewImageKey;
 }
