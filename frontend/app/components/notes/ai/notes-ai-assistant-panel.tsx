@@ -1,6 +1,6 @@
 import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { ActivityIndicator, Animated, Image, PanResponder, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Animated, Image, Keyboard, PanResponder, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { isClassInsightQuestion, isClassInsightTargetDocument } from '../../../hooks/notes/class-insight';
 import { AiResponseContent } from './ai-response-content';
 import { useNotesGlobalContext } from '../workspace/notes-global-context';
@@ -26,6 +26,15 @@ const CLASS_INSIGHT_QUICK_PROMPTS = [
   { label: '중요 페이지', question: '시험에 나올만한 중요 페이지 추천해줘' },
   { label: '다음 순위', question: '다음 순위 중요 페이지도 더 알려줘' },
   { label: '복습 순서', question: '이 PDF에서 먼저 복습할 순서 알려줘' },
+  { label: '예상 문제', question: '이 내용에서 시험 예상 문제를 만들어줘' },
+  { label: '암기 포인트', question: '시험 전에 외워야 할 핵심 포인트만 정리해줘' },
+] as const;
+
+const DEFAULT_AI_QUICK_PROMPTS = [
+  { label: '핵심 3개', question: '여기서 중요한 개념 3개만 알려줘' },
+  { label: '쉽게 설명', question: '이 부분을 쉽게 풀어서 설명해줘' },
+  { label: '예상 문제', question: '이 내용으로 시험 예상 문제를 만들어줘' },
+  { label: '요약', question: '현재 페이지를 짧게 요약해줘' },
 ] as const;
 
 export function NotesAiAssistantPanel() {
@@ -47,19 +56,18 @@ export function NotesAiAssistantPanel() {
   const [editingTitle, setEditingTitle] = React.useState('');
   const [editingTitleError, setEditingTitleError] = React.useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = React.useState<{ id: number; title: string } | null>(null);
+  const [keyboardTop, setKeyboardTop] = React.useState<number | null>(null);
   const messagesScrollRef = React.useRef<ScrollView | null>(null);
   const hasChatHistory = workspace.aiMessages.length > 0;
   const quickPrompts = React.useMemo(() => (
     isClassInsightTargetDocument(workspace.studyDocument, workspace.subject)
       ? CLASS_INSIGHT_QUICK_PROMPTS
-      : []
+      : DEFAULT_AI_QUICK_PROMPTS
   ), [workspace.studyDocument, workspace.subject]);
   const showQuickPrompts = Boolean(
     !workspace.aiChatReadOnly
-    && !workspace.aiLoading
     && quickPrompts.length
     && !workspace.aiQuestion.trim()
-    && !hasChatHistory,
   );
   const shouldShowClassInsightPages = React.useMemo(() => (
     isClassInsightQuestion(workspace.aiQuestion)
@@ -89,10 +97,37 @@ export function NotesAiAssistantPanel() {
     () => new Set(workspace.noteAiChatSessions.map((session: any) => session.id)),
     [workspace.noteAiChatSessions],
   );
+  const keyboardInset = keyboardTop === null ? 0 : Math.max(0, height - keyboardTop);
+  const keyboardVisible = keyboardInset > 0;
   const floatingPanelHeight = Math.min(FLOATING_PANEL_HEIGHT, Math.max(360, height - FLOATING_PANEL_TOP - FLOATING_PANEL_MARGIN));
+  const keyboardAwareFloatingHeight = keyboardVisible
+    ? Math.max(260, Math.min(floatingPanelHeight, (keyboardTop ?? height) - floatingPosition.y - FLOATING_PANEL_MARGIN))
+    : floatingPanelHeight;
+  const keyboardAwareSidebarHeight = keyboardVisible
+    ? Math.max(280, (keyboardTop ?? height) - FLOATING_PANEL_TOP - FLOATING_PANEL_MARGIN)
+    : undefined;
   const floatingMaxX = Math.max(FLOATING_PANEL_MARGIN, width - FLOATING_PANEL_WIDTH - FLOATING_PANEL_MARGIN);
-  const floatingMaxY = Math.max(FLOATING_PANEL_TOP, height - floatingPanelHeight - FLOATING_PANEL_MARGIN);
+  const floatingMaxY = Math.max(FLOATING_PANEL_TOP, (keyboardTop ?? height) - keyboardAwareFloatingHeight - FLOATING_PANEL_MARGIN);
   const sidebarMaxWidth = Math.max(SIDEBAR_MIN_WIDTH, Math.floor(width * 0.5));
+  const effectivePanelMode = workspace.aiPanelMode;
+
+  React.useEffect(() => {
+    const updateKeyboardFrame = (event: { endCoordinates?: { screenY?: number } }) => {
+      const screenY = event.endCoordinates?.screenY;
+      setKeyboardTop(typeof screenY === 'number' && screenY < height ? screenY : null);
+    };
+    const hideKeyboardFrame = () => setKeyboardTop(null);
+    const showSub = Keyboard.addListener('keyboardWillChangeFrame', updateKeyboardFrame);
+    const showFallbackSub = Keyboard.addListener('keyboardDidShow', updateKeyboardFrame);
+    const hideSub = Keyboard.addListener('keyboardWillHide', hideKeyboardFrame);
+    const hideFallbackSub = Keyboard.addListener('keyboardDidHide', hideKeyboardFrame);
+    return () => {
+      showSub.remove();
+      showFallbackSub.remove();
+      hideSub.remove();
+      hideFallbackSub.remove();
+    };
+  }, [height]);
 
   React.useEffect(() => {
     setFloatingPosition((current) => ({
@@ -115,9 +150,9 @@ export function NotesAiAssistantPanel() {
 
   const floatingPanResponder = React.useMemo(
     () => PanResponder.create({
-      onStartShouldSetPanResponder: () => workspace.aiPanelMode === 'floating',
+      onStartShouldSetPanResponder: () => effectivePanelMode === 'floating',
       onMoveShouldSetPanResponder: (_, gesture) => (
-        workspace.aiPanelMode === 'floating'
+        effectivePanelMode === 'floating'
         && Math.abs(gesture.dx) + Math.abs(gesture.dy) > 3
       ),
       onPanResponderGrant: () => {
@@ -152,14 +187,14 @@ export function NotesAiAssistantPanel() {
         floatingDragOffset.setValue({ x: 0, y: 0 });
       },
     }),
-    [floatingDragOffset, floatingMaxX, floatingMaxY, workspace.aiPanelMode],
+    [effectivePanelMode, floatingDragOffset, floatingMaxX, floatingMaxY],
   );
 
   const sidebarResizePanResponder = React.useMemo(
     () => PanResponder.create({
-      onStartShouldSetPanResponder: () => workspace.aiPanelMode === 'sidebar',
+      onStartShouldSetPanResponder: () => effectivePanelMode === 'sidebar',
       onMoveShouldSetPanResponder: (_, gesture) => (
-        workspace.aiPanelMode === 'sidebar'
+        effectivePanelMode === 'sidebar'
         && Math.abs(gesture.dx) > 3
       ),
       onPanResponderGrant: () => {
@@ -179,7 +214,7 @@ export function NotesAiAssistantPanel() {
         setSidebarWidth(next);
       },
     }),
-    [sidebarMaxWidth, workspace.aiPanelMode],
+    [effectivePanelMode, sidebarMaxWidth],
   );
 
   const startEditingSession = (sessionId: number, title: string) => {
@@ -329,9 +364,9 @@ export function NotesAiAssistantPanel() {
 
   if (!workspace.aiPanelOpen) return null;
   const floatingTranslate = floatingDragOffset.getTranslateTransform();
-  const panelStyle = workspace.aiPanelMode === 'floating'
-    ? [workspace.styles.aiPanel, { left: floatingPosition.x, top: floatingPosition.y, bottom: undefined, height: floatingPanelHeight, transform: floatingTranslate }]
-    : [workspace.styles.aiPanel, workspace.styles.aiPanelSidebar, { width: sidebarWidth }];
+  const panelStyle = effectivePanelMode === 'floating'
+    ? [workspace.styles.aiPanel, { left: floatingPosition.x, top: floatingPosition.y, bottom: undefined, height: keyboardAwareFloatingHeight, transform: floatingTranslate }]
+    : [workspace.styles.aiPanel, workspace.styles.aiPanelSidebar, { width: sidebarWidth }, keyboardAwareSidebarHeight ? { height: keyboardAwareSidebarHeight, alignSelf: 'flex-start' as const } : null];
 
   return (
     <Animated.View style={panelStyle}>
@@ -433,51 +468,19 @@ export function NotesAiAssistantPanel() {
       ) : null}
 
       <Animated.View style={[workspace.styles.aiHomePane, homePaneAnimatedStyle]} pointerEvents={sidebarOpen ? 'none' : 'auto'}>
-        <View style={[workspace.styles.aiPanelHeader, workspace.aiPanelMode === 'floating' && workspace.styles.aiPanelHeaderDraggable]} {...(workspace.aiPanelMode === 'floating' ? floatingPanResponder.panHandlers : {})}>
-          <Pressable style={workspace.styles.aiHeaderIconButton} onPress={openSidebar}>
-            <MaterialCommunityIcons name="menu" size={20} color="#303744" />
-          </Pressable>
-
-          <View style={workspace.styles.aiHeaderTitleWrap}>
-            {headerEditing && activeSession ? (
-              <View style={workspace.styles.aiHeaderEditRow}>
-                <TextInput
-                  value={headerEditingTitle}
-                  onChangeText={setHeaderEditingTitle}
-                  style={workspace.styles.aiHeaderEditInput}
-                  returnKeyType="done"
-                  onSubmitEditing={saveHeaderEditing}
-                  autoFocus
-                />
-                <Pressable style={workspace.styles.aiHeaderEditButton} onPress={saveHeaderEditing} disabled={workspace.aiLoading}>
-                  <MaterialCommunityIcons name="check" size={14} color="#111827" />
-                </Pressable>
-                <Pressable style={workspace.styles.aiHeaderEditButton} onPress={() => setHeaderEditing(false)} disabled={workspace.aiLoading}>
-                  <MaterialCommunityIcons name="close" size={14} color="#111827" />
-                </Pressable>
-              </View>
-            ) : (
-              <>
-                <Text style={workspace.styles.aiHeaderTitle} numberOfLines={1}>
-                  {activeSession ? activeSession.title : '새 채팅'}
-                </Text>
-                {workspace.aiChatReadOnly ? (
-                  <Text style={workspace.styles.aiHeaderSubtitle} numberOfLines={1}>읽기 전용</Text>
-                ) : null}
-              </>
-            )}
-          </View>
-
-          <View style={workspace.styles.aiHeaderActions}>
+        <View style={workspace.styles.aiPanelHeader}>
+          <View style={workspace.styles.aiHeaderButtonCluster}>
+            <Pressable style={workspace.styles.aiHeaderIconButton} onPress={openSidebar}>
+              <MaterialCommunityIcons name="menu" size={20} color="#303744" />
+            </Pressable>
+            <Pressable style={workspace.styles.aiHeaderIconButton} onPress={startNewChat} disabled={workspace.aiLoading}>
+              <MaterialCommunityIcons name="square-edit-outline" size={17} color="#303744" />
+            </Pressable>
             <Pressable
-              style={[workspace.styles.aiHeaderIconButton, workspace.aiPanelMode === 'sidebar' && workspace.styles.aiHeaderIconButtonActive]}
+              style={[workspace.styles.aiHeaderIconButton, effectivePanelMode === 'sidebar' && workspace.styles.aiHeaderIconButtonActive]}
               onPress={togglePanelMode}
             >
-              <MaterialCommunityIcons name={workspace.aiPanelMode === 'floating' ? 'dock-left' : 'window-restore'} size={18} color="#303744" />
-            </Pressable>
-            <Pressable style={workspace.styles.aiHeaderNewChatButton} onPress={startNewChat} disabled={workspace.aiLoading}>
-              <MaterialCommunityIcons name="square-edit-outline" size={16} color="#303744" />
-              <Text style={workspace.styles.aiHeaderNewChatButtonText}>새 채팅</Text>
+              <MaterialCommunityIcons name={effectivePanelMode === 'floating' ? 'dock-left' : 'window-restore'} size={18} color="#303744" />
             </Pressable>
             <View style={workspace.styles.aiHeaderMenuWrap}>
               <Pressable
@@ -500,6 +503,44 @@ export function NotesAiAssistantPanel() {
                 </View>
               ) : null}
             </View>
+          </View>
+
+          <View
+            style={[workspace.styles.aiHeaderTitleWrap, effectivePanelMode === 'floating' && !headerEditing && workspace.styles.aiPanelHeaderDraggable]}
+            {...(effectivePanelMode === 'floating' && !headerEditing ? floatingPanResponder.panHandlers : {})}
+          >
+            {headerEditing && activeSession ? (
+              <View style={workspace.styles.aiHeaderEditRow}>
+                <TextInput
+                  value={headerEditingTitle}
+                  onChangeText={setHeaderEditingTitle}
+                  style={workspace.styles.aiHeaderEditInput}
+                  returnKeyType="done"
+                  onSubmitEditing={saveHeaderEditing}
+                  autoFocus
+                />
+                <Pressable style={workspace.styles.aiHeaderEditButton} onPress={saveHeaderEditing} disabled={workspace.aiLoading}>
+                  <MaterialCommunityIcons name="check" size={14} color="#111827" />
+                </Pressable>
+                <Pressable style={workspace.styles.aiHeaderEditButton} onPress={() => setHeaderEditing(false)} disabled={workspace.aiLoading}>
+                  <MaterialCommunityIcons name="close" size={14} color="#111827" />
+                </Pressable>
+              </View>
+            ) : (
+              <View style={workspace.styles.aiHeaderDragZone}>
+                <View style={workspace.styles.aiHeaderTitleTextWrap}>
+                  <Text style={workspace.styles.aiHeaderTitle} numberOfLines={1}>
+                    {activeSession ? activeSession.title : '새 채팅'}
+                  </Text>
+                  {workspace.aiChatReadOnly ? (
+                    <Text style={workspace.styles.aiHeaderSubtitle} numberOfLines={1}>읽기 전용</Text>
+                  ) : null}
+                </View>
+                {effectivePanelMode === 'floating' ? (
+                  <MaterialCommunityIcons name="drag-horizontal-variant" size={17} color="#8A94A6" />
+                ) : null}
+              </View>
+            )}
           </View>
         </View>
 
@@ -616,7 +657,7 @@ export function NotesAiAssistantPanel() {
             <TextInput
               value={workspace.aiQuestion}
               onChangeText={workspace.onChangeAiQuestion}
-              placeholder={workspace.selectionRect || workspace.selectionPreviewUri ? '선택 영역에 대해 물어보세요' : '메시지 입력'}
+              placeholder={workspace.selectionPreviewUri ? '선택 영역에 대해 물어보세요' : '메시지 입력'}
               placeholderTextColor="#8F96A3"
               multiline
               editable={!workspace.aiChatReadOnly && !workspace.aiLoading}
@@ -627,12 +668,12 @@ export function NotesAiAssistantPanel() {
             </Pressable>
           </View>
         </View>
-      </View>
+        </View>
       </Animated.View>
       {sidebarVisible ? (
         <Pressable style={workspace.styles.aiSidebarHomeDismissLayer} onPress={closeSidebar} />
       ) : null}
-      {workspace.aiPanelMode === 'sidebar' ? (
+      {effectivePanelMode === 'sidebar' ? (
         <View style={workspace.styles.aiPanelSidebarResizeHandle} {...sidebarResizePanResponder.panHandlers}>
           <View style={workspace.styles.aiPanelSidebarResizeGrip}>
             <View style={workspace.styles.aiPanelSidebarResizeDot} />

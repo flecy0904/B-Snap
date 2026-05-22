@@ -44,6 +44,7 @@ export function useAiChatActions(params: {
   currentDocumentHasBackendPages: boolean;
   selectionRect: SelectionRect | null;
   selectionPreviewUri: string | null;
+  selectionAttachmentEnabled: boolean;
   currentPageNumber: number | null;
   activeAiChatSessionId: number | null;
   aiChatReadOnly: boolean;
@@ -321,12 +322,11 @@ export function useAiChatActions(params: {
       return;
     }
 
-    const selectionRect = params.selectionRect;
-    const hasSelection = Boolean(selectionRect || params.selectionPreviewUri);
-    const selectionPreviewUri = override?.selectionImageUri ?? params.selectionPreviewUri;
+    const selectionPreviewUri = override?.selectionImageUri ?? (params.selectionAttachmentEnabled ? params.selectionPreviewUri : null);
+    const selectionRect = params.selectionAttachmentEnabled ? params.selectionRect : null;
+    const hasSelection = Boolean(selectionRect || selectionPreviewUri);
     const requestSource: AiQuestionSource = override?.source
       ?? (hasSelection ? 'selection' : selectionPreviewUri ? 'photo' : 'general');
-    const shouldHideSelectionAttachment = requestSource === 'selection';
     const question = override?.question?.trim() || params.aiQuestion.trim() || (hasSelection ? '선택한 영역을 설명해줘' : '현재 페이지를 요약해줘');
     const contextHint = requestSource === 'general' || requestSource === 'class-insight'
       ? params.buildContextHint?.(question) ?? null
@@ -385,7 +385,7 @@ export function useAiChatActions(params: {
         session_id: sessionId,
         role: 'user',
         content: question,
-        selection_image_url: shouldHideSelectionAttachment ? null : selectionPreviewUri,
+        selection_image_url: selectionPreviewUri,
         model: null,
         created_at: new Date().toISOString(),
       };
@@ -406,7 +406,7 @@ export function useAiChatActions(params: {
       });
       const userMessageWithAttachment = {
         ...response.user_message,
-        selection_image_url: shouldHideSelectionAttachment ? null : selectionPreviewUri,
+        selection_image_url: selectionPreviewUri,
       };
       params.setLastChatSessionByDocument((current) => ({
         ...current,
