@@ -4,37 +4,13 @@ import { InkPath } from '../canvas/ink-path';
 import { TextAnnotationLayer } from '../canvas/text-annotation-layer';
 import { SelectionContextMenu } from '../canvas/selection-context-menu';
 import { SelectionLassoOverlay, SelectionOverlay } from '../canvas/selection-overlays';
-import { doesRectIntersectPolygon, findInkStrokesInLasso, findInkStrokesInRect } from '../../../ui-helpers';
+import { SelectionMovePreview, getSelectedObjectIdsForSelection, getSelectionMovePreview } from '../canvas/selection-move-preview';
 import type { InkStroke, InkTextAnnotation, SelectionRect } from '../../../ui-types';
 import type { NotebookPage } from '../../../types';
 
-function getTextAnnotationRect(annotation: InkTextAnnotation): SelectionRect {
-  return annotation.anchorRect ?? {
-    x: annotation.x,
-    y: annotation.y,
-    width: annotation.width,
-    height: annotation.height ?? 96,
-    pageWidth: annotation.pageWidth,
-    pageHeight: annotation.pageHeight,
-  };
-}
-
 function getSelectedObjectCountForView(strokes: InkStroke[], textAnnotations: InkTextAnnotation[], selection: SelectionRect) {
-  const selectedStrokeIds = selection.path && selection.path.length > 2
-    ? findInkStrokesInLasso(strokes, selection.path)
-    : findInkStrokesInRect(strokes, selection);
-  const selectedTextCount = textAnnotations.filter((annotation) => {
-    const rect = getTextAnnotationRect(annotation);
-    return selection.path && selection.path.length > 2
-      ? doesRectIntersectPolygon(rect, selection.path)
-      : (
-          rect.x <= selection.x + selection.width
-          && rect.x + rect.width >= selection.x
-          && rect.y <= selection.y + selection.height
-          && rect.y + rect.height >= selection.y
-        );
-  }).length;
-  return selectedStrokeIds.length + selectedTextCount;
+  const { strokeIds, textAnnotationIds } = getSelectedObjectIdsForSelection(selection, strokes, textAnnotations);
+  return strokeIds.size + textAnnotationIds.size;
 }
 
 function isCurrentStrokeOnPage(page: NotebookPage, stroke: InkStroke | null) {
@@ -63,7 +39,7 @@ export const PdfInkLayers = React.memo(function PdfInkLayers(props: {
   onMoveTextAnnotation: (id: string, x: number, y: number) => void;
   onResizeTextAnnotation: (id: string, width: number, height: number) => void;
   onRemoveTextAnnotation: (id: string) => void;
-  onAskAiAboutSelection?: () => void;
+  onAskAiAboutSelection?: (selectionPreviewUri?: string | null) => void;
   onDuplicateSelection?: () => void;
   onDeleteSelection?: () => void;
   onChangeSelectedStrokesColor?: (color: string) => void;
@@ -80,6 +56,30 @@ export const PdfInkLayers = React.memo(function PdfInkLayers(props: {
     () => (props.selectionForView ? getSelectedObjectCountForView(props.pageStrokes, props.pageTextAnnotations, props.selectionForView) : 0),
     [props.pageStrokes, props.pageTextAnnotations, props.selectionForView],
   );
+  const selectionMovePreview = React.useMemo(
+    () => getSelectionMovePreview(props.selectionForView, props.draftForView, props.pageStrokes, props.pageTextAnnotations),
+    [props.draftForView, props.pageStrokes, props.pageTextAnnotations, props.selectionForView],
+  );
+  const visiblePageStrokes = React.useMemo(
+    () => selectionMovePreview
+      ? props.pageStrokes.filter((stroke) => !selectionMovePreview.strokeIds.has(stroke.id))
+      : props.pageStrokes,
+    [props.pageStrokes, selectionMovePreview],
+  );
+  const visibleTextAnnotations = React.useMemo(
+    () => selectionMovePreview
+      ? props.pageTextAnnotations.filter((annotation) => !selectionMovePreview.textAnnotationIds.has(annotation.id))
+      : props.pageTextAnnotations,
+    [props.pageTextAnnotations, selectionMovePreview],
+  );
+  const visibleHighlightStrokes = React.useMemo(
+    () => visiblePageStrokes.filter((stroke) => stroke.style === 'highlight'),
+    [visiblePageStrokes],
+  );
+  const visibleInkStrokes = React.useMemo(
+    () => visiblePageStrokes.filter((stroke) => stroke.style !== 'highlight'),
+    [visiblePageStrokes],
+  );
   const hasHighlight = highlightStrokes.length > 0 || (currentStrokeOnPage && props.currentStroke?.style === 'highlight');
   const hasInk = inkStrokes.length > 0 || (currentStrokeOnPage && props.currentStroke?.style !== 'highlight' && props.currentStroke);
   const hasTextAnnotations = props.pageTextAnnotations.length > 0;
@@ -92,14 +92,14 @@ export const PdfInkLayers = React.memo(function PdfInkLayers(props: {
     <>
       {hasHighlight ? (
         <Svg width="100%" height="100%" pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0 }}>
-          {highlightStrokes.map((stroke) => <InkPath key={stroke.id} stroke={stroke} />)}
+          {visibleHighlightStrokes.map((stroke) => <InkPath key={stroke.id} stroke={stroke} />)}
           {currentStrokeOnPage && props.currentStroke?.style === 'highlight' ? <InkPath stroke={props.currentStroke} draft /> : null}
         </Svg>
       ) : null}
 
       {hasTextAnnotations ? (
         <TextAnnotationLayer
-          annotations={props.pageTextAnnotations}
+          annotations={visibleTextAnnotations}
           styles={props.styles}
           onChangeText={props.onUpdateTextAnnotation}
           onMove={props.onMoveTextAnnotation}
@@ -111,18 +111,26 @@ export const PdfInkLayers = React.memo(function PdfInkLayers(props: {
 
       {hasInk ? (
         <Svg width="100%" height="100%" pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0 }}>
-          {inkStrokes.map((stroke) => <InkPath key={stroke.id} stroke={stroke} />)}
+          {visibleInkStrokes.map((stroke) => <InkPath key={stroke.id} stroke={stroke} />)}
           {currentStrokeOnPage && props.currentStroke?.style !== 'highlight' && props.currentStroke ? <InkPath stroke={props.currentStroke} draft /> : null}
         </Svg>
       ) : null}
+      {selectionMovePreview ? (
+        <SelectionMovePreview
+          preview={selectionMovePreview}
+          styles={props.styles}
+          textAnnotationVariant={props.textAnnotationVariant}
+        />
+      ) : null}
 
       {!props.capturingSelection && !props.draftForView && props.selectionForView ? <SelectionOverlay rect={props.selectionForView} styles={props.styles} /> : null}
-      {!props.capturingSelection && !props.draftForView && props.currentPage && props.selectionForView && selectedObjectCount > 0 ? (
+      {!props.capturingSelection && !props.draftForView && props.currentPage && props.selectionForView ? (
         <SelectionContextMenu
           rect={props.selectionForView}
           pageWidth={props.viewerWidth}
           pageHeight={props.viewerHeight}
           styles={props.styles}
+          editable={selectedObjectCount > 0}
           onAskAi={props.onAskAiAboutSelection}
           onDuplicate={props.onDuplicateSelection}
           onDelete={props.onDeleteSelection}

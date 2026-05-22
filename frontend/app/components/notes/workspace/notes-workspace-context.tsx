@@ -39,6 +39,7 @@ export type DesktopNotesWorkspaceContextValue = {
   brushType: InkBrush;
   linePattern: InkLinePattern;
   eraserMode: InkEraserMode;
+  eraserWidth: number;
   selectionMode: InkSelectionMode;
   brushSettings: InkBrushSettings;
   inkStrokes: InkStroke[];
@@ -97,7 +98,7 @@ export type DesktopNotesWorkspaceContextValue = {
   onStartNewAiChatSession: () => void;
   onCreateAiChatSession: () => void;
   onRequestAiAnswer: () => void;
-  onAskAiAboutSelection: () => void;
+  onAskAiAboutSelection: (selectionPreviewUri?: string | null) => void;
   onInsertAiAnswerPage: () => void;
   onGoToPreviousDocumentPage: () => void;
   onGoToNextDocumentPage: () => void;
@@ -108,6 +109,7 @@ export type DesktopNotesWorkspaceContextValue = {
   onChangeBrushType: (brush: InkBrush) => void;
   onChangeLinePattern: (pattern: InkLinePattern) => void;
   onChangeEraserMode: (mode: InkEraserMode) => void;
+  onChangeEraserWidth: (width: number) => void;
   onChangeSelectionMode: (mode: InkSelectionMode) => void;
   onChangeBrushSettings: (settings: Partial<InkBrushSettings>) => void;
   onUndoInk: () => void;

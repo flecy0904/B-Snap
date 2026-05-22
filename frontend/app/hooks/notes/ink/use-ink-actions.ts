@@ -54,17 +54,39 @@ export function useInkActions(params: {
     })
   );
 
+  const getSelectionPageScope = () => {
+    const selection = params.selectionRect;
+    const pathPoint = selection?.path?.find((point) => point.generatedPageId || typeof point.pageNumber === 'number');
+    return {
+      generatedPageId: selection?.generatedPageId ?? pathPoint?.generatedPageId,
+      pageNumber: selection?.pageNumber ?? pathPoint?.pageNumber,
+    };
+  };
+
   const getPageStrokesForSelection = () => {
     if (!params.studyDocumentId) return [];
     const currentStrokes = params.inkByDocument[params.studyDocumentId] ?? [];
+    const selectionScope = getSelectionPageScope();
     return currentStrokes.filter((stroke) => (
-      params.currentDocumentPage?.kind === 'generated'
-        ? stroke.generatedPageId === params.currentDocumentPage.pageId
+      selectionScope.generatedPageId
+        ? stroke.generatedPageId === selectionScope.generatedPageId
         : (
             !stroke.generatedPageId &&
-            (params.studyDocument?.type === 'blank'
-              ? (stroke.pageNumber ?? 1) === params.currentPdfPage
-              : (!stroke.pageNumber || stroke.pageNumber === params.currentPdfPage))
+            (typeof selectionScope.pageNumber === 'number'
+              ? (
+                  params.studyDocument?.type === 'blank'
+                    ? (stroke.pageNumber ?? 1) === selectionScope.pageNumber
+                    : (!stroke.pageNumber || stroke.pageNumber === selectionScope.pageNumber)
+                )
+              : (
+                  params.currentDocumentPage?.kind === 'generated'
+                    ? stroke.generatedPageId === params.currentDocumentPage.pageId
+                    : (
+                        params.studyDocument?.type === 'blank'
+                          ? (stroke.pageNumber ?? 1) === params.currentPdfPage
+                          : (!stroke.pageNumber || stroke.pageNumber === params.currentPdfPage)
+                      )
+                ))
           )
     ));
   };
@@ -85,14 +107,27 @@ export function useInkActions(params: {
   const getPageTextAnnotationsForSelection = () => {
     if (!params.studyDocumentId) return [];
     const annotations = params.textAnnotationsByDocument[params.studyDocumentId] ?? [];
+    const selectionScope = getSelectionPageScope();
     return annotations.filter((annotation) => (
-      params.currentDocumentPage?.kind === 'generated'
-        ? annotation.generatedPageId === params.currentDocumentPage.pageId
+      selectionScope.generatedPageId
+        ? annotation.generatedPageId === selectionScope.generatedPageId
         : (
             !annotation.generatedPageId &&
-            (params.studyDocument?.type === 'blank'
-              ? (annotation.pageNumber ?? 1) === params.currentPdfPage
-              : annotation.pageNumber === params.currentPdfPage)
+            (typeof selectionScope.pageNumber === 'number'
+              ? (
+                  params.studyDocument?.type === 'blank'
+                    ? (annotation.pageNumber ?? 1) === selectionScope.pageNumber
+                    : annotation.pageNumber === selectionScope.pageNumber
+                )
+              : (
+                  params.currentDocumentPage?.kind === 'generated'
+                    ? annotation.generatedPageId === params.currentDocumentPage.pageId
+                    : (
+                        params.studyDocument?.type === 'blank'
+                          ? (annotation.pageNumber ?? 1) === params.currentPdfPage
+                          : annotation.pageNumber === params.currentPdfPage
+                      )
+                ))
           )
     ));
   };
@@ -300,6 +335,11 @@ export function useInkActions(params: {
 
   const markCurrentPageDirty = () => {
     markPageDirty(params.currentDocumentPage?.kind === 'pdf' ? params.currentDocumentPage.pageNumber : params.currentPdfPage);
+  };
+
+  const markSelectionPageDirty = () => {
+    const selectionScope = getSelectionPageScope();
+    markPageDirty(selectionScope.generatedPageId ? null : selectionScope.pageNumber ?? params.currentPdfPage);
   };
 
   const getCurrentSnapshot = (): WorkspaceEditSnapshot => ({
@@ -693,7 +733,7 @@ export function useInkActions(params: {
         ...current,
         [params.studyDocumentId!]: (current[params.studyDocumentId!] ?? []).filter((annotation) => !selectedTextAnnotationIds.has(annotation.id)),
       }));
-      markCurrentPageDirty();
+      markSelectionPageDirty();
       params.setWorkspaceFeedback(`선택한 객체 ${selectedStrokeIds.size + selectedTextAnnotationIds.size}개를 지웠습니다.`);
     }
     clearCurrentSelection();
@@ -729,11 +769,10 @@ export function useInkActions(params: {
             : annotation
         )),
       }));
-      markCurrentPageDirty();
+      markSelectionPageDirty();
       params.setWorkspaceFeedback(`선택한 객체 ${selectedStrokeIds.size + selectedTextAnnotationIds.size}개의 색상을 변경했습니다.`);
     }
-    clearCurrentSelection();
-    params.setInkTool('view');
+    params.setInkTool('select');
   };
 
   const duplicateSelectedStrokes = () => {
@@ -808,7 +847,7 @@ export function useInkActions(params: {
           }
         : null,
     }));
-    markCurrentPageDirty();
+    markSelectionPageDirty();
     params.setWorkspaceFeedback(`선택한 객체 ${selectedStrokeIds.size + selectedTextAnnotationIds.size}개를 복제했습니다.`);
     params.setInkTool('select');
   };
@@ -876,7 +915,7 @@ export function useInkActions(params: {
         height: params.selectionRect!.height * scale,
       },
     }));
-    markCurrentPageDirty();
+    markSelectionPageDirty();
     params.setWorkspaceFeedback('선택한 필기 크기를 조절했습니다.');
     params.setInkTool('select');
   };
@@ -951,7 +990,7 @@ export function useInkActions(params: {
       ...current,
       [params.studyDocumentId!]: nextRect,
     }));
-    markCurrentPageDirty();
+    markSelectionPageDirty();
     params.setWorkspaceFeedback('선택한 필기 크기를 조절했습니다.');
     params.setInkTool('select');
   };
@@ -1026,8 +1065,7 @@ export function useInkActions(params: {
         })),
       },
     }));
-    markCurrentPageDirty();
-    params.setWorkspaceFeedback('선택한 객체를 이동했습니다.');
+    markSelectionPageDirty();
     params.setInkTool('select');
   };
 

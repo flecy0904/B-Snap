@@ -10,6 +10,7 @@ export type CanvasState = {
   brushType: InkBrush;
   linePattern: InkLinePattern;
   eraserMode: InkEraserMode;
+  eraserWidth: number;
   selectionMode: InkSelectionMode;
   brushSettings: InkBrushSettings;
   inkStrokes: InkStroke[];
@@ -28,6 +29,7 @@ export type CanvasActions = {
   setBrushType: (brush: InkBrush) => void;
   setLinePattern: (pattern: InkLinePattern) => void;
   setEraserMode: (mode: InkEraserMode) => void;
+  setEraserWidth: (width: number) => void;
   setSelectionMode: (mode: InkSelectionMode) => void;
   setBrushSettings: (settings: Partial<InkBrushSettings>) => void;
   setSelectionRect: (rect: SelectionRect | null) => void;
@@ -65,6 +67,7 @@ export function CanvasProvider({ children }: { children: React.ReactNode }) {
     brushType: globalContext.brushType,
     linePattern: globalContext.linePattern,
     eraserMode: globalContext.eraserMode ?? 'partial',
+    eraserWidth: globalContext.eraserWidth ?? 6,
     selectionMode: globalContext.selectionMode ?? 'rect',
     brushSettings: globalContext.brushSettings,
     inkStrokes: globalContext.inkStrokes ?? [],
@@ -80,6 +83,7 @@ export function CanvasProvider({ children }: { children: React.ReactNode }) {
     setBrushType: globalContext.onChangeBrushType,
     setLinePattern: globalContext.onChangeLinePattern,
     setEraserMode: globalContext.onChangeEraserMode,
+    setEraserWidth: globalContext.onChangeEraserWidth,
     setSelectionMode: globalContext.onChangeSelectionMode,
     setBrushSettings: globalContext.onChangeBrushSettings,
     setSelectionRect: globalContext.onSelectionChange,

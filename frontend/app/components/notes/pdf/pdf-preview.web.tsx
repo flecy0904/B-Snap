@@ -347,6 +347,7 @@ export function PdfPreview(props: {
   brushType: InkBrush;
   linePattern: InkLinePattern;
   eraserMode?: InkEraserMode;
+  eraserWidth?: number;
   selectionMode?: InkSelectionMode;
   brushSettings?: InkBrushSettings;
   inkStrokes: InkStroke[];
@@ -364,7 +365,7 @@ export function PdfPreview(props: {
   onSelectionChange: (rect: SelectionRect | null) => void;
   onMoveSelection?: (dx: number, dy: number) => void;
   onResizeSelection?: (rect: SelectionRect) => void;
-  onAskAiAboutSelection?: () => void;
+  onAskAiAboutSelection?: (selectionPreviewUri?: string | null) => void;
   onDuplicateSelection?: () => void;
   onDeleteSelection?: () => void;
   onChangeSelectedStrokesColor?: (color: string) => void;
