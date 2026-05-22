@@ -98,7 +98,7 @@ export function FloatingToolPalette() {
       return;
     }
     canvasContext.setInkTool('select');
-    setSelectionModeOpen(true);
+    setSelectionModeOpen(false);
     workspaceContext.setPageListOpen(false);
   };
 
@@ -109,7 +109,6 @@ export function FloatingToolPalette() {
 
   const chooseEraserMode = (mode: InkEraserMode) => {
     canvasContext.setEraserMode(mode);
-    setEraserModeOpen(false);
   };
 
   const activateHighlight = () => {
@@ -135,7 +134,7 @@ export function FloatingToolPalette() {
       const alreadyActive = canvasContext.inkTool === 'erase';
       canvasContext.setInkTool('erase');
       closeDetail();
-      setEraserModeOpen(alreadyActive ? (current) => !current : true);
+      setEraserModeOpen(alreadyActive ? (current) => !current : false);
       workspaceContext.setPageListOpen(false);
       return;
     }
@@ -171,6 +170,7 @@ export function FloatingToolPalette() {
   const detailColors = colorLibraryOpen ? [...detailBaseColors, ...detailExtraColors] : detailBaseColors;
   const detailWidths = detailMode === 'highlight' ? HIGHLIGHT_WIDTHS : PEN_WIDTHS;
   const detailWidthRange = { min: detailWidths[0], max: detailWidths[detailWidths.length - 1], step: detailMode === 'highlight' ? 2 : 1 };
+  const eraserWidthRange = { min: 3, max: 18, step: 1 };
   const detailTitle = detailMode === 'shape' ? '도형' : BRUSH_LABELS[detailBrush];
   const previewDashArray = canvasContext.linePattern === 'dotted'
     ? `${Math.max(1, canvasContext.penWidth * 0.45)} ${Math.max(8, canvasContext.penWidth * 2.3)}`
@@ -195,6 +195,14 @@ export function FloatingToolPalette() {
   const nudgePenWidth = (delta: number) => {
     const step = canvasContext.inkTool === 'highlight' ? 2 : 1;
     setPenWidth(canvasContext.penWidth + delta * step);
+  };
+
+  const setEraserWidth = (value: number) => {
+    canvasContext.setEraserWidth(clamp(value, eraserWidthRange.min, eraserWidthRange.max));
+  };
+
+  const nudgeEraserWidth = (delta: number) => {
+    setEraserWidth(canvasContext.eraserWidth + delta * eraserWidthRange.step);
   };
 
   const renderDetailPopover = () => (
@@ -402,6 +410,25 @@ export function FloatingToolPalette() {
   const activePenBrush = canvasContext.brushType === 'highlighter' || canvasContext.brushType === 'fountain' ? 'ballpoint' : canvasContext.brushType;
   const activePenPreset = PEN_BRUSHES.find((preset) => preset.brush === activePenBrush) ?? PEN_BRUSHES[0];
   const penActive = canvasContext.inkTool === 'pen';
+  const eraserActive = canvasContext.inkTool === 'erase';
+  const activeWidthValue = eraserActive && canvasContext.eraserMode === 'partial' ? canvasContext.eraserWidth : canvasContext.penWidth;
+
+  const nudgeActiveWidth = (delta: number) => {
+    if (eraserActive) {
+      if (canvasContext.eraserMode === 'partial') nudgeEraserWidth(delta);
+      else setEraserModeOpen(true);
+      return;
+    }
+    nudgePenWidth(delta);
+  };
+
+  const openActiveWidthDetail = () => {
+    if (eraserActive) {
+      setEraserModeOpen(true);
+      return;
+    }
+    openDetail(quickMode, quickMode === 'highlight' ? 'highlighter' : detailBrush);
+  };
 
   return (
     <View pointerEvents="box-none" style={workspaceContext.styles.fixedInkToolbarWrap}>
@@ -434,29 +461,55 @@ export function FloatingToolPalette() {
           </View>
           <View style={workspaceContext.styles.fixedInkToolAnchor}>
             <Pressable
-              style={[workspaceContext.styles.fixedInkToolButton, canvasContext.inkTool === 'erase' && workspaceContext.styles.fixedInkToolButtonActive]}
+              style={[workspaceContext.styles.fixedInkToolButton, eraserActive && workspaceContext.styles.fixedInkToolButtonActive]}
               onPress={() => activateTool('erase')}
             >
-              <MaterialCommunityIcons name={canvasContext.eraserMode === 'stroke' ? 'eraser' : 'eraser-variant'} size={20} color={canvasContext.inkTool === 'erase' ? '#2563EB' : '#334155'} />
+              <MaterialCommunityIcons name={canvasContext.eraserMode === 'stroke' ? 'eraser' : 'eraser-variant'} size={20} color={eraserActive ? '#2563EB' : '#334155'} />
             </Pressable>
             {eraserModeOpen ? (
-              <View style={workspaceContext.styles.fixedSelectionModePopover}>
-                {([
-                  { mode: 'partial' as InkEraserMode, icon: 'eraser-variant' as const, label: '부분' },
-                  { mode: 'stroke' as InkEraserMode, icon: 'gesture-tap' as const, label: '획' },
-                ]).map((item) => {
-                  const active = canvasContext.eraserMode === item.mode;
-                  return (
-                    <Pressable
-                      key={item.mode}
-                      style={[workspaceContext.styles.selectionModeChoice, active && workspaceContext.styles.selectionModeChoiceActive]}
-                      onPress={() => chooseEraserMode(item.mode)}
-                    >
-                      <MaterialCommunityIcons name={item.icon} size={18} color={active ? '#2563EB' : '#475569'} />
-                      <Text style={[workspaceContext.styles.selectionModeChoiceText, active && workspaceContext.styles.selectionModeChoiceTextActive]}>{item.label}</Text>
-                    </Pressable>
-                  );
-                })}
+              <View style={workspaceContext.styles.fixedEraserModePopover}>
+                <View style={workspaceContext.styles.eraserModeChoiceRow}>
+                  {([
+                    { mode: 'partial' as InkEraserMode, icon: 'eraser-variant' as const, label: '부분' },
+                    { mode: 'stroke' as InkEraserMode, icon: 'gesture-tap' as const, label: '획' },
+                  ]).map((item) => {
+                    const active = canvasContext.eraserMode === item.mode;
+                    return (
+                      <Pressable
+                        key={item.mode}
+                        style={[workspaceContext.styles.selectionModeChoice, active && workspaceContext.styles.selectionModeChoiceActive]}
+                        onPress={() => chooseEraserMode(item.mode)}
+                      >
+                        <MaterialCommunityIcons name={item.icon} size={18} color={active ? '#2563EB' : '#475569'} />
+                        <Text style={[workspaceContext.styles.selectionModeChoiceText, active && workspaceContext.styles.selectionModeChoiceTextActive]}>{item.label}</Text>
+                      </Pressable>
+                    );
+                  })}
+                </View>
+                {canvasContext.eraserMode === 'partial' ? (
+                  <View style={workspaceContext.styles.eraserSizePanel}>
+                    <View style={workspaceContext.styles.penDetailRowHeader}>
+                      <Text style={workspaceContext.styles.penDetailLabel}>크기</Text>
+                      <Text style={workspaceContext.styles.penDetailValue}>{canvasContext.eraserWidth}</Text>
+                    </View>
+                    <View style={workspaceContext.styles.penDetailSliderRow}>
+                      <Pressable style={workspaceContext.styles.penDetailStepperButton} onPress={() => nudgeEraserWidth(-1)}>
+                        <MaterialCommunityIcons name="minus" size={14} color="#2563EB" />
+                      </Pressable>
+                      <InkSlider
+                        value={canvasContext.eraserWidth}
+                        min={eraserWidthRange.min}
+                        max={eraserWidthRange.max}
+                        step={eraserWidthRange.step}
+                        accent="#64748B"
+                        onChange={setEraserWidth}
+                      />
+                      <Pressable style={workspaceContext.styles.penDetailStepperButton} onPress={() => nudgeEraserWidth(1)}>
+                        <MaterialCommunityIcons name="plus" size={14} color="#2563EB" />
+                      </Pressable>
+                    </View>
+                  </View>
+                ) : null}
               </View>
             ) : null}
           </View>
@@ -490,14 +543,14 @@ export function FloatingToolPalette() {
 
           <View style={workspaceContext.styles.fixedInkToolbarDivider} />
           <View style={workspaceContext.styles.fixedInkWidthControl}>
-            <Pressable style={workspaceContext.styles.fixedInkWidthNudge} onPress={() => nudgePenWidth(-1)}>
+            <Pressable style={workspaceContext.styles.fixedInkWidthNudge} onPress={() => nudgeActiveWidth(-1)}>
               <MaterialCommunityIcons name="minus" size={13} color="#5B6474" />
             </Pressable>
-            <Pressable style={workspaceContext.styles.fixedInkWidthPreview} onPress={() => openDetail(quickMode, quickMode === 'highlight' ? 'highlighter' : detailBrush)}>
-              <View style={[workspaceContext.styles.fixedInkWidthLine, { height: Math.max(2, Math.min(8, canvasContext.penWidth / 2.2)) }]} />
-              <Text style={workspaceContext.styles.fixedInkWidthValue}>{canvasContext.penWidth}</Text>
+            <Pressable style={workspaceContext.styles.fixedInkWidthPreview} onPress={openActiveWidthDetail}>
+              <View style={[workspaceContext.styles.fixedInkWidthLine, { height: Math.max(2, Math.min(8, activeWidthValue / 2.2)), backgroundColor: eraserActive ? '#64748B' : '#263144' }]} />
+              <Text style={workspaceContext.styles.fixedInkWidthValue}>{eraserActive && canvasContext.eraserMode === 'stroke' ? '획' : activeWidthValue}</Text>
             </Pressable>
-            <Pressable style={workspaceContext.styles.fixedInkWidthNudge} onPress={() => nudgePenWidth(1)}>
+            <Pressable style={workspaceContext.styles.fixedInkWidthNudge} onPress={() => nudgeActiveWidth(1)}>
               <MaterialCommunityIcons name="plus" size={13} color="#5B6474" />
             </Pressable>
           </View>

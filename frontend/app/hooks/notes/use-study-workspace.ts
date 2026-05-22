@@ -65,6 +65,7 @@ export function useStudyWorkspace(props: {
   const [brushType, setBrushType] = useState<InkBrush>('ballpoint');
   const [linePattern, setLinePattern] = useState<InkLinePattern>('solid');
   const [eraserMode, setEraserMode] = useState<InkEraserMode>('partial');
+  const [eraserWidth, setEraserWidth] = useState(6);
   const [selectionMode, setSelectionMode] = useState<InkSelectionMode>('rect');
   const [brushSettings, setBrushSettings] = useState<InkBrushSettings>({
     stability: 18,
@@ -98,6 +99,7 @@ export function useStudyWorkspace(props: {
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const [selectionPreviewByDocument, setSelectionPreviewByDocument] = useState<Record<number, string | null>>({});
+  const [selectionPreviewAttachedByDocument, setSelectionPreviewAttachedByDocument] = useState<Record<number, boolean>>({});
   const [chatSessionByDocument, setChatSessionByDocument] = useState<Record<number, number>>({});
   const [viewingAiChatSessionId, setViewingAiChatSessionId] = useState<number | null>(null);
   const [lastChatSessionByDocument, setLastChatSessionByDocument] = useState<Record<number, number>>({});
@@ -266,6 +268,7 @@ export function useStudyWorkspace(props: {
     activeAiChatSessionId,
     aiChatReadOnly,
     aiMessages,
+    rawSelectionPreviewUri,
     selectionPreviewUri,
     noteAiChatSessions: aiChatSessions,
     visibleAiChatSessions,
@@ -277,6 +280,7 @@ export function useStudyWorkspace(props: {
     viewingAiChatSessionId,
     aiMessagesBySession,
     selectionPreviewByDocument,
+    selectionPreviewAttachedByDocument,
     chatSessionsByDocument,
     allChatSessions,
     aiChatScope,
@@ -569,6 +573,7 @@ export function useStudyWorkspace(props: {
       setInkTool('view');
       if (studyDocumentId) {
         setSelectionByDocument((current) => ({ ...current, [studyDocumentId]: null }));
+        setSelectionPreviewAttachedByDocument((current) => ({ ...current, [studyDocumentId]: false }));
       }
       return;
     }
@@ -603,6 +608,7 @@ export function useStudyWorkspace(props: {
     setInkTool(tool);
     if (tool !== 'select' && tool !== 'text' && studyDocumentId) {
       setSelectionByDocument((current) => ({ ...current, [studyDocumentId]: null }));
+      setSelectionPreviewAttachedByDocument((current) => ({ ...current, [studyDocumentId]: false }));
     }
   };
 
@@ -633,12 +639,18 @@ export function useStudyWorkspace(props: {
     setInkTool('erase');
   };
 
+  const changeEraserWidth = (width: number) => {
+    setEraserWidth(Math.max(3, Math.min(18, Math.round(width))));
+    setInkTool('erase');
+  };
+
   const changeSelectionMode = (mode: InkSelectionMode) => {
     setSelectionMode(mode);
     setInkTool('select');
     if (studyDocumentId) {
       setSelectionByDocument((current) => ({ ...current, [studyDocumentId]: null }));
       setSelectionPreviewByDocument((current) => ({ ...current, [studyDocumentId]: null }));
+      setSelectionPreviewAttachedByDocument((current) => ({ ...current, [studyDocumentId]: false }));
     }
   };
 
@@ -654,6 +666,7 @@ export function useStudyWorkspace(props: {
   const changeSelection = (rect: SelectionRect | null) => {
     if (!studyDocumentId) return;
     setSelectionByDocument((current) => ({ ...current, [studyDocumentId]: rect }));
+    setSelectionPreviewAttachedByDocument((current) => ({ ...current, [studyDocumentId]: false }));
     if (!rect) {
       setSelectionPreviewByDocument((current) => ({ ...current, [studyDocumentId]: null }));
     }
@@ -693,6 +706,7 @@ export function useStudyWorkspace(props: {
     if (!studyDocumentId) return;
     setSelectionByDocument((current) => ({ ...current, [studyDocumentId]: null }));
     setSelectionPreviewByDocument((current) => ({ ...current, [studyDocumentId]: null }));
+    setSelectionPreviewAttachedByDocument((current) => ({ ...current, [studyDocumentId]: false }));
   }, [studyDocumentId]);
 
   const {
@@ -709,6 +723,7 @@ export function useStudyWorkspace(props: {
     currentDocumentHasBackendPages,
     selectionRect,
     selectionPreviewUri,
+    selectionAttachmentEnabled: Boolean(studyDocumentId && selectionPreviewAttachedByDocument[studyDocumentId]),
     currentPageNumber: currentDocumentPage?.kind === 'pdf' ? currentDocumentPage.pageNumber : null,
     activeAiChatSessionId,
     aiChatReadOnly,
@@ -747,12 +762,19 @@ export function useStudyWorkspace(props: {
     askAiAboutSelection,
   } = useWorkspaceAiIntents({
     selectionRect,
-    selectionPreviewUri,
+    selectionPreviewUri: rawSelectionPreviewUri,
     setAiPanelOpen,
     setAiPanelMode,
     setAiQuestion,
     setViewingAiChatSessionId,
     setWorkspaceFeedback,
+    attachSelectionPreviewToAi: (selectionPreviewUri?: string | null) => {
+      if (!studyDocumentId) return;
+      if (selectionPreviewUri !== undefined) {
+        setSelectionPreviewByDocument((current) => ({ ...current, [studyDocumentId]: selectionPreviewUri }));
+      }
+      setSelectionPreviewAttachedByDocument((current) => ({ ...current, [studyDocumentId]: true }));
+    },
   });
 
   const {
@@ -944,6 +966,7 @@ export function useStudyWorkspace(props: {
     brushType,
     linePattern,
     eraserMode,
+    eraserWidth,
     selectionMode,
     brushSettings,
     inkStrokes,
@@ -1021,6 +1044,7 @@ export function useStudyWorkspace(props: {
     changeBrushType,
     changeLinePattern,
     changeEraserMode,
+    changeEraserWidth,
     changeSelectionMode,
     changeBrushSettings,
     toggleAiPanel,

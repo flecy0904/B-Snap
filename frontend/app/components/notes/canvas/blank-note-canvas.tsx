@@ -1,15 +1,16 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState, memo } from 'react';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
-import { Image, View } from 'react-native';
+import { Image, PanResponder, View } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { runOnJS } from 'react-native-reanimated';
 import Svg from 'react-native-svg';
 import { captureRef } from 'react-native-view-shot';
 import { TextAnnotationLayer } from './text-annotation-layer';
 import { InkPath } from './ink-path';
-import { SelectionContextMenu } from './selection-context-menu';
+import { SelectionContextMenu, isPointInSelectionContextMenu } from './selection-context-menu';
 import { PencilHoverOverlay } from './pencil-hover-overlay';
 import { SelectionLassoOverlay, SelectionOverlay } from './selection-overlays';
+import { SelectionMovePreview, getSelectedObjectIdsForSelection, getSelectionMovePreview } from './selection-move-preview';
 import { finalizeInkStroke, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, shouldAppendInkPoint } from '../../../ui-helpers';
 import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { useCanvasContext } from './canvas-context';
@@ -18,6 +19,10 @@ import { getPencilEraserRadius, getPencilHoverPoint, getPencilHoverSize, getPenc
 import { useDesktopNotesWorkspaceContext } from '../workspace/notes-workspace-context';
 
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
+}
 
 function getResizeCorner(rect: SelectionRect | null, point: InkPoint): ResizeCorner | null {
   if (!rect) return null;
@@ -44,6 +49,8 @@ function resizeRectFromCorner(source: SelectionRect, corner: ResizeCorner, point
     y: Math.max(0, nextTop),
     width: Math.max(minSize, nextRight - nextLeft),
     height: Math.max(minSize, nextBottom - nextTop),
+    pageNumber: source.pageNumber,
+    generatedPageId: source.generatedPageId,
     pageWidth: point.pageWidth,
     pageHeight: point.pageHeight,
   };
@@ -56,6 +63,8 @@ function getSelectionRectFromDrag(origin: InkPoint, point: InkPoint): SelectionR
     width: Math.abs(point.x - origin.x),
     height: Math.abs(point.y - origin.y),
     mode: 'rect',
+    pageNumber: origin.pageNumber ?? point.pageNumber,
+    generatedPageId: origin.generatedPageId ?? point.generatedPageId,
     pageWidth: point.pageWidth,
     pageHeight: point.pageHeight,
   };
@@ -73,8 +82,31 @@ function getSelectionRectFromPoints(points: InkPoint[]): SelectionRect | null {
     height: Math.max(1, Math.max(...ys) - Math.min(...ys)),
     mode: 'lasso',
     path: points,
+    pageNumber: reference.pageNumber,
+    generatedPageId: reference.generatedPageId,
     pageWidth: reference.pageWidth,
     pageHeight: reference.pageHeight,
+  };
+}
+
+function translateSelectionRect(source: SelectionRect, dx: number, dy: number, pageWidth: number, pageHeight: number): SelectionRect {
+  const boundedX = clamp(source.x + dx, 0, Math.max(0, pageWidth - source.width));
+  const boundedY = clamp(source.y + dy, 0, Math.max(0, pageHeight - source.height));
+  const moveDx = boundedX - source.x;
+  const moveDy = boundedY - source.y;
+  return {
+    ...source,
+    x: boundedX,
+    y: boundedY,
+    path: source.path?.map((point) => ({
+      ...point,
+      x: point.x + moveDx,
+      y: point.y + moveDy,
+      pageWidth,
+      pageHeight,
+    })),
+    pageWidth,
+    pageHeight,
   };
 }
 
@@ -127,6 +159,26 @@ export function BlankNoteCanvas(props: {
   const [draftSelectionPath, setDraftSelectionPath] = useState<InkPoint[]>([]);
   const [capturingSelection, setCapturingSelection] = useState(false);
   const [pencilHover, setPencilHover] = useState<PencilHoverPoint | null>(null);
+  const selectionMovePreview = useMemo(
+    () => getSelectionMovePreview(selectionRect, draftSelection, inkStrokes, textAnnotations),
+    [draftSelection, inkStrokes, selectionRect, textAnnotations],
+  );
+  const selectedObjectCount = useMemo(() => {
+    const { strokeIds, textAnnotationIds } = getSelectedObjectIdsForSelection(selectionRect, inkStrokes, textAnnotations);
+    return strokeIds.size + textAnnotationIds.size;
+  }, [inkStrokes, selectionRect, textAnnotations]);
+  const visibleInkStrokes = useMemo(
+    () => selectionMovePreview
+      ? inkStrokes.filter((stroke) => !selectionMovePreview.strokeIds.has(stroke.id))
+      : inkStrokes,
+    [inkStrokes, selectionMovePreview],
+  );
+  const visibleTextAnnotations = useMemo(
+    () => selectionMovePreview
+      ? textAnnotations.filter((annotation) => !selectionMovePreview.textAnnotationIds.has(annotation.id))
+      : textAnnotations,
+    [selectionMovePreview, textAnnotations],
+  );
   const currentStrokeRef = useRef<InkStroke | null>(null);
   const selectionOriginRef = useRef<InkPoint | null>(null);
   const selectionMoveOriginRef = useRef<InkPoint | null>(null);
@@ -184,11 +236,26 @@ export function BlankNoteCanvas(props: {
     }
   }, [pageSize.height, pageSize.width]);
 
+  const askAiAboutCurrentSelection = useCallback(async () => {
+    if (!selectionRect) {
+      workspaceContext.onAskAiAboutSelection();
+      return;
+    }
+
+    const token = selectionPreviewTokenRef.current + 1;
+    selectionPreviewTokenRef.current = token;
+    onSelectionPreviewChange?.(null);
+    const uri = await buildSelectionPreview(selectionRect);
+    if (selectionPreviewTokenRef.current !== token) return;
+    if (uri) onSelectionPreviewChange?.(uri);
+    workspaceContext.onAskAiAboutSelection(uri ?? null);
+  }, [buildSelectionPreview, onSelectionPreviewChange, selectionRect, workspaceContext]);
+
   const eraseAtPoint = useCallback((point: InkPoint) => {
-    const radius = getPencilEraserRadius(penWidth, canvasCtx.eraserMode);
+    const radius = getPencilEraserRadius(canvasCtx.eraserWidth, canvasCtx.eraserMode);
     const changed = canvasCtx.eraseInkAtPoint(point, radius, !eraserSnapshotPushedRef.current, canvasCtx.eraserMode);
     if (changed) eraserSnapshotPushedRef.current = true;
-  }, [canvasCtx, penWidth]);
+  }, [canvasCtx]);
 
   const handleInkGestureStart = useCallback((x: number, y: number) => {
     const point = clampPointToPage(x, y);
@@ -216,6 +283,7 @@ export function BlankNoteCanvas(props: {
 
     if (inkTool === 'select') {
       const currentSelection = selectionRect;
+      if (currentSelection && isPointInSelectionContextMenu(point, currentSelection, pageSize.width, pageSize.height)) return;
       const resizeCorner = getResizeCorner(currentSelection, point);
       if (currentSelection && resizeCorner) {
         selectionResizeCornerRef.current = resizeCorner;
@@ -248,7 +316,17 @@ export function BlankNoteCanvas(props: {
       const initialPath = selectionMode === 'lasso' ? [point] : [];
       draftSelectionPathRef.current = initialPath;
       setDraftSelectionPath(initialPath);
-      const rect = { x: point.x, y: point.y, width: 0, height: 0, mode: selectionMode, pageWidth: point.pageWidth, pageHeight: point.pageHeight };
+      const rect = {
+        x: point.x,
+        y: point.y,
+        width: 0,
+        height: 0,
+        mode: selectionMode,
+        pageNumber: point.pageNumber,
+        generatedPageId: point.generatedPageId,
+        pageWidth: point.pageWidth,
+        pageHeight: point.pageHeight,
+      };
       draftSelectionRef.current = rect;
       setDraftSelection(rect);
       return;
@@ -453,6 +531,54 @@ export function BlankNoteCanvas(props: {
       }),
     [fingerDrawingEnabled, handleInkGestureCancel, handleInkGestureEnd, handleInkGestureMove, handleInkGestureStart, inkTool],
   );
+  const selectionMovePanResponder = useMemo(() => PanResponder.create({
+    onStartShouldSetPanResponder: () => inkTool === 'select' && Boolean(selectionRect),
+    onMoveShouldSetPanResponder: (_event, gesture) => (
+      inkTool === 'select'
+      && Boolean(selectionRect)
+      && (Math.abs(gesture.dx) > 1 || Math.abs(gesture.dy) > 1)
+    ),
+    onPanResponderGrant: () => {
+      if (!selectionRect) return;
+      selectionMoveStartRectRef.current = selectionRect;
+      draftSelectionRef.current = selectionRect;
+      draftSelectionPathRef.current = [];
+      setDraftSelectionPath([]);
+      setDraftSelection(selectionRect);
+    },
+    onPanResponderMove: (_event, gesture) => {
+      const startRect = selectionMoveStartRectRef.current;
+      if (!startRect) return;
+      const nextRect = translateSelectionRect(startRect, gesture.dx, gesture.dy, pageSize.width || 1000, pageSize.height || 1000);
+      draftSelectionRef.current = nextRect;
+      setDraftSelection(nextRect);
+    },
+    onPanResponderRelease: (_event, gesture) => {
+      const startRect = selectionMoveStartRectRef.current;
+      selectionMoveStartRectRef.current = null;
+      draftSelectionRef.current = null;
+      draftSelectionPathRef.current = [];
+      setDraftSelection(null);
+      setDraftSelectionPath([]);
+      if (!startRect) return;
+      const nextRect = translateSelectionRect(startRect, gesture.dx, gesture.dy, pageSize.width || 1000, pageSize.height || 1000);
+      const dx = nextRect.x - startRect.x;
+      const dy = nextRect.y - startRect.y;
+      if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
+        canvasCtx.nudgeSelectedStrokes(dx, dy);
+        onSelectionPreviewChange?.(null);
+        selectionPreviewTokenRef.current += 1;
+      }
+    },
+    onPanResponderTerminate: () => {
+      selectionMoveStartRectRef.current = null;
+      draftSelectionRef.current = null;
+      draftSelectionPathRef.current = [];
+      setDraftSelection(null);
+      setDraftSelectionPath([]);
+    },
+    onPanResponderTerminationRequest: () => false,
+  }), [canvasCtx, inkTool, onSelectionPreviewChange, pageSize.height, pageSize.width, selectionRect]);
   const handlePencilHoverMove = useCallback((event: unknown) => {
     if (!shouldPreviewPencilHover(inkTool) || !isStylusHoverEvent(event)) return;
     const point = getPencilHoverPoint(event);
@@ -466,80 +592,99 @@ export function BlankNoteCanvas(props: {
     onPointerLeave: () => setPencilHover(null),
     onPointerCancel: () => setPencilHover(null),
   } as any), [handlePencilHoverMove]);
-  const hoverSize = getPencilHoverSize(inkTool, penWidth, canvasCtx.eraserMode);
+  const hoverSize = getPencilHoverSize(inkTool, inkTool === 'erase' ? canvasCtx.eraserWidth : penWidth, canvasCtx.eraserMode);
   const hoverVisible = pencilHover && shouldPreviewPencilHover(inkTool);
   const hoverToolLabel = getPencilHoverToolLabel(inkTool, canvasCtx.eraserMode);
 
   return (
     <View style={[props.styles.blankNoteCanvasCard, { paddingVertical: 0, borderWidth: 0 }]}>
-      <GestureDetector gesture={inkGesture}>
-        <View
-          {...hoverHandlers}
-          ref={captureTargetRef}
-          collapsable={false}
-          style={[props.styles.blankNotePage, { flex: 1, width: '100%', height: '100%', borderRadius: 20, borderWidth: 0, elevation: 0 }]}
-          onLayout={(e) => setPageSize({ width: e.nativeEvent.layout.width, height: e.nativeEvent.layout.height })}
-        >
-          {props.backgroundImageUri ? (
-            <Image
-              source={{ uri: props.backgroundImageUri }}
-              style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, width: '100%', height: '100%' }}
-              resizeMode="contain"
-            />
-          ) : null}
-          <View pointerEvents="none" style={props.styles.blankNoteRuleLayer} />
-
-          <Svg width="100%" height="100%" pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0 }}>
-            <StaticStrokes strokes={inkStrokes} type="highlight" />
-            {currentStroke?.style === 'highlight' ? <InkPath stroke={currentStroke} draft /> : null}
-          </Svg>
-
-          <TextAnnotationLayer
-            annotations={textAnnotations}
-            styles={props.styles}
-            onChangeText={onUpdateTextAnnotation}
-            onMove={onMoveTextAnnotation}
-            onResize={onResizeTextAnnotation}
-            onRemove={onRemoveTextAnnotation}
+      <View
+        {...hoverHandlers}
+        ref={captureTargetRef}
+        collapsable={false}
+        style={[props.styles.blankNotePage, { flex: 1, width: '100%', height: '100%', borderRadius: 20, borderWidth: 0, elevation: 0 }]}
+        onLayout={(e) => setPageSize({ width: e.nativeEvent.layout.width, height: e.nativeEvent.layout.height })}
+      >
+        {props.backgroundImageUri ? (
+          <Image
+            source={{ uri: props.backgroundImageUri }}
+            style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, width: '100%', height: '100%' }}
+            resizeMode="contain"
           />
+        ) : null}
+        <View pointerEvents="none" style={props.styles.blankNoteRuleLayer} />
 
-          <Svg width="100%" height="100%" pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0 }}>
-            <StaticStrokes strokes={inkStrokes} type="ink" />
-            {currentStroke?.style !== 'highlight' && currentStroke ? <InkPath stroke={currentStroke} draft /> : null}
-          </Svg>
+        <Svg width="100%" height="100%" pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0 }}>
+          <StaticStrokes strokes={visibleInkStrokes} type="highlight" />
+          {currentStroke?.style === 'highlight' ? <InkPath stroke={currentStroke} draft /> : null}
+        </Svg>
 
-          {!capturingSelection && !draftSelection && selectionRect ? <SelectionOverlay rect={selectionRect} styles={props.styles} /> : null}
-          {!capturingSelection && !draftSelection && selectionRect ? (
-            <SelectionContextMenu
-              rect={selectionRect}
-              pageWidth={pageSize.width}
-              pageHeight={pageSize.height}
-              styles={props.styles}
-              onAskAi={workspaceContext.onAskAiAboutSelection}
-              onDuplicate={canvasCtx.duplicateSelectedStrokes}
-              onDelete={canvasCtx.deleteSelectedStrokes}
-              onChangeColor={canvasCtx.changeSelectedStrokesColor}
-            />
-          ) : null}
-          {!capturingSelection && draftSelectionPath.length > 1 ? <SelectionLassoOverlay points={draftSelectionPath} /> : null}
-          {!capturingSelection && draftSelection && draftSelection.mode !== 'lasso' ? <SelectionOverlay rect={draftSelection} styles={props.styles} draft /> : null}
-          {hoverVisible ? (
-            <PencilHoverOverlay
-              x={pencilHover.x}
-              y={pencilHover.y}
-              size={hoverSize}
-              pageWidth={pageSize.width}
-              pageHeight={pageSize.height}
-              borderColor={inkTool === 'erase' ? '#EF4444' : penColor}
-              label={hoverToolLabel}
-              isEraser={inkTool === 'erase'}
-              activeTool={inkTool}
-              styles={props.styles}
-              onSelectTool={canvasCtx.setInkTool}
-            />
-          ) : null}
-        </View>
-      </GestureDetector>
+        <TextAnnotationLayer
+          annotations={visibleTextAnnotations}
+          styles={props.styles}
+          onChangeText={onUpdateTextAnnotation}
+          onMove={onMoveTextAnnotation}
+          onResize={onResizeTextAnnotation}
+          onRemove={onRemoveTextAnnotation}
+        />
+
+        <Svg width="100%" height="100%" pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0 }}>
+          <StaticStrokes strokes={visibleInkStrokes} type="ink" />
+          {currentStroke?.style !== 'highlight' && currentStroke ? <InkPath stroke={currentStroke} draft /> : null}
+        </Svg>
+        {selectionMovePreview ? <SelectionMovePreview preview={selectionMovePreview} styles={props.styles} /> : null}
+
+        {!capturingSelection && !draftSelection && selectionRect ? <SelectionOverlay rect={selectionRect} styles={props.styles} /> : null}
+        {!capturingSelection && draftSelectionPath.length > 1 ? <SelectionLassoOverlay points={draftSelectionPath} /> : null}
+        {!capturingSelection && draftSelection && draftSelection.mode !== 'lasso' ? <SelectionOverlay rect={draftSelection} styles={props.styles} draft /> : null}
+        <GestureDetector gesture={inkGesture}>
+          <View {...hoverHandlers} pointerEvents={inkTool === 'view' ? 'none' : 'auto'} style={props.styles.inkOverlay} />
+        </GestureDetector>
+        {!capturingSelection && selectionRect ? (
+          <View
+            {...selectionMovePanResponder.panHandlers}
+            pointerEvents={inkTool === 'select' ? 'auto' : 'none'}
+            style={{
+              position: 'absolute',
+              left: selectionRect.x,
+              top: selectionRect.y,
+              width: selectionRect.width,
+              height: selectionRect.height,
+              zIndex: 70,
+              elevation: 70,
+              backgroundColor: 'transparent',
+            }}
+          />
+        ) : null}
+        {!capturingSelection && !draftSelection && selectionRect ? (
+          <SelectionContextMenu
+            rect={selectionRect}
+            pageWidth={pageSize.width}
+            pageHeight={pageSize.height}
+            styles={props.styles}
+            editable={selectedObjectCount > 0}
+            onAskAi={askAiAboutCurrentSelection}
+            onDuplicate={canvasCtx.duplicateSelectedStrokes}
+            onDelete={canvasCtx.deleteSelectedStrokes}
+            onChangeColor={canvasCtx.changeSelectedStrokesColor}
+          />
+        ) : null}
+        {hoverVisible ? (
+          <PencilHoverOverlay
+            x={pencilHover.x}
+            y={pencilHover.y}
+            size={hoverSize}
+            pageWidth={pageSize.width}
+            pageHeight={pageSize.height}
+            borderColor={inkTool === 'erase' ? '#EF4444' : penColor}
+            label={hoverToolLabel}
+            isEraser={inkTool === 'erase'}
+            activeTool={inkTool}
+            styles={props.styles}
+            onSelectTool={canvasCtx.setInkTool}
+          />
+        ) : null}
+      </View>
     </View>
   );
 }

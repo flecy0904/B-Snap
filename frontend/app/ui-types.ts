@@ -38,4 +38,13 @@ export type InkTextAnnotation = {
   text: string;
   anchorRect?: SelectionRect | null;
 } & InkPageSize;
-export type SelectionRect = { x: number; y: number; width: number; height: number; mode?: InkSelectionMode; path?: InkPoint[] } & InkPageSize;
+export type SelectionRect = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  mode?: InkSelectionMode;
+  path?: InkPoint[];
+  pageNumber?: number;
+  generatedPageId?: string;
+} & InkPageSize;
