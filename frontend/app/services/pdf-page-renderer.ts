@@ -50,6 +50,16 @@ async function ensureLocalPdfUri(fileUri: string) {
   return downloadPromise;
 }
 
+export async function resolveLocalPdfUri(file: PdfRenderSource) {
+  const sourceUri = typeof file === 'string' ? file : file.uri;
+
+  if (!sourceUri) {
+    throw new Error('PDF source URI is unavailable.');
+  }
+
+  return ensureLocalPdfUri(sourceUri);
+}
+
 export async function renderPdfPageToImage(params: {
   file: PdfRenderSource;
   pageNumber: number;

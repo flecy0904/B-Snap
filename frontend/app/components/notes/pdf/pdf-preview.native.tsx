@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
-import { FlatList, Image, NativeScrollEvent, NativeSyntheticEvent, Pressable, Text, useWindowDimensions, View } from 'react-native';
+import { FlatList, Image, NativeScrollEvent, NativeSyntheticEvent, Platform, Pressable, Text, useWindowDimensions, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { runOnJS } from 'react-native-reanimated';
@@ -10,6 +10,7 @@ import { InkPath } from '../canvas/ink-path';
 import { TextAnnotationLayer } from '../canvas/text-annotation-layer';
 import { shouldActivateNativeInkGesture, type NativeGestureStateManager, type NativeInkGestureEvent, type NativeInkTouchEvent } from '../canvas/native-ink-gesture-policy';
 import { getCaptureOriginalImageSource, getPageCaptureReferenceImageSource } from '../shared/capture-assets';
+import { AndroidNativePdfViewport } from './android-native-pdf-viewport';
 import { cleanAiDisplayText, finalizeInkStroke, findHitInkStrokeId, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize, shouldAppendInkPoint } from '../../../ui-helpers';
 import { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { CaptureAsset, NotebookPage, PageCaptureReference } from '../../../types';
@@ -175,6 +176,31 @@ export function PdfPreview(props: {
   onAskAiAboutPageCaptureReference?: (referenceId: string) => void;
   styles: any;
 }) {
+  if (Platform.OS === 'android') {
+    return (
+      <View style={props.styles.pdfViewerCard}>
+        <AndroidNativePdfViewport
+          file={props.file}
+          page={props.page}
+          inkTool={props.inkTool}
+          fingerDrawingEnabled={props.fingerDrawingEnabled}
+          penColor={props.penColor}
+          penWidth={props.penWidth}
+          brushType={props.brushType}
+          linePattern={props.linePattern}
+          brushSettings={props.brushSettings}
+          inkStrokes={props.inkStrokes}
+          notebookPages={props.notebookPages}
+          onCommitInkStroke={props.onCommitInkStroke}
+          onRemoveInkStroke={props.onRemoveInkStroke}
+          onPageChanged={props.onPageChanged}
+          onDocumentLoaded={props.onDocumentLoaded}
+          style={{ alignSelf: 'stretch', flex: 1, width: '100%' }}
+        />
+      </View>
+    );
+  }
+
   const { width, height } = useWindowDimensions();
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const availableWidth = Math.max(320, containerSize.width || width);
