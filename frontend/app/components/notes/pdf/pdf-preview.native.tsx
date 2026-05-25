@@ -190,11 +190,30 @@ export function PdfPreview(props: {
           linePattern={props.linePattern}
           brushSettings={props.brushSettings}
           inkStrokes={props.inkStrokes}
+          textAnnotations={props.textAnnotations}
+          textAnnotationVariant={props.textAnnotationVariant}
+          selectionRect={props.selectionRect}
           notebookPages={props.notebookPages}
+          activeGeneratedPageId={props.activeGeneratedPageId}
+          pageCaptureReferences={props.pageCaptureReferences}
+          incomingAssetSuggestion={props.incomingAssetSuggestion}
           onCommitInkStroke={props.onCommitInkStroke}
           onRemoveInkStroke={props.onRemoveInkStroke}
+          onAddTextAnnotation={props.onAddTextAnnotation}
+          onUpdateTextAnnotation={props.onUpdateTextAnnotation}
+          onRemoveTextAnnotation={props.onRemoveTextAnnotation}
+          onSelectionChange={props.onSelectionChange}
+          onMoveSelection={props.onMoveSelection}
+          onResizeSelection={props.onResizeSelection}
+          onSelectionPreviewChange={props.onSelectionPreviewChange}
+          onAcceptIncomingAsset={props.onAcceptIncomingAsset}
+          onArchiveIncomingAsset={props.onArchiveIncomingAsset}
+          onDismissIncomingAsset={props.onDismissIncomingAsset}
+          onOpenPageCaptureReference={props.onOpenPageCaptureReference}
+          onAskAiAboutPageCaptureReference={props.onAskAiAboutPageCaptureReference}
           onPageChanged={props.onPageChanged}
           onDocumentLoaded={props.onDocumentLoaded}
+          styles={props.styles}
           style={{ alignSelf: 'stretch', flex: 1, width: '100%' }}
         />
       </View>
