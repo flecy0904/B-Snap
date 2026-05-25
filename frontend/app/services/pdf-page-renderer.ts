@@ -99,8 +99,8 @@ export async function renderPdfSelectionPreview(params: {
   inkStrokes?: InkStroke[];
   textAnnotations?: InkTextAnnotation[];
 }) {
-  if (Platform.OS !== 'android') {
-    throw new Error('Native PDF selection rendering is only enabled on Android.');
+  if (Platform.OS !== 'android' && Platform.OS !== 'ios') {
+    throw new Error('Native PDF selection rendering is only enabled on iOS and Android.');
   }
   if (!nativeRenderer?.renderSelectionPreview) {
     throw new Error('BsnPdfPageRenderer selection rendering is unavailable.');

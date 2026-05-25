@@ -292,7 +292,7 @@ export function PdfPreview(props: {
   onAskAiAboutPageCaptureReference?: (referenceId: string) => void;
   styles: any;
 }) {
-  if (Platform.OS === 'android') {
+  if (Platform.OS === 'android' || Platform.OS === 'ios') {
     return (
       <View style={props.styles.pdfViewerCard}>
         <AndroidNativePdfViewport

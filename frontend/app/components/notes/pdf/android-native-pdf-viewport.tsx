@@ -60,7 +60,7 @@ type BsnPdfViewportNativeProps = {
   onViewportChanged?: (event: NativeViewportChangedEvent) => void;
 };
 
-const NativeBsnPdfViewportView = Platform.OS === 'android'
+const NativeBsnPdfViewportView = Platform.OS === 'android' || Platform.OS === 'ios'
   ? requireNativeComponent<BsnPdfViewportNativeProps>('BsnPdfViewportView')
   : null;
 
@@ -609,7 +609,7 @@ export function AndroidNativePdfViewport(props: {
     onPanResponderTerminate: resetOverlayGesture,
   }), [getPointFromEvent, handleOverlayEnd, handleOverlayMove, handleOverlayStart, props.inkTool, resetOverlayGesture]);
 
-  if (Platform.OS !== 'android' || !NativeBsnPdfViewportView) return null;
+  if ((Platform.OS !== 'android' && Platform.OS !== 'ios') || !NativeBsnPdfViewportView) return null;
 
   if (!localFileUri) {
     return (
