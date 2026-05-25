@@ -2,7 +2,6 @@ package com.anonymous.bsnap
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.DashPathEffect
@@ -27,7 +26,6 @@ import com.facebook.react.bridge.ReadableMap
 import com.facebook.react.uimanager.PixelUtil
 import com.facebook.react.uimanager.events.RCTEventEmitter
 import java.io.File
-import java.io.FileOutputStream
 import java.net.URLDecoder
 import java.security.MessageDigest
 import java.util.UUID
@@ -131,9 +129,7 @@ class PdfViewportView(context: Context) : View(context) {
           markBaseRenderFinished(job.key)
           continue
         }
-        val bitmapFromDisk = loadBaseBitmapFromDisk(job.key)
-        val bitmap = bitmapFromDisk ?: if (isBaseRenderJobWanted(job)) renderBasePage(job.uri, job.pageNumber, job.targetWidth) else null
-        if (bitmapFromDisk == null && bitmap != null && isBaseRenderJobWanted(job)) saveBaseBitmapToDisk(job.key, bitmap)
+        val bitmap = if (isBaseRenderJobWanted(job)) renderBasePage(job.uri, job.pageNumber, job.targetWidth) else null
         post {
           val shouldKeep = isBaseRenderJobWanted(job)
           markBaseRenderFinished(job.key)
@@ -157,7 +153,7 @@ class PdfViewportView(context: Context) : View(context) {
   private val baseBitmapCache = object : LruCache<String, Bitmap>(64 * 1024 * 1024) {
     override fun sizeOf(key: String, value: Bitmap): Int = value.allocationByteCount
     override fun entryRemoved(evicted: Boolean, key: String, oldValue: Bitmap, newValue: Bitmap?) {
-      if (evicted && oldValue != newValue && !oldValue.isRecycled) oldValue.recycle()
+      if (oldValue != newValue && !oldValue.isRecycled) oldValue.recycle()
     }
   }
 
@@ -315,6 +311,7 @@ class PdfViewportView(context: Context) : View(context) {
     nativePages = parseNotebookPages(pages)
     rebuildPageLayouts()
     restoreViewportAnchor(anchor)
+    resetHiResOverlayState()
     requestViewportChanged(force = true)
     invalidate()
   }
@@ -360,6 +357,7 @@ class PdfViewportView(context: Context) : View(context) {
       restoreViewportAnchor(anchor)
     }
     clampViewport()
+    resetHiResOverlayState()
     scheduleVisibleBaseRenders()
     requestViewportChanged(force = true)
   }
@@ -562,6 +560,13 @@ class PdfViewportView(context: Context) : View(context) {
   }
 
   private fun closeDocument() {
+    baseBitmapCache.evictAll()
+    synchronized(baseRenderLock) {
+      baseRenderRequests.clear()
+      wantedBaseRenderKeys = emptySet()
+    }
+    baseRenderQueue.clear()
+    resetHiResOverlayState()
     renderer?.close()
     renderer = null
     descriptor?.close()
@@ -938,9 +943,7 @@ class PdfViewportView(context: Context) : View(context) {
     if (applyScaleSnap && scale <= 1.02f) {
       scale = 1f
       translateX = 0f
-      clearHiResOverlays()
-      hiResInFlight.clear()
-      removeCallbacks(hiResRequestRunnable)
+      resetHiResOverlayState()
     }
   }
 
@@ -1102,8 +1105,7 @@ class PdfViewportView(context: Context) : View(context) {
 
   private fun startHiResOverlayRender() {
     if (scale < hiResMinScale || width <= 0 || height <= 0) {
-      clearHiResOverlays()
-      hiResInFlight.clear()
+      resetHiResOverlayState()
       return
     }
     val requests = buildVisibleHiResRequests()
@@ -1163,6 +1165,13 @@ class PdfViewportView(context: Context) : View(context) {
       if (!overlay.bitmap.isRecycled) overlay.bitmap.recycle()
     }
     hiResOverlays.clear()
+  }
+
+  private fun resetHiResOverlayState() {
+    removeCallbacks(hiResRequestRunnable)
+    hiResGeneration += 1
+    clearHiResOverlays()
+    hiResInFlight.clear()
   }
 
   private fun discardInvisibleHiResOverlays(visiblePageNumbers: Set<Int>) {
@@ -1481,23 +1490,6 @@ class PdfViewportView(context: Context) : View(context) {
   }
 
   private fun baseCacheKey(pageNumber: Int, targetWidth: Int) = "$sourceKey-$pageNumber-$targetWidth"
-
-  private fun loadBaseBitmapFromDisk(key: String): Bitmap? {
-    val file = File(cacheDir(), "$key.png")
-    if (!file.exists()) return null
-    return BitmapFactory.decodeFile(file.absolutePath)
-  }
-
-  private fun saveBaseBitmapToDisk(key: String, bitmap: Bitmap) {
-    try {
-      val file = File(cacheDir(), "$key.png")
-      file.parentFile?.mkdirs()
-      FileOutputStream(file).use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
-    } catch (_: Exception) {
-    }
-  }
-
-  private fun cacheDir() = File(context.cacheDir, "bsnap-native-pdf-pages")
 
   private fun hashKey(value: String): String {
     val bytes = MessageDigest.getInstance("SHA-256").digest(value.toByteArray())
