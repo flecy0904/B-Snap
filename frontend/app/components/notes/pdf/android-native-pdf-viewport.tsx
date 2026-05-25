@@ -1,14 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { Image, PanResponder, Platform, Pressable, requireNativeComponent, StyleSheet, Text, View, type GestureResponderEvent, type NativeSyntheticEvent, type StyleProp, type ViewStyle } from 'react-native';
-import { captureRef } from 'react-native-view-shot';
+import { Image, PanResponder, PixelRatio, Platform, Pressable, requireNativeComponent, StyleSheet, Text, View, type GestureResponderEvent, type NativeSyntheticEvent, type StyleProp, type ViewStyle } from 'react-native';
 import { TextAnnotationLayer } from '../canvas/text-annotation-layer';
 import { getCaptureOriginalImageSource, getPageCaptureReferenceImageSource } from '../shared/capture-assets';
 import { cleanAiDisplayText, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize } from '../../../ui-helpers';
 import type { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import type { CaptureAsset, NotebookPage, PageCaptureReference } from '../../../types';
-import { resolveLocalPdfUri, type PdfRenderSource } from '../../../services/pdf-page-renderer';
+import { renderPdfSelectionPreview, resolveLocalPdfUri, type PdfRenderSource } from '../../../services/pdf-page-renderer';
 
 type NativeDocumentLoadedEvent = NativeSyntheticEvent<{ pageCount: number }>;
 type NativePageChangedEvent = NativeSyntheticEvent<{ pageNumber: number }>;
@@ -204,13 +202,14 @@ export function AndroidNativePdfViewport(props: {
   const [capturingSelection, setCapturingSelection] = useState(false);
   const [openReferenceId, setOpenReferenceId] = useState<string | null>(null);
   const selectionOriginRef = useRef<InkPoint | null>(null);
+  const selectionPageRef = useRef<PdfViewportOverlayPage | null>(null);
   const selectionMoveOriginRef = useRef<InkPoint | null>(null);
   const selectionMoveStartRectRef = useRef<SelectionRect | null>(null);
   const selectionResizeCornerRef = useRef<ResizeCorner | null>(null);
   const selectionResizeStartRectRef = useRef<SelectionRect | null>(null);
   const draftSelectionRef = useRef<SelectionRect | null>(null);
   const textTapRef = useRef<InkPoint | null>(null);
-  const viewportCaptureRef = useRef<View | null>(null);
+  const viewportRef = useRef<PdfViewportOverlayState | null>(null);
   const pdfSource = useMemo(() => getPdfRenderSource(props.file), [props.file]);
   const overlayEnabled = props.inkTool === 'select'
     || props.inkTool === 'text'
@@ -336,37 +335,29 @@ export function AndroidNativePdfViewport(props: {
   }, [currentPages]);
 
   const buildSelectionPreview = useCallback(async (page: PdfViewportOverlayPage, rect: SelectionRect) => {
-    const target = viewportCaptureRef.current;
-    if (!target || !viewport) return null;
+    const targetPage = (viewportRef.current ?? viewport)?.pages.find((candidate) => candidate.id === page.id)
+      ?? page;
     setCapturingSelection(true);
-    await new Promise((resolve) => setTimeout(resolve, 60));
     try {
-      const fullImageUri = await captureRef(target, {
-        format: 'png',
-        result: 'tmpfile',
-        quality: 1,
-        width: Math.round(viewport.viewportWidth),
-        height: Math.round(viewport.viewportHeight),
-        handleGLSurfaceViewOnAndroid: true,
-      });
-      const cropLeft = page.left + rect.x / Math.max(1, page.pageWidth) * page.width;
-      const cropTop = page.top + rect.y / Math.max(1, page.pageHeight) * page.height;
-      const cropWidth = rect.width / Math.max(1, page.pageWidth) * page.width;
-      const cropHeight = rect.height / Math.max(1, page.pageHeight) * page.height;
-      const crop = {
-        originX: Math.max(0, Math.floor(cropLeft)),
-        originY: Math.max(0, Math.floor(cropTop)),
-        width: Math.max(1, Math.min(Math.floor(cropWidth), Math.floor(viewport.viewportWidth - cropLeft))),
-        height: Math.max(1, Math.min(Math.floor(cropHeight), Math.floor(viewport.viewportHeight - cropTop))),
-      };
-      const cropped = await manipulateAsync(fullImageUri, [{ crop }], { compress: 1, format: SaveFormat.PNG });
-      return cropped.uri;
+      if (targetPage.kind === 'pdf' && targetPage.pageNumber && localFileUri) {
+        const visibleSelectionWidth = rect.width / Math.max(1, rect.pageWidth ?? targetPage.pageWidth) * targetPage.width;
+        const renderedPage = await renderPdfSelectionPreview({
+          file: localFileUri,
+          pageNumber: targetPage.pageNumber,
+          rect,
+          targetWidth: Math.max(320, Math.min(1800, Math.round(visibleSelectionWidth * PixelRatio.get()))),
+          inkStrokes: props.inkStrokes,
+          textAnnotations: props.textAnnotations ?? [],
+        });
+        return renderedPage.uri;
+      }
+      return null;
     } catch {
       return null;
     } finally {
       setCapturingSelection(false);
     }
-  }, [viewport]);
+  }, [localFileUri, props.inkStrokes, props.textAnnotations, viewport]);
 
   const handleOverlayStart = useCallback((event: GestureResponderEvent) => {
     const hit = getPointFromEvent(event);
@@ -382,6 +373,7 @@ export function AndroidNativePdfViewport(props: {
     if (currentSelection && resizeCorner) {
       selectionResizeCornerRef.current = resizeCorner;
       selectionResizeStartRectRef.current = currentSelection;
+      selectionPageRef.current = page;
       draftSelectionRef.current = currentSelection;
       setDraftSelection(currentSelection);
       return;
@@ -395,6 +387,7 @@ export function AndroidNativePdfViewport(props: {
     ) {
       selectionMoveOriginRef.current = point;
       selectionMoveStartRectRef.current = currentSelection;
+      selectionPageRef.current = page;
       draftSelectionRef.current = currentSelection;
       setDraftSelection(currentSelection);
       return;
@@ -402,6 +395,7 @@ export function AndroidNativePdfViewport(props: {
     props.onSelectionChange?.(null);
     props.onSelectionPreviewChange?.(null);
     selectionOriginRef.current = point;
+    selectionPageRef.current = page;
     const rect = { x: point.x, y: point.y, width: 0, height: 0, pageWidth: point.pageWidth, pageHeight: point.pageHeight };
     draftSelectionRef.current = rect;
     setDraftSelection(rect);
@@ -436,13 +430,14 @@ export function AndroidNativePdfViewport(props: {
     }
     const origin = selectionOriginRef.current;
     if (!origin) return;
+    const page = selectionPageRef.current ?? hit.page;
     const rect = {
       x: Math.min(origin.x, point.x),
       y: Math.min(origin.y, point.y),
       width: Math.abs(point.x - origin.x),
       height: Math.abs(point.y - origin.y),
-      pageWidth: point.pageWidth,
-      pageHeight: point.pageHeight,
+      pageWidth: page.pageWidth,
+      pageHeight: page.pageHeight,
     };
     draftSelectionRef.current = rect;
     setDraftSelection(rect);
@@ -450,6 +445,7 @@ export function AndroidNativePdfViewport(props: {
 
   const resetOverlayGesture = useCallback(() => {
     selectionOriginRef.current = null;
+    selectionPageRef.current = null;
     selectionMoveOriginRef.current = null;
     selectionMoveStartRectRef.current = null;
     selectionResizeCornerRef.current = null;
@@ -470,13 +466,7 @@ export function AndroidNativePdfViewport(props: {
       const moveStartRect = selectionMoveStartRectRef.current;
       const resizeCorner = selectionResizeCornerRef.current;
       const resizeStartRect = selectionResizeStartRectRef.current;
-      const page = rect
-        ? currentPages.find((candidate) => (
-            rect.pageWidth === candidate.pageWidth &&
-            rect.pageHeight === candidate.pageHeight &&
-            (candidate.pageNumber === props.page || candidate.generatedPageId === props.activeGeneratedPageId)
-          )) ?? currentPages.find(isCurrentPage)
-        : null;
+      const page = rect ? selectionPageRef.current ?? currentPages.find(isCurrentPage) : null;
       resetOverlayGesture();
       if (rect && resizeCorner && resizeStartRect) {
         props.onResizeSelection?.(rect);
@@ -667,7 +657,10 @@ export function AndroidNativePdfViewport(props: {
   };
 
   return (
-    <View ref={viewportCaptureRef} collapsable={false} style={[styles.viewportWrap, props.style]}>
+    <View
+      collapsable={false}
+      style={[styles.viewportWrap, props.style]}
+    >
       <NativeBsnPdfViewportView
         fileUri={localFileUri}
         page={props.page}
@@ -686,6 +679,7 @@ export function AndroidNativePdfViewport(props: {
         onCommitInkStroke={(event) => props.onCommitInkStroke(event.nativeEvent)}
         onRemoveInkStroke={(event) => props.onRemoveInkStroke(event.nativeEvent.strokeId)}
         onViewportChanged={overlayEnabled ? (event) => {
+          viewportRef.current = event.nativeEvent;
           setViewport(event.nativeEvent);
           props.onViewportChanged?.(event.nativeEvent);
         } : undefined}

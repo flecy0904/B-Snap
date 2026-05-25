@@ -24,6 +24,7 @@ import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.ReactContext
 import com.facebook.react.bridge.ReadableArray
 import com.facebook.react.bridge.ReadableMap
+import com.facebook.react.uimanager.PixelUtil
 import com.facebook.react.uimanager.events.RCTEventEmitter
 import java.io.File
 import java.io.FileOutputStream
@@ -182,7 +183,7 @@ class PdfViewportView(context: Context) : View(context) {
   private val naturalFlingMaxVelocity = 10600f
   private val naturalFlingMinVelocity = 650f
   private val naturalFlingDecayPerSecond = 2.2f
-  private val naturalFlingStopVelocity = 28f
+  private val naturalFlingStopVelocity = 100f
 
   private var inkTool = "view"
   private var fingerDrawingEnabled = false
@@ -355,6 +356,7 @@ class PdfViewportView(context: Context) : View(context) {
     stopInertia()
     closeDocument()
     removeCallbacks(hiResRequestRunnable)
+    removeCallbacks(viewportEventRunnable)
     baseRenderWorker.interrupt()
     hiResExecutor.shutdownNow()
   }
@@ -1297,10 +1299,10 @@ class PdfViewportView(context: Context) : View(context) {
         putString("label", layout.page.label)
         if (layout.page.pageNumber != null) putInt("pageNumber", layout.page.pageNumber)
         if (layout.page.generatedPageId != null) putString("generatedPageId", layout.page.generatedPageId)
-        putDouble("left", screenLeft.toDouble())
-        putDouble("top", screenTop.toDouble())
-        putDouble("width", screenWidth.toDouble())
-        putDouble("height", screenHeight.toDouble())
+        putDouble("left", PixelUtil.toDIPFromPixel(screenLeft).toDouble())
+        putDouble("top", PixelUtil.toDIPFromPixel(screenTop).toDouble())
+        putDouble("width", PixelUtil.toDIPFromPixel(screenWidth).toDouble())
+        putDouble("height", PixelUtil.toDIPFromPixel(screenHeight).toDouble())
         putDouble("pageWidth", pageLogicalWidth.toDouble())
         putDouble("pageHeight", pageLogicalHeight.toDouble())
       })
@@ -1312,11 +1314,11 @@ class PdfViewportView(context: Context) : View(context) {
     lastViewportEventKey = key
     val event = Arguments.createMap().apply {
       putDouble("scale", scale.toDouble())
-      putDouble("scrollY", scrollYDocument.toDouble())
-      putDouble("translateX", translateX.toDouble())
-      putDouble("viewportWidth", width.toDouble())
-      putDouble("viewportHeight", height.toDouble())
-      putDouble("contentHeight", (pageLayouts.lastOrNull()?.let { it.top + it.height + dp(24f) } ?: 0f).toDouble())
+      putDouble("scrollY", PixelUtil.toDIPFromPixel(scrollYDocument).toDouble())
+      putDouble("translateX", PixelUtil.toDIPFromPixel(translateX).toDouble())
+      putDouble("viewportWidth", PixelUtil.toDIPFromPixel(width.toFloat()).toDouble())
+      putDouble("viewportHeight", PixelUtil.toDIPFromPixel(height.toFloat()).toDouble())
+      putDouble("contentHeight", PixelUtil.toDIPFromPixel(pageLayouts.lastOrNull()?.let { it.top + it.height + dp(24f) } ?: 0f).toDouble())
       putArray("pages", pages)
     }
     emit("topViewportChanged", event)

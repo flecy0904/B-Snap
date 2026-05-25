@@ -1,8 +1,17 @@
 import { NativeModules, Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
+import type { InkStroke, InkTextAnnotation, SelectionRect } from '../ui-types';
 
 type NativePdfPageRenderer = {
   renderPage: (fileUri: string, pageNumber: number, targetWidth: number) => Promise<RenderedPdfPage>;
+  renderSelectionPreview?: (
+    fileUri: string,
+    pageNumber: number,
+    rect: SelectionRect,
+    targetWidth: number,
+    inkStrokes: InkStroke[],
+    textAnnotations: InkTextAnnotation[],
+  ) => Promise<RenderedPdfPage>;
 };
 
 export type RenderedPdfPage = {
@@ -80,4 +89,36 @@ export async function renderPdfPageToImage(params: {
 
   const localUri = await ensureLocalPdfUri(sourceUri);
   return nativeRenderer.renderPage(localUri, params.pageNumber, Math.max(1, Math.round(params.targetWidth)));
+}
+
+export async function renderPdfSelectionPreview(params: {
+  file: PdfRenderSource;
+  pageNumber: number;
+  rect: SelectionRect;
+  targetWidth: number;
+  inkStrokes?: InkStroke[];
+  textAnnotations?: InkTextAnnotation[];
+}) {
+  if (Platform.OS !== 'android') {
+    throw new Error('Native PDF selection rendering is only enabled on Android.');
+  }
+  if (!nativeRenderer?.renderSelectionPreview) {
+    throw new Error('BsnPdfPageRenderer selection rendering is unavailable.');
+  }
+
+  const sourceUri = typeof params.file === 'string' ? params.file : params.file.uri;
+
+  if (!sourceUri) {
+    throw new Error('PDF source URI is unavailable.');
+  }
+
+  const localUri = await ensureLocalPdfUri(sourceUri);
+  return nativeRenderer.renderSelectionPreview(
+    localUri,
+    params.pageNumber,
+    params.rect,
+    Math.max(1, Math.round(params.targetWidth)),
+    params.inkStrokes ?? [],
+    params.textAnnotations ?? [],
+  );
 }
