@@ -5,6 +5,7 @@ import { useDocumentContext } from './document-context';
 import { useCanvasContext } from '../canvas/canvas-context';
 import { NotebookPage } from '../../../types';
 import { useDesktopNotesWorkspaceContext } from './notes-workspace-context';
+import { FloatingToolPalette } from './floating-tool-palette';
 
 export function NotesPageListOverlay() {
   const workspaceContext = useDesktopNotesWorkspaceContext();
@@ -24,6 +25,18 @@ export function NotesPageListOverlay() {
     return '원본 PDF';
   };
 
+  const getNotebookPageLabel = (page: NotebookPage, index: number) => {
+    if (page.kind === 'pdf' && page.pageNumber) return `${page.pageNumber}`;
+    const fallbackLabel = page.label || `${page.insertAfterPage ?? index + 1}-1`;
+    return fallbackLabel.replace(/\s*(메모|AI 정리|페이지)$/g, '').trim();
+  };
+
+  const getNotebookPageSubLabel = (page: NotebookPage) => {
+    if (page.kind === 'pdf') return '원본 페이지';
+    if (typeof page.insertAfterPage === 'number') return `${page.insertAfterPage}페이지 뒤 삽입`;
+    return '추가 페이지';
+  };
+
   const isActiveNotebookPage = (page: NotebookPage) => {
     const current = documentContext.currentDocumentPage;
     if (!current) return false;
@@ -33,6 +46,7 @@ export function NotesPageListOverlay() {
   };
 
   const notebookPages = documentContext.notebookPages.length ? documentContext.notebookPages : [];
+  const originalPageCount = documentContext.totalDocumentPageCount || notebookPages.filter((page) => page.kind === 'pdf').length || notebookPages.length;
 
   const navigateToPage = (page: NotebookPage) => {
     if (page.kind === 'pdf' && page.pageNumber) documentContext.onSetCurrentPdfPage(page.pageNumber);
@@ -41,45 +55,78 @@ export function NotesPageListOverlay() {
   };
 
   return (
-    <View style={{ position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, zIndex: 9999, elevation: 99 }}>
-      <Pressable style={{ position: 'absolute', top: 0, bottom: 0, left: 0, right: 0, backgroundColor: 'rgba(0,0,0,0.1)' }} onPress={() => workspaceContext.setPageListOpen(false)} />
-      <View pointerEvents="box-none" style={{ position: 'absolute', top: 74, left: 30, width: 260, bottom: 0 }}>
-        <View style={{ width: 260, maxHeight: 460, backgroundColor: '#FFFFFF', borderRadius: 12, borderWidth: 1, borderColor: '#E6EAF2', shadowColor: '#9098A8', shadowOpacity: 0.16, shadowRadius: 16, shadowOffset: { width: 0, height: 8 }, elevation: 8 }}>
-          <View style={{ paddingHorizontal: 12, paddingTop: 12, paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: '#EEF1F6' }}>
-            <Text style={{ fontSize: 12, fontWeight: '900', color: '#303744' }}>페이지</Text>
-            <Text style={{ marginTop: 2, fontSize: 11, fontWeight: '700', color: '#8A93A3' }}>{notebookPages.length}개 페이지 블록</Text>
-          </View>
-          <ScrollView nestedScrollEnabled keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={true} style={{ padding: 8, maxHeight: 380 }}>
-            {notebookPages.map((page, index) => {
-              const isActive = isActiveNotebookPage(page);
-              const bookmarked = page.sourcePage
-                ? documentContext.currentDocumentBookmarks.some((bookmark) => {
-                    if (!page.sourcePage || bookmark.page.kind !== page.sourcePage.kind) return false;
-                    if (bookmark.page.kind === 'pdf' && page.sourcePage.kind === 'pdf') return bookmark.page.pageNumber === page.sourcePage.pageNumber;
-                    if (bookmark.page.kind === 'generated' && page.sourcePage.kind === 'generated') return bookmark.page.pageId === page.sourcePage.pageId;
-                    return false;
-                  })
-                : false;
-              return (
-                <Pressable 
-                  key={page.id}
-                  style={{ flexDirection: 'row', alignItems: 'center', gap: 10, paddingVertical: 10, paddingHorizontal: 10, borderRadius: 8, backgroundColor: isActive ? '#F0F4FF' : 'transparent' }}
-                  onPress={() => navigateToPage(page)}
-                >
-                  <View style={{ width: 30, height: 38, borderRadius: 6, backgroundColor: page.kind === 'pdf' ? '#F8FAFD' : '#FFFDF7', borderWidth: 1, borderColor: isActive ? '#C8D4FF' : '#E7ECF4', alignItems: 'center', justifyContent: 'center' }}>
-                    <MaterialCommunityIcons name={getNotebookPageIcon(page)} size={16} color={isActive ? '#4F68D2' : '#7B8494'} />
-                  </View>
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <Text style={{ fontSize: 13, fontWeight: isActive ? '900' : '700', color: isActive ? '#4F68D2' : '#414B5D' }} numberOfLines={1}>
-                      {bookmarked ? '★ ' : ''}{page.label || `${index + 1} 페이지`}
-                    </Text>
-                    <Text style={{ marginTop: 2, fontSize: 10, fontWeight: '800', color: '#9AA3B2' }}>{getNotebookPageMeta(page)}</Text>
-                  </View>
-                </Pressable>
-              );
-            })}
-          </ScrollView>
+    <View style={workspaceContext.styles.pageDrawerOverlay}>
+      <Pressable style={workspaceContext.styles.pageDrawerScrim} onPress={() => workspaceContext.setPageListOpen(false)} />
+      <View style={workspaceContext.styles.pageDrawerPanel}>
+        <View style={workspaceContext.styles.pageDrawerHeader}>
+          <Text style={workspaceContext.styles.pageDrawerMoreText}>•••</Text>
+          <Text style={workspaceContext.styles.pageDrawerTitle}>페이지</Text>
+          <Pressable style={workspaceContext.styles.pageDrawerClose} onPress={() => workspaceContext.setPageListOpen(false)}>
+            <MaterialCommunityIcons name="close" size={22} color="#C9CDD6" />
+          </Pressable>
         </View>
+        <View style={workspaceContext.styles.pageDrawerTabs}>
+          <View style={[workspaceContext.styles.pageDrawerTab, workspaceContext.styles.pageDrawerTabActive]}>
+            <MaterialCommunityIcons name="file-document-outline" size={16} color="#FFFFFF" />
+          </View>
+          <View style={workspaceContext.styles.pageDrawerTab}>
+            <MaterialCommunityIcons name="format-list-bulleted" size={16} color="#B9C0CC" />
+          </View>
+          <View style={workspaceContext.styles.pageDrawerTab}>
+            <MaterialCommunityIcons name="bookmark-multiple-outline" size={16} color="#B9C0CC" />
+          </View>
+        </View>
+        <View style={workspaceContext.styles.pageDrawerFilterRow}>
+          <View style={workspaceContext.styles.pageDrawerFilterChip}>
+            <Text style={workspaceContext.styles.pageDrawerFilterText}>모든 페이지</Text>
+            <MaterialCommunityIcons name="chevron-down" size={14} color="#78B8FF" />
+          </View>
+          <Text style={workspaceContext.styles.pageDrawerTotalText}>원본 {originalPageCount}p</Text>
+        </View>
+        <ScrollView
+          nestedScrollEnabled
+          keyboardShouldPersistTaps="handled"
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={workspaceContext.styles.pageDrawerGrid}
+        >
+          {notebookPages.map((page, index) => {
+            const isActive = isActiveNotebookPage(page);
+            const bookmarked = page.sourcePage
+              ? documentContext.currentDocumentBookmarks.some((bookmark) => {
+                  if (!page.sourcePage || bookmark.page.kind !== page.sourcePage.kind) return false;
+                  if (bookmark.page.kind === 'pdf' && page.sourcePage.kind === 'pdf') return bookmark.page.pageNumber === page.sourcePage.pageNumber;
+                  if (bookmark.page.kind === 'generated' && page.sourcePage.kind === 'generated') return bookmark.page.pageId === page.sourcePage.pageId;
+                  return false;
+                })
+              : false;
+            return (
+              <Pressable
+                key={page.id}
+                style={[workspaceContext.styles.pageDrawerCard, isActive && workspaceContext.styles.pageDrawerCardActive]}
+                onPress={() => navigateToPage(page)}
+              >
+                <View style={[workspaceContext.styles.pageDrawerPreview, page.kind !== 'pdf' && workspaceContext.styles.pageDrawerPreviewGenerated, isActive && workspaceContext.styles.pageDrawerPreviewActive]}>
+                  <MaterialCommunityIcons name={getNotebookPageIcon(page)} size={24} color={isActive ? '#82B3FF' : '#8D96A5'} />
+                  <Text style={workspaceContext.styles.pageDrawerPreviewLabel}>{getNotebookPageMeta(page)}</Text>
+                  {bookmarked ? (
+                    <View style={workspaceContext.styles.pageDrawerBookmarkBadge}>
+                      <MaterialCommunityIcons name="star" size={12} color="#FBBF24" />
+                    </View>
+                  ) : null}
+                </View>
+                <View style={workspaceContext.styles.pageDrawerPageRow}>
+                  <View style={workspaceContext.styles.pageDrawerPageTextBox}>
+                    <Text style={[workspaceContext.styles.pageDrawerPageNumber, isActive && workspaceContext.styles.pageDrawerPageNumberActive]} numberOfLines={1}>
+                      {getNotebookPageLabel(page, index)}
+                    </Text>
+                    <Text style={workspaceContext.styles.pageDrawerPageMeta} numberOfLines={1}>{getNotebookPageSubLabel(page)}</Text>
+                  </View>
+                  <MaterialCommunityIcons name="chevron-down" size={16} color="#D7DBE2" />
+                </View>
+              </Pressable>
+            );
+          })}
+        </ScrollView>
       </View>
     </View>
   );
@@ -95,15 +142,15 @@ export const NotesWorkspaceToolbar = React.memo(function NotesWorkspaceToolbar()
       <View style={workspaceContext.styles.inkToolbar}>
         <View style={[workspaceContext.styles.documentPageNavigator, { position: 'relative' }]}>
           <Pressable
-            style={{ height: 34, minWidth: 92, paddingHorizontal: 10, borderRadius: 10, backgroundColor: workspaceContext.pageListOpen ? '#F0F4FF' : '#F8FAFD', borderWidth: 1, borderColor: workspaceContext.pageListOpen ? '#DCE4FF' : '#EEF1F6', flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 3 }}
+            style={[
+              workspaceContext.styles.inkActionButton,
+              workspaceContext.pageListOpen && workspaceContext.styles.inkToolButtonActive,
+            ]}
             onPress={() => {
               workspaceContext.setPageListOpen(!workspaceContext.pageListOpen);
             }}
           >
-            <Text style={workspaceContext.styles.documentPageLabel}>
-              {workspaceContext.currentPageLabel}
-            </Text>
-            <MaterialCommunityIcons name={workspaceContext.pageListOpen ? "menu-up" : "menu-down"} size={14} color="#5B6474" />
+            <MaterialCommunityIcons name="view-grid-outline" size={18} color={workspaceContext.pageListOpen ? '#4F68D2' : '#556070'} />
           </Pressable>
           
           <Pressable 
@@ -121,38 +168,19 @@ export const NotesWorkspaceToolbar = React.memo(function NotesWorkspaceToolbar()
           <Pressable style={workspaceContext.styles.inkActionButton} onPress={documentContext.onExportCurrentDocument}>
             <MaterialCommunityIcons name="share-variant-outline" size={18} color="#556070" />
           </Pressable>
-          <Pressable
-            style={[workspaceContext.styles.inkActionButton, workspaceContext.focusMode && workspaceContext.styles.inkToolButtonActive]}
-            onPress={workspaceContext.onToggleFocusMode}
-          >
-            <MaterialCommunityIcons name={workspaceContext.focusMode ? 'fullscreen-exit' : 'fullscreen'} size={18} color={workspaceContext.focusMode ? '#4F68D2' : '#556070'} />
-          </Pressable>
         </View>
 
         <View style={workspaceContext.styles.inkToolbarTools}>
           <View style={workspaceContext.styles.inkSecondaryCluster}>
-            {canvasContext.selectionRect ? (
-              <>
-                <Pressable style={workspaceContext.styles.inkActionButton} onPress={canvasContext.duplicateSelectedStrokes}>
-                  <MaterialCommunityIcons name="content-copy" size={18} color="#556070" />
-                </Pressable>
-                <Pressable style={workspaceContext.styles.inkActionButton} onPress={canvasContext.deleteSelectedStrokes}>
-                  <MaterialCommunityIcons name="delete-outline" size={18} color="#EF4444" />
-                </Pressable>
-              </>
-            ) : (
-              <>
-                <Pressable style={workspaceContext.styles.inkActionButton} onPress={canvasContext.undoInk}>
-                  <MaterialCommunityIcons name="undo-variant" size={18} color="#556070" />
-                </Pressable>
-                <Pressable style={workspaceContext.styles.inkActionButton} onPress={canvasContext.redoInk}>
-                  <MaterialCommunityIcons name="redo-variant" size={18} color="#556070" />
-                </Pressable>
-                <Pressable style={workspaceContext.styles.inkActionButton} onPress={canvasContext.clearInk}>
-                  <MaterialCommunityIcons name="trash-can-outline" size={18} color="#556070" />
-                </Pressable>
-              </>
-            )}
+            <Pressable style={workspaceContext.styles.inkActionButton} onPress={canvasContext.undoInk}>
+              <MaterialCommunityIcons name="undo-variant" size={18} color="#556070" />
+            </Pressable>
+            <Pressable style={workspaceContext.styles.inkActionButton} onPress={canvasContext.redoInk}>
+              <MaterialCommunityIcons name="redo-variant" size={18} color="#556070" />
+            </Pressable>
+            <Pressable style={workspaceContext.styles.inkActionButton} onPress={canvasContext.clearInk}>
+              <MaterialCommunityIcons name="trash-can-outline" size={18} color="#556070" />
+            </Pressable>
           </View>
 
           <View style={workspaceContext.styles.inkToolbarDivider} />
@@ -184,6 +212,7 @@ export const NotesWorkspaceToolbar = React.memo(function NotesWorkspaceToolbar()
             </Pressable>
           </View>
         </View>
+        <FloatingToolPalette />
       </View>
     </View>
   );

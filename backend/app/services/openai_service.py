@@ -153,8 +153,10 @@ def build_selection_context(
     if page_number is not None:
         parts.append(f"The user's current page is page {page_number}.")
     if selection_rect:
+        mode = selection_rect.get("mode")
+        selection_label = "freeform lasso region" if mode == "lasso" else "rectangular region"
         parts.append(
-            "The user selected a rectangular region with "
+            f"The user selected a {selection_label} bounded by "
             f"x={selection_rect.get('x')}, y={selection_rect.get('y')}, "
             f"width={selection_rect.get('width')}, height={selection_rect.get('height')}, "
             f"pageWidth={selection_rect.get('pageWidth')}, pageHeight={selection_rect.get('pageHeight')}."

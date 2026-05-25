@@ -69,25 +69,7 @@ export function InkPath({ stroke, draft = false }: { stroke: InkStroke; draft?: 
   }
 
   if (stroke.brush === 'pencil') {
-    const centerlinePath = getInkCenterlinePath(stroke.points);
-    return (
-      <>
-        <Path key={`${stroke.id}-body`} d={path} fill={stroke.color} opacity={draft ? 0.76 : 0.86} />
-        {centerlinePath ? (
-          <Path
-            key={`${stroke.id}-grain`}
-            d={centerlinePath}
-            fill="none"
-            stroke={stroke.color}
-            strokeWidth={Math.max(0.8, stroke.width * 0.22)}
-            strokeLinecap="round"
-            strokeLinejoin="round"
-            strokeDasharray={`${Math.max(1.2, stroke.width * 0.35)} ${Math.max(2.4, stroke.width * 0.9)}`}
-            opacity={0.32}
-          />
-        ) : null}
-      </>
-    );
+    return <Path key={stroke.id} d={path} fill={stroke.color} opacity={draft ? 0.72 : 0.82} />;
   }
 
   if (stroke.brush === 'marker') {

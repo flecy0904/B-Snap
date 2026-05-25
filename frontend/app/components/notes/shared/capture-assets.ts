@@ -34,16 +34,25 @@ function getCapturePreviewUri(asset: Pick<CaptureAsset, 'fileUrl' | 'processedUr
     ?? asset.previewImageKey;
 }
 
+function getCaptureOriginalUri(asset: Pick<CaptureAsset, 'fileUrl' | 'processedUrl' | 'thumbnailUrl' | 'previewImageKey'> | Pick<PageCaptureReference, 'fileUrl' | 'processedUrl' | 'thumbnailUrl' | 'previewImageKey'>) {
+  return asset.fileUrl
+    ?? getPersistedLocalImageUri(asset)
+    ?? asset.thumbnailUrl
+    ?? derivePreprocessedCropUrl(asset.processedUrl)
+    ?? asset.processedUrl
+    ?? asset.previewImageKey;
+}
+
 export function getCaptureImageSource(asset: CaptureAsset) {
   return buildImageSource(getCapturePreviewUri(asset), asset.previewImage);
 }
 
 export function getCaptureOriginalImageSource(asset: CaptureAsset) {
-  return buildImageSource(getCapturePreviewUri(asset), asset.previewImage);
+  return buildImageSource(getCaptureOriginalUri(asset), asset.previewImage);
 }
 
 export function getPageCaptureReferenceImageSource(reference: PageCaptureReference) {
-  return buildImageSource(getCapturePreviewUri(reference), reference.previewImage);
+  return buildImageSource(getCaptureOriginalUri(reference), reference.previewImage);
 }
 
 export function formatCaptureDate(value: string) {

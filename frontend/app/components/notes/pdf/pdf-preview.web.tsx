@@ -1,13 +1,13 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { GestureResponderEvent, Image, Pressable, ScrollView, Text, useWindowDimensions, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import Svg from 'react-native-svg';
+import Svg, { Path } from 'react-native-svg';
 import { InkPath } from '../canvas/ink-path';
 import { TextAnnotationLayer } from '../canvas/text-annotation-layer';
 import { hasMultipleTouches, shouldCaptureInkPointer, shouldUsePrimaryPointer } from '../canvas/ink-input-policy';
 import { getCaptureOriginalImageSource, getPageCaptureReferenceImageSource } from '../shared/capture-assets';
 import { cleanAiDisplayText, finalizeInkStroke, findHitInkStrokeId, getInkCenterlinePath, getInkStrokeSvgPath, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize, shouldAppendInkPoint } from '../../../ui-helpers';
-import { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
+import { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { CaptureAsset, NotebookPage, PageCaptureReference } from '../../../types';
 
 function NotebookPaperBackground({ page }: { page: NotebookPage }) {
@@ -42,6 +42,41 @@ function NotebookPaperBackground({ page }: { page: NotebookPage }) {
       <Text style={{ position: 'absolute', top: 30, left: 58, fontSize: 13, fontWeight: '900', color: '#B7791F' }}>
         AI 정리 페이지
       </Text>
+    </View>
+  );
+}
+
+function AdaptiveReferenceImage(props: {
+  source: any;
+  frameStyle: any;
+  imageStyle: any;
+  minHeight?: number;
+  maxHeight?: number;
+}) {
+  const [frameWidth, setFrameWidth] = useState(0);
+  const [aspectRatio, setAspectRatio] = useState<number | null>(null);
+  const minHeight = props.minHeight ?? 220;
+  const maxHeight = props.maxHeight ?? 430;
+  const dynamicHeight = frameWidth > 0 && aspectRatio
+    ? Math.round(Math.max(minHeight, Math.min(maxHeight, frameWidth / aspectRatio)))
+    : undefined;
+
+  return (
+    <View
+      style={[props.frameStyle, dynamicHeight ? { height: dynamicHeight } : null]}
+      onLayout={(event) => setFrameWidth(Math.round(event.nativeEvent.layout.width))}
+    >
+      <Image
+        source={props.source}
+        style={props.imageStyle}
+        resizeMode="contain"
+        onLoad={(event) => {
+          const source = (event.nativeEvent as any)?.source ?? {};
+          const width = Number(source.width);
+          const height = Number(source.height);
+          if (width > 0 && height > 0) setAspectRatio(width / height);
+        }}
+      />
     </View>
   );
 }
@@ -95,7 +130,6 @@ let pdfJsLoaderPromise: Promise<PdfJsLib> | null = null;
 
 function shouldLockScrollForTool(tool: InkTool, fingerDrawingEnabled: boolean | undefined) {
   return tool === 'select'
-    || tool === 'erase'
     || tool === 'text'
     || Boolean(fingerDrawingEnabled && isDrawingTool(tool));
 }
@@ -103,13 +137,15 @@ function shouldLockScrollForTool(tool: InkTool, fingerDrawingEnabled: boolean | 
 function shouldCaptureToolStart(tool: InkTool, event: GestureResponderEvent, fingerDrawingEnabled: boolean | undefined) {
   if (!shouldUsePrimaryPointer(event)) return false;
   if (isDrawingTool(tool)) return shouldCaptureInkPointer(event, Boolean(fingerDrawingEnabled));
-  return tool === 'select' || tool === 'erase' || tool === 'text';
+  if (tool === 'erase') return shouldCaptureInkPointer(event, Boolean(fingerDrawingEnabled));
+  return tool === 'select' || tool === 'text';
 }
 
 function shouldCaptureToolMove(tool: InkTool, event: GestureResponderEvent, fingerDrawingEnabled: boolean | undefined) {
   if (!shouldUsePrimaryPointer(event)) return false;
   if (isDrawingTool(tool)) return shouldCaptureInkPointer(event, Boolean(fingerDrawingEnabled));
-  return tool === 'select' || tool === 'erase';
+  if (tool === 'erase') return shouldCaptureInkPointer(event, Boolean(fingerDrawingEnabled));
+  return tool === 'select';
 }
 
 function isPdfUri(uri: string | undefined) {
@@ -146,8 +182,34 @@ function resizeRectFromCorner(source: SelectionRect, corner: ResizeCorner, point
   };
 }
 
+function getLassoPath(points: InkPoint[]) {
+  if (!points.length) return '';
+  return points
+    .map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`)
+    .join(' ');
+}
+
 function SelectionOverlay(props: { rect: SelectionRect; styles: any; draft?: boolean }) {
   const handleOffset = -7;
+  const lassoPath = props.rect.path && props.rect.path.length > 2 ? getLassoPath(props.rect.path) : '';
+  if (props.rect.mode === 'lasso') {
+    if (!lassoPath) return null;
+    return (
+      <Svg width="100%" height="100%" pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0 }}>
+        <Path
+          d={`${lassoPath} Z`}
+          fill="rgba(78, 141, 255, 0.06)"
+          stroke="#2563EB"
+          strokeWidth={2}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeDasharray="7 5"
+          opacity={props.draft ? 0.88 : 0.96}
+        />
+      </Svg>
+    );
+  }
+
   return (
     <View style={[props.styles.selectionOverlayRect, props.draft && props.styles.selectionOverlayDraft, { left: props.rect.x, top: props.rect.y, width: props.rect.width, height: props.rect.height, pointerEvents: 'none' }]}>
       {(['nw', 'ne', 'sw', 'se'] as const).map((corner) => (
@@ -278,6 +340,7 @@ export function PdfPreview(props: {
   penWidth: number;
   brushType: InkBrush;
   linePattern: InkLinePattern;
+  selectionMode?: InkSelectionMode;
   brushSettings?: InkBrushSettings;
   inkStrokes: InkStroke[];
   textAnnotations: InkTextAnnotation[];
@@ -288,6 +351,9 @@ export function PdfPreview(props: {
   onAddTextAnnotation: (point: InkPoint) => void;
   onUpdateTextAnnotation: (id: string, text: string) => void;
   onRemoveTextAnnotation: (id: string) => void;
+  onMoveTextAnnotation: (id: string, x: number, y: number) => void;
+  onResizeTextAnnotation: (id: string, width: number, height: number) => void;
+  onEraseInkAtPoint?: (point: InkPoint, radius: number, snapshot?: boolean) => boolean;
   onSelectionChange: (rect: SelectionRect | null) => void;
   onMoveSelection?: (dx: number, dy: number) => void;
   onResizeSelection?: (rect: SelectionRect) => void;
@@ -736,6 +802,8 @@ export function PdfPreview(props: {
           annotations={pageTextAnnotationsForView}
           styles={props.styles}
           onChangeText={props.onUpdateTextAnnotation}
+          onMove={props.onMoveTextAnnotation}
+          onResize={props.onResizeTextAnnotation}
           onRemove={props.onRemoveTextAnnotation}
           variant={props.textAnnotationVariant}
         />
@@ -764,9 +832,13 @@ export function PdfPreview(props: {
               </Pressable>
             </View>
             {activeReferenceImage ? (
-              <View style={props.styles.pdfPageReferencePopoverImageFrame}>
-                <Image source={activeReferenceImage} style={props.styles.pdfPageReferencePopoverImage} resizeMode="contain" />
-              </View>
+              <AdaptiveReferenceImage
+                source={activeReferenceImage}
+                frameStyle={props.styles.pdfPageReferencePopoverImageFrame}
+                imageStyle={props.styles.pdfPageReferencePopoverImage}
+                minHeight={280}
+                maxHeight={560}
+              />
             ) : (
               <View style={props.styles.pdfPageReferencePopoverFallback}>
                 <MaterialCommunityIcons name={activePageReference.type === 'pdf' ? 'file-pdf-box' : 'image-outline'} size={24} color="#6D7BD9" />
@@ -778,7 +850,7 @@ export function PdfPreview(props: {
                 <MaterialCommunityIcons name="star-four-points" size={14} color="#5F79FF" />
                 <Text style={props.styles.pdfPageReferencePopoverAnswerTitle}>AI 설명</Text>
               </View>
-              <Text style={props.styles.pdfPageReferencePopoverAnswerText} numberOfLines={5}>
+              <Text style={props.styles.pdfPageReferencePopoverAnswerText} numberOfLines={7}>
                 {cleanAiDisplayText(activePageReference.aiSummary || activePageReference.summary)}
               </Text>
             </View>
@@ -830,16 +902,20 @@ export function PdfPreview(props: {
               </Pressable>
             </View>
             {incomingAssetImage ? (
-              <View style={props.styles.pdfIncomingCaptureImageFrame}>
-                <Image source={incomingAssetImage} style={props.styles.pdfIncomingCaptureImage} resizeMode="cover" />
-              </View>
+              <AdaptiveReferenceImage
+                source={incomingAssetImage}
+                frameStyle={props.styles.pdfIncomingCaptureImageFrame}
+                imageStyle={props.styles.pdfIncomingCaptureImage}
+                minHeight={320}
+                maxHeight={600}
+              />
             ) : null}
             <View style={props.styles.pdfIncomingCaptureAnswer}>
               <View style={props.styles.pdfIncomingCaptureAnswerHeader}>
                 <MaterialCommunityIcons name="star-four-points" size={13} color="#5F79FF" />
                 <Text style={props.styles.pdfIncomingCaptureAnswerTitle}>AI 설명</Text>
               </View>
-              <Text style={props.styles.pdfIncomingCaptureAnswerText} numberOfLines={4}>{incomingAssetSummary}</Text>
+              <Text style={props.styles.pdfIncomingCaptureAnswerText} numberOfLines={6}>{incomingAssetSummary}</Text>
             </View>
             <View style={props.styles.pdfIncomingCaptureActions}>
               <Pressable style={props.styles.pdfIncomingCapturePrimaryAction} onPress={props.onAcceptIncomingAsset}>
@@ -1020,7 +1096,7 @@ export function PdfPreview(props: {
             {(page.generatedPageId ? currentStroke?.generatedPageId === page.generatedPageId : currentStroke?.pageNumber === page.pageNumber) && currentStroke?.style !== 'highlight' && currentStroke ? <InkPath stroke={currentStroke} draft /> : null}
           </Svg>
           {!draftSelectionStyle && selectionRectStyle ? <SelectionOverlay rect={selectionRectStyle} styles={props.styles} /> : null}
-          {draftSelectionStyle ? <SelectionOverlay rect={draftSelectionStyle} styles={props.styles} draft /> : null}
+          {draftSelectionStyle && draftSelectionStyle.mode !== 'lasso' ? <SelectionOverlay rect={draftSelectionStyle} styles={props.styles} draft /> : null}
         </View>
       </View>
     );
