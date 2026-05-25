@@ -1,6 +1,7 @@
 import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Image, PanResponder, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import Reanimated, { useAnimatedStyle, useSharedValue } from 'react-native-reanimated';
 import { useNotesGlobalContext } from './notes-global-context';
 import { useDocumentContext } from './document-context';
 import { cleanAiDisplayText } from '../../../ui-helpers';
@@ -15,6 +16,9 @@ export function NotesWorkspaceDock() {
   const startPositionRef = React.useRef(position);
   const headerIconName = 'image-multiple-outline';
   const panelHeight = Math.max(360, Math.min(640, height - position.y - 16));
+  const dockX = useSharedValue(position.x);
+  const dockY = useSharedValue(position.y);
+  const dockHeight = useSharedValue(panelHeight);
   const normalizedReferenceQuery = referenceQuery.trim().toLowerCase();
   const filterReference = (reference: any) => {
     if (!normalizedReferenceQuery) return true;
@@ -48,28 +52,69 @@ export function NotesWorkspaceDock() {
 
   React.useEffect(() => {
     startPositionRef.current = position;
-  }, [position]);
+    dockX.value = position.x;
+    dockY.value = position.y;
+    dockHeight.value = panelHeight;
+  }, [dockHeight, dockX, dockY, panelHeight, position]);
+
+  const dockAnimatedStyle = useAnimatedStyle(() => ({
+    left: dockX.value,
+    top: dockY.value,
+    height: dockHeight.value,
+  }));
+
+  const getClampedPosition = React.useCallback((x: number, y: number) => ({
+    x: Math.max(8, Math.min(width - 316, x)),
+    y: Math.max(8, Math.min(height - 380, y)),
+  }), [height, width]);
+
+  const commitDragPosition = React.useCallback((gesture: { dx: number; dy: number }) => {
+    const nextPosition = getClampedPosition(
+      startPositionRef.current.x + gesture.dx,
+      startPositionRef.current.y + gesture.dy,
+    );
+    setPosition(nextPosition);
+    startPositionRef.current = nextPosition;
+    dockX.value = nextPosition.x;
+    dockY.value = nextPosition.y;
+    dockHeight.value = Math.max(360, Math.min(640, height - nextPosition.y - 16));
+  }, [dockHeight, dockX, dockY, getClampedPosition, height]);
 
   const panResponder = React.useMemo(() => PanResponder.create({
     onStartShouldSetPanResponder: () => true,
     onMoveShouldSetPanResponder: (_, gesture) => Math.abs(gesture.dx) + Math.abs(gesture.dy) > 4,
     onPanResponderGrant: () => {
       startPositionRef.current = position;
+      dockX.value = position.x;
+      dockY.value = position.y;
+      dockHeight.value = panelHeight;
     },
     onPanResponderMove: (_, gesture) => {
-      setPosition({
-        x: Math.max(8, Math.min(width - 316, startPositionRef.current.x + gesture.dx)),
-        y: Math.max(8, Math.min(height - 380, startPositionRef.current.y + gesture.dy)),
-      });
+      const nextPosition = getClampedPosition(
+        startPositionRef.current.x + gesture.dx,
+        startPositionRef.current.y + gesture.dy,
+      );
+      dockX.value = nextPosition.x;
+      dockY.value = nextPosition.y;
+      dockHeight.value = Math.max(360, Math.min(640, height - nextPosition.y - 16));
     },
-  }), [height, position, width]);
+    onPanResponderRelease: (_, gesture) => {
+      commitDragPosition(gesture);
+    },
+    onPanResponderTerminate: (_, gesture) => {
+      commitDragPosition(gesture);
+    },
+  }), [commitDragPosition, dockHeight, dockX, dockY, getClampedPosition, height, panelHeight, position]);
 
   return (
-    <View
+    <Reanimated.View
       style={[
         globalContext.styles.workspaceDock,
         globalContext.aiPanelOpen && globalContext.styles.workspaceDockShifted,
-        { left: position.x, top: position.y, bottom: undefined, height: panelHeight },
+        {
+          bottom: undefined,
+        },
+        dockAnimatedStyle,
       ]}
     >
       <View style={globalContext.styles.workspaceDockTop}>
@@ -290,6 +335,6 @@ export function NotesWorkspaceDock() {
           </View>
         ) : null}
       </ScrollView>
-    </View>
+    </Reanimated.View>
   );
 }

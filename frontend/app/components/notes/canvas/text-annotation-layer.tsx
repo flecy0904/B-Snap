@@ -20,6 +20,12 @@ function MovableTextAnnotationBox(props: {
   const inputRef = React.useRef<TextInput | null>(null);
   const annotationRef = React.useRef(props.annotation);
   const wasActiveRef = React.useRef(props.active);
+  const [draftFrame, setDraftFrame] = React.useState<{
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  } | null>(null);
   const startFrameRef = React.useRef({
     x: props.annotation.x,
     y: props.annotation.y,
@@ -30,6 +36,23 @@ function MovableTextAnnotationBox(props: {
   React.useEffect(() => {
     annotationRef.current = props.annotation;
   }, [props.annotation]);
+
+  React.useEffect(() => {
+    setDraftFrame(null);
+  }, [props.annotation.id]);
+
+  React.useEffect(() => {
+    if (!draftFrame) return;
+    const annotationHeight = props.annotation.height ?? 88;
+    if (
+      Math.abs(props.annotation.x - draftFrame.x) < 0.5
+      && Math.abs(props.annotation.y - draftFrame.y) < 0.5
+      && Math.abs(props.annotation.width - draftFrame.width) < 0.5
+      && Math.abs(annotationHeight - draftFrame.height) < 0.5
+    ) {
+      setDraftFrame(null);
+    }
+  }, [draftFrame, props.annotation.height, props.annotation.width, props.annotation.x, props.annotation.y]);
 
   React.useEffect(() => {
     if (!props.annotation.text.trim()) {
@@ -83,12 +106,19 @@ function MovableTextAnnotationBox(props: {
       };
     },
     onPanResponderMove: (_event, gesture) => {
+      setDraftFrame({
+        ...startFrameRef.current,
+        x: startFrameRef.current.x + gesture.dx,
+        y: startFrameRef.current.y + gesture.dy,
+      });
+    },
+    onPanResponderRelease: (_event, gesture) => {
       if (!props.onMove) return;
-      props.onMove(
-        props.annotation.id,
-        startFrameRef.current.x + gesture.dx,
-        startFrameRef.current.y + gesture.dy,
-      );
+      props.onMove(props.annotation.id, startFrameRef.current.x + gesture.dx, startFrameRef.current.y + gesture.dy);
+    },
+    onPanResponderTerminate: (_event, gesture) => {
+      if (!props.onMove) return;
+      props.onMove(props.annotation.id, startFrameRef.current.x + gesture.dx, startFrameRef.current.y + gesture.dy);
     },
     onPanResponderTerminationRequest: () => false,
     onShouldBlockNativeResponder: () => true,
@@ -113,6 +143,21 @@ function MovableTextAnnotationBox(props: {
       };
     },
     onPanResponderMove: (_event, gesture) => {
+      setDraftFrame({
+        ...startFrameRef.current,
+        width: Math.max(MIN_TEXT_BOX_WIDTH, startFrameRef.current.width + gesture.dx),
+        height: Math.max(MIN_TEXT_BOX_HEIGHT, startFrameRef.current.height + gesture.dy),
+      });
+    },
+    onPanResponderRelease: (_event, gesture) => {
+      if (!props.onResize) return;
+      props.onResize(
+        props.annotation.id,
+        Math.max(MIN_TEXT_BOX_WIDTH, startFrameRef.current.width + gesture.dx),
+        Math.max(MIN_TEXT_BOX_HEIGHT, startFrameRef.current.height + gesture.dy),
+      );
+    },
+    onPanResponderTerminate: (_event, gesture) => {
       if (!props.onResize) return;
       props.onResize(
         props.annotation.id,
@@ -124,7 +169,12 @@ function MovableTextAnnotationBox(props: {
     onShouldBlockNativeResponder: () => true,
   }), [props.annotation.id, props.onActivate, props.onResize]);
 
-  const height = props.annotation.height ?? 88;
+  const frame = draftFrame ?? {
+    x: props.annotation.x,
+    y: props.annotation.y,
+    width: props.annotation.width,
+    height: props.annotation.height ?? 88,
+  };
 
   return (
     <View
@@ -132,10 +182,10 @@ function MovableTextAnnotationBox(props: {
         props.styles.textAnnotationCard,
         props.active && props.styles.textAnnotationCardActive,
         {
-          left: props.annotation.x,
-          top: props.annotation.y,
-          width: props.annotation.width,
-          height,
+          left: frame.x,
+          top: frame.y,
+          width: frame.width,
+          height: frame.height,
         },
       ]}
     >
@@ -175,7 +225,7 @@ function MovableTextAnnotationBox(props: {
         style={[
           props.styles.textAnnotationInput,
           {
-            minHeight: Math.max(32, height - (props.active ? 46 : 16)),
+            minHeight: Math.max(32, frame.height - (props.active ? 46 : 16)),
           },
         ]}
       />

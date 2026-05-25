@@ -10,5 +10,5 @@ class PdfPageRendererPackage : ReactPackage {
     listOf(PdfPageRendererModule(reactContext))
 
   override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> =
-    emptyList()
+    listOf(PdfViewportViewManager(reactContext))
 }

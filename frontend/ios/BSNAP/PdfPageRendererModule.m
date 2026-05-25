@@ -206,6 +206,266 @@ RCT_EXPORT_METHOD(renderPage:(NSString *)fileUri
   }
 }
 
+RCT_EXPORT_METHOD(renderSelectionPreview:(NSString *)fileUri
+                  pageNumber:(nonnull NSNumber *)pageNumber
+                  rect:(NSDictionary *)rect
+                  targetWidth:(nonnull NSNumber *)targetWidth
+                  inkStrokes:(NSArray *)inkStrokes
+                  textAnnotations:(NSArray *)textAnnotations
+                  resolver:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+{
+  if (fileUri == nil || fileUri.length == 0) {
+    reject(@"PDF_RENDER_INVALID_URI", @"PDF file URI is empty.", nil);
+    return;
+  }
+
+  NSInteger requestedPageNumber = pageNumber.integerValue;
+  if (requestedPageNumber < 1) {
+    reject(@"PDF_RENDER_INVALID_PAGE", @"PDF pageNumber must start at 1.", nil);
+    return;
+  }
+
+  CGFloat selectionX = [rect[@"x"] doubleValue];
+  CGFloat selectionY = [rect[@"y"] doubleValue];
+  CGFloat selectionWidth = [rect[@"width"] doubleValue];
+  CGFloat selectionHeight = [rect[@"height"] doubleValue];
+  CGFloat logicalPageWidth = MAX(1.0, [rect[@"pageWidth"] doubleValue]);
+  CGFloat logicalPageHeight = MAX(1.0, [rect[@"pageHeight"] doubleValue]);
+  if (selectionWidth <= 0 || selectionHeight <= 0) {
+    reject(@"PDF_RENDER_INVALID_SELECTION", @"Selection rect is empty.", nil);
+    return;
+  }
+
+  NSURL *fileURL = [self fileURLFromString:fileUri];
+  if (fileURL == nil || ![[NSFileManager defaultManager] fileExistsAtPath:fileURL.path]) {
+    reject(@"PDF_RENDER_INVALID_URI", @"PDF file does not exist.", nil);
+    return;
+  }
+
+  PDFDocument *document = [[PDFDocument alloc] initWithURL:fileURL];
+  if (document == nil || requestedPageNumber > document.pageCount) {
+    reject(@"PDF_RENDER_FAILED", @"Cannot open PDF page.", nil);
+    return;
+  }
+
+  PDFPage *page = [document pageAtIndex:requestedPageNumber - 1];
+  if (page == nil) {
+    reject(@"PDF_RENDER_FAILED", @"Cannot open PDF page.", nil);
+    return;
+  }
+
+  PDFDisplayBox displayBox = kPDFDisplayBoxCropBox;
+  CGRect pageBounds = [page boundsForBox:displayBox];
+  if (CGRectIsEmpty(pageBounds) || pageBounds.size.width <= 0 || pageBounds.size.height <= 0) {
+    displayBox = kPDFDisplayBoxMediaBox;
+    pageBounds = [page boundsForBox:displayBox];
+  }
+  if (CGRectIsEmpty(pageBounds) || pageBounds.size.width <= 0 || pageBounds.size.height <= 0) {
+    reject(@"PDF_RENDER_FAILED", @"PDF page has invalid bounds.", nil);
+    return;
+  }
+
+  NSInteger bitmapWidth = MAX(1, targetWidth.integerValue);
+  NSInteger bitmapHeight = MAX(1, (NSInteger)llround((CGFloat)bitmapWidth * selectionHeight / MAX(1.0, selectionWidth)));
+  CGSize imageSize = CGSizeMake((CGFloat)bitmapWidth, (CGFloat)bitmapHeight);
+
+  UIGraphicsImageRendererFormat *format = [UIGraphicsImageRendererFormat defaultFormat];
+  format.opaque = YES;
+  format.scale = 1.0;
+  UIGraphicsImageRenderer *renderer = [[UIGraphicsImageRenderer alloc] initWithSize:imageSize format:format];
+  UIImage *image = [renderer imageWithActions:^(UIGraphicsImageRendererContext * _Nonnull rendererContext) {
+    CGContextRef context = rendererContext.CGContext;
+    [[UIColor whiteColor] setFill];
+    CGContextFillRect(context, CGRectMake(0, 0, imageSize.width, imageSize.height));
+
+    CGFloat scale = imageSize.width / MAX(1.0, selectionWidth);
+    CGContextSaveGState(context);
+    CGContextScaleCTM(context, scale, scale);
+    CGContextTranslateCTM(context, -selectionX, -selectionY);
+
+    CGContextSaveGState(context);
+    CGContextTranslateCTM(context, 0, logicalPageHeight);
+    CGContextScaleCTM(context, 1.0, -1.0);
+    CGContextScaleCTM(context, logicalPageWidth / pageBounds.size.width, logicalPageHeight / pageBounds.size.height);
+    CGContextTranslateCTM(context, -pageBounds.origin.x, -pageBounds.origin.y);
+    [page drawWithBox:displayBox toContext:context];
+    CGContextRestoreGState(context);
+
+    [self drawInkStrokes:inkStrokes pageNumber:requestedPageNumber context:context];
+    [self drawTextAnnotations:textAnnotations pageNumber:requestedPageNumber context:context];
+    CGContextRestoreGState(context);
+  }];
+
+  NSData *pngData = UIImagePNGRepresentation(image);
+  if (pngData == nil) {
+    reject(@"PDF_RENDER_FAILED", @"Cannot encode PDF selection image.", nil);
+    return;
+  }
+
+  NSArray<NSURL *> *cacheDirectories = [[NSFileManager defaultManager] URLsForDirectory:NSCachesDirectory inDomains:NSUserDomainMask];
+  NSURL *cacheDirectory = cacheDirectories.firstObject ?: [NSURL fileURLWithPath:NSTemporaryDirectory()];
+  NSURL *outputDirectory = [cacheDirectory URLByAppendingPathComponent:@"bsnap-pdf-selections" isDirectory:YES];
+  NSError *directoryError = nil;
+  [[NSFileManager defaultManager] createDirectoryAtURL:outputDirectory withIntermediateDirectories:YES attributes:nil error:&directoryError];
+  if (directoryError != nil) {
+    reject(@"PDF_RENDER_FAILED", directoryError.localizedDescription, directoryError);
+    return;
+  }
+
+  NSURL *outputURL = [outputDirectory URLByAppendingPathComponent:[NSString stringWithFormat:@"selection-%lld-%@.png", (long long)(NSDate.date.timeIntervalSince1970 * 1000), NSUUID.UUID.UUIDString]];
+  NSError *writeError = nil;
+  [pngData writeToURL:outputURL options:NSDataWritingAtomic error:&writeError];
+  if (writeError != nil) {
+    reject(@"PDF_RENDER_FAILED", writeError.localizedDescription, writeError);
+    return;
+  }
+  [self pruneSelectionPreviewImagesAtDirectory:outputDirectory.path activePath:outputURL.path];
+
+  resolve(@{
+    @"uri": outputURL.absoluteString,
+    @"width": @(bitmapWidth),
+    @"height": @(bitmapHeight),
+    @"pageNumber": @(requestedPageNumber),
+    @"pageCount": @(document.pageCount),
+  });
+}
+
+- (void)pruneSelectionPreviewImagesAtDirectory:(NSString *)directoryPath activePath:(NSString *)activePath
+{
+  NSFileManager *fileManager = [NSFileManager defaultManager];
+  NSArray<NSString *> *fileNames = [fileManager contentsOfDirectoryAtPath:directoryPath error:nil];
+  if (fileNames.count <= 24) return;
+
+  NSMutableArray<NSDictionary<NSString *, id> *> *images = [NSMutableArray array];
+  for (NSString *fileName in fileNames) {
+    if (![fileName.pathExtension.lowercaseString isEqualToString:@"png"]) continue;
+    NSString *path = [directoryPath stringByAppendingPathComponent:fileName];
+    NSDictionary<NSFileAttributeKey, id> *attributes = [fileManager attributesOfItemAtPath:path error:nil];
+    NSDate *modifiedAt = attributes[NSFileModificationDate] ?: NSDate.distantPast;
+    [images addObject:@{ @"path": path, @"modifiedAt": modifiedAt }];
+  }
+
+  [images sortUsingComparator:^NSComparisonResult(NSDictionary<NSString *, id> *first, NSDictionary<NSString *, id> *second) {
+    return [(NSDate *)second[@"modifiedAt"] compare:(NSDate *)first[@"modifiedAt"]];
+  }];
+
+  for (NSUInteger index = 0; index < images.count; index += 1) {
+    NSString *path = (NSString *)images[index][@"path"];
+    if ([path isEqualToString:activePath]) continue;
+    if (index < 24) continue;
+    [fileManager removeItemAtPath:path error:nil];
+  }
+}
+
+- (void)drawInkStrokes:(NSArray *)inkStrokes pageNumber:(NSInteger)pageNumber context:(CGContextRef)context
+{
+  if (![inkStrokes isKindOfClass:NSArray.class]) return;
+  for (NSDictionary *stroke in inkStrokes) {
+    if (![stroke isKindOfClass:NSDictionary.class]) continue;
+    NSNumber *strokePageNumber = stroke[@"pageNumber"];
+    if (strokePageNumber == nil || strokePageNumber.integerValue != pageNumber) continue;
+    NSArray *points = stroke[@"points"];
+    if (![points isKindOfClass:NSArray.class] || points.count == 0) continue;
+
+    UIColor *color = [self colorFromHex:stroke[@"color"] ?: @"#111827"];
+    NSString *style = [stroke[@"style"] isKindOfClass:NSString.class] ? stroke[@"style"] : @"pen";
+    CGFloat width = MAX(1.0, [stroke[@"width"] doubleValue]);
+    CGContextSaveGState(context);
+    CGContextSetStrokeColorWithColor(context, [color colorWithAlphaComponent:[style isEqualToString:@"highlight"] ? 0.36 : 1.0].CGColor);
+    CGContextSetLineWidth(context, width);
+    CGContextSetLineCap(context, kCGLineCapRound);
+    CGContextSetLineJoin(context, kCGLineJoinRound);
+
+    NSString *linePattern = [stroke[@"linePattern"] isKindOfClass:NSString.class] ? stroke[@"linePattern"] : @"solid";
+    if ([linePattern isEqualToString:@"dashed"]) {
+      CGFloat lengths[] = { width * 4.0, width * 2.5 };
+      CGContextSetLineDash(context, 0, lengths, 2);
+    } else if ([linePattern isEqualToString:@"dotted"]) {
+      CGFloat lengths[] = { width, width * 1.8 };
+      CGContextSetLineDash(context, 0, lengths, 2);
+    }
+
+    if ([style isEqualToString:@"shape"] && points.count >= 2) {
+      NSDictionary *start = points.firstObject;
+      NSDictionary *end = points.lastObject;
+      NSString *shape = [stroke[@"shape"] isKindOfClass:NSString.class] ? stroke[@"shape"] : @"line";
+      CGFloat x1 = [start[@"x"] doubleValue];
+      CGFloat y1 = [start[@"y"] doubleValue];
+      CGFloat x2 = [end[@"x"] doubleValue];
+      CGFloat y2 = [end[@"y"] doubleValue];
+      CGRect shapeRect = CGRectMake(MIN(x1, x2), MIN(y1, y2), fabs(x2 - x1), fabs(y2 - y1));
+      if ([shape isEqualToString:@"rect"]) {
+        CGContextStrokeRect(context, shapeRect);
+      } else if ([shape isEqualToString:@"ellipse"]) {
+        CGContextStrokeEllipseInRect(context, shapeRect);
+      } else {
+        CGContextMoveToPoint(context, x1, y1);
+        CGContextAddLineToPoint(context, x2, y2);
+        CGContextStrokePath(context);
+        if ([shape isEqualToString:@"arrow"]) [self drawArrowFrom:CGPointMake(x1, y1) to:CGPointMake(x2, y2) context:context width:width];
+      }
+      CGContextRestoreGState(context);
+      continue;
+    }
+
+    for (NSInteger index = 0; index < points.count; index += 1) {
+      NSDictionary *point = points[index];
+      CGFloat x = [point[@"x"] doubleValue];
+      CGFloat y = [point[@"y"] doubleValue];
+      if (index == 0) CGContextMoveToPoint(context, x, y); else CGContextAddLineToPoint(context, x, y);
+    }
+    CGContextStrokePath(context);
+    CGContextRestoreGState(context);
+  }
+}
+
+- (void)drawTextAnnotations:(NSArray *)textAnnotations pageNumber:(NSInteger)pageNumber context:(CGContextRef)context
+{
+  if (![textAnnotations isKindOfClass:NSArray.class]) return;
+  for (NSDictionary *annotation in textAnnotations) {
+    if (![annotation isKindOfClass:NSDictionary.class]) continue;
+    NSNumber *annotationPageNumber = annotation[@"pageNumber"];
+    if (annotationPageNumber == nil || annotationPageNumber.integerValue != pageNumber) continue;
+    NSString *text = [annotation[@"text"] isKindOfClass:NSString.class] ? annotation[@"text"] : @"";
+    if (text.length == 0) continue;
+    NSNumber *heightValue = annotation[@"height"];
+    CGFloat annotationHeight = heightValue != nil ? heightValue.doubleValue : 88.0;
+    CGRect frame = CGRectMake([annotation[@"x"] doubleValue], [annotation[@"y"] doubleValue], MAX(1.0, [annotation[@"width"] doubleValue]), MAX(32.0, annotationHeight));
+    UIColor *color = [self colorFromHex:annotation[@"color"] ?: @"#111827"];
+    NSDictionary *attrs = @{
+      NSFontAttributeName: [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold],
+      NSForegroundColorAttributeName: color,
+    };
+    [text drawInRect:CGRectInset(frame, 8, 6) withAttributes:attrs];
+  }
+}
+
+- (void)drawArrowFrom:(CGPoint)start to:(CGPoint)end context:(CGContextRef)context width:(CGFloat)width
+{
+  CGFloat angle = atan2(end.y - start.y, end.x - start.x);
+  CGFloat length = MAX(10.0, width * 4.0);
+  CGPoint left = CGPointMake(end.x + cos(angle + M_PI * 0.82) * length, end.y + sin(angle + M_PI * 0.82) * length);
+  CGPoint right = CGPointMake(end.x + cos(angle - M_PI * 0.82) * length, end.y + sin(angle - M_PI * 0.82) * length);
+  CGContextMoveToPoint(context, end.x, end.y);
+  CGContextAddLineToPoint(context, left.x, left.y);
+  CGContextMoveToPoint(context, end.x, end.y);
+  CGContextAddLineToPoint(context, right.x, right.y);
+  CGContextStrokePath(context);
+}
+
+- (UIColor *)colorFromHex:(NSString *)hex
+{
+  NSString *clean = [[hex stringByReplacingOccurrencesOfString:@"#" withString:@""] uppercaseString];
+  if (clean.length != 6) return UIColor.blackColor;
+  unsigned int rgb = 0;
+  [[NSScanner scannerWithString:clean] scanHexInt:&rgb];
+  return [UIColor colorWithRed:((rgb >> 16) & 0xFF) / 255.0
+                         green:((rgb >> 8) & 0xFF) / 255.0
+                          blue:(rgb & 0xFF) / 255.0
+                         alpha:1.0];
+}
+
 - (NSURL *)fileURLFromString:(NSString *)fileUri
 {
   NSURL *url = [NSURL URLWithString:fileUri];

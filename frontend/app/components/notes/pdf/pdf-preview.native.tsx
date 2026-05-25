@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
-import { FlatList, Image, NativeScrollEvent, NativeSyntheticEvent, Pressable, Text, useWindowDimensions, View } from 'react-native';
+import { FlatList, Image, NativeScrollEvent, NativeSyntheticEvent, Platform, Pressable, Text, useWindowDimensions, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { runOnJS } from 'react-native-reanimated';
@@ -11,6 +11,7 @@ import { TextAnnotationLayer } from '../canvas/text-annotation-layer';
 import { getPencilHoverPoint, getPencilHoverSize, getPencilHoverToolLabel, isStylusHoverEvent, shouldPreviewPencilHover, type PencilHoverPoint } from '../canvas/native-pencil-hover';
 import { shouldActivateNativeInkGesture, type NativeGestureStateManager, type NativeInkGestureEvent, type NativeInkTouchEvent } from '../canvas/native-ink-gesture-policy';
 import { getCaptureOriginalImageSource, getPageCaptureReferenceImageSource } from '../shared/capture-assets';
+import { AndroidNativePdfViewport } from './android-native-pdf-viewport';
 import { cleanAiDisplayText, finalizeInkStroke, findHitInkStrokeId, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize, shouldAppendInkPoint } from '../../../ui-helpers';
 import { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { CaptureAsset, NotebookPage, PageCaptureReference } from '../../../types';
@@ -291,6 +292,53 @@ export function PdfPreview(props: {
   onAskAiAboutPageCaptureReference?: (referenceId: string) => void;
   styles: any;
 }) {
+  if (Platform.OS === 'android' || Platform.OS === 'ios') {
+    return (
+      <View style={props.styles.pdfViewerCard}>
+        <AndroidNativePdfViewport
+          file={props.file}
+          page={props.page}
+          inkTool={props.inkTool}
+          fingerDrawingEnabled={props.fingerDrawingEnabled}
+          penColor={props.penColor}
+          penWidth={props.penWidth}
+          brushType={props.brushType}
+          linePattern={props.linePattern}
+          selectionMode={props.selectionMode}
+          brushSettings={props.brushSettings}
+          inkStrokes={props.inkStrokes}
+          textAnnotations={props.textAnnotations}
+          textAnnotationVariant={props.textAnnotationVariant}
+          selectionRect={props.selectionRect}
+          notebookPages={props.notebookPages}
+          activeGeneratedPageId={props.activeGeneratedPageId}
+          pageCaptureReferences={props.pageCaptureReferences}
+          incomingAssetSuggestion={props.incomingAssetSuggestion}
+          onCommitInkStroke={props.onCommitInkStroke}
+          onRemoveInkStroke={props.onRemoveInkStroke}
+          onAddTextAnnotation={props.onAddTextAnnotation}
+          onUpdateTextAnnotation={props.onUpdateTextAnnotation}
+          onRemoveTextAnnotation={props.onRemoveTextAnnotation}
+          onMoveTextAnnotation={props.onMoveTextAnnotation}
+          onResizeTextAnnotation={props.onResizeTextAnnotation}
+          onSelectionChange={props.onSelectionChange}
+          onMoveSelection={props.onMoveSelection}
+          onResizeSelection={props.onResizeSelection}
+          onSelectionPreviewChange={props.onSelectionPreviewChange}
+          onAcceptIncomingAsset={props.onAcceptIncomingAsset}
+          onArchiveIncomingAsset={props.onArchiveIncomingAsset}
+          onDismissIncomingAsset={props.onDismissIncomingAsset}
+          onOpenPageCaptureReference={props.onOpenPageCaptureReference}
+          onAskAiAboutPageCaptureReference={props.onAskAiAboutPageCaptureReference}
+          onPageChanged={props.onPageChanged}
+          onDocumentLoaded={props.onDocumentLoaded}
+          styles={props.styles}
+          style={{ alignSelf: 'stretch', flex: 1, width: '100%' }}
+        />
+      </View>
+    );
+  }
+
   const { width, height } = useWindowDimensions();
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const availableWidth = Math.max(320, containerSize.width || width);
