@@ -17,11 +17,9 @@ import android.os.ParcelFileDescriptor
 import android.util.Log
 import android.util.LruCache
 import android.view.MotionEvent
-import android.view.ScaleGestureDetector
 import android.view.VelocityTracker
 import android.view.View
 import android.view.ViewConfiguration
-import android.widget.OverScroller
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.ReactContext
 import com.facebook.react.bridge.ReadableArray
@@ -32,10 +30,12 @@ import java.io.FileOutputStream
 import java.net.URLDecoder
 import java.security.MessageDigest
 import java.util.UUID
-import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.PriorityBlockingQueue
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.abs
 import kotlin.math.ceil
+import kotlin.math.exp
 import kotlin.math.floor
 import kotlin.math.hypot
 import kotlin.math.max
@@ -92,8 +92,48 @@ class PdfViewportView(context: Context) : View(context) {
     val bitmap: Bitmap,
   )
 
-  private val renderExecutor: ExecutorService = Executors.newSingleThreadExecutor()
-  private val scroller = OverScroller(context)
+  private data class BaseRenderJob(
+    val sequence: Long,
+    val generation: Int,
+    val pageNumber: Int,
+    val targetWidth: Int,
+    val priority: Int,
+    val key: String,
+    val uri: String,
+  ) : Comparable<BaseRenderJob> {
+    override fun compareTo(other: BaseRenderJob): Int {
+      val priorityCompare = priority.compareTo(other.priority)
+      return if (priorityCompare != 0) priorityCompare else sequence.compareTo(other.sequence)
+    }
+  }
+
+  private val baseRenderQueue = PriorityBlockingQueue<BaseRenderJob>()
+  private val renderSequence = AtomicLong(0L)
+  private val hiResExecutor = Executors.newSingleThreadExecutor()
+  private val baseRenderWorker = Thread {
+    while (!Thread.currentThread().isInterrupted) {
+      try {
+        val job = baseRenderQueue.take()
+        if (job.generation != renderGeneration) continue
+        val bitmap = loadBaseBitmapFromDisk(job.key) ?: renderBasePage(job.uri, job.pageNumber, job.targetWidth)?.also {
+          saveBaseBitmapToDisk(job.key, it)
+        }
+        post {
+          baseRenderRequests.remove(job.key)
+          if (job.generation != renderGeneration || bitmap == null) {
+            bitmap?.recycle()
+            return@post
+          }
+          baseBitmapCache.put(job.key, bitmap)
+          postInvalidateOnAnimation()
+        }
+      } catch (_: InterruptedException) {
+        Thread.currentThread().interrupt()
+      } catch (error: Exception) {
+        Log.w(logTag, "base render worker failed", error)
+      }
+    }
+  }
   private val touchSlop = ViewConfiguration.get(context).scaledTouchSlop
   private val minFlingVelocity = ViewConfiguration.get(context).scaledMinimumFlingVelocity
   private val maxFlingVelocity = ViewConfiguration.get(context).scaledMaximumFlingVelocity
@@ -104,40 +144,14 @@ class PdfViewportView(context: Context) : View(context) {
     }
   }
 
-  private val scaleDetector = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
-    override fun onScaleBegin(detector: ScaleGestureDetector): Boolean {
-      cancelFling()
-      pinchStartScale = scale
-      pinchFocusDocumentX = screenToDocumentX(detector.focusX)
-      pinchFocusDocumentY = screenToDocumentY(detector.focusY)
-      isPinching = true
-      activeStroke = null
-      return true
-    }
-
-    override fun onScale(detector: ScaleGestureDetector): Boolean {
-      val nextScale = (pinchStartScale * detector.scaleFactor).coerceIn(minScale, maxScale)
-      setScaleAroundFocus(nextScale, detector.focusX, detector.focusY, pinchFocusDocumentX, pinchFocusDocumentY)
-      return true
-    }
-
-    override fun onScaleEnd(detector: ScaleGestureDetector) {
-      isPinching = false
-      savedScale = scale
-      clampViewport()
-      maybeRequestHiResOverlay()
-      invalidate()
-    }
-  })
-
   private var fileUri: String? = null
   private var sourceKey = ""
   private var descriptor: ParcelFileDescriptor? = null
   private var renderer: PdfRenderer? = null
   private var pdfPageSize: PdfPageSize? = null
   private var documentGeneration = 0
-  private var renderGeneration = 0
-  private var hiResGeneration = 0
+  @Volatile private var renderGeneration = 0
+  @Volatile private var hiResGeneration = 0
   private var documentPageCount = 0
   private var nativePages: List<NativePage> = emptyList()
   private var pageLayouts: List<PageLayout> = emptyList()
@@ -151,12 +165,17 @@ class PdfViewportView(context: Context) : View(context) {
   private var scale = 1f
   private var savedScale = 1f
   private var pinchStartScale = 1f
+  private var pinchStartDistance = 1f
   private var pinchFocusDocumentX = 0f
   private var pinchFocusDocumentY = 0f
   private val minScale = 1f
   private val maxScale = 3f
   private val hiResMinScale = 1.35f
   private val hiResOverscan = 0.3f
+  private val naturalFlingMaxVelocity = 10600f
+  private val naturalFlingMinVelocity = 650f
+  private val naturalFlingDecayPerSecond = 2.2f
+  private val naturalFlingStopVelocity = 28f
 
   private var inkTool = "view"
   private var fingerDrawingEnabled = false
@@ -173,11 +192,50 @@ class PdfViewportView(context: Context) : View(context) {
   private var isPanning = false
   private var isDrawing = false
   private var isPinching = false
+  private var suppressNextFling = false
+  private var isUserInteracting = false
+  private var hasAppliedInitialPage = false
   private var velocityTracker: VelocityTracker? = null
+  private var inertiaVelocityX = 0f
+  private var inertiaVelocityYDocument = 0f
+  private var inertiaLastFrameNanos = 0L
 
-  private var hiResOverlay: HiResOverlay? = null
-  private var hiResInFlight: HiResRequest? = null
+  private val hiResOverlays = mutableMapOf<Int, HiResOverlay>()
+  private val hiResInFlight = mutableMapOf<Int, HiResRequest>()
   private val baseRenderRequests = mutableSetOf<String>()
+  private var lastBaseRenderScheduleKey = ""
+  private val hiResRequestRunnable = Runnable { startHiResOverlayRender() }
+  private val inertiaRunnable = object : Runnable {
+    override fun run() {
+      if (isUserInteracting) {
+        stopInertia()
+        return
+      }
+      val now = System.nanoTime()
+      val elapsed = if (inertiaLastFrameNanos > 0L) (now - inertiaLastFrameNanos) / 1_000_000_000f else 0.016f
+      val dt = elapsed.coerceIn(0.001f, 0.034f)
+      inertiaLastFrameNanos = now
+
+      scrollYDocument += inertiaVelocityYDocument * dt
+      translateX += inertiaVelocityX * dt
+      clampViewport()
+      stopInertiaAtBounds()
+
+      val decay = exp(-naturalFlingDecayPerSecond * dt)
+      inertiaVelocityX *= decay
+      inertiaVelocityYDocument *= decay
+      notifyPageIfNeeded(false)
+      scheduleVisibleBaseRenders()
+      postInvalidateOnAnimation()
+
+      if (abs(inertiaVelocityX) > naturalFlingStopVelocity || abs(inertiaVelocityYDocument) > naturalFlingStopVelocity / max(1f, scale)) {
+        postOnAnimation(this)
+      } else {
+        stopInertia()
+        requestHiResOverlay(delayMs = 80L)
+      }
+    }
+  }
 
   private val backgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
   private val placeholderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(248, 250, 252) }
@@ -200,6 +258,8 @@ class PdfViewportView(context: Context) : View(context) {
   init {
     setBackgroundColor(Color.WHITE)
     isFocusable = true
+    baseRenderWorker.name = "BsnPdfBaseRender"
+    baseRenderWorker.start()
   }
 
   fun setFileUri(uri: String?) {
@@ -213,7 +273,10 @@ class PdfViewportView(context: Context) : View(context) {
     val nextPage = max(1, page)
     requestedPage = nextPage
     if (nextPage == reportedPage) return
-    if (width > 0 && pageLayouts.isNotEmpty()) {
+    if (!hasAppliedInitialPage && width > 0 && pageLayouts.isNotEmpty()) {
+      scrollToPage(nextPage, notify = false)
+      hasAppliedInitialPage = true
+    } else if (!isUserInteracting && reportedPage == 0 && width > 0 && pageLayouts.isNotEmpty()) {
       scrollToPage(nextPage, notify = false)
     }
   }
@@ -264,8 +327,11 @@ class PdfViewportView(context: Context) : View(context) {
 
   override fun onDetachedFromWindow() {
     super.onDetachedFromWindow()
+    stopInertia()
     closeDocument()
-    renderExecutor.shutdownNow()
+    removeCallbacks(hiResRequestRunnable)
+    baseRenderWorker.interrupt()
+    hiResExecutor.shutdownNow()
   }
 
   override fun onDraw(canvas: Canvas) {
@@ -285,11 +351,9 @@ class PdfViewportView(context: Context) : View(context) {
   }
 
   override fun onTouchEvent(event: MotionEvent): Boolean {
-    scaleDetector.onTouchEvent(event)
-    if (isPinching) return true
-
     when (event.actionMasked) {
       MotionEvent.ACTION_DOWN -> {
+        isUserInteracting = true
         parent.requestDisallowInterceptTouchEvent(true)
         cancelFling()
         velocityTracker = VelocityTracker.obtain()
@@ -299,10 +363,42 @@ class PdfViewportView(context: Context) : View(context) {
         lastPanX = event.x
         lastPanY = event.y
         isPanning = false
+        suppressNextFling = false
         isDrawing = shouldStartInk(event)
         if (isDrawing) beginInk(event.x, event.y)
       }
+      MotionEvent.ACTION_POINTER_DOWN -> {
+        isUserInteracting = true
+        parent.requestDisallowInterceptTouchEvent(true)
+        cancelFling()
+        activeStroke = null
+        isDrawing = false
+        isPanning = false
+        suppressNextFling = true
+        if (event.pointerCount >= 2) {
+          isPinching = true
+          pinchStartScale = scale
+          pinchStartDistance = max(1f, pointerDistance(event))
+          val focusX = pointerFocusX(event)
+          val focusY = pointerFocusY(event)
+          pinchFocusDocumentX = screenToDocumentX(focusX)
+          pinchFocusDocumentY = screenToDocumentY(focusY)
+        }
+        velocityTracker?.clear()
+        return true
+      }
       MotionEvent.ACTION_MOVE -> {
+        if (event.pointerCount >= 2 && isPinching) {
+          val focusX = pointerFocusX(event)
+          val focusY = pointerFocusY(event)
+          val distanceRatio = pointerDistance(event) / max(1f, pinchStartDistance)
+          val nextScale = (pinchStartScale * distanceRatio).coerceIn(minScale, maxScale)
+          setScaleAroundFocus(nextScale, focusX, focusY, pinchFocusDocumentX, pinchFocusDocumentY)
+          lastPanX = focusX
+          lastPanY = focusY
+          velocityTracker?.clear()
+          return true
+        }
         velocityTracker?.addMovement(event)
         if (isDrawing) {
           moveInk(event.x, event.y)
@@ -319,42 +415,54 @@ class PdfViewportView(context: Context) : View(context) {
           }
         }
       }
+      MotionEvent.ACTION_POINTER_UP -> {
+        velocityTracker?.clear()
+        isPanning = false
+        isDrawing = false
+        if (event.pointerCount <= 2) {
+          isPinching = false
+          savedScale = scale
+          resetPanAnchorToRemainingPointer(event)
+          clampViewport(applyScaleSnap = true)
+          requestHiResOverlay()
+        }
+        return true
+      }
       MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
         velocityTracker?.addMovement(event)
-        if (isDrawing) {
+        if (isPinching) {
+          savedScale = scale
+          clampViewport(applyScaleSnap = true)
+          requestHiResOverlay()
+        } else if (isDrawing) {
           endInk(commit = event.actionMasked == MotionEvent.ACTION_UP)
-        } else if (event.actionMasked == MotionEvent.ACTION_UP) {
+        } else if (event.actionMasked == MotionEvent.ACTION_UP && !suppressNextFling) {
           velocityTracker?.computeCurrentVelocity(1000, maxFlingVelocity.toFloat())
           val velocityX = velocityTracker?.xVelocity ?: 0f
           val velocityY = velocityTracker?.yVelocity ?: 0f
-          if (abs(velocityY) >= minFlingVelocity || abs(velocityX) >= minFlingVelocity) {
+          if (abs(velocityY) >= max(minFlingVelocity.toFloat(), naturalFlingMinVelocity) || abs(velocityX) >= max(minFlingVelocity.toFloat(), naturalFlingMinVelocity)) {
             fling(velocityX, velocityY)
           } else {
-            maybeRequestHiResOverlay()
+            requestHiResOverlay(delayMs = 80L)
           }
+        } else {
+          requestHiResOverlay(delayMs = 80L)
         }
         velocityTracker?.recycle()
         velocityTracker = null
         isPanning = false
         isDrawing = false
+        isPinching = false
+        suppressNextFling = false
+        isUserInteracting = false
         parent.requestDisallowInterceptTouchEvent(false)
       }
     }
     return true
   }
 
-  override fun computeScroll() {
-    if (!scroller.computeScrollOffset()) return
-    scrollYDocument = scroller.currY.toFloat() / 1000f
-    translateX = scroller.currX.toFloat() / 1000f
-    clampViewport()
-    notifyPageIfNeeded(false)
-    scheduleVisibleBaseRenders()
-    postInvalidateOnAnimation()
-    if (scroller.isFinished) maybeRequestHiResOverlay()
-  }
-
   private fun openDocument() {
+    stopInertia()
     closeDocument()
     loadErrorMessage = null
     documentGeneration += 1
@@ -362,8 +470,11 @@ class PdfViewportView(context: Context) : View(context) {
     hiResGeneration += 1
     baseBitmapCache.evictAll()
     baseRenderRequests.clear()
-    hiResOverlay = null
-    hiResInFlight = null
+    baseRenderQueue.clear()
+    lastBaseRenderScheduleKey = ""
+    removeCallbacks(hiResRequestRunnable)
+    clearHiResOverlays()
+    hiResInFlight.clear()
 
     val uri = fileUri
     if (uri.isNullOrBlank()) {
@@ -388,7 +499,8 @@ class PdfViewportView(context: Context) : View(context) {
       rebuildPageLayouts()
       emitDocumentLoaded(documentPageCount)
       scrollToPage(requestedPage, notify = false)
-      scheduleVisibleBaseRenders()
+      hasAppliedInitialPage = true
+      scheduleVisibleBaseRenders(force = true)
       Log.i(logTag, "openDocument success pages=$documentPageCount size=${pdfPageSize?.width}x${pdfPageSize?.height} view=${width}x$height layouts=${pageLayouts.size}")
       invalidate()
     } catch (error: Exception) {
@@ -463,8 +575,8 @@ class PdfViewportView(context: Context) : View(context) {
   }
 
   private fun drawHiResOverlay(canvas: Canvas, layout: PageLayout, pageRect: RectF) {
-    val overlay = hiResOverlay ?: return
     val pageNumber = layout.page.pageNumber ?: return
+    val overlay = hiResOverlays[pageNumber] ?: return
     if (overlay.request.pageNumber != pageNumber || overlay.request.generation != hiResGeneration) return
     val request = overlay.request
     val dest = RectF(
@@ -656,49 +768,95 @@ class PdfViewportView(context: Context) : View(context) {
     clampViewport()
     notifyPageIfNeeded(false)
     scheduleVisibleBaseRenders()
-    maybeRequestHiResOverlay()
-    invalidate()
-  }
-
-  private fun fling(velocityX: Float, velocityY: Float) {
-    val maxY = maxScrollY()
-    val horizontalLimit = horizontalLimit()
-    scroller.fling(
-      (translateX * 1000f).roundToInt(),
-      (scrollYDocument * 1000f).roundToInt(),
-      (velocityX * 1000f).roundToInt(),
-      (-velocityY * 1000f / scale).roundToInt(),
-      (-horizontalLimit * 1000f).roundToInt(),
-      (horizontalLimit * 1000f).roundToInt(),
-      0,
-      (maxY * 1000f).roundToInt(),
-    )
+    requestHiResOverlay(delayMs = 120L)
     postInvalidateOnAnimation()
   }
 
+  private fun fling(velocityX: Float, velocityY: Float) {
+    stopInertia()
+    inertiaVelocityX = velocityX.coerceIn(-naturalFlingMaxVelocity, naturalFlingMaxVelocity)
+    inertiaVelocityYDocument = (-velocityY).coerceIn(-naturalFlingMaxVelocity, naturalFlingMaxVelocity) / max(1f, scale)
+    stopInertiaAtBounds()
+    if (abs(inertiaVelocityX) < naturalFlingStopVelocity && abs(inertiaVelocityYDocument) < naturalFlingStopVelocity / max(1f, scale)) {
+      requestHiResOverlay(delayMs = 80L)
+      return
+    }
+    inertiaLastFrameNanos = System.nanoTime()
+    postOnAnimation(inertiaRunnable)
+  }
+
   private fun cancelFling() {
-    if (!scroller.isFinished) scroller.forceFinished(true)
+    stopInertia()
+  }
+
+  private fun stopInertia() {
+    removeCallbacks(inertiaRunnable)
+    inertiaVelocityX = 0f
+    inertiaVelocityYDocument = 0f
+    inertiaLastFrameNanos = 0L
+  }
+
+  private fun stopInertiaAtBounds() {
+    val maxY = maxScrollY()
+    val horizontalLimit = horizontalLimit()
+    if ((scrollYDocument <= 0f && inertiaVelocityYDocument < 0f) || (scrollYDocument >= maxY && inertiaVelocityYDocument > 0f)) {
+      inertiaVelocityYDocument = 0f
+    }
+    if ((translateX <= -horizontalLimit && inertiaVelocityX < 0f) || (translateX >= horizontalLimit && inertiaVelocityX > 0f)) {
+      inertiaVelocityX = 0f
+    }
   }
 
   private fun setScaleAroundFocus(nextScale: Float, focusX: Float, focusY: Float, documentX: Float, documentY: Float) {
     scale = nextScale
     scrollYDocument = documentY - focusY / scale
     translateX = focusX - width / 2f - (documentX - width / 2f) * scale
-    clampViewport()
+    clampViewport(applyScaleSnap = false)
     notifyPageIfNeeded(false)
     scheduleVisibleBaseRenders()
-    maybeRequestHiResOverlay()
-    invalidate()
+    requestHiResOverlay(delayMs = 120L)
+    postInvalidateOnAnimation()
   }
 
-  private fun clampViewport() {
+  private fun resetPanAnchorToRemainingPointer(event: MotionEvent) {
+    val actionIndex = event.actionIndex
+    val remainingIndex = (0 until event.pointerCount).firstOrNull { it != actionIndex } ?: return
+    val x = event.getX(remainingIndex)
+    val y = event.getY(remainingIndex)
+    lastTouchX = x
+    lastTouchY = y
+    lastPanX = x
+    lastPanY = y
+    isPanning = false
+    velocityTracker?.clear()
+  }
+
+  private fun pointerDistance(event: MotionEvent): Float {
+    if (event.pointerCount < 2) return 1f
+    val dx = event.getX(1) - event.getX(0)
+    val dy = event.getY(1) - event.getY(0)
+    return hypot(dx.toDouble(), dy.toDouble()).toFloat()
+  }
+
+  private fun pointerFocusX(event: MotionEvent): Float {
+    if (event.pointerCount < 2) return event.x
+    return (event.getX(0) + event.getX(1)) / 2f
+  }
+
+  private fun pointerFocusY(event: MotionEvent): Float {
+    if (event.pointerCount < 2) return event.y
+    return (event.getY(0) + event.getY(1)) / 2f
+  }
+
+  private fun clampViewport(applyScaleSnap: Boolean = true) {
     scrollYDocument = scrollYDocument.coerceIn(0f, maxScrollY())
     translateX = translateX.coerceIn(-horizontalLimit(), horizontalLimit())
-    if (scale <= 1.02f) {
+    if (applyScaleSnap && scale <= 1.02f) {
       scale = 1f
       translateX = 0f
-      hiResOverlay = null
-      hiResInFlight = null
+      clearHiResOverlays()
+      hiResInFlight.clear()
+      removeCallbacks(hiResRequestRunnable)
     }
   }
 
@@ -732,86 +890,120 @@ class PdfViewportView(context: Context) : View(context) {
     if (reportedPage > 0) emitPageChanged(reportedPage)
   }
 
-  private fun scheduleVisibleBaseRenders() {
+  private fun scheduleVisibleBaseRenders(force: Boolean = false) {
     val centerIndex = pageLayouts.indexOfFirst {
       val center = scrollYDocument + height / max(1f, scale) / 2f
       center >= it.top && center <= it.top + it.height
     }.let { if (it >= 0) it else 0 }
-    val first = max(0, centerIndex - 3)
-    val last = min(pageLayouts.size - 1, centerIndex + 5)
-    (first..last).forEach { index ->
+    val first = max(0, centerIndex - 2)
+    val last = min(pageLayouts.size - 1, centerIndex + 3)
+    val scheduleKey = "$renderGeneration:$width:$centerIndex:$first:$last"
+    if (!force && scheduleKey == lastBaseRenderScheduleKey) return
+    lastBaseRenderScheduleKey = scheduleKey
+    val prioritizedIndexes = (first..last).sortedBy { abs(it - centerIndex) }
+    prioritizedIndexes.forEach { index ->
       val pageNumber = pageLayouts[index].page.pageNumber ?: return@forEach
-      requestBaseRender(pageNumber)
+      requestBaseRender(pageNumber, abs(index - centerIndex))
     }
   }
 
-  private fun requestBaseRender(pageNumber: Int) {
+  private fun requestBaseRender(pageNumber: Int, priority: Int = 0) {
     if (renderer == null || width <= 0) return
-    val targetWidth = max(1, width)
+    val targetWidth = baseRenderTargetWidth()
     val key = baseCacheKey(pageNumber, targetWidth)
     if (baseBitmapCache.get(key) != null || baseRenderRequests.contains(key)) return
-    loadBaseBitmapFromDisk(key)?.let {
-      baseBitmapCache.put(key, it)
-      invalidate()
-      return
-    }
-    baseRenderRequests.add(key)
     val generation = renderGeneration
     val uri = fileUri ?: return
-    renderExecutor.execute {
-      val bitmap = renderBasePage(uri, pageNumber, targetWidth)
-      post {
-        baseRenderRequests.remove(key)
-        if (generation != renderGeneration || bitmap == null) {
-          bitmap?.recycle()
-          return@post
+    baseRenderRequests.add(key)
+    baseRenderQueue.offer(BaseRenderJob(renderSequence.incrementAndGet(), generation, pageNumber, targetWidth, priority, key, uri))
+  }
+
+  private fun getBaseBitmap(pageNumber: Int): Bitmap? {
+    val key = baseCacheKey(pageNumber, baseRenderTargetWidth())
+    return baseBitmapCache.get(key)
+  }
+
+  private fun baseRenderTargetWidth(): Int = max(1, min(width, 1200))
+
+  private fun requestHiResOverlay(delayMs: Long = 0L) {
+    removeCallbacks(hiResRequestRunnable)
+    if (delayMs <= 0L) {
+      startHiResOverlayRender()
+    } else {
+      postDelayed(hiResRequestRunnable, delayMs)
+    }
+  }
+
+  private fun startHiResOverlayRender() {
+    if (scale < hiResMinScale || width <= 0 || height <= 0) {
+      clearHiResOverlays()
+      hiResInFlight.clear()
+      return
+    }
+    val requests = buildVisibleHiResRequests()
+    val visiblePageNumbers = requests.map { it.pageNumber }.toSet()
+    discardInvisibleHiResOverlays(visiblePageNumbers)
+    hiResInFlight.keys.filter { it !in visiblePageNumbers }.forEach { hiResInFlight.remove(it) }
+    if (requests.isEmpty()) return
+
+    val uri = fileUri ?: return
+    requests.forEach { request ->
+      val current = hiResOverlays[request.pageNumber]?.request
+      if (current != null && request.targetWidth == current.targetWidth && regionContains(current, request)) return@forEach
+      val inFlight = hiResInFlight[request.pageNumber]
+      if (inFlight != null && request.targetWidth == inFlight.targetWidth && regionContains(inFlight, request)) return@forEach
+
+      val generationRequest = request.copy(generation = hiResGeneration)
+      hiResInFlight[generationRequest.pageNumber] = generationRequest
+      hiResExecutor.execute {
+        val bitmap = renderRegion(uri, generationRequest)
+        post {
+          val currentInFlight = hiResInFlight[generationRequest.pageNumber]
+          if (generationRequest.generation != hiResGeneration || currentInFlight != generationRequest || bitmap == null) {
+            bitmap?.recycle()
+            if (currentInFlight == generationRequest) hiResInFlight.remove(generationRequest.pageNumber)
+            return@post
+          }
+          hiResOverlays.remove(generationRequest.pageNumber)?.bitmap?.recycle()
+          hiResOverlays[generationRequest.pageNumber] = HiResOverlay(generationRequest, bitmap)
+          hiResInFlight.remove(generationRequest.pageNumber)
+          invalidate()
         }
-        baseBitmapCache.put(key, bitmap)
-        saveBaseBitmapToDisk(key, bitmap)
-        invalidate()
       }
     }
   }
 
-  private fun getBaseBitmap(pageNumber: Int): Bitmap? {
-    val key = baseCacheKey(pageNumber, max(1, width))
-    baseBitmapCache.get(key)?.let { return it }
-    loadBaseBitmapFromDisk(key)?.let {
-      baseBitmapCache.put(key, it)
-      return it
-    }
-    return null
+  private fun buildVisibleHiResRequests(): List<HiResRequest> {
+    val viewportTop = scrollYDocument
+    val viewportBottom = scrollYDocument + height / scale
+    return pageLayouts
+      .filter { layout ->
+        layout.page.pageNumber != null
+          && layout.top < viewportBottom
+          && layout.top + layout.height > viewportTop
+      }
+      .mapNotNull { layout ->
+        val request = buildHiResRequest(layout) ?: return@mapNotNull null
+        val overlapTop = max(viewportTop, layout.top)
+        val overlapBottom = min(viewportBottom, layout.top + layout.height)
+        request to max(0f, overlapBottom - overlapTop)
+      }
+      .sortedByDescending { it.second }
+      .map { it.first }
   }
 
-  private fun maybeRequestHiResOverlay() {
-    if (scale < hiResMinScale || width <= 0 || height <= 0) {
-      hiResOverlay = null
-      hiResInFlight = null
-      return
+  private fun clearHiResOverlays() {
+    hiResOverlays.values.forEach { overlay ->
+      if (!overlay.bitmap.isRecycled) overlay.bitmap.recycle()
     }
-    val visibleCenter = scrollYDocument + height / scale / 2f
-    val layout = pageLayouts.firstOrNull { it.page.pageNumber != null && visibleCenter >= it.top && visibleCenter <= it.top + it.height } ?: return
-    val request = buildHiResRequest(layout) ?: return
-    val current = hiResOverlay?.request
-    if (current != null && request.pageNumber == current.pageNumber && request.targetWidth == current.targetWidth && regionContains(current, request)) return
-    val inFlight = hiResInFlight
-    if (inFlight != null && inFlight.pageNumber == request.pageNumber && inFlight.targetWidth == request.targetWidth && regionContains(inFlight, request)) return
+    hiResOverlays.clear()
+  }
 
-    hiResGeneration += 1
-    val generationRequest = request.copy(generation = hiResGeneration)
-    hiResInFlight = generationRequest
-    val uri = fileUri ?: return
-    renderExecutor.execute {
-      val bitmap = renderRegion(uri, generationRequest)
-      post {
-        if (generationRequest.generation != hiResGeneration || bitmap == null) {
-          bitmap?.recycle()
-          return@post
-        }
-        hiResOverlay?.bitmap?.recycle()
-        hiResOverlay = HiResOverlay(generationRequest, bitmap)
-        hiResInFlight = null
-        invalidate()
+  private fun discardInvisibleHiResOverlays(visiblePageNumbers: Set<Int>) {
+    val invisiblePageNumbers = hiResOverlays.keys.filter { it !in visiblePageNumbers }
+    invisiblePageNumbers.forEach { pageNumber ->
+      hiResOverlays.remove(pageNumber)?.bitmap?.let { bitmap ->
+        if (!bitmap.isRecycled) bitmap.recycle()
       }
     }
   }
