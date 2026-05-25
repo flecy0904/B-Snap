@@ -304,6 +304,7 @@ export function PdfPreview(props: {
           penWidth={props.penWidth}
           brushType={props.brushType}
           linePattern={props.linePattern}
+          selectionMode={props.selectionMode}
           brushSettings={props.brushSettings}
           inkStrokes={props.inkStrokes}
           textAnnotations={props.textAnnotations}
@@ -318,6 +319,8 @@ export function PdfPreview(props: {
           onAddTextAnnotation={props.onAddTextAnnotation}
           onUpdateTextAnnotation={props.onUpdateTextAnnotation}
           onRemoveTextAnnotation={props.onRemoveTextAnnotation}
+          onMoveTextAnnotation={props.onMoveTextAnnotation}
+          onResizeTextAnnotation={props.onResizeTextAnnotation}
           onSelectionChange={props.onSelectionChange}
           onMoveSelection={props.onMoveSelection}
           onResizeSelection={props.onResizeSelection}

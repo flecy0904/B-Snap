@@ -1,10 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Image, PanResponder, PixelRatio, Platform, Pressable, requireNativeComponent, StyleSheet, Text, View, type GestureResponderEvent, type NativeSyntheticEvent, type StyleProp, type ViewStyle } from 'react-native';
+import Svg, { Path } from 'react-native-svg';
 import { TextAnnotationLayer } from '../canvas/text-annotation-layer';
 import { getCaptureOriginalImageSource, getPageCaptureReferenceImageSource } from '../shared/capture-assets';
 import { cleanAiDisplayText, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize } from '../../../ui-helpers';
-import type { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
+import type { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import type { CaptureAsset, NotebookPage, PageCaptureReference } from '../../../types';
 import { renderPdfSelectionPreview, resolveLocalPdfUri, type PdfRenderSource } from '../../../services/pdf-page-renderer';
 
@@ -73,8 +74,34 @@ function getCaptureAssetSummary(asset: CaptureAsset | null | undefined) {
   return cleanAiDisplayText(asset.analysisSummary || asset.summary);
 }
 
+function getLassoPath(points: InkPoint[]) {
+  if (!points.length) return '';
+  return points
+    .map((point, index) => `${index === 0 ? 'M' : 'L'} ${point.x.toFixed(1)} ${point.y.toFixed(1)}`)
+    .join(' ');
+}
+
 function SelectionOverlay(props: { rect: SelectionRect; styles: any; draft?: boolean }) {
   const handleOffset = -7;
+  const lassoPath = props.rect.path && props.rect.path.length > 2 ? getLassoPath(props.rect.path) : '';
+  if (props.rect.mode === 'lasso') {
+    if (!lassoPath) return null;
+    return (
+      <Svg width="100%" height="100%" pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0 }}>
+        <Path
+          d={`${lassoPath} Z`}
+          fill="rgba(78, 141, 255, 0.06)"
+          stroke="#2563EB"
+          strokeWidth={2}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeDasharray="7 5"
+          opacity={props.draft ? 0.88 : 0.96}
+        />
+      </Svg>
+    );
+  }
+
   return (
     <View pointerEvents="none" style={[props.styles.selectionOverlayRect, props.draft && props.styles.selectionOverlayDraft, { left: props.rect.x, top: props.rect.y, width: props.rect.width, height: props.rect.height }]}>
       {(['nw', 'ne', 'sw', 'se'] as const).map((corner) => (
@@ -90,6 +117,24 @@ function SelectionOverlay(props: { rect: SelectionRect; styles: any; draft?: boo
         />
       ))}
     </View>
+  );
+}
+
+function SelectionLassoOverlay(props: { points: InkPoint[] }) {
+  if (props.points.length < 2) return null;
+  return (
+    <Svg width="100%" height="100%" pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0 }}>
+      <Path
+        d={getLassoPath(props.points)}
+        fill="none"
+        stroke="#2563EB"
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeDasharray="7 5"
+        opacity={0.9}
+      />
+    </Svg>
   );
 }
 
@@ -157,6 +202,35 @@ function resizeRectFromCorner(source: SelectionRect, corner: ResizeCorner, point
   };
 }
 
+function getSelectionRectFromDrag(origin: InkPoint, point: InkPoint): SelectionRect {
+  return {
+    x: Math.min(origin.x, point.x),
+    y: Math.min(origin.y, point.y),
+    width: Math.abs(point.x - origin.x),
+    height: Math.abs(point.y - origin.y),
+    mode: 'rect',
+    pageWidth: point.pageWidth,
+    pageHeight: point.pageHeight,
+  };
+}
+
+function getSelectionRectFromPoints(points: InkPoint[]): SelectionRect | null {
+  if (points.length < 2) return null;
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  const reference = points[0];
+  return {
+    x: Math.max(0, Math.min(...xs)),
+    y: Math.max(0, Math.min(...ys)),
+    width: Math.max(1, Math.max(...xs) - Math.min(...xs)),
+    height: Math.max(1, Math.max(...ys) - Math.min(...ys)),
+    mode: 'lasso',
+    path: points,
+    pageWidth: reference.pageWidth,
+    pageHeight: reference.pageHeight,
+  };
+}
+
 export function AndroidNativePdfViewport(props: {
   file: number | string | { uri: string };
   page: number;
@@ -166,6 +240,7 @@ export function AndroidNativePdfViewport(props: {
   penWidth: number;
   brushType: InkBrush;
   linePattern: InkLinePattern;
+  selectionMode?: InkSelectionMode;
   brushSettings?: InkBrushSettings;
   inkStrokes: InkStroke[];
   textAnnotations?: InkTextAnnotation[];
@@ -180,6 +255,8 @@ export function AndroidNativePdfViewport(props: {
   onAddTextAnnotation?: (point: InkPoint) => void;
   onUpdateTextAnnotation?: (id: string, text: string) => void;
   onRemoveTextAnnotation?: (id: string) => void;
+  onMoveTextAnnotation?: (id: string, x: number, y: number) => void;
+  onResizeTextAnnotation?: (id: string, width: number, height: number) => void;
   onSelectionChange?: (rect: SelectionRect | null) => void;
   onMoveSelection?: (dx: number, dy: number) => void;
   onResizeSelection?: (rect: SelectionRect) => void;
@@ -199,6 +276,8 @@ export function AndroidNativePdfViewport(props: {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [viewport, setViewport] = useState<PdfViewportOverlayState | null>(null);
   const [draftSelection, setDraftSelection] = useState<SelectionRect | null>(null);
+  const [draftSelectionPageId, setDraftSelectionPageId] = useState<string | null>(null);
+  const [draftSelectionPath, setDraftSelectionPath] = useState<InkPoint[]>([]);
   const [capturingSelection, setCapturingSelection] = useState(false);
   const [openReferenceId, setOpenReferenceId] = useState<string | null>(null);
   const selectionOriginRef = useRef<InkPoint | null>(null);
@@ -208,6 +287,8 @@ export function AndroidNativePdfViewport(props: {
   const selectionResizeCornerRef = useRef<ResizeCorner | null>(null);
   const selectionResizeStartRectRef = useRef<SelectionRect | null>(null);
   const draftSelectionRef = useRef<SelectionRect | null>(null);
+  const draftSelectionPageIdRef = useRef<string | null>(null);
+  const draftSelectionPathRef = useRef<InkPoint[]>([]);
   const textTapRef = useRef<InkPoint | null>(null);
   const viewportRef = useRef<PdfViewportOverlayState | null>(null);
   const pdfSource = useMemo(() => getPdfRenderSource(props.file), [props.file]);
@@ -374,6 +455,10 @@ export function AndroidNativePdfViewport(props: {
       selectionResizeCornerRef.current = resizeCorner;
       selectionResizeStartRectRef.current = currentSelection;
       selectionPageRef.current = page;
+      draftSelectionPageIdRef.current = page.id;
+      draftSelectionPathRef.current = [];
+      setDraftSelectionPageId(page.id);
+      setDraftSelectionPath([]);
       draftSelectionRef.current = currentSelection;
       setDraftSelection(currentSelection);
       return;
@@ -388,6 +473,10 @@ export function AndroidNativePdfViewport(props: {
       selectionMoveOriginRef.current = point;
       selectionMoveStartRectRef.current = currentSelection;
       selectionPageRef.current = page;
+      draftSelectionPageIdRef.current = page.id;
+      draftSelectionPathRef.current = [];
+      setDraftSelectionPageId(page.id);
+      setDraftSelectionPath([]);
       draftSelectionRef.current = currentSelection;
       setDraftSelection(currentSelection);
       return;
@@ -396,7 +485,13 @@ export function AndroidNativePdfViewport(props: {
     props.onSelectionPreviewChange?.(null);
     selectionOriginRef.current = point;
     selectionPageRef.current = page;
-    const rect = { x: point.x, y: point.y, width: 0, height: 0, pageWidth: point.pageWidth, pageHeight: point.pageHeight };
+    draftSelectionPageIdRef.current = page.id;
+    setDraftSelectionPageId(page.id);
+    const selectionMode = props.selectionMode ?? 'rect';
+    const initialPath = selectionMode === 'lasso' ? [point] : [];
+    draftSelectionPathRef.current = initialPath;
+    setDraftSelectionPath(initialPath);
+    const rect = { x: point.x, y: point.y, width: 0, height: 0, mode: selectionMode, pageWidth: point.pageWidth, pageHeight: point.pageHeight };
     draftSelectionRef.current = rect;
     setDraftSelection(rect);
   }, [getPointFromEvent, isCurrentPage, props]);
@@ -417,10 +512,19 @@ export function AndroidNativePdfViewport(props: {
     const moveOrigin = selectionMoveOriginRef.current;
     const moveStartRect = selectionMoveStartRectRef.current;
     if (moveOrigin && moveStartRect) {
+      const dx = point.x - moveOrigin.x;
+      const dy = point.y - moveOrigin.y;
       const rect = {
         ...moveStartRect,
-        x: moveStartRect.x + point.x - moveOrigin.x,
-        y: moveStartRect.y + point.y - moveOrigin.y,
+        x: moveStartRect.x + dx,
+        y: moveStartRect.y + dy,
+        path: moveStartRect.path?.map((pathPoint) => ({
+          ...pathPoint,
+          x: pathPoint.x + dx,
+          y: pathPoint.y + dy,
+          pageWidth: point.pageWidth,
+          pageHeight: point.pageHeight,
+        })),
         pageWidth: point.pageWidth,
         pageHeight: point.pageHeight,
       };
@@ -431,17 +535,23 @@ export function AndroidNativePdfViewport(props: {
     const origin = selectionOriginRef.current;
     if (!origin) return;
     const page = selectionPageRef.current ?? hit.page;
-    const rect = {
-      x: Math.min(origin.x, point.x),
-      y: Math.min(origin.y, point.y),
-      width: Math.abs(point.x - origin.x),
-      height: Math.abs(point.y - origin.y),
-      pageWidth: page.pageWidth,
-      pageHeight: page.pageHeight,
-    };
+    if ((props.selectionMode ?? 'rect') === 'rect') {
+      const rect = getSelectionRectFromDrag(origin, point);
+      draftSelectionRef.current = rect;
+      setDraftSelection(rect);
+      return;
+    }
+    const currentPath = draftSelectionPathRef.current;
+    const lastPoint = currentPath[currentPath.length - 1];
+    const nextPath = !lastPoint || Math.hypot(lastPoint.x - point.x, lastPoint.y - point.y) > 5
+      ? [...currentPath, point]
+      : currentPath;
+    draftSelectionPathRef.current = nextPath;
+    setDraftSelectionPath(nextPath);
+    const rect = getSelectionRectFromPoints(nextPath) ?? getSelectionRectFromDrag(origin, { ...point, pageWidth: page.pageWidth, pageHeight: page.pageHeight });
     draftSelectionRef.current = rect;
     setDraftSelection(rect);
-  }, [getPointFromEvent, props.inkTool]);
+  }, [getPointFromEvent, props.inkTool, props.selectionMode]);
 
   const resetOverlayGesture = useCallback(() => {
     selectionOriginRef.current = null;
@@ -452,7 +562,11 @@ export function AndroidNativePdfViewport(props: {
     selectionResizeStartRectRef.current = null;
     textTapRef.current = null;
     draftSelectionRef.current = null;
+    draftSelectionPageIdRef.current = null;
+    draftSelectionPathRef.current = [];
     setDraftSelection(null);
+    setDraftSelectionPageId(null);
+    setDraftSelectionPath([]);
   }, []);
 
   const handleOverlayEnd = useCallback(() => {
@@ -518,7 +632,31 @@ export function AndroidNativePdfViewport(props: {
     const incomingAssetImage = incomingAsset ? getCaptureOriginalImageSource(incomingAsset) : null;
     const incomingAssetSummary = getCaptureAssetSummary(incomingAsset);
     const selectionForView = currentPage ? scaleSelectionRectToPageSize(props.selectionRect ?? null, page.width, page.height) : null;
-    const draftForView = currentPage && draftSelection ? scaleSelectionRectToPageSize(draftSelection, page.width, page.height) : null;
+    const draftForView = draftSelectionPageId === page.id && draftSelection ? scaleSelectionRectToPageSize(draftSelection, page.width, page.height) : null;
+    const draftLassoForView = draftSelectionPageId === page.id
+      ? draftSelectionPath.map((point) => ({
+          ...point,
+          x: point.x / Math.max(1, point.pageWidth ?? page.pageWidth) * page.width,
+          y: point.y / Math.max(1, point.pageHeight ?? page.pageHeight) * page.height,
+          pageWidth: page.width,
+          pageHeight: page.height,
+        }))
+      : [];
+    const draftRectForView = draftForView?.mode === 'lasso' ? null : draftForView;
+    const moveTextAnnotation = (id: string, x: number, y: number) => {
+      props.onMoveTextAnnotation?.(
+        id,
+        x / Math.max(1, page.width) * page.pageWidth,
+        y / Math.max(1, page.height) * page.pageHeight,
+      );
+    };
+    const resizeTextAnnotation = (id: string, width: number, height: number) => {
+      props.onResizeTextAnnotation?.(
+        id,
+        width / Math.max(1, page.width) * page.pageWidth,
+        height / Math.max(1, page.height) * page.pageHeight,
+      );
+    };
 
     return (
       <View
@@ -533,13 +671,16 @@ export function AndroidNativePdfViewport(props: {
             annotations={pageTextAnnotations}
             styles={props.styles}
             onChangeText={(id, text) => props.onUpdateTextAnnotation?.(id, text)}
+            onMove={moveTextAnnotation}
+            onResize={resizeTextAnnotation}
             onRemove={(id) => props.onRemoveTextAnnotation?.(id)}
             variant={props.textAnnotationVariant}
           />
         ) : null}
 
         {!capturingSelection && !draftForView && selectionForView ? <SelectionOverlay rect={selectionForView} styles={props.styles} /> : null}
-        {!capturingSelection && draftForView ? <SelectionOverlay rect={draftForView} styles={props.styles} draft /> : null}
+        {!capturingSelection && draftLassoForView.length > 1 ? <SelectionLassoOverlay points={draftLassoForView} /> : null}
+        {!capturingSelection && draftRectForView ? <SelectionOverlay rect={draftRectForView} styles={props.styles} draft /> : null}
 
         {pageReferences.length ? (
           <View pointerEvents="box-none" style={props.styles.pdfPageReferenceCluster}>
