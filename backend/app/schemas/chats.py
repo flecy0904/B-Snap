@@ -35,6 +35,7 @@ class SelectionRectPayload(BaseModel):
     y: float
     width: float
     height: float
+    mode: str | None = None
     pageWidth: float | None = None
     pageHeight: float | None = None
 

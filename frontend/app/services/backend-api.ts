@@ -724,6 +724,7 @@ export async function sendBackendAiMessage(payload: {
     y: number;
     width: number;
     height: number;
+    mode?: 'rect' | 'lasso';
     pageWidth?: number;
     pageHeight?: number;
   } | null;
