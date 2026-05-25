@@ -116,19 +116,28 @@ class PdfViewportView(context: Context) : View(context) {
   }
 
   private val baseRenderQueue = PriorityBlockingQueue<BaseRenderJob>()
+  private val baseRenderLock = Any()
   private val renderSequence = AtomicLong(0L)
   private val hiResExecutor = Executors.newSingleThreadExecutor()
-  private val baseRenderWorker = Thread {
+  private val baseRenderWorkerCount = 2
+  private val baseRenderWorkers = List(baseRenderWorkerCount) { index ->
+    Thread { runBaseRenderWorker() }.apply { name = "BsnPdfBaseRender-$index" }
+  }
+  private fun runBaseRenderWorker() {
     while (!Thread.currentThread().isInterrupted) {
       try {
         val job = baseRenderQueue.take()
-        if (job.generation != renderGeneration) continue
-        val bitmap = loadBaseBitmapFromDisk(job.key) ?: renderBasePage(job.uri, job.pageNumber, job.targetWidth)?.also {
-          saveBaseBitmapToDisk(job.key, it)
+        if (!isBaseRenderJobWanted(job)) {
+          markBaseRenderFinished(job.key)
+          continue
         }
+        val bitmapFromDisk = loadBaseBitmapFromDisk(job.key)
+        val bitmap = bitmapFromDisk ?: if (isBaseRenderJobWanted(job)) renderBasePage(job.uri, job.pageNumber, job.targetWidth) else null
+        if (bitmapFromDisk == null && bitmap != null && isBaseRenderJobWanted(job)) saveBaseBitmapToDisk(job.key, bitmap)
         post {
-          baseRenderRequests.remove(job.key)
-          if (job.generation != renderGeneration || bitmap == null) {
+          val shouldKeep = isBaseRenderJobWanted(job)
+          markBaseRenderFinished(job.key)
+          if (!shouldKeep || bitmap == null) {
             bitmap?.recycle()
             return@post
           }
@@ -211,6 +220,8 @@ class PdfViewportView(context: Context) : View(context) {
   private val hiResOverlays = mutableMapOf<Int, HiResOverlay>()
   private val hiResInFlight = mutableMapOf<Int, HiResRequest>()
   private val baseRenderRequests = mutableSetOf<String>()
+  private var wantedBaseRenderKeys: Set<String> = emptySet()
+  private var baseRenderDirection = 0
   private var lastBaseRenderScheduleKey = ""
   private var lastViewportEventKey = ""
   private var viewportEventScheduled = false
@@ -239,6 +250,7 @@ class PdfViewportView(context: Context) : View(context) {
       val decay = exp(-naturalFlingDecayPerSecond * dt)
       inertiaVelocityX *= decay
       inertiaVelocityYDocument *= decay
+      updateBaseRenderDirection(inertiaVelocityYDocument)
       notifyPageIfNeeded(false)
       scheduleVisibleBaseRenders()
       requestViewportChanged()
@@ -248,6 +260,8 @@ class PdfViewportView(context: Context) : View(context) {
         postOnAnimation(this)
       } else {
         stopInertia()
+        resetBaseRenderDirection()
+        scheduleVisibleBaseRenders(force = true)
         requestHiResOverlay(delayMs = 80L)
       }
     }
@@ -274,8 +288,7 @@ class PdfViewportView(context: Context) : View(context) {
   init {
     setBackgroundColor(Color.WHITE)
     isFocusable = true
-    baseRenderWorker.name = "BsnPdfBaseRender"
-    baseRenderWorker.start()
+    baseRenderWorkers.forEach { it.start() }
   }
 
   fun setFileUri(uri: String?) {
@@ -357,7 +370,7 @@ class PdfViewportView(context: Context) : View(context) {
     closeDocument()
     removeCallbacks(hiResRequestRunnable)
     removeCallbacks(viewportEventRunnable)
-    baseRenderWorker.interrupt()
+    baseRenderWorkers.forEach { it.interrupt() }
     hiResExecutor.shutdownNow()
   }
 
@@ -470,9 +483,13 @@ class PdfViewportView(context: Context) : View(context) {
           if (abs(velocityY) >= max(minFlingVelocity.toFloat(), naturalFlingMinVelocity) || abs(velocityX) >= max(minFlingVelocity.toFloat(), naturalFlingMinVelocity)) {
             fling(velocityX, velocityY)
           } else {
+            resetBaseRenderDirection()
+            scheduleVisibleBaseRenders(force = true)
             requestHiResOverlay(delayMs = 80L)
           }
         } else {
+          resetBaseRenderDirection()
+          scheduleVisibleBaseRenders(force = true)
           requestHiResOverlay(delayMs = 80L)
         }
         velocityTracker?.recycle()
@@ -496,9 +513,13 @@ class PdfViewportView(context: Context) : View(context) {
     renderGeneration += 1
     hiResGeneration += 1
     baseBitmapCache.evictAll()
-    baseRenderRequests.clear()
+    synchronized(baseRenderLock) {
+      baseRenderRequests.clear()
+      wantedBaseRenderKeys = emptySet()
+    }
     baseRenderQueue.clear()
     lastBaseRenderScheduleKey = ""
+    baseRenderDirection = 0
     removeCallbacks(hiResRequestRunnable)
     removeCallbacks(viewportEventRunnable)
     clearHiResOverlays()
@@ -821,9 +842,11 @@ class PdfViewportView(context: Context) : View(context) {
   }
 
   private fun panBy(dx: Float, dy: Float) {
+    val previousScrollY = scrollYDocument
     translateX += dx
     scrollYDocument -= dy / scale
     clampViewport()
+    updateBaseRenderDirection(scrollYDocument - previousScrollY)
     notifyPageIfNeeded(false)
     scheduleVisibleBaseRenders()
     requestViewportChanged()
@@ -835,6 +858,7 @@ class PdfViewportView(context: Context) : View(context) {
     stopInertia()
     inertiaVelocityX = velocityX.coerceIn(-naturalFlingMaxVelocity, naturalFlingMaxVelocity)
     inertiaVelocityYDocument = (-velocityY).coerceIn(-naturalFlingMaxVelocity, naturalFlingMaxVelocity) / max(1f, scale)
+    updateBaseRenderDirection(inertiaVelocityYDocument)
     stopInertiaAtBounds()
     if (abs(inertiaVelocityX) < naturalFlingStopVelocity && abs(inertiaVelocityYDocument) < naturalFlingStopVelocity / max(1f, scale)) {
       requestHiResOverlay(delayMs = 80L)
@@ -968,15 +992,51 @@ class PdfViewportView(context: Context) : View(context) {
       val center = scrollYDocument + height / max(1f, scale) / 2f
       center >= it.top && center <= it.top + it.height
     }.let { if (it >= 0) it else 0 }
-    val first = max(0, centerIndex - 2)
-    val last = min(pageLayouts.size - 1, centerIndex + 3)
-    val scheduleKey = "$renderGeneration:$width:$centerIndex:$first:$last"
+    val prioritizedIndexes = buildBaseRenderPriorityIndexes(centerIndex)
+    val targetWidth = baseRenderTargetWidth()
+    val wantedKeys = prioritizedIndexes.mapNotNull { index ->
+      val pageNumber = pageLayouts[index].page.pageNumber ?: return@mapNotNull null
+      baseCacheKey(pageNumber, targetWidth)
+    }.toSet()
+    val scheduleKey = "$renderGeneration:$width:$centerIndex:$baseRenderDirection:${prioritizedIndexes.joinToString(",")}"
     if (!force && scheduleKey == lastBaseRenderScheduleKey) return
     lastBaseRenderScheduleKey = scheduleKey
-    val prioritizedIndexes = (first..last).sortedBy { abs(it - centerIndex) }
-    prioritizedIndexes.forEach { index ->
-      val pageNumber = pageLayouts[index].page.pageNumber ?: return@forEach
-      requestBaseRender(pageNumber, abs(index - centerIndex))
+    pruneBaseRenderQueue(wantedKeys)
+    prioritizedIndexes.forEachIndexed { priority, index ->
+      val pageNumber = pageLayouts[index].page.pageNumber ?: return@forEachIndexed
+      requestBaseRender(pageNumber, priority)
+    }
+  }
+
+  private fun buildBaseRenderPriorityIndexes(centerIndex: Int): List<Int> {
+    val indexes = mutableListOf<Int>()
+    fun addOffset(offset: Int) {
+      val index = centerIndex + offset
+      if (index in pageLayouts.indices && index !in indexes) indexes.add(index)
+    }
+
+    addOffset(0)
+    when {
+      baseRenderDirection > 0 -> {
+        (1..5).forEach { addOffset(it) }
+      }
+      baseRenderDirection < 0 -> {
+        (-1 downTo -5).forEach { addOffset(it) }
+      }
+      else -> {
+        listOf(-1, 1, -2, 2, 3).forEach { addOffset(it) }
+      }
+    }
+    return indexes
+  }
+
+  private fun pruneBaseRenderQueue(wantedKeys: Set<String>) {
+    synchronized(baseRenderLock) {
+      wantedBaseRenderKeys = wantedKeys
+      baseRenderRequests.retainAll(wantedKeys)
+    }
+    baseRenderQueue.removeIf { job ->
+      job.generation != renderGeneration || job.key !in wantedKeys
     }
   }
 
@@ -984,11 +1044,44 @@ class PdfViewportView(context: Context) : View(context) {
     if (renderer == null || width <= 0) return
     val targetWidth = baseRenderTargetWidth()
     val key = baseCacheKey(pageNumber, targetWidth)
-    if (baseBitmapCache.get(key) != null || baseRenderRequests.contains(key)) return
+    if (baseBitmapCache.get(key) != null) return
     val generation = renderGeneration
     val uri = fileUri ?: return
-    baseRenderRequests.add(key)
+    val shouldRequest = synchronized(baseRenderLock) {
+      if (key !in wantedBaseRenderKeys || baseRenderRequests.contains(key)) {
+        false
+      } else {
+        baseRenderRequests.add(key)
+        true
+      }
+    }
+    if (!shouldRequest) return
     baseRenderQueue.offer(BaseRenderJob(renderSequence.incrementAndGet(), generation, pageNumber, targetWidth, priority, key, uri))
+  }
+
+  private fun isBaseRenderJobWanted(job: BaseRenderJob): Boolean {
+    if (job.generation != renderGeneration) return false
+    return synchronized(baseRenderLock) { job.key in wantedBaseRenderKeys }
+  }
+
+  private fun markBaseRenderFinished(key: String) {
+    synchronized(baseRenderLock) {
+      baseRenderRequests.remove(key)
+    }
+  }
+
+  private fun updateBaseRenderDirection(documentDeltaY: Float) {
+    if (abs(documentDeltaY) < 0.5f) return
+    val nextDirection = if (documentDeltaY > 0f) 1 else -1
+    if (baseRenderDirection == nextDirection) return
+    baseRenderDirection = nextDirection
+    lastBaseRenderScheduleKey = ""
+  }
+
+  private fun resetBaseRenderDirection() {
+    if (baseRenderDirection == 0) return
+    baseRenderDirection = 0
+    lastBaseRenderScheduleKey = ""
   }
 
   private fun getBaseBitmap(pageNumber: Int): Bitmap? {
