@@ -16,6 +16,10 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
+function getFloatingPanelHeight(windowHeight: number, panelY: number) {
+  return Math.min(FLOATING_PANEL_HEIGHT, Math.max(360, windowHeight - panelY - FLOATING_PANEL_MARGIN));
+}
+
 function formatPriorityLabel(priority: string) {
   if (priority === 'very-high') return '매우 높음';
   if (priority === 'high') return '높음';
@@ -36,7 +40,8 @@ export function NotesAiAssistantPanel() {
   const sidebarProgress = React.useRef(new Animated.Value(0)).current;
   const [floatingPosition, setFloatingPosition] = React.useState({ x: FLOATING_PANEL_MARGIN, y: FLOATING_PANEL_TOP });
   const floatingPositionRef = React.useRef(floatingPosition);
-  const floatingDragOffset = React.useRef(new Animated.ValueXY({ x: 0, y: 0 })).current;
+  const floatingAnimatedPosition = React.useRef(new Animated.ValueXY(floatingPosition)).current;
+  const floatingAnimatedHeight = React.useRef(new Animated.Value(FLOATING_PANEL_HEIGHT)).current;
   const [sidebarWidth, setSidebarWidth] = React.useState(SIDEBAR_DEFAULT_WIDTH);
   const sidebarWidthRef = React.useRef(SIDEBAR_DEFAULT_WIDTH);
   const [menuSessionId, setMenuSessionId] = React.useState<number | null>(null);
@@ -89,9 +94,9 @@ export function NotesAiAssistantPanel() {
     () => new Set(workspace.noteAiChatSessions.map((session: any) => session.id)),
     [workspace.noteAiChatSessions],
   );
-  const floatingPanelHeight = Math.min(FLOATING_PANEL_HEIGHT, Math.max(360, height - FLOATING_PANEL_TOP - FLOATING_PANEL_MARGIN));
+  const floatingPanelHeight = getFloatingPanelHeight(height, floatingPosition.y);
   const floatingMaxX = Math.max(FLOATING_PANEL_MARGIN, width - FLOATING_PANEL_WIDTH - FLOATING_PANEL_MARGIN);
-  const floatingMaxY = Math.max(FLOATING_PANEL_TOP, height - floatingPanelHeight - FLOATING_PANEL_MARGIN);
+  const floatingMaxY = Math.max(FLOATING_PANEL_TOP, height - 360 - FLOATING_PANEL_MARGIN);
   const sidebarMaxWidth = Math.max(SIDEBAR_MIN_WIDTH, Math.floor(width * 0.5));
 
   React.useEffect(() => {
@@ -103,7 +108,9 @@ export function NotesAiAssistantPanel() {
 
   React.useEffect(() => {
     floatingPositionRef.current = floatingPosition;
-  }, [floatingPosition]);
+    floatingAnimatedPosition.setValue(floatingPosition);
+    floatingAnimatedHeight.setValue(floatingPanelHeight);
+  }, [floatingAnimatedHeight, floatingAnimatedPosition, floatingPanelHeight, floatingPosition]);
 
   React.useEffect(() => {
     setSidebarWidth((current) => {
@@ -122,14 +129,16 @@ export function NotesAiAssistantPanel() {
       ),
       onPanResponderGrant: () => {
         closeOpenMenus();
-        floatingDragOffset.setValue({ x: 0, y: 0 });
+        floatingAnimatedPosition.setValue(floatingPositionRef.current);
+        floatingAnimatedHeight.setValue(floatingPanelHeight);
       },
       onPanResponderMove: (_, gesture) => {
         const start = floatingPositionRef.current;
-        floatingDragOffset.setValue({
-          x: clamp(start.x + gesture.dx, FLOATING_PANEL_MARGIN, floatingMaxX) - start.x,
-          y: clamp(start.y + gesture.dy, FLOATING_PANEL_TOP, floatingMaxY) - start.y,
-        });
+        const next = {
+          x: clamp(start.x + gesture.dx, FLOATING_PANEL_MARGIN, floatingMaxX),
+          y: clamp(start.y + gesture.dy, FLOATING_PANEL_TOP, floatingMaxY),
+        };
+        floatingAnimatedPosition.setValue(next);
       },
       onPanResponderRelease: (_, gesture) => {
         const start = floatingPositionRef.current;
@@ -137,9 +146,11 @@ export function NotesAiAssistantPanel() {
           x: clamp(start.x + gesture.dx, FLOATING_PANEL_MARGIN, floatingMaxX),
           y: clamp(start.y + gesture.dy, FLOATING_PANEL_TOP, floatingMaxY),
         };
+        const nextHeight = getFloatingPanelHeight(height, next.y);
         floatingPositionRef.current = next;
         setFloatingPosition(next);
-        floatingDragOffset.setValue({ x: 0, y: 0 });
+        floatingAnimatedPosition.setValue(next);
+        floatingAnimatedHeight.setValue(nextHeight);
       },
       onPanResponderTerminate: (_, gesture) => {
         const start = floatingPositionRef.current;
@@ -147,12 +158,14 @@ export function NotesAiAssistantPanel() {
           x: clamp(start.x + gesture.dx, FLOATING_PANEL_MARGIN, floatingMaxX),
           y: clamp(start.y + gesture.dy, FLOATING_PANEL_TOP, floatingMaxY),
         };
+        const nextHeight = getFloatingPanelHeight(height, next.y);
         floatingPositionRef.current = next;
         setFloatingPosition(next);
-        floatingDragOffset.setValue({ x: 0, y: 0 });
+        floatingAnimatedPosition.setValue(next);
+        floatingAnimatedHeight.setValue(nextHeight);
       },
     }),
-    [floatingDragOffset, floatingMaxX, floatingMaxY, workspace.aiPanelMode],
+    [floatingAnimatedHeight, floatingAnimatedPosition, floatingMaxX, floatingMaxY, floatingPanelHeight, height, workspace.aiPanelMode],
   );
 
   const sidebarResizePanResponder = React.useMemo(
@@ -328,9 +341,8 @@ export function NotesAiAssistantPanel() {
   };
 
   if (!workspace.aiPanelOpen) return null;
-  const floatingTranslate = floatingDragOffset.getTranslateTransform();
   const panelStyle = workspace.aiPanelMode === 'floating'
-    ? [workspace.styles.aiPanel, { left: floatingPosition.x, top: floatingPosition.y, bottom: undefined, height: floatingPanelHeight, transform: floatingTranslate }]
+    ? [workspace.styles.aiPanel, { left: floatingAnimatedPosition.x, top: floatingAnimatedPosition.y, bottom: undefined, height: floatingAnimatedHeight }]
     : [workspace.styles.aiPanel, workspace.styles.aiPanelSidebar, { width: sidebarWidth }];
 
   return (
