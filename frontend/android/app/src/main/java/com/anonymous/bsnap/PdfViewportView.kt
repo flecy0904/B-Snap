@@ -55,6 +55,13 @@ class PdfViewportView(context: Context) : View(context) {
 
   private data class PdfPageSize(val width: Int, val height: Int)
   private data class PageLayout(val page: NativePage, val index: Int, val top: Float, val height: Float)
+  private data class ViewportAnchor(
+    val pageId: String,
+    val pageNumber: Int?,
+    val generatedPageId: String?,
+    val pageProgressY: Float,
+  )
+
   private data class InkPoint(
     val x: Float,
     val y: Float,
@@ -282,8 +289,10 @@ class PdfViewportView(context: Context) : View(context) {
   }
 
   fun setNotebookPages(pages: ReadableArray?) {
+    val anchor = captureViewportAnchor()
     nativePages = parseNotebookPages(pages)
     rebuildPageLayouts()
+    restoreViewportAnchor(anchor)
     invalidate()
   }
 
@@ -319,8 +328,13 @@ class PdfViewportView(context: Context) : View(context) {
   override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
     super.onSizeChanged(w, h, oldw, oldh)
     Log.d(logTag, "onSizeChanged ${w}x$h old=${oldw}x$oldh")
+    val anchor = if (oldw > 0 && oldh > 0) captureViewportAnchor() else null
     rebuildPageLayouts()
-    if (oldw == 0 || oldh == 0) scrollToPage(requestedPage, notify = false)
+    if (oldw == 0 || oldh == 0) {
+      scrollToPage(requestedPage, notify = false)
+    } else {
+      restoreViewportAnchor(anchor)
+    }
     clampViewport()
     scheduleVisibleBaseRenders()
   }
@@ -533,6 +547,34 @@ class PdfViewportView(context: Context) : View(context) {
       layout
     }
     clampViewport()
+  }
+
+  private fun captureViewportAnchor(): ViewportAnchor? {
+    if (pageLayouts.isEmpty() || height <= 0) return null
+    val centerY = scrollYDocument + height / max(1f, scale) / 2f
+    val layout = pageLayouts.firstOrNull { centerY >= it.top && centerY <= it.top + it.height }
+      ?: pageLayouts.minByOrNull { abs((it.top + it.height / 2f) - centerY) }
+      ?: return null
+    val progress = ((centerY - layout.top) / max(1f, layout.height)).coerceIn(0f, 1f)
+    return ViewportAnchor(
+      pageId = layout.page.id,
+      pageNumber = layout.page.pageNumber,
+      generatedPageId = layout.page.generatedPageId,
+      pageProgressY = progress,
+    )
+  }
+
+  private fun restoreViewportAnchor(anchor: ViewportAnchor?) {
+    if (anchor == null || pageLayouts.isEmpty() || height <= 0) return
+    val layout = pageLayouts.firstOrNull { it.page.id == anchor.pageId }
+      ?: pageLayouts.firstOrNull { anchor.generatedPageId != null && it.page.generatedPageId == anchor.generatedPageId }
+      ?: pageLayouts.firstOrNull { anchor.pageNumber != null && it.page.pageNumber == anchor.pageNumber }
+      ?: return
+    val centerY = layout.top + layout.height * anchor.pageProgressY
+    scrollYDocument = centerY - height / max(1f, scale) / 2f
+    clampViewport()
+    scheduleVisibleBaseRenders()
+    invalidate()
   }
 
   private fun drawEmptyState(canvas: Canvas) {
