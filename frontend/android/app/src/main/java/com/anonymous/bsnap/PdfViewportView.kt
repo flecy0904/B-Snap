@@ -211,7 +211,14 @@ class PdfViewportView(context: Context) : View(context) {
   private val hiResInFlight = mutableMapOf<Int, HiResRequest>()
   private val baseRenderRequests = mutableSetOf<String>()
   private var lastBaseRenderScheduleKey = ""
+  private var lastViewportEventKey = ""
+  private var viewportEventScheduled = false
+  private val viewportEventDelayMs = 32L
   private val hiResRequestRunnable = Runnable { startHiResOverlayRender() }
+  private val viewportEventRunnable = Runnable {
+    viewportEventScheduled = false
+    emitViewportChanged()
+  }
   private val inertiaRunnable = object : Runnable {
     override fun run() {
       if (isUserInteracting) {
@@ -233,6 +240,7 @@ class PdfViewportView(context: Context) : View(context) {
       inertiaVelocityYDocument *= decay
       notifyPageIfNeeded(false)
       scheduleVisibleBaseRenders()
+      requestViewportChanged()
       postInvalidateOnAnimation()
 
       if (abs(inertiaVelocityX) > naturalFlingStopVelocity || abs(inertiaVelocityYDocument) > naturalFlingStopVelocity / max(1f, scale)) {
@@ -293,11 +301,13 @@ class PdfViewportView(context: Context) : View(context) {
     nativePages = parseNotebookPages(pages)
     rebuildPageLayouts()
     restoreViewportAnchor(anchor)
+    requestViewportChanged(force = true)
     invalidate()
   }
 
   fun setInkTool(value: String?) {
     inkTool = value ?: "view"
+    requestViewportChanged(force = true)
   }
 
   fun setFingerDrawingEnabled(value: Boolean) {
@@ -337,6 +347,7 @@ class PdfViewportView(context: Context) : View(context) {
     }
     clampViewport()
     scheduleVisibleBaseRenders()
+    requestViewportChanged(force = true)
   }
 
   override fun onDetachedFromWindow() {
@@ -487,6 +498,7 @@ class PdfViewportView(context: Context) : View(context) {
     baseRenderQueue.clear()
     lastBaseRenderScheduleKey = ""
     removeCallbacks(hiResRequestRunnable)
+    removeCallbacks(viewportEventRunnable)
     clearHiResOverlays()
     hiResInFlight.clear()
 
@@ -515,6 +527,7 @@ class PdfViewportView(context: Context) : View(context) {
       scrollToPage(requestedPage, notify = false)
       hasAppliedInitialPage = true
       scheduleVisibleBaseRenders(force = true)
+      requestViewportChanged(force = true)
       Log.i(logTag, "openDocument success pages=$documentPageCount size=${pdfPageSize?.width}x${pdfPageSize?.height} view=${width}x$height layouts=${pageLayouts.size}")
       invalidate()
     } catch (error: Exception) {
@@ -574,6 +587,7 @@ class PdfViewportView(context: Context) : View(context) {
     scrollYDocument = centerY - height / max(1f, scale) / 2f
     clampViewport()
     scheduleVisibleBaseRenders()
+    requestViewportChanged(force = true)
     invalidate()
   }
 
@@ -810,6 +824,7 @@ class PdfViewportView(context: Context) : View(context) {
     clampViewport()
     notifyPageIfNeeded(false)
     scheduleVisibleBaseRenders()
+    requestViewportChanged()
     requestHiResOverlay(delayMs = 120L)
     postInvalidateOnAnimation()
   }
@@ -856,6 +871,7 @@ class PdfViewportView(context: Context) : View(context) {
     clampViewport(applyScaleSnap = false)
     notifyPageIfNeeded(false)
     scheduleVisibleBaseRenders()
+    requestViewportChanged()
     requestHiResOverlay(delayMs = 120L)
     postInvalidateOnAnimation()
   }
@@ -915,6 +931,7 @@ class PdfViewportView(context: Context) : View(context) {
     clampViewport()
     if (notify) notifyPageIfNeeded(true)
     scheduleVisibleBaseRenders()
+    requestViewportChanged(force = true)
     invalidate()
   }
 
@@ -930,6 +947,18 @@ class PdfViewportView(context: Context) : View(context) {
 
   private val pageNotifyRunnable = Runnable {
     if (reportedPage > 0) emitPageChanged(reportedPage)
+  }
+
+  private fun requestViewportChanged(force: Boolean = false) {
+    if (force) {
+      removeCallbacks(viewportEventRunnable)
+      viewportEventScheduled = false
+      emitViewportChanged(force = true)
+      return
+    }
+    if (viewportEventScheduled) return
+    viewportEventScheduled = true
+    postDelayed(viewportEventRunnable, viewportEventDelayMs)
   }
 
   private fun scheduleVisibleBaseRenders(force: Boolean = false) {
@@ -1238,6 +1267,59 @@ class PdfViewportView(context: Context) : View(context) {
 
   private fun buildDefaultPdfPages(count: Int): List<NativePage> = (1..max(1, count)).map {
     NativePage("pdf:$it", "pdf", "$it 페이지", it, null)
+  }
+
+  private fun emitViewportChanged(force: Boolean = false) {
+    if (width <= 0 || height <= 0 || pageLayouts.isEmpty()) return
+    val viewportTop = scrollYDocument
+    val viewportBottom = scrollYDocument + height / max(1f, scale)
+    val pageSize = pdfPageSize
+    val pages = Arguments.createArray()
+    val keyParts = mutableListOf(
+      width.toString(),
+      height.toString(),
+      (scale * 1000f).roundToInt().toString(),
+      scrollYDocument.roundToInt().toString(),
+      translateX.roundToInt().toString(),
+    )
+
+    pageLayouts.forEach { layout ->
+      if (layout.top > viewportBottom || layout.top + layout.height < viewportTop) return@forEach
+      val screenLeft = (width - width * scale) / 2f + translateX
+      val screenTop = (layout.top - scrollYDocument) * scale
+      val screenWidth = width * scale
+      val screenHeight = layout.height * scale
+      val pageLogicalWidth = pageSize?.width?.toFloat() ?: width.toFloat()
+      val pageLogicalHeight = pageSize?.height?.toFloat() ?: layout.height
+      pages.pushMap(Arguments.createMap().apply {
+        putString("id", layout.page.id)
+        putString("kind", layout.page.kind)
+        putString("label", layout.page.label)
+        if (layout.page.pageNumber != null) putInt("pageNumber", layout.page.pageNumber)
+        if (layout.page.generatedPageId != null) putString("generatedPageId", layout.page.generatedPageId)
+        putDouble("left", screenLeft.toDouble())
+        putDouble("top", screenTop.toDouble())
+        putDouble("width", screenWidth.toDouble())
+        putDouble("height", screenHeight.toDouble())
+        putDouble("pageWidth", pageLogicalWidth.toDouble())
+        putDouble("pageHeight", pageLogicalHeight.toDouble())
+      })
+      keyParts.add("${layout.page.id}:${screenLeft.roundToInt()}:${screenTop.roundToInt()}:${screenWidth.roundToInt()}:${screenHeight.roundToInt()}")
+    }
+
+    val key = keyParts.joinToString("|")
+    if (!force && key == lastViewportEventKey) return
+    lastViewportEventKey = key
+    val event = Arguments.createMap().apply {
+      putDouble("scale", scale.toDouble())
+      putDouble("scrollY", scrollYDocument.toDouble())
+      putDouble("translateX", translateX.toDouble())
+      putDouble("viewportWidth", width.toDouble())
+      putDouble("viewportHeight", height.toDouble())
+      putDouble("contentHeight", (pageLayouts.lastOrNull()?.let { it.top + it.height + dp(24f) } ?: 0f).toDouble())
+      putArray("pages", pages)
+    }
+    emit("topViewportChanged", event)
   }
 
   private fun emitDocumentLoaded(pageCount: Int) {

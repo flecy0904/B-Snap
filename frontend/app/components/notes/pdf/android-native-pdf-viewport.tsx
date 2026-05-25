@@ -8,6 +8,31 @@ type NativeDocumentLoadedEvent = NativeSyntheticEvent<{ pageCount: number }>;
 type NativePageChangedEvent = NativeSyntheticEvent<{ pageNumber: number }>;
 type NativeCommitInkStrokeEvent = NativeSyntheticEvent<InkStroke>;
 type NativeRemoveInkStrokeEvent = NativeSyntheticEvent<{ strokeId: string }>;
+type NativeViewportChangedEvent = NativeSyntheticEvent<PdfViewportOverlayState>;
+
+export type PdfViewportOverlayPage = {
+  id: string;
+  kind: NotebookPage['kind'];
+  label: string;
+  pageNumber?: number;
+  generatedPageId?: string;
+  left: number;
+  top: number;
+  width: number;
+  height: number;
+  pageWidth: number;
+  pageHeight: number;
+};
+
+export type PdfViewportOverlayState = {
+  scale: number;
+  scrollY: number;
+  translateX: number;
+  viewportWidth: number;
+  viewportHeight: number;
+  contentHeight: number;
+  pages: PdfViewportOverlayPage[];
+};
 
 type BsnPdfViewportNativeProps = {
   fileUri: string;
@@ -26,6 +51,7 @@ type BsnPdfViewportNativeProps = {
   onPageChanged?: (event: NativePageChangedEvent) => void;
   onCommitInkStroke?: (event: NativeCommitInkStrokeEvent) => void;
   onRemoveInkStroke?: (event: NativeRemoveInkStrokeEvent) => void;
+  onViewportChanged?: (event: NativeViewportChangedEvent) => void;
 };
 
 const NativeBsnPdfViewportView = Platform.OS === 'android'
@@ -53,6 +79,7 @@ export function AndroidNativePdfViewport(props: {
   onRemoveInkStroke: (strokeId: string) => void;
   onPageChanged?: (page: number) => void;
   onDocumentLoaded?: (pageCount: number) => void;
+  onViewportChanged?: (viewport: PdfViewportOverlayState) => void;
   style?: StyleProp<ViewStyle>;
 }) {
   const [localFileUri, setLocalFileUri] = useState<string | null>(null);
@@ -117,6 +144,7 @@ export function AndroidNativePdfViewport(props: {
       onPageChanged={(event) => props.onPageChanged?.(event.nativeEvent.pageNumber)}
       onCommitInkStroke={(event) => props.onCommitInkStroke(event.nativeEvent)}
       onRemoveInkStroke={(event) => props.onRemoveInkStroke(event.nativeEvent.strokeId)}
+      onViewportChanged={(event) => props.onViewportChanged?.(event.nativeEvent)}
     />
   );
 }
