@@ -10,6 +10,7 @@ import { InkPath } from './ink-path';
 import { finalizeInkStroke, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, shouldAppendInkPoint } from '../../../ui-helpers';
 import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { useCanvasContext } from './canvas-context';
+import { useNotesGlobalContext } from '../workspace/notes-global-context';
 import { shouldActivateNativeInkGesture, type NativeGestureStateManager, type NativeInkGestureEvent, type NativeInkTouchEvent } from './native-ink-gesture-policy';
 import { getPencilHoverPoint, getPencilHoverSize, getPencilHoverToolLabel, isStylusHoverEvent, shouldPreviewPencilHover, type PencilHoverPoint } from './native-pencil-hover';
 
@@ -158,6 +159,7 @@ export function BlankNoteCanvas(props: {
   styles: any;
 }) {
   const canvasCtx = useCanvasContext();
+  const globalContext = useNotesGlobalContext();
   const {
     inkTool,
     fingerDrawingEnabled,
@@ -250,6 +252,7 @@ export function BlankNoteCanvas(props: {
   }, [canvasCtx, penWidth]);
 
   const handleInkGestureStart = useCallback((x: number, y: number) => {
+    globalContext.onFocusWorkspaceTarget?.('document');
     const point = clampPointToPage(x, y);
     if (isDrawingTool(inkTool)) {
       const appearance = isShapeTool(inkTool)
@@ -333,6 +336,7 @@ export function BlankNoteCanvas(props: {
     selectionMode,
     selectionRect,
     eraseAtPoint,
+    globalContext,
   ]);
 
   const handleInkGestureMove = useCallback((x: number, y: number) => {
@@ -537,6 +541,7 @@ export function BlankNoteCanvas(props: {
           ref={captureTargetRef}
           collapsable={false}
           style={[props.styles.blankNotePage, { flex: 1, width: '100%', height: '100%', borderRadius: 20, borderWidth: 0, elevation: 0 }]}
+          onTouchStart={() => globalContext.onFocusWorkspaceTarget?.('document')}
           onLayout={(e) => setPageSize({ width: e.nativeEvent.layout.width, height: e.nativeEvent.layout.height })}
         >
           {props.backgroundImageUri ? (

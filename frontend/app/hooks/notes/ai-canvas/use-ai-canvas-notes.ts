@@ -89,11 +89,13 @@ export function useAiCanvasNotes({
   enabled,
   currentPageNumber,
   onFeedback,
+  onRecordWorkspaceAction,
 }: {
   noteId: number | null;
   enabled: boolean;
   currentPageNumber: number | null;
   onFeedback: (message: string) => void;
+  onRecordWorkspaceAction?: () => void;
 }): UseAiCanvasNotesResult {
   const [isOpen, setIsOpen] = useState(false);
   const [mode, setMode] = useState<AiCanvasMode>('preview');
@@ -241,6 +243,7 @@ export function useAiCanvasNotes({
       directEditBaselineRef.current = markdownDraft;
       setUndoStack((current) => appendUndoSnapshot(current, markdownDraft));
       setRedoStack([]);
+      onRecordWorkspaceAction?.();
     }
     setMarkdownDraft(value);
 
@@ -255,7 +258,7 @@ export function useAiCanvasNotes({
     if (lineCountChanged || likelyPaste) {
       finishDirectEditBatch();
     }
-  }, [finishDirectEditBatch, markdownDraft]);
+  }, [finishDirectEditBatch, markdownDraft, onRecordWorkspaceAction]);
 
   const createCanvasNote = useCallback(async () => {
     if (!enabled || !noteId) {
@@ -421,6 +424,7 @@ export function useAiCanvasNotes({
     if (hasMeaningfulUndoState(previousMarkdown) && previousMarkdown !== canvasNote.markdown) {
       setUndoStack((current) => appendUndoSnapshot(current, previousMarkdown));
       setRedoStack([]);
+      onRecordWorkspaceAction?.();
     }
     setActiveNote(canvasNote);
     setActiveNoteId(canvasNote.id);
@@ -434,7 +438,7 @@ export function useAiCanvasNotes({
     });
     setError(null);
     onFeedback(action === 'canvas_create' ? 'AI Chat에서 Canvas를 만들었습니다.' : 'AI Chat이 Canvas를 수정했습니다.');
-  }, [finishDirectEditBatch, markdownDraft, onFeedback]);
+  }, [finishDirectEditBatch, markdownDraft, onFeedback, onRecordWorkspaceAction]);
 
   const requestAiEditFromChat = useCallback(async ({ question, answer }: { question: string; answer: string }) => {
     if (!enabled || !noteId) {
@@ -469,11 +473,12 @@ export function useAiCanvasNotes({
     if (hasMeaningfulUndoState(previousMarkdown) && previousMarkdown !== aiDraftMarkdown) {
       setUndoStack((current) => appendUndoSnapshot(current, previousMarkdown));
       setRedoStack([]);
+      onRecordWorkspaceAction?.();
     }
     setMarkdownDraft(aiDraftMarkdown);
     setAiDraftMarkdown(null);
     setMode('edit');
-  }, [aiDraftMarkdown, markdownDraft]);
+  }, [aiDraftMarkdown, markdownDraft, onRecordWorkspaceAction]);
 
   const discardAiDraft = useCallback(() => {
     setAiDraftMarkdown(null);

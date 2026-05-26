@@ -17,6 +17,7 @@ export function NotesAiCanvasPanel() {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = React.useState(false);
   const [miniCommand, setMiniCommand] = React.useState('');
   const [miniSelectionImageUri, setMiniSelectionImageUri] = React.useState<string | null>(null);
+  const isAppAiCanvasSidebar = Boolean(workspace.isAppAiCanvasSidebarPanel);
 
   const noteActionMenuNote = React.useMemo(
     () => canvas.notes.find((note) => note.id === noteActionMenuId) ?? null,
@@ -131,7 +132,7 @@ export function NotesAiCanvasPanel() {
   };
 
   return (
-    <View style={workspace.styles.aiCanvasPanel}>
+    <View style={[workspace.styles.aiCanvasPanel, isAppAiCanvasSidebar && workspace.styles.appRightSidebarAiCanvasPanel]}>
       {noteListOpen ? (
         <Pressable style={workspace.styles.aiCanvasMenuDismissLayer} onPress={closeMenus} />
       ) : null}
@@ -214,7 +215,7 @@ export function NotesAiCanvasPanel() {
           ) : null}
         </View>
         <View style={workspace.styles.aiCanvasHeaderActions}>
-          <View style={workspace.styles.aiCanvasHistoryActions}>
+          {!isAppAiCanvasSidebar ? <View style={workspace.styles.aiCanvasHistoryActions}>
             <Pressable
               style={[workspace.styles.aiCanvasHistoryButton, !canvas.canUndo && workspace.styles.aiCanvasHistoryButtonDisabled]}
               onPress={canvas.undoCanvasEdit}
@@ -229,7 +230,7 @@ export function NotesAiCanvasPanel() {
             >
               <MaterialCommunityIcons name="redo" size={18} color={canvas.canRedo ? '#405CD1' : '#A8B0BF'} />
             </Pressable>
-          </View>
+          </View> : null}
           <Pressable
             style={[
               workspace.styles.aiCanvasHeaderNewButton,
@@ -240,9 +241,9 @@ export function NotesAiCanvasPanel() {
           >
             <MaterialCommunityIcons name="note-edit-outline" size={20} color="#111827" />
           </Pressable>
-          <Pressable style={workspace.styles.aiCanvasIconButton} onPress={canvas.close}>
+          {!isAppAiCanvasSidebar ? <Pressable style={workspace.styles.aiCanvasIconButton} onPress={canvas.close}>
             <MaterialCommunityIcons name="close" size={22} color="#303744" />
-          </Pressable>
+          </Pressable> : null}
         </View>
       </View>
 
@@ -268,6 +269,7 @@ export function NotesAiCanvasPanel() {
               <TextInput
                 value={canvas.markdownDraft}
                 onChangeText={canvas.setMarkdownDraft}
+                onFocus={() => workspace.onFocusWorkspaceTarget('aiCanvas')}
                 placeholder="Markdown으로 정리 내용을 작성하세요."
                 placeholderTextColor="#A2AAB8"
                 multiline
