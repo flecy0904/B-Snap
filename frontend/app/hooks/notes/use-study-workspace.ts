@@ -796,6 +796,8 @@ export function useStudyWorkspace(props: {
     setChatSessionsByDocument,
     setAllChatSessions,
     setAiMessagesBySession,
+    activeCanvasNoteId: aiCanvas.activeNoteId,
+    onApplyCanvasEditFromChat: aiCanvas.applyChatCanvasEdit,
     clearSelection: clearSelectionForCurrentDocument,
     onRequestCanvasEditFromChat: aiCanvas.requestAiEditFromChat,
     buildContextHint: (question) => buildClassInsightContext({
@@ -860,6 +862,13 @@ export function useStudyWorkspace(props: {
     openStudyDocument,
     requestAiAnswerForQuestion,
   });
+
+  const requestAiCanvasCommand = useCallback(async (command: string) => (
+    requestAiAnswer({
+      question: command,
+      source: 'canvas-mini',
+    })
+  ), [requestAiAnswer]);
 
   const acceptIncomingAsset = () => {
     if (!incomingAssetSuggestion) return;
@@ -1176,6 +1185,7 @@ export function useStudyWorkspace(props: {
     startNewAiChatSession,
     createAiChatSession,
     requestAiAnswer,
+    requestAiCanvasCommand,
     askAiAboutSelection,
     insertAiAnswerPage,
     changeSelection,

@@ -97,6 +97,7 @@ export type DesktopNotesWorkspaceContextValue = {
   onCreateAiChatSession: () => void;
   onRequestAiAnswer: () => void;
   onAskAiAboutSelection: () => void;
+  onRequestAiCanvasCommand: (command: string) => Promise<boolean>;
   onInsertAiAnswerPage: () => void;
   onGoToPreviousDocumentPage: () => void;
   onGoToNextDocumentPage: () => void;
