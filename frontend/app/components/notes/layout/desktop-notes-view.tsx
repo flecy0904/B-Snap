@@ -41,45 +41,55 @@ function clamp(value: number, min: number, max: number) {
 function AppRightSidebar() {
   const workspace = useDesktopNotesWorkspaceContext();
   const { width } = useWindowDimensions();
-  const widthRef = React.useRef(workspace.appRightSidebarWidth);
   const maxWidth = Math.max(APP_RIGHT_SIDEBAR_MIN_WIDTH, Math.min(APP_RIGHT_SIDEBAR_MAX_WIDTH, Math.floor(width * 0.48)));
+  const [localWidth, setLocalWidth] = React.useState(() => clamp(workspace.appRightSidebarWidth, APP_RIGHT_SIDEBAR_MIN_WIDTH, maxWidth));
+  const localWidthRef = React.useRef(localWidth);
+  const dragStartWidthRef = React.useRef(localWidth);
+  const onChangeAppRightSidebarWidth = workspace.onChangeAppRightSidebarWidth;
 
   React.useEffect(() => {
-    widthRef.current = clamp(workspace.appRightSidebarWidth, APP_RIGHT_SIDEBAR_MIN_WIDTH, maxWidth);
+    const next = clamp(workspace.appRightSidebarWidth, APP_RIGHT_SIDEBAR_MIN_WIDTH, maxWidth);
+    setLocalWidth(next);
+    localWidthRef.current = next;
+    dragStartWidthRef.current = next;
   }, [maxWidth, workspace.appRightSidebarWidth]);
+
+  const changeLocalWidth = React.useCallback((next: number) => {
+    localWidthRef.current = next;
+    setLocalWidth(next);
+  }, []);
 
   const resizePanResponder = React.useMemo(
     () => PanResponder.create({
       onStartShouldSetPanResponder: () => true,
       onMoveShouldSetPanResponder: (_, gesture) => Math.abs(gesture.dx) > 3,
+      onPanResponderGrant: () => {
+        dragStartWidthRef.current = localWidthRef.current;
+      },
       onPanResponderMove: (_, gesture) => {
-        workspace.onChangeAppRightSidebarWidth(clamp(widthRef.current - gesture.dx, APP_RIGHT_SIDEBAR_MIN_WIDTH, maxWidth));
+        changeLocalWidth(clamp(dragStartWidthRef.current - gesture.dx, APP_RIGHT_SIDEBAR_MIN_WIDTH, maxWidth));
       },
       onPanResponderRelease: (_, gesture) => {
-        const next = clamp(widthRef.current - gesture.dx, APP_RIGHT_SIDEBAR_MIN_WIDTH, maxWidth);
-        widthRef.current = next;
-        workspace.onChangeAppRightSidebarWidth(next);
+        const next = clamp(dragStartWidthRef.current - gesture.dx, APP_RIGHT_SIDEBAR_MIN_WIDTH, maxWidth);
+        dragStartWidthRef.current = next;
+        changeLocalWidth(next);
+        onChangeAppRightSidebarWidth(next);
       },
       onPanResponderTerminate: (_, gesture) => {
-        const next = clamp(widthRef.current - gesture.dx, APP_RIGHT_SIDEBAR_MIN_WIDTH, maxWidth);
-        widthRef.current = next;
-        workspace.onChangeAppRightSidebarWidth(next);
+        const next = clamp(dragStartWidthRef.current - gesture.dx, APP_RIGHT_SIDEBAR_MIN_WIDTH, maxWidth);
+        dragStartWidthRef.current = next;
+        changeLocalWidth(next);
+        onChangeAppRightSidebarWidth(next);
       },
     }),
-    [maxWidth, workspace],
+    [changeLocalWidth, maxWidth, onChangeAppRightSidebarWidth],
   );
 
   if (!workspace.appRightSidebarPanel) return null;
 
   return (
-    <View style={[workspace.styles.appRightSidebar, { width: clamp(workspace.appRightSidebarWidth, APP_RIGHT_SIDEBAR_MIN_WIDTH, maxWidth) }]}>
-      <View style={workspace.styles.appRightSidebarResizeHandle} {...resizePanResponder.panHandlers}>
-        <View style={workspace.styles.appRightSidebarResizeGrip}>
-          <View style={workspace.styles.appRightSidebarResizeDot} />
-          <View style={workspace.styles.appRightSidebarResizeDot} />
-          <View style={workspace.styles.appRightSidebarResizeDot} />
-        </View>
-      </View>
+    <View style={[workspace.styles.appRightSidebar, { width: localWidth }]}>
+      <View style={workspace.styles.appRightSidebarResizeHandle} {...resizePanResponder.panHandlers} />
       <View style={workspace.styles.appRightSidebarBody}>
         {workspace.appRightSidebarPanel === 'chat' ? <NotesAiAssistantPanel /> : <NotesAiCanvasPanel />}
       </View>
