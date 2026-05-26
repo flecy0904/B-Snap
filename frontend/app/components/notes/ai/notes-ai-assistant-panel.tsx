@@ -297,6 +297,15 @@ export function NotesAiAssistantPanel() {
     setMenuSessionId(null);
   };
 
+  const closeChatPanel = () => {
+    closeOpenMenus();
+    if (workspace.isAppChatSidebarPanel) {
+      workspace.onCloseAppRightSidebar?.();
+      return;
+    }
+    workspace.onToggleAiPanel?.();
+  };
+
   const togglePanelMode = () => {
     if (workspace.isAppChatSidebarPanel) {
       closeOpenMenus();
@@ -496,10 +505,6 @@ export function NotesAiAssistantPanel() {
           ]}
           {...(workspace.aiPanelMode === 'floating' && !appChatSidebar ? floatingPanResponder.panHandlers : {})}
         >
-          <Pressable style={workspace.styles.aiHeaderIconButton} onPress={openSidebar}>
-            <MaterialCommunityIcons name="menu" size={20} color="#303744" />
-          </Pressable>
-
           <View style={workspace.styles.aiHeaderTitleWrap}>
             {headerEditing && activeSession ? (
               <View style={workspace.styles.aiHeaderEditRow}>
@@ -532,36 +537,52 @@ export function NotesAiAssistantPanel() {
 
           <View style={workspace.styles.aiHeaderActions}>
             <Pressable
-              style={[workspace.styles.aiHeaderIconButton, workspace.aiPanelMode === 'sidebar' && workspace.styles.aiHeaderIconButtonActive]}
+              style={workspace.styles.aiHeaderIconButton}
               onPress={togglePanelMode}
             >
               <MaterialCommunityIcons name={workspace.aiPanelMode === 'floating' ? 'dock-left' : 'window-restore'} size={18} color="#303744" />
             </Pressable>
-            <Pressable style={workspace.styles.aiHeaderNewChatButton} onPress={startNewChat} disabled={workspace.aiLoading}>
-              <MaterialCommunityIcons name="square-edit-outline" size={16} color="#303744" />
-              <Text style={workspace.styles.aiHeaderNewChatButtonText}>새 채팅</Text>
+            <Pressable style={workspace.styles.aiHeaderIconButton} onPress={startNewChat} disabled={workspace.aiLoading}>
+              <MaterialCommunityIcons name="square-edit-outline" size={18} color="#303744" />
             </Pressable>
             <View style={workspace.styles.aiHeaderMenuWrap}>
               <Pressable
-                style={[workspace.styles.aiHeaderIconButton, !canManageActiveSession && workspace.styles.aiHeaderIconButtonDisabled]}
-                onPress={() => canManageActiveSession && setHeaderMenuOpen((current) => !current)}
-                disabled={!canManageActiveSession || workspace.aiLoading}
+                style={workspace.styles.aiHeaderIconButton}
+                onPress={() => {
+                  workspace.onLoadAllAiChatSessions();
+                  setHeaderMenuOpen((current) => !current);
+                }}
+                disabled={workspace.aiLoading}
               >
-                <MaterialCommunityIcons name="dots-vertical" size={20} color={canManageActiveSession ? '#303744' : '#A0A7B3'} />
+                <MaterialCommunityIcons name="dots-vertical" size={20} color="#303744" />
               </Pressable>
-              {headerMenuOpen && activeSession && !workspace.aiChatReadOnly ? (
-                <View style={workspace.styles.aiHeaderContextMenu}>
-                  <Pressable style={workspace.styles.aiSidebarContextMenuItem} onPress={startHeaderEditing}>
-                    <MaterialCommunityIcons name="pencil-outline" size={15} color="#111827" />
-                    <Text style={workspace.styles.aiSidebarContextMenuText}>이름 바꾸기</Text>
-                  </Pressable>
-                  <Pressable style={workspace.styles.aiSidebarContextMenuItem} onPress={() => confirmRemoveSession(activeSession.id, activeSession.title)}>
-                    <MaterialCommunityIcons name="trash-can-outline" size={15} color="#C04B4B" />
-                    <Text style={[workspace.styles.aiSidebarContextMenuText, workspace.styles.aiSidebarContextMenuDanger]}>삭제하기</Text>
-                  </Pressable>
+              {headerMenuOpen ? (
+                <View style={workspace.styles.aiHeaderRecentMenu}>
+                  {sidebarSessions.length ? sidebarSessions.slice(0, 8).map((session: any) => {
+                    const active = session.id === workspace.activeAiChatSessionId;
+                    return (
+                      <Pressable
+                        key={session.id}
+                        style={[workspace.styles.aiHeaderRecentMenuItem, active && workspace.styles.aiHeaderRecentMenuItemActive]}
+                        onPress={() => {
+                          void workspace.onSelectAiChatSession(session.id);
+                          closeOpenMenus();
+                        }}
+                      >
+                        <Text style={[workspace.styles.aiHeaderRecentMenuText, active && workspace.styles.aiHeaderRecentMenuTextActive]} numberOfLines={1}>
+                          {session.title}
+                        </Text>
+                      </Pressable>
+                    );
+                  }) : (
+                    <Text style={workspace.styles.aiSidebarEmptyText}>최근 대화가 없습니다</Text>
+                  )}
                 </View>
               ) : null}
             </View>
+            <Pressable style={workspace.styles.aiHeaderIconButton} onPress={closeChatPanel}>
+              <MaterialCommunityIcons name="close" size={20} color="#303744" />
+            </Pressable>
           </View>
         </View>
 
