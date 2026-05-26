@@ -9,6 +9,8 @@ const FLOATING_PANEL_WIDTH = 300;
 const FLOATING_PANEL_HEIGHT = 620;
 const FLOATING_PANEL_TOP = 66;
 const FLOATING_PANEL_MARGIN = 8;
+const APP_DETACHED_PANEL_WIDTH = 380;
+const APP_DETACHED_PANEL_TOP = 60;
 const SIDEBAR_MIN_WIDTH = 300;
 const SIDEBAR_DEFAULT_WIDTH = 340;
 
@@ -94,10 +96,29 @@ export function NotesAiAssistantPanel() {
     () => new Set(workspace.noteAiChatSessions.map((session: any) => session.id)),
     [workspace.noteAiChatSessions],
   );
+  const appFloatingChat = Boolean(
+    workspace.usesAppAiPanelLayout
+    && workspace.appChatMode === 'floating'
+    && workspace.aiPanelMode === 'floating',
+  );
+  const appChatSidebar = Boolean(workspace.isAppChatSidebarPanel);
+  const floatingPanelWidth = appFloatingChat ? APP_DETACHED_PANEL_WIDTH : FLOATING_PANEL_WIDTH;
   const floatingPanelHeight = getFloatingPanelHeight(height, floatingPosition.y);
-  const floatingMaxX = Math.max(FLOATING_PANEL_MARGIN, width - FLOATING_PANEL_WIDTH - FLOATING_PANEL_MARGIN);
+  const floatingMaxX = Math.max(FLOATING_PANEL_MARGIN, width - floatingPanelWidth - FLOATING_PANEL_MARGIN);
   const floatingMaxY = Math.max(FLOATING_PANEL_TOP, height - 360 - FLOATING_PANEL_MARGIN);
   const sidebarMaxWidth = Math.max(SIDEBAR_MIN_WIDTH, Math.floor(width * 0.5));
+
+  React.useEffect(() => {
+    if (!appFloatingChat) return;
+    const next = {
+      x: Math.max(FLOATING_PANEL_MARGIN, width - APP_DETACHED_PANEL_WIDTH - 10),
+      y: APP_DETACHED_PANEL_TOP,
+    };
+    floatingPositionRef.current = next;
+    setFloatingPosition(next);
+    floatingAnimatedPosition.setValue(next);
+    floatingAnimatedHeight.setValue(getFloatingPanelHeight(height, next.y));
+  }, [appFloatingChat, floatingAnimatedHeight, floatingAnimatedPosition, height, width]);
 
   React.useEffect(() => {
     setFloatingPosition((current) => ({
@@ -277,12 +298,22 @@ export function NotesAiAssistantPanel() {
   };
 
   const togglePanelMode = () => {
+    if (workspace.isAppChatSidebarPanel) {
+      closeOpenMenus();
+      workspace.onFloatAppAiChatPanel?.();
+      return;
+    }
+    if (workspace.usesAppAiPanelLayout && workspace.appChatMode === 'floating') {
+      closeOpenMenus();
+      workspace.onDockAppAiChatPanel?.();
+      return;
+    }
     closeOpenMenus();
     workspace.onChangeAiPanelMode(workspace.aiPanelMode === 'floating' ? 'sidebar' : 'floating');
   };
 
   const scrollToLatestMessage = React.useCallback(() => {
-    window.setTimeout(() => {
+    setTimeout(() => {
       messagesScrollRef.current?.scrollToEnd({ animated: true });
     }, 40);
   }, []);
@@ -340,10 +371,18 @@ export function NotesAiAssistantPanel() {
     }],
   };
 
-  if (!workspace.aiPanelOpen) return null;
-  const panelStyle = workspace.aiPanelMode === 'floating'
-    ? [workspace.styles.aiPanel, { left: floatingAnimatedPosition.x, top: floatingAnimatedPosition.y, bottom: undefined, height: floatingAnimatedHeight }]
-    : [workspace.styles.aiPanel, workspace.styles.aiPanelSidebar, { width: sidebarWidth }];
+  if (!workspace.aiPanelOpen && !appChatSidebar) return null;
+  const panelStyle = appChatSidebar
+    ? [workspace.styles.aiPanel, workspace.styles.appRightSidebarPanelContent]
+    : appFloatingChat
+      ? [
+          workspace.styles.aiPanel,
+          workspace.styles.appFloatingAiChatPanel,
+          { left: floatingAnimatedPosition.x, top: floatingAnimatedPosition.y, right: undefined, bottom: undefined, height: floatingAnimatedHeight },
+        ]
+    : workspace.aiPanelMode === 'floating'
+      ? [workspace.styles.aiPanel, { left: floatingAnimatedPosition.x, top: floatingAnimatedPosition.y, bottom: undefined, height: floatingAnimatedHeight }]
+      : [workspace.styles.aiPanel, workspace.styles.aiPanelSidebar, { width: sidebarWidth }];
 
   return (
     <Animated.View style={panelStyle}>
@@ -448,7 +487,15 @@ export function NotesAiAssistantPanel() {
         {headerMenuOpen ? (
           <Pressable style={workspace.styles.aiHomeMenuDismissLayer} onPress={closeOpenMenus} />
         ) : null}
-        <View style={[workspace.styles.aiPanelHeader, workspace.aiPanelMode === 'floating' && workspace.styles.aiPanelHeaderDraggable]} {...(workspace.aiPanelMode === 'floating' ? floatingPanResponder.panHandlers : {})}>
+        <View
+          style={[
+            workspace.styles.aiPanelHeader,
+            workspace.aiPanelMode === 'floating'
+              && !appChatSidebar
+              && workspace.styles.aiPanelHeaderDraggable,
+          ]}
+          {...(workspace.aiPanelMode === 'floating' && !appChatSidebar ? floatingPanResponder.panHandlers : {})}
+        >
           <Pressable style={workspace.styles.aiHeaderIconButton} onPress={openSidebar}>
             <MaterialCommunityIcons name="menu" size={20} color="#303744" />
           </Pressable>
@@ -631,6 +678,7 @@ export function NotesAiAssistantPanel() {
             <TextInput
               value={workspace.aiQuestion}
               onChangeText={workspace.onChangeAiQuestion}
+              onFocus={() => workspace.onFocusWorkspaceTarget?.(null)}
               placeholder={workspace.selectionRect || workspace.selectionPreviewUri ? '선택 영역에 대해 물어보세요' : '메시지 입력'}
               placeholderTextColor="#8F96A3"
               multiline
@@ -647,7 +695,7 @@ export function NotesAiAssistantPanel() {
       {sidebarVisible ? (
         <Pressable style={workspace.styles.aiSidebarHomeDismissLayer} onPress={closeSidebar} />
       ) : null}
-      {workspace.aiPanelMode === 'sidebar' ? (
+      {workspace.aiPanelMode === 'sidebar' && !workspace.usesAppAiPanelLayout ? (
         <View style={workspace.styles.aiPanelSidebarResizeHandle} {...sidebarResizePanResponder.panHandlers}>
           <View style={workspace.styles.aiPanelSidebarResizeGrip}>
             <View style={workspace.styles.aiPanelSidebarResizeDot} />
