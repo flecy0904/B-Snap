@@ -77,6 +77,7 @@ export function useStudyWorkspace(props: {
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
   const [aiPanelMode, setAiPanelMode] = useState<'floating' | 'sidebar'>('floating');
   const [selectionByDocument, setSelectionByDocument] = useState<Record<number, SelectionRect | null>>({});
+  const [copiedSelectionImageByDocument, setCopiedSelectionImageByDocument] = useState<Record<number, string | null>>({});
   const [aiQuestion, setAiQuestion] = useState('');
   const [incomingAssetSuggestion, setIncomingAssetSuggestion] = useState<CaptureAsset | null>(null);
   const [captureAssetsBySubject, setCaptureAssetsBySubject] = useState<Record<number, CaptureAsset[]>>({});
@@ -733,6 +734,19 @@ export function useStudyWorkspace(props: {
     setSelectionPreviewByDocument((current) => ({ ...current, [studyDocumentId]: uri }));
   };
 
+  const copySelectionImage = useCallback(() => {
+    if (!studyDocumentId || !selectionRect) {
+      setWorkspaceFeedback('복사할 선택 영역을 먼저 선택해 주세요.');
+      return;
+    }
+    if (!selectionPreviewUri) {
+      setWorkspaceFeedback('선택 영역 미리보기를 준비 중입니다. 잠시 후 다시 복사해 주세요.');
+      return;
+    }
+    setCopiedSelectionImageByDocument((current) => ({ ...current, [studyDocumentId]: selectionPreviewUri }));
+    setWorkspaceFeedback('선택 영역을 복사했습니다. Canvas 입력창에 붙여넣어 첨부할 수 있습니다.');
+  }, [selectionPreviewUri, selectionRect, studyDocumentId]);
+
   const {
     updateAssetStatus,
     findCaptureAssetById,
@@ -863,10 +877,11 @@ export function useStudyWorkspace(props: {
     requestAiAnswerForQuestion,
   });
 
-  const requestAiCanvasCommand = useCallback(async (command: string) => (
+  const requestAiCanvasCommand = useCallback(async (command: string, options?: { selectionImageUri?: string | null }) => (
     requestAiAnswer({
       question: command,
       source: 'canvas-mini',
+      selectionImageUri: options?.selectionImageUri ?? null,
     })
   ), [requestAiAnswer]);
 
@@ -1100,6 +1115,7 @@ export function useStudyWorkspace(props: {
     aiPanelMode,
     selectionRect,
     selectionPreviewUri,
+    copiedSelectionImageUri: studyDocumentId ? copiedSelectionImageByDocument[studyDocumentId] ?? null : null,
     aiQuestion,
     aiAnswer,
     aiMessages,
@@ -1190,6 +1206,7 @@ export function useStudyWorkspace(props: {
     insertAiAnswerPage,
     changeSelection,
     changeSelectionPreview,
+    copySelectionImage,
     clearCurrentSelection,
     undoInk,
     redoInk,

@@ -494,8 +494,12 @@ export function FloatingToolPalette() {
               <MaterialCommunityIcons name="star-four-points" size={15} color="#FFFFFF" />
               <Text style={workspaceContext.styles.selectionActionPrimaryText}>AI</Text>
             </Pressable>
-            <Pressable style={workspaceContext.styles.selectionActionButton} onPress={canvasContext.duplicateSelectedStrokes}>
+            <Pressable style={workspaceContext.styles.selectionActionButton} onPress={canvasContext.copySelectionImage}>
               <MaterialCommunityIcons name="content-copy" size={15} color="#455062" />
+              <Text style={workspaceContext.styles.selectionActionButtonText}>복사</Text>
+            </Pressable>
+            <Pressable style={workspaceContext.styles.selectionActionButton} onPress={canvasContext.duplicateSelectedStrokes}>
+              <MaterialCommunityIcons name="content-duplicate" size={15} color="#455062" />
               <Text style={workspaceContext.styles.selectionActionButtonText}>복제</Text>
             </Pressable>
             <Pressable

@@ -355,6 +355,7 @@ def create_ai_chat_message(
                 canvas_title=canvas_note["title"],
                 canvas_markdown=canvas_note["markdown"],
                 current_page_number=payload.page_number,
+                selection_image=payload.selection_image,
                 selection_image_url=payload.selection_image_url,
             )
             canvas_title = canvas_note["title"]

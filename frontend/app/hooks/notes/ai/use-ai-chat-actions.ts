@@ -355,9 +355,18 @@ export function useAiChatActions(params: {
       return false;
     }
 
-    const selectionRect = params.selectionRect;
-    const hasSelection = Boolean(selectionRect || params.selectionPreviewUri);
-    const selectionPreviewUri = override?.selectionImageUri ?? params.selectionPreviewUri;
+    const explicitSelectionImageUri = Object.prototype.hasOwnProperty.call(override ?? {}, 'selectionImageUri')
+      ? override?.selectionImageUri ?? null
+      : undefined;
+    const selectionPreviewUri = explicitSelectionImageUri !== undefined
+      ? explicitSelectionImageUri
+      : override?.source === 'canvas-mini'
+        ? null
+        : params.selectionPreviewUri;
+    const selectionRect = override?.source === 'canvas-mini' && !selectionPreviewUri
+      ? null
+      : params.selectionRect;
+    const hasSelection = Boolean(selectionRect || selectionPreviewUri);
     const shouldHideSelectionAttachment = Boolean(selectionRect || params.selectionPreviewUri);
     const rawQuestion = override?.question?.trim() ?? params.aiQuestion.trim();
     if (override?.source === 'canvas-mini' && !rawQuestion) return false;
@@ -371,9 +380,9 @@ export function useAiChatActions(params: {
     params.setAiLoading(true);
     params.setAiError(null);
     params.setAiQuestion('');
-    if (hasSelection) {
+    if (hasSelection && override?.source !== 'canvas-mini') {
       params.clearSelection?.();
-    } else if (selectionPreviewUri) {
+    } else if (selectionPreviewUri && override?.source !== 'canvas-mini') {
       params.setSelectionPreviewByDocument((current) => ({ ...current, [params.studyDocumentId!]: null }));
     }
     let aiRequestStage: 'chat-session' | 'ai-answer' = 'ai-answer';
@@ -516,6 +525,7 @@ export function useAiChatActions(params: {
     question?: string;
     source?: 'chat' | 'canvas-mini';
     canvasAction?: CanvasAction;
+    selectionImageUri?: string | null;
   }) => requestAiAnswerInternal(options);
 
   const requestAiAnswerForQuestion = async (question: string, options?: {

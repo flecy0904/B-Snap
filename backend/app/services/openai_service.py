@@ -285,6 +285,7 @@ def generate_ai_canvas_edit_from_chat(
     canvas_title: str,
     canvas_markdown: str,
     current_page_number: int | None = None,
+    selection_image: str | None = None,
     selection_image_url: str | None = None,
 ) -> str:
     input_items: list[dict[str, Any]] = [
@@ -324,12 +325,13 @@ def generate_ai_canvas_edit_from_chat(
             role = message["role"] if message["role"] in {"user", "assistant"} else "user"
             input_items.append({"role": role, "content": message["content"]})
 
-    if selection_image_url:
+    image_url = _prepare_input_image_url(selection_image or selection_image_url)
+    if image_url:
         input_items.append({
             "role": "user",
             "content": [
                 {"type": "input_text", "text": "Selected region image for the user's request:"},
-                {"type": "input_image", "image_url": selection_image_url},
+                {"type": "input_image", "image_url": image_url},
             ],
         })
 

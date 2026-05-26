@@ -220,6 +220,7 @@ export function AppShell(props: {
                   aiPanelMode={notesState.aiPanelMode}
                   selectionRect={notesState.selectionRect}
                   selectionPreviewUri={notesState.selectionPreviewUri}
+                  copiedSelectionImageUri={notesState.copiedSelectionImageUri}
                   aiQuestion={notesState.aiQuestion}
                   aiAnswer={notesState.aiAnswer}
                   aiMessages={notesState.aiMessages}
@@ -283,6 +284,7 @@ export function AppShell(props: {
                   onInsertAiAnswerPage={notesState.insertAiAnswerPage}
                   onSelectionChange={notesState.changeSelection}
                   onSelectionPreviewChange={notesState.changeSelectionPreview}
+                  onCopySelectionImage={notesState.copySelectionImage}
                   onClearSelection={notesState.clearCurrentSelection}
                   onUndoInk={notesState.undoInk}
                   onRedoInk={notesState.redoInk}
