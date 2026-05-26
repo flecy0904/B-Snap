@@ -30,7 +30,7 @@ export type AiChatActions = {
   removeAiChatSession: (sessionId: number) => Promise<void>;
   createAiChatSession: () => Promise<void>;
   startNewAiChatSession: () => void;
-  requestAiAnswer: () => Promise<void>;
+  requestAiAnswer: () => Promise<boolean>;
 };
 
 const AiChatContext = createContext<(AiChatState & AiChatActions) | null>(null);

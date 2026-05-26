@@ -20,6 +20,10 @@ export function getAiBackendErrorMessage(error: unknown, fallbackMessage: string
       return 'AI 제공자 응답을 받아오지 못했습니다. API 키, 결제/사용량 한도, 모델 설정을 확인해 주세요.';
     }
 
+    if (error.status === 409 && detail.includes('canvas')) {
+      return 'Canvas는 노트당 최대 3개까지 만들 수 있습니다.';
+    }
+
     if (error.status >= 500) {
       return 'DB 연결 상태를 확인해 주세요.';
     }
