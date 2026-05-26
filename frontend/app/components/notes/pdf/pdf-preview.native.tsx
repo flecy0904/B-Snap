@@ -13,7 +13,7 @@ import { shouldActivateNativeInkGesture, type NativeGestureStateManager, type Na
 import { getCaptureOriginalImageSource, getPageCaptureReferenceImageSource } from '../shared/capture-assets';
 import { AndroidNativePdfViewport } from './android-native-pdf-viewport';
 import { cleanAiDisplayText, finalizeInkStroke, findHitInkStrokeId, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize, shouldAppendInkPoint } from '../../../ui-helpers';
-import { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
+import { InkBrush, InkBrushSettings, InkEraserMode, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { CaptureAsset, NotebookPage, PageCaptureReference } from '../../../types';
 import { renderPdfPageToImage, type PdfRenderSource, type RenderedPdfPage } from '../../../services/pdf-page-renderer';
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
@@ -260,6 +260,8 @@ export function PdfPreview(props: {
   penWidth: number;
   brushType: InkBrush;
   linePattern: InkLinePattern;
+  eraserMode?: InkEraserMode;
+  eraserWidth?: number;
   selectionMode?: InkSelectionMode;
   brushSettings?: InkBrushSettings;
   inkStrokes: InkStroke[];
@@ -277,6 +279,10 @@ export function PdfPreview(props: {
   onSelectionChange: (rect: SelectionRect | null) => void;
   onMoveSelection?: (dx: number, dy: number) => void;
   onResizeSelection?: (rect: SelectionRect) => void;
+  onAskAiAboutSelection?: (selectionPreviewUri?: string | null) => void;
+  onDuplicateSelection?: () => void;
+  onDeleteSelection?: () => void;
+  onChangeSelectedStrokesColor?: (color: string) => void;
   onSelectionPreviewChange?: (uri: string | null) => void;
   onPageChanged?: (page: number) => void;
   onOpenGeneratedPage?: (pageId: string) => void;
@@ -290,6 +296,7 @@ export function PdfPreview(props: {
   onDismissIncomingAsset?: () => void;
   onOpenPageCaptureReference?: (referenceId: string) => void;
   onAskAiAboutPageCaptureReference?: (referenceId: string) => void;
+  onChangeInkTool?: (tool: InkTool) => void;
   styles: any;
 }) {
   if (Platform.OS === 'android' || Platform.OS === 'ios') {
