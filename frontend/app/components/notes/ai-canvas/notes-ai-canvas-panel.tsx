@@ -4,6 +4,8 @@ import { ActivityIndicator, Image, Pressable, Text, TextInput, View } from 'reac
 
 import { useDesktopNotesWorkspaceContext } from '../workspace/notes-workspace-context';
 
+const AI_CANVAS_MINI_PROMPTS = ['마무리 다듬기', '수준 조정', '길이 조절'];
+
 export function NotesAiCanvasPanel() {
   const workspace = useDesktopNotesWorkspaceContext();
   const canvas = workspace.aiCanvas;
@@ -17,7 +19,9 @@ export function NotesAiCanvasPanel() {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = React.useState(false);
   const [miniCommand, setMiniCommand] = React.useState('');
   const [miniSelectionImageUri, setMiniSelectionImageUri] = React.useState<string | null>(null);
+  const [miniComposerOpen, setMiniComposerOpen] = React.useState(false);
   const isAppAiCanvasSidebar = Boolean(workspace.isAppAiCanvasSidebarPanel);
+  const miniCommandReady = Boolean(miniCommand.trim());
 
   const noteActionMenuNote = React.useMemo(
     () => canvas.notes.find((note) => note.id === noteActionMenuId) ?? null,
@@ -73,7 +77,13 @@ export function NotesAiCanvasPanel() {
     if (sent) {
       setMiniCommand('');
       setMiniSelectionImageUri(null);
+      setMiniComposerOpen(false);
     }
+  };
+  const closeMiniComposer = () => {
+    setMiniCommand('');
+    setMiniSelectionImageUri(null);
+    setMiniComposerOpen(false);
   };
   const pasteCopiedSelectionImage = () => {
     if (!workspace.copiedSelectionImageUri) return;
@@ -90,8 +100,14 @@ export function NotesAiCanvasPanel() {
     if (workspace.aiPanelOpen) return null;
 
     return (
-      <View style={workspace.styles.aiCanvasMiniComposer}>
-        {miniSelectionImageUri ? (
+      <View
+        pointerEvents="box-none"
+        style={[
+          workspace.styles.aiCanvasMiniComposer,
+          !miniComposerOpen && workspace.styles.aiCanvasMiniComposerFloating,
+        ]}
+      >
+        {miniComposerOpen && miniSelectionImageUri ? (
           <View style={workspace.styles.aiCanvasMiniAttachment}>
             <Image source={{ uri: miniSelectionImageUri }} style={workspace.styles.aiCanvasMiniAttachmentImage} resizeMode="cover" />
             <Pressable
@@ -101,38 +117,66 @@ export function NotesAiCanvasPanel() {
               <MaterialCommunityIcons name="close" size={12} color="#FFFFFF" />
             </Pressable>
           </View>
-        ) : workspace.copiedSelectionImageUri ? (
+        ) : miniComposerOpen && workspace.copiedSelectionImageUri ? (
           <Pressable style={workspace.styles.aiCanvasPasteSelectionButton} onPress={pasteCopiedSelectionImage}>
             <MaterialCommunityIcons name="content-paste" size={14} color="#405CD1" />
             <Text style={workspace.styles.aiCanvasPasteSelectionText}>복사한 선택 영역 붙여넣기</Text>
           </Pressable>
         ) : null}
-        <View style={workspace.styles.aiCanvasMiniInputBar}>
-          <TextInput
-            value={miniCommand}
-            onChangeText={setMiniCommand}
-            placeholder="AI에게 수정 요청"
-            placeholderTextColor="#8F96A3"
-            style={workspace.styles.aiCanvasMiniInput}
-            multiline
-            editable={!workspace.aiLoading}
-            onSubmitEditing={submitMiniCommand}
-          />
-          <Pressable
-            style={[
-              workspace.styles.aiCanvasMiniSendButton,
-              (!miniCommand.trim() || workspace.aiLoading) && workspace.styles.aiCanvasMiniSendButtonDisabled,
-            ]}
-            onPress={submitMiniCommand}
-            disabled={!miniCommand.trim() || workspace.aiLoading}
-          >
-            {workspace.aiLoading ? (
-              <ActivityIndicator size="small" color="#FFFFFF" />
-            ) : (
-              <MaterialCommunityIcons name="arrow-up" size={18} color="#FFFFFF" />
-            )}
-          </Pressable>
-        </View>
+        {miniComposerOpen ? (
+          <View style={workspace.styles.aiCanvasMiniQuickRow}>
+            {AI_CANVAS_MINI_PROMPTS.map((prompt) => (
+              <Pressable
+                key={prompt}
+                style={workspace.styles.aiCanvasMiniQuickChip}
+                onPress={() => setMiniCommand(prompt)}
+                disabled={workspace.aiLoading}
+              >
+                <Text style={workspace.styles.aiCanvasMiniQuickChipText}>{prompt}</Text>
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
+        {miniComposerOpen ? (
+          <View style={workspace.styles.aiCanvasMiniInputBar}>
+            <TextInput
+              value={miniCommand}
+              onChangeText={setMiniCommand}
+              placeholder="AI에게 수정 요청"
+              placeholderTextColor="#8F96A3"
+              style={workspace.styles.aiCanvasMiniInput}
+              multiline
+              editable={!workspace.aiLoading}
+              onSubmitEditing={submitMiniCommand}
+              autoFocus
+            />
+            <Pressable
+              style={[
+                workspace.styles.aiCanvasMiniSendButton,
+                workspace.aiLoading && workspace.styles.aiCanvasMiniSendButtonDisabled,
+              ]}
+              onPress={miniCommandReady ? submitMiniCommand : closeMiniComposer}
+              disabled={workspace.aiLoading}
+            >
+              {workspace.aiLoading ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : miniCommandReady ? (
+                <MaterialCommunityIcons name="arrow-up" size={18} color="#FFFFFF" />
+              ) : (
+                <MaterialCommunityIcons name="close" size={18} color="#FFFFFF" />
+              )}
+            </Pressable>
+          </View>
+        ) : (
+          <View style={workspace.styles.aiCanvasMiniFabAnchor}>
+            <Pressable
+              style={workspace.styles.aiCanvasMiniSendButton}
+              onPress={() => setMiniComposerOpen(true)}
+            >
+              <MaterialCommunityIcons name="pencil-outline" size={20} color="#FFFFFF" />
+            </Pressable>
+          </View>
+        )}
       </View>
     );
   };
