@@ -68,6 +68,39 @@ export function NotesAiCanvasPanel() {
     const sent = await workspace.onRequestAiCanvasCommand(command);
     if (sent) setMiniCommand('');
   };
+  const renderMiniCommandInput = () => {
+    if (workspace.aiPanelOpen) return null;
+
+    return (
+      <View style={workspace.styles.aiCanvasMiniInputBar}>
+        <TextInput
+          value={miniCommand}
+          onChangeText={setMiniCommand}
+          placeholder="이 Canvas에 추가하거나 수정할 내용을 입력하세요"
+          placeholderTextColor="#9AA3B2"
+          style={workspace.styles.aiCanvasMiniInput}
+          multiline
+          textAlignVertical="center"
+          editable={!workspace.aiLoading}
+          onSubmitEditing={submitMiniCommand}
+        />
+        <Pressable
+          style={[
+            workspace.styles.aiCanvasMiniSendButton,
+            (!miniCommand.trim() || workspace.aiLoading) && workspace.styles.aiCanvasMiniSendButtonDisabled,
+          ]}
+          onPress={submitMiniCommand}
+          disabled={!miniCommand.trim() || workspace.aiLoading}
+        >
+          {workspace.aiLoading ? (
+            <ActivityIndicator size="small" color="#FFFFFF" />
+          ) : (
+            <MaterialCommunityIcons name="arrow-up" size={18} color="#FFFFFF" />
+          )}
+        </Pressable>
+      </View>
+    );
+  };
 
   return (
     <View style={workspace.styles.aiCanvasPanel}>
@@ -214,73 +247,17 @@ export function NotesAiCanvasPanel() {
                 textAlignVertical="top"
                 style={workspace.styles.aiCanvasMarkdownInput}
               />
-              {!workspace.aiPanelOpen ? (
-                <View style={workspace.styles.aiCanvasMiniInputBar}>
-                  <TextInput
-                    value={miniCommand}
-                    onChangeText={setMiniCommand}
-                    placeholder="이 Canvas에 추가하거나 수정할 내용을 입력하세요"
-                    placeholderTextColor="#9AA3B2"
-                    style={workspace.styles.aiCanvasMiniInput}
-                    multiline
-                    textAlignVertical="center"
-                    editable={!workspace.aiLoading}
-                    onSubmitEditing={submitMiniCommand}
-                  />
-                  <Pressable
-                    style={[
-                      workspace.styles.aiCanvasMiniSendButton,
-                      (!miniCommand.trim() || workspace.aiLoading) && workspace.styles.aiCanvasMiniSendButtonDisabled,
-                    ]}
-                    onPress={submitMiniCommand}
-                    disabled={!miniCommand.trim() || workspace.aiLoading}
-                  >
-                    {workspace.aiLoading ? (
-                      <ActivityIndicator size="small" color="#FFFFFF" />
-                    ) : (
-                      <MaterialCommunityIcons name="arrow-up" size={18} color="#FFFFFF" />
-                    )}
-                  </Pressable>
-                </View>
-              ) : null}
+              {renderMiniCommandInput()}
             </View>
           ) : (
-            <>
-              <View style={workspace.styles.aiCanvasStateCard}>
-                <MaterialCommunityIcons name="note-edit-outline" size={22} color="#6D7890" />
-                <Text style={workspace.styles.aiCanvasStateTitle}>아직 Canvas Note가 없습니다.</Text>
-                <Text style={workspace.styles.aiCanvasStateBody}>새 Canvas를 만들어 요약이나 정리 내용을 저장하세요.</Text>
+            <View style={workspace.styles.aiCanvasEditorShell}>
+              <View style={workspace.styles.aiCanvasEmptyState}>
+                <Text style={workspace.styles.aiCanvasEmptyText}>
+                  새 Canvas를 만들어 요약이나 정리 내용을 저장해주세요.
+                </Text>
               </View>
-              {!workspace.aiPanelOpen ? (
-                <View style={workspace.styles.aiCanvasMiniInputBar}>
-                  <TextInput
-                    value={miniCommand}
-                    onChangeText={setMiniCommand}
-                    placeholder="이 Canvas에 추가하거나 수정할 내용을 입력하세요"
-                    placeholderTextColor="#9AA3B2"
-                    style={workspace.styles.aiCanvasMiniInput}
-                    multiline
-                    textAlignVertical="center"
-                    editable={!workspace.aiLoading}
-                    onSubmitEditing={submitMiniCommand}
-                  />
-                  <Pressable
-                    style={[
-                      workspace.styles.aiCanvasMiniSendButton,
-                      (!miniCommand.trim() || workspace.aiLoading) && workspace.styles.aiCanvasMiniSendButtonDisabled,
-                    ]}
-                    onPress={submitMiniCommand}
-                    disabled={!miniCommand.trim() || workspace.aiLoading}
-                  >
-                    {workspace.aiLoading ? (
-                      <ActivityIndicator size="small" color="#FFFFFF" />
-                    ) : (
-                      <MaterialCommunityIcons name="arrow-up" size={18} color="#FFFFFF" />
-                    )}
-                  </Pressable>
-                </View>
-              ) : null}
-            </>
+              {renderMiniCommandInput()}
+            </View>
           )}
         </>
       )}
