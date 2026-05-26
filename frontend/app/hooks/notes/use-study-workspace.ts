@@ -832,7 +832,6 @@ export function useStudyWorkspace(props: {
     activeCanvasNoteId: aiCanvas.activeNoteId,
     onApplyCanvasEditFromChat: aiCanvas.applyChatCanvasEdit,
     clearSelection: clearSelectionForCurrentDocument,
-    onRequestCanvasEditFromChat: aiCanvas.requestAiEditFromChat,
     buildContextHint: (question) => buildClassInsightContext({
       question,
       studyDocument,

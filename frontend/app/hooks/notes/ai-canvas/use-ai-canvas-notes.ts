@@ -5,17 +5,13 @@ import {
   deleteBackendAiCanvasNote,
   getBackendAiCanvasNote,
   listBackendAiCanvasNotes,
-  requestBackendAiCanvasEdit,
   updateBackendAiCanvasNote,
   type BackendAiCanvasNote,
   type BackendAiCanvasNoteSummary,
 } from '../../../services/backend-api';
 
-export type AiCanvasMode = 'preview' | 'edit';
-
 export type UseAiCanvasNotesResult = {
   isOpen: boolean;
-  mode: AiCanvasMode;
   notes: BackendAiCanvasNoteSummary[];
   activeNote: BackendAiCanvasNote | null;
   activeNoteId: number | null;
@@ -23,8 +19,6 @@ export type UseAiCanvasNotesResult = {
   loading: boolean;
   saving: boolean;
   error: string | null;
-  aiDraftMarkdown: string | null;
-  aiEditing: boolean;
   enabled: boolean;
   canCreateNote: boolean;
   canUndo: boolean;
@@ -34,7 +28,6 @@ export type UseAiCanvasNotesResult = {
   open: () => void;
   close: () => void;
   toggle: () => void;
-  setMode: (mode: AiCanvasMode) => void;
   selectNote: (noteId: number) => void;
   setMarkdownDraft: (value: string) => void;
   createNote: () => Promise<void>;
@@ -45,9 +38,6 @@ export type UseAiCanvasNotesResult = {
   deleteActiveNote: () => Promise<void>;
   ensureNoteForChatEdit: () => Promise<{ note: BackendAiCanvasNote; needsTitle: boolean } | null>;
   applyChatCanvasEdit: (payload: { action: 'canvas_edit' | 'canvas_create'; canvasNote: BackendAiCanvasNote }) => void;
-  requestAiEditFromChat: (payload: { question: string; answer: string }) => Promise<void>;
-  applyAiDraft: () => void;
-  discardAiDraft: () => void;
   undoCanvasEdit: () => void;
   redoCanvasEdit: () => void;
 };
@@ -69,21 +59,6 @@ function hasMeaningfulUndoState(markdown: string) {
   return Boolean(normalized) && normalized !== DEFAULT_CANVAS_MARKDOWN;
 }
 
-function buildChatCanvasInstruction({ question, answer }: { question: string; answer: string }) {
-  return [
-    '사용자가 AI Chat에서 Canvas 수정을 요청했습니다.',
-    '',
-    '사용자 요청:',
-    question,
-    '',
-    'AI Chat이 현재 노트/페이지 맥락을 참고해 만든 답변:',
-    answer,
-    '',
-    '위 답변을 현재 Canvas Note에 자연스럽게 반영해 주세요.',
-    '기존 내용과 겹치면 중복을 줄이고, 필요한 경우 적절한 제목과 bullet로 정리해 주세요.',
-  ].join('\n');
-}
-
 export function useAiCanvasNotes({
   noteId,
   enabled,
@@ -98,7 +73,6 @@ export function useAiCanvasNotes({
   onRecordWorkspaceAction?: () => void;
 }): UseAiCanvasNotesResult {
   const [isOpen, setIsOpen] = useState(false);
-  const [mode, setMode] = useState<AiCanvasMode>('preview');
   const [notes, setNotes] = useState<BackendAiCanvasNoteSummary[]>([]);
   const [activeNote, setActiveNote] = useState<BackendAiCanvasNote | null>(null);
   const [activeNoteId, setActiveNoteId] = useState<number | null>(null);
@@ -106,8 +80,6 @@ export function useAiCanvasNotes({
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [aiDraftMarkdown, setAiDraftMarkdown] = useState<string | null>(null);
-  const [aiEditing, setAiEditing] = useState(false);
   const [undoStack, setUndoStack] = useState<string[]>([]);
   const [redoStack, setRedoStack] = useState<string[]>([]);
   const detailRequestIdRef = useRef(0);
@@ -153,8 +125,6 @@ export function useAiCanvasNotes({
     setActiveNote(note);
     setActiveNoteId(note?.id ?? null);
     setMarkdownDraft(note?.markdown ?? '');
-    setMode(note ? 'preview' : 'edit');
-    setAiDraftMarkdown(null);
     setUndoStack([]);
     setRedoStack([]);
   }, [finishDirectEditBatch]);
@@ -291,7 +261,6 @@ export function useAiCanvasNotes({
     try {
       const created = await createCanvasNote();
       if (!created) return;
-      setMode('edit');
       onFeedback('AI Canvas Note를 만들었습니다.');
     } catch {
       setError('AI Canvas Note를 만들지 못했습니다.');
@@ -429,8 +398,6 @@ export function useAiCanvasNotes({
     setActiveNote(canvasNote);
     setActiveNoteId(canvasNote.id);
     setMarkdownDraft(canvasNote.markdown);
-    setMode('preview');
-    setAiDraftMarkdown(null);
     setNotes((current) => {
       const exists = current.some((note) => note.id === canvasNote.id);
       if (!exists) return [canvasNote, ...current];
@@ -439,50 +406,6 @@ export function useAiCanvasNotes({
     setError(null);
     onFeedback(action === 'canvas_create' ? 'AI Chat에서 Canvas를 만들었습니다.' : 'AI Chat이 Canvas를 수정했습니다.');
   }, [finishDirectEditBatch, markdownDraft, onFeedback, onRecordWorkspaceAction]);
-
-  const requestAiEditFromChat = useCallback(async ({ question, answer }: { question: string; answer: string }) => {
-    if (!enabled || !noteId) {
-      setError('백엔드에 저장된 노트에서만 Canvas를 수정할 수 있습니다.');
-      return;
-    }
-
-    setIsOpen(true);
-    setAiEditing(true);
-    setError(null);
-    try {
-      const targetNote = activeNote ?? (await createCanvasNote());
-      if (!targetNote) return;
-
-      const result = await requestBackendAiCanvasEdit({
-        canvasNoteId: targetNote.id,
-        instruction: buildChatCanvasInstruction({ question, answer }),
-      });
-      setAiDraftMarkdown(result.markdown);
-      setMode('preview');
-      onFeedback('AI Chat 기반 Canvas 수정안이 생성되었습니다.');
-    } catch {
-      setError('AI Chat 답변을 Canvas 수정안으로 만들지 못했습니다.');
-    } finally {
-      setAiEditing(false);
-    }
-  }, [activeNote, createCanvasNote, enabled, noteId, onFeedback]);
-
-  const applyAiDraft = useCallback(() => {
-    if (aiDraftMarkdown === null) return;
-    const previousMarkdown = markdownDraft;
-    if (hasMeaningfulUndoState(previousMarkdown) && previousMarkdown !== aiDraftMarkdown) {
-      setUndoStack((current) => appendUndoSnapshot(current, previousMarkdown));
-      setRedoStack([]);
-      onRecordWorkspaceAction?.();
-    }
-    setMarkdownDraft(aiDraftMarkdown);
-    setAiDraftMarkdown(null);
-    setMode('edit');
-  }, [aiDraftMarkdown, markdownDraft, onRecordWorkspaceAction]);
-
-  const discardAiDraft = useCallback(() => {
-    setAiDraftMarkdown(null);
-  }, []);
 
   const undoCanvasEdit = useCallback(() => {
     if (!canUndo) return;
@@ -504,7 +427,6 @@ export function useAiCanvasNotes({
 
   return {
     isOpen,
-    mode,
     notes,
     activeNote,
     activeNoteId,
@@ -512,8 +434,6 @@ export function useAiCanvasNotes({
     loading,
     saving,
     error,
-    aiDraftMarkdown,
-    aiEditing,
     enabled,
     canCreateNote,
     canUndo,
@@ -523,7 +443,6 @@ export function useAiCanvasNotes({
     open: () => setIsOpen(true),
     close: () => setIsOpen(false),
     toggle: () => setIsOpen((current) => !current),
-    setMode,
     selectNote,
     setMarkdownDraft: changeMarkdownDraft,
     createNote,
@@ -534,9 +453,6 @@ export function useAiCanvasNotes({
     deleteActiveNote,
     ensureNoteForChatEdit,
     applyChatCanvasEdit,
-    requestAiEditFromChat,
-    applyAiDraft,
-    discardAiDraft,
     undoCanvasEdit,
     redoCanvasEdit,
   };

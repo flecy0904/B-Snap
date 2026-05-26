@@ -342,31 +342,6 @@ def generate_ai_canvas_edit_from_chat(
     )
 
 
-def generate_ai_canvas_edit(
-    *,
-    model: str,
-    title: str,
-    markdown: str,
-    instruction: str,
-) -> str:
-    return generate_text_response(
-        model=model,
-        instructions=AI_CANVAS_EDIT_INSTRUCTIONS,
-        input_items=[{
-            "role": "user",
-            "content": "\n".join([
-                f"Canvas title: {title}",
-                "",
-                "Current Markdown:",
-                markdown or "(empty)",
-                "",
-                "User edit instruction:",
-                instruction,
-            ]),
-        }],
-    )
-
-
 def generate_capture_image_analysis(
     *,
     model: str,
