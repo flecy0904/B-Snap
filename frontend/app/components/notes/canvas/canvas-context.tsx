@@ -34,6 +34,7 @@ export type CanvasActions = {
   setBrushSettings: (settings: Partial<InkBrushSettings>) => void;
   setSelectionRect: (rect: SelectionRect | null) => void;
   setSelectionPreviewUri: (uri: string | null) => void;
+  copySelectionImage: () => void;
   clearCurrentSelection: () => void;
   clearInk: () => void;
   undoInk: () => void;
@@ -88,6 +89,7 @@ export function CanvasProvider({ children }: { children: React.ReactNode }) {
     setBrushSettings: globalContext.onChangeBrushSettings,
     setSelectionRect: globalContext.onSelectionChange,
     setSelectionPreviewUri: globalContext.onSelectionPreviewChange,
+    copySelectionImage: globalContext.onCopySelectionImage,
     clearCurrentSelection: globalContext.onClearSelection,
     clearInk: globalContext.onClearInk,
     undoInk: globalContext.onUndoInk,

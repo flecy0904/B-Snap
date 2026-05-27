@@ -1,6 +1,9 @@
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+from backend.app.schemas.ai_canvas_notes import AiCanvasNoteRead
 
 
 class ChatSessionCreate(BaseModel):
@@ -46,6 +49,9 @@ class ChatAiMessageCreate(BaseModel):
     page_number: int | None = Field(default=None, ge=1)
     selection_image_url: str | None = None
     context_hint: str | None = Field(default=None, max_length=4000)
+    canvas_note_id: int | None = Field(default=None, ge=1)
+    canvas_action: Literal["auto", "chat_only", "canvas_edit", "canvas_create"] = "auto"
+    canvas_note_needs_title: bool = False
     use_rag: bool = False
     top_k: int = Field(default=5, ge=1, le=20)
     selection_image: str | None = None
@@ -67,8 +73,17 @@ class ChatSessionDetail(ChatSessionRead):
     messages: list[ChatMessageRead]
 
 
+class ChatCanvasEditRead(BaseModel):
+    action: Literal["canvas_edit", "canvas_create"]
+    canvas_note_id: int
+    markdown: str
+    title: str
+    canvas_note: AiCanvasNoteRead
+
+
 class ChatAiMessageRead(BaseModel):
     model: str
     user_message: ChatMessageRead
     assistant_message: ChatMessageRead
     chat_session: ChatSessionRead | None = None
+    canvas_edit: ChatCanvasEditRead | None = None

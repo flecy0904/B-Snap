@@ -201,7 +201,7 @@ export const NotesWorkspaceToolbar = React.memo(function NotesWorkspaceToolbar()
               style={[workspaceContext.styles.inkActionButton, workspaceContext.styles.aiCanvasToolbarButton, workspaceContext.aiCanvas.isOpen && workspaceContext.styles.aiCanvasToolbarButtonActive]}
               onPress={workspaceContext.aiCanvas.toggle}
             >
-              <MaterialCommunityIcons name="note-edit-outline" size={18} color={workspaceContext.aiCanvas.isOpen ? '#5A74E8' : '#77839A'} />
+              <MaterialCommunityIcons name="note-text-outline" size={18} color={workspaceContext.aiCanvas.isOpen ? '#5A74E8' : '#77839A'} />
             </Pressable>
           </View>
         </View>

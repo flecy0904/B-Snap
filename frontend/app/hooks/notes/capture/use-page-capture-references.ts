@@ -41,7 +41,7 @@ type PageCaptureReferenceActionsParams = {
     selectionImageUri?: string | null;
     pageNumber?: number | null;
     source?: 'general' | 'selection' | 'photo' | 'class-insight';
-  }) => Promise<void>;
+  }) => Promise<boolean>;
 };
 
 function clampPdfPage(rawPageNumber: number, pageCount: number) {

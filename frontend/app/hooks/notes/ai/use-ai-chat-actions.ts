@@ -7,6 +7,7 @@ import {
   listBackendChatMessages,
   sendBackendAiMessage,
   updateBackendChatSession,
+  type BackendAiCanvasNote,
   type BackendChatMessage,
   type BackendChatSession,
 } from '../../../services/backend-api';
@@ -17,14 +18,34 @@ import { buildAiChatTitle } from './ai-chat-title';
 import { getAiBackendErrorMessage } from './ai-errors';
 
 type SetState<T> = Dispatch<SetStateAction<T>>;
-type AiQuestionSource = 'general' | 'selection' | 'photo' | 'class-insight';
+type AiQuestionSource = 'general' | 'selection' | 'photo' | 'class-insight' | 'chat' | 'canvas-mini';
+type CanvasAction = 'auto' | 'chat_only' | 'canvas_edit' | 'canvas_create';
 
-function isCanvasEditIntent(question: string) {
+function getCanvasAction(question: string, source: 'chat' | 'canvas-mini' = 'chat'): CanvasAction {
   const lowerQuestion = question.toLowerCase();
-  const mentionsCanvas = lowerQuestion.includes('canvas') || question.includes('캔버스');
-  if (!mentionsCanvas) return false;
+  const createKeywords = [
+    'new canvas',
+    '새 canvas',
+    '새 캔버스',
+    '새로운 canvas',
+    '새로운 캔버스',
+    '별도 canvas',
+    '별도 캔버스',
+    '다른 canvas',
+    '다른 캔버스',
+    '새 정리본',
+    '새 요약본',
+    '새 정리 노트',
+    '새 노트',
+  ];
+  if (createKeywords.some((keyword) => lowerQuestion.includes(keyword))) {
+    return 'canvas_create';
+  }
 
-  return [
+  if (source === 'canvas-mini') return 'canvas_edit';
+
+  const mentionsCanvas = lowerQuestion.includes('canvas') || question.includes('캔버스') || question.includes('정리 노트');
+  const editKeywords = [
     '적어',
     '써',
     '정리',
@@ -35,7 +56,18 @@ function isCanvasEditIntent(question: string) {
     '넣어',
     '만들',
     '작성',
-  ].some((keyword) => question.includes(keyword));
+    '고쳐',
+  ];
+  if (mentionsCanvas && editKeywords.some((keyword) => question.includes(keyword))) {
+    return 'canvas_edit';
+  }
+
+  return 'auto';
+}
+
+function isCanvasEditIntent(question: string) {
+  const action = getCanvasAction(question);
+  return action === 'canvas_edit' || action === 'canvas_create';
 }
 
 export function useAiChatActions(params: {
@@ -63,6 +95,8 @@ export function useAiChatActions(params: {
   setChatSessionsByDocument: SetState<Record<number, BackendChatSession[]>>;
   setAllChatSessions: SetState<BackendChatSession[]>;
   setAiMessagesBySession: SetState<Record<number, BackendChatMessage[]>>;
+  activeCanvasNoteId?: number | null;
+  onApplyCanvasEditFromChat?: (payload: { action: 'canvas_edit' | 'canvas_create'; canvasNote: BackendAiCanvasNote }) => void;
   clearSelection?: () => void;
   onRequestCanvasEditFromChat?: (payload: { question: string; answer: string }) => Promise<void>;
   buildContextHint?: (question: string) => string | null;
@@ -314,29 +348,46 @@ export function useAiChatActions(params: {
     question?: string;
     selectionImageUri?: string | null;
     pageNumber?: number | null;
-    source?: AiQuestionSource;
+    source?: 'chat' | 'canvas-mini';
+    canvasAction?: CanvasAction;
   }) => {
-    if (!params.studyDocumentId) return;
+    if (!params.studyDocumentId) return false;
     if (params.aiChatReadOnly) {
       params.setAiError('보고 있는 노트와 연결된 대화방이 아니라서 읽기만 가능합니다.');
-      return;
+      return false;
     }
 
-    const selectionPreviewUri = override?.selectionImageUri ?? (params.selectionAttachmentEnabled ? params.selectionPreviewUri : null);
-    const selectionRect = params.selectionAttachmentEnabled ? params.selectionRect : null;
+    const explicitSelectionImageUri = Object.prototype.hasOwnProperty.call(override ?? {}, 'selectionImageUri')
+      ? override?.selectionImageUri ?? null
+      : undefined;
+    const attachedSelectionPreviewUri = params.selectionAttachmentEnabled ? params.selectionPreviewUri : null;
+    const selectionPreviewUri = explicitSelectionImageUri !== undefined
+      ? explicitSelectionImageUri
+      : override?.source === 'canvas-mini'
+        ? null
+        : attachedSelectionPreviewUri;
+    const selectionRect = override?.source === 'canvas-mini' && !selectionPreviewUri
+      ? null
+      : params.selectionAttachmentEnabled
+        ? params.selectionRect
+        : null;
     const hasSelection = Boolean(selectionRect || selectionPreviewUri);
-    const requestSource: AiQuestionSource = override?.source
-      ?? (hasSelection ? 'selection' : selectionPreviewUri ? 'photo' : 'general');
-    const question = override?.question?.trim() || params.aiQuestion.trim() || (hasSelection ? '선택한 영역을 설명해줘' : '현재 페이지를 요약해줘');
-    const contextHint = requestSource === 'general' || requestSource === 'class-insight'
-      ? params.buildContextHint?.(question) ?? null
-      : null;
+    const shouldHideSelectionAttachment = Boolean(selectionRect || attachedSelectionPreviewUri);
+    const rawQuestion = override?.question?.trim() ?? params.aiQuestion.trim();
+    if (override?.source === 'canvas-mini' && !rawQuestion) return false;
+
+    const question = rawQuestion || (hasSelection ? '선택한 영역을 설명해줘' : '현재 페이지를 요약해줘');
+    const canvasAction = override?.canvasAction ?? getCanvasAction(question, override?.source ?? 'chat');
+    const requestContent = override?.source === 'canvas-mini'
+      ? `${canvasAction === 'canvas_create' ? '새 Canvas' : 'Canvas 수정'}: ${question}`
+      : question;
+    const contextHint = params.buildContextHint?.(question) ?? null;
     params.setAiLoading(true);
     params.setAiError(null);
     params.setAiQuestion('');
-    if (hasSelection) {
+    if (hasSelection && override?.source !== 'canvas-mini') {
       params.clearSelection?.();
-    } else if (selectionPreviewUri) {
+    } else if (selectionPreviewUri && override?.source !== 'canvas-mini') {
       params.setSelectionPreviewByDocument((current) => ({ ...current, [params.studyDocumentId!]: null }));
     }
     let aiRequestStage: 'chat-session' | 'ai-answer' = 'ai-answer';
@@ -345,19 +396,19 @@ export function useAiChatActions(params: {
       if (!isBackendApiEnabled()) {
         params.setAiAnswer(null);
         params.setAiError('백엔드 서버에 연결할 수 없습니다. 백엔드가 실행 중인지 확인해 주세요.');
-        return;
+        return false;
       }
 
       if (!params.currentDocumentHasBackendPages) {
         params.setAiAnswer(null);
         params.setAiError('AI 채팅은 백엔드에 저장된 노트에서 사용할 수 있습니다. 새 빈 노트나 PDF 업로드로 만든 노트에서 다시 시도해 주세요.');
-        return;
+        return false;
       }
       const backendNoteId = getCurrentBackendNoteId();
       if (!backendNoteId) {
         params.setAiAnswer(null);
         params.setAiError('AI 채팅은 백엔드 동기화가 끝난 노트에서 사용할 수 있습니다.');
-        return;
+        return false;
       }
 
       let sessionId = params.chatSessionByDocument[params.studyDocumentId];
@@ -365,7 +416,7 @@ export function useAiChatActions(params: {
         aiRequestStage = 'chat-session';
         const session = await createBackendChatSession({
           noteId: backendNoteId,
-          title: buildAiChatTitle(question, params.studyDocument?.title),
+          title: buildAiChatTitle(requestContent, params.studyDocument?.title),
         });
         sessionId = session.id;
         params.setChatSessionByDocument((current) => ({
@@ -384,8 +435,8 @@ export function useAiChatActions(params: {
         id: -Date.now(),
         session_id: sessionId,
         role: 'user',
-        content: question,
-        selection_image_url: selectionPreviewUri,
+        content: requestContent,
+        selection_image_url: shouldHideSelectionAttachment ? null : selectionPreviewUri,
         model: null,
         created_at: new Date().toISOString(),
       };
@@ -397,11 +448,14 @@ export function useAiChatActions(params: {
       const selectionImage = await buildSelectionImagePayload(selectionPreviewUri);
       const response = await sendBackendAiMessage({
         sessionId,
-        content: question,
+        content: requestContent,
         selectionImage,
         selectionImageUri: selectionPreviewUri,
         selectionRect,
         pageNumber: override?.pageNumber ?? params.currentPageNumber,
+        canvasNoteId: canvasAction === 'canvas_create' ? null : params.activeCanvasNoteId ?? null,
+        canvasAction,
+        canvasNoteNeedsTitle: canvasAction === 'canvas_create',
         contextHint,
       });
       const userMessageWithAttachment = {
@@ -437,7 +491,7 @@ export function useAiChatActions(params: {
         });
       }
       params.setAiAnswer({
-        question,
+        question: requestContent,
         response: content,
         sections: [
           {
@@ -448,9 +502,17 @@ export function useAiChatActions(params: {
         ],
         createdAt: response.assistant_message.created_at,
       });
-      if (params.onRequestCanvasEditFromChat && isCanvasEditIntent(question)) {
+      if (response.canvas_edit && params.onApplyCanvasEditFromChat) {
+        params.onApplyCanvasEditFromChat({
+          action: response.canvas_edit.action,
+          canvasNote: response.canvas_edit.canvas_note,
+        });
+      } else if (canvasAction === 'canvas_edit' || canvasAction === 'canvas_create') {
+        params.setAiError('Canvas 수정 응답을 받지 못했습니다. 백엔드 서버를 다시 실행해 주세요.');
+      } else if (params.onRequestCanvasEditFromChat && isCanvasEditIntent(question)) {
         void params.onRequestCanvasEditFromChat({ question, answer: content });
       }
+      return true;
     } catch (error) {
       params.setAiError(getAiBackendErrorMessage(
         error,
@@ -458,12 +520,18 @@ export function useAiChatActions(params: {
           ? 'AI 채팅방을 만들지 못했습니다.'
           : 'AI 응답을 받아오지 못했습니다.',
       ));
+      return false;
     } finally {
       params.setAiLoading(false);
     }
   };
 
-  const requestAiAnswer = async () => requestAiAnswerInternal();
+  const requestAiAnswer = async (options?: {
+    question?: string;
+    source?: 'chat' | 'canvas-mini';
+    canvasAction?: CanvasAction;
+    selectionImageUri?: string | null;
+  }) => requestAiAnswerInternal(options);
 
   const requestAiAnswerForQuestion = async (question: string, options?: {
     selectionImageUri?: string | null;
@@ -473,7 +541,7 @@ export function useAiChatActions(params: {
     question,
     selectionImageUri: options?.selectionImageUri ?? null,
     pageNumber: options?.pageNumber ?? params.currentPageNumber,
-    source: options?.source,
+    source: options?.source === 'canvas-mini' ? 'canvas-mini' : 'chat',
   });
 
   return {

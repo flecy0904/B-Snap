@@ -146,6 +146,13 @@ export type BackendAiMessageResponse = {
     created_at: string;
   };
   chat_session?: BackendChatSession | null;
+  canvas_edit?: {
+    action: 'canvas_edit' | 'canvas_create';
+    canvas_note_id: number;
+    markdown: string;
+    title: string;
+    canvas_note: BackendAiCanvasNote;
+  } | null;
 };
 
 export type BackendPdfTextExtractionResponse = {
@@ -731,6 +738,9 @@ export async function sendBackendAiMessage(payload: {
   pageNumber?: number | null;
   selectionImageUri?: string | null;
   contextHint?: string | null;
+  canvasNoteId?: number | null;
+  canvasAction?: 'auto' | 'chat_only' | 'canvas_edit' | 'canvas_create';
+  canvasNoteNeedsTitle?: boolean;
 }) {
   return request<BackendAiMessageResponse>(`/chat-sessions/${payload.sessionId}/ai-messages`, {
     method: 'POST',
@@ -743,6 +753,9 @@ export async function sendBackendAiMessage(payload: {
       page_number: payload.pageNumber ?? null,
       selection_image_url: payload.selectionImageUri ?? null,
       context_hint: payload.contextHint ?? null,
+      canvas_note_id: payload.canvasNoteId ?? null,
+      canvas_action: payload.canvasAction ?? 'auto',
+      canvas_note_needs_title: payload.canvasNoteNeedsTitle ?? false,
     },
   });
 }

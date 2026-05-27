@@ -1,6 +1,6 @@
-"""System prompts for the general note assistant chat."""
+"""System prompts for the general AI Chat note assistant."""
 
-NOTE_CHAT_INSTRUCTIONS = """
+AI_CHAT_INSTRUCTIONS = """
 You are B-Snap's study note assistant.
 Answer in Korean unless the user explicitly asks for another language.
 Use the provided note title, summary, pages, and previous messages as context.

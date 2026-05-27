@@ -347,7 +347,7 @@ export function NotesAiAssistantPanel() {
 
   return (
     <Animated.View style={panelStyle}>
-      {headerMenuOpen || menuSessionId ? (
+      {menuSessionId ? (
         <Pressable style={workspace.styles.aiMenuDismissLayer} onPress={closeOpenMenus} />
       ) : null}
       {sidebarVisible ? (
@@ -445,6 +445,9 @@ export function NotesAiAssistantPanel() {
       ) : null}
 
       <Animated.View style={[workspace.styles.aiHomePane, homePaneAnimatedStyle]} pointerEvents={sidebarOpen ? 'none' : 'auto'}>
+        {headerMenuOpen ? (
+          <Pressable style={workspace.styles.aiHomeMenuDismissLayer} onPress={closeOpenMenus} />
+        ) : null}
         <View style={[workspace.styles.aiPanelHeader, workspace.aiPanelMode === 'floating' && workspace.styles.aiPanelHeaderDraggable]} {...(workspace.aiPanelMode === 'floating' ? floatingPanResponder.panHandlers : {})}>
           <Pressable style={workspace.styles.aiHeaderIconButton} onPress={openSidebar}>
             <MaterialCommunityIcons name="menu" size={20} color="#303744" />

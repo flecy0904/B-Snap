@@ -60,6 +60,7 @@ export type DesktopNotesViewProps = {
   aiPanelMode: 'floating' | 'sidebar';
   selectionRect: SelectionRect | null;
   selectionPreviewUri: string | null;
+  copiedSelectionImageUri: string | null;
   aiQuestion: string;
   aiAnswer: AiAnswer | null;
   aiMessages: BackendChatMessage[];
@@ -123,9 +124,11 @@ export type DesktopNotesViewProps = {
   onCreateAiChatSession: () => void;
   onRequestAiAnswer: () => void;
   onAskAiAboutSelection: (selectionPreviewUri?: string | null) => void;
+  onRequestAiCanvasCommand: (command: string, options?: { selectionImageUri?: string | null }) => Promise<boolean>;
   onInsertAiAnswerPage: () => void;
   onSelectionChange: (rect: SelectionRect | null) => void;
   onSelectionPreviewChange: (uri: string | null) => void;
+  onCopySelectionImage: () => void;
   onClearSelection: () => void;
   onUndoInk: () => void;
   onRedoInk: () => void;
@@ -280,6 +283,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           aiPanelMode: props.aiPanelMode,
           selectionRect: props.selectionRect,
           selectionPreviewUri: props.selectionPreviewUri,
+          copiedSelectionImageUri: props.copiedSelectionImageUri,
           aiQuestion: props.aiQuestion,
           normalizedQuestion,
           aiResponse,
@@ -364,6 +368,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           onCreateAiChatSession: props.onCreateAiChatSession,
           onRequestAiAnswer: props.onRequestAiAnswer,
           onAskAiAboutSelection: props.onAskAiAboutSelection,
+          onRequestAiCanvasCommand: props.onRequestAiCanvasCommand,
           onInsertAiAnswerPage: props.onInsertAiAnswerPage,
           onGoToPreviousDocumentPage: props.onGoToPreviousDocumentPage,
           onGoToNextDocumentPage: props.onGoToNextDocumentPage,
@@ -424,6 +429,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           onEraseInkAtPoint: props.onEraseInkAtPoint,
           onSelectionChange: props.onSelectionChange,
           onSelectionPreviewChange: props.onSelectionPreviewChange,
+          onCopySelectionImage: props.onCopySelectionImage,
           onClearSelection: props.onClearSelection,
           deleteSelectedStrokes: props.deleteSelectedStrokes,
           changeSelectedStrokesColor: props.changeSelectedStrokesColor,
