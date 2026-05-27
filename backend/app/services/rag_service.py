@@ -12,8 +12,9 @@ from backend.app.schemas.rag import (
     RAGQuizResponse,
     RetrievedContext,
 )
+from backend.app.services.note_page_content import extract_ai_page_text
 from backend.app.services.openai_service import generate_text_response
-from backend.app.services.prompt_templates import (
+from backend.app.services.prompts.rag import (
     EXAM_SUMMARY_PROMPT,
     NOTE_SUMMARY_PROMPT,
     QUIZ_GENERATION_PROMPT,
@@ -21,6 +22,7 @@ from backend.app.services.prompt_templates import (
     build_quiz_prompt,
     build_rag_prompt,
     build_summary_prompt,
+    format_contexts_for_prompt,
 )
 from backend.app.services.rag_retriever import (
     Document,
@@ -62,6 +64,23 @@ def load_note_documents(
         """,
         params,
     )
+    ai_canvas_notes = fetch_all(
+        connection,
+        f"""
+        SELECT c.id,
+               c.note_id,
+               c.title,
+               c.markdown,
+               c.source_page_start,
+               c.source_page_end,
+               n.title AS note_title
+        FROM ai_canvas_notes c
+        JOIN notes n ON n.id = c.note_id
+        {where_clause}
+        ORDER BY c.updated_at DESC, c.id DESC
+        """,
+        params,
+    )
 
     documents: list[Document] = []
     for note in notes:
@@ -76,13 +95,36 @@ def load_note_documents(
             )
 
     for page in pages:
-        if page.get("content"):
+        content = extract_ai_page_text(page.get("content"))
+        if content:
             documents.append(
                 {
                     "source_type": "note_page",
                     "source_id": str(page["id"]),
                     "title": f"{page['note_title']} - page {page['page_number']}",
-                    "content": page["content"],
+                    "content": content,
+                }
+            )
+
+    for canvas_note in ai_canvas_notes:
+        if canvas_note.get("markdown"):
+            page_range = _format_page_range(
+                canvas_note.get("source_page_start"),
+                canvas_note.get("source_page_end"),
+            )
+            documents.append(
+                {
+                    "source_type": "ai_canvas_note",
+                    "source_id": str(canvas_note["id"]),
+                    "title": f"{canvas_note['note_title']} - {canvas_note['title']}",
+                    "content": "\n".join(
+                        part
+                        for part in [
+                            f"Source pages: {page_range}" if page_range else "",
+                            canvas_note["markdown"],
+                        ]
+                        if part
+                    ),
                 }
             )
 
@@ -114,6 +156,24 @@ def ask_with_rag(
             NoteSummarySection(title="참고 자료", body=_sources_text(contexts), tone="muted"),
         ],
         sources=contexts,
+    )
+
+
+def build_rag_context_hint(
+    *,
+    question: str,
+    documents: list[Document],
+    top_k: int = 5,
+) -> str | None:
+    contexts = retrieve_relevant_contexts(question, documents, top_k=top_k)
+    if not contexts:
+        return None
+
+    return "\n\n".join(
+        [
+            "Retrieved study context for this user question:",
+            format_contexts_for_prompt(contexts),
+        ]
     )
 
 
@@ -199,6 +259,14 @@ def _build_note_filters(
     if not filters:
         return "", ()
     return "WHERE " + " AND ".join(filters), tuple(params)
+
+
+def _format_page_range(start: int | None, end: int | None) -> str:
+    if start is None:
+        return ""
+    if end is None or end == start:
+        return str(start)
+    return f"{start}-{end}"
 
 
 def _retrieve_or_mock(
