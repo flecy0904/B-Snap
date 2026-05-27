@@ -40,7 +40,7 @@ type PageCaptureReferenceActionsParams = {
   requestAiAnswerForQuestion: (question: string, options?: {
     selectionImageUri?: string | null;
     pageNumber?: number | null;
-  }) => Promise<void>;
+  }) => Promise<boolean>;
 };
 
 function clampPdfPage(rawPageNumber: number, pageCount: number) {

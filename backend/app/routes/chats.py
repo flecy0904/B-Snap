@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from psycopg import Connection
 
 from backend.app.core.auth import get_current_user
@@ -16,11 +16,131 @@ from backend.app.schemas.chats import (
     ChatSessionRead,
     ChatSessionUpdate,
 )
-from backend.app.services.openai_service import generate_chat_title, generate_note_chat_answer
+from backend.app.services.openai_service import (
+    generate_ai_canvas_intent,
+    generate_ai_canvas_title,
+    generate_ai_canvas_edit_from_chat,
+    generate_chat_title,
+    generate_note_chat_answer,
+)
 from backend.app.services.rag_service import ask_with_rag, build_rag_context_hint, load_note_documents
 
 
 router = APIRouter(tags=["chats"])
+
+MAX_AI_CANVAS_NOTES_PER_NOTE = 3
+DEFAULT_CANVAS_TITLE = "AI Canvas Note"
+DEFAULT_CANVAS_MARKDOWN = "# AI Canvas Note\n\n정리할 내용을 입력하거나 AI에게 추가를 요청해보세요."
+
+CANVAS_TARGET_KEYWORDS = (
+    "canvas",
+    "캔버스",
+    "정리노트",
+    "정리 노트",
+)
+CANVAS_EDIT_KEYWORDS = (
+    "정리",
+    "요약",
+    "추가",
+    "반영",
+    "작성",
+    "넣어",
+    "적어",
+    "수정",
+    "고쳐",
+    "만들",
+)
+CANVAS_CREATE_KEYWORDS = (
+    "new canvas",
+    "새 canvas",
+    "새 캔버스",
+    "새로운 canvas",
+    "새로운 캔버스",
+    "별도 canvas",
+    "별도 캔버스",
+    "다른 canvas",
+    "다른 캔버스",
+    "새 정리본",
+    "새 요약본",
+    "새 정리 노트",
+    "새 노트",
+)
+
+
+def keyword_canvas_action(content: str) -> str | None:
+    normalized = content.lower()
+    if any(keyword in normalized for keyword in CANVAS_CREATE_KEYWORDS):
+        return "canvas_create"
+
+    has_canvas_target = any(keyword in normalized for keyword in CANVAS_TARGET_KEYWORDS)
+    has_canvas_edit = any(keyword in normalized for keyword in CANVAS_EDIT_KEYWORDS)
+    if has_canvas_target and has_canvas_edit:
+        return "canvas_edit"
+    return None
+
+
+def resolve_canvas_action(content: str, requested_action: str, model: str) -> str:
+    if requested_action in {"chat_only", "canvas_edit", "canvas_create"}:
+        return requested_action
+
+    keyword_action = keyword_canvas_action(content)
+    if keyword_action:
+        return keyword_action
+
+    normalized = content.lower()
+    might_be_canvas_request = any(keyword in normalized for keyword in CANVAS_EDIT_KEYWORDS)
+    if not might_be_canvas_request:
+        return "chat_only"
+
+    try:
+        return generate_ai_canvas_intent(model=model, user_content=content)
+    except Exception:
+        return "chat_only"
+
+
+def get_canvas_note_for_chat(canvas_note_id: int, note_id: int, connection: Connection) -> dict:
+    return require_row(
+        fetch_one(
+            connection,
+            """
+            SELECT id, folder_id, note_id, title, markdown, source_page_start, source_page_end, created_at, updated_at
+            FROM ai_canvas_notes
+            WHERE id = %s AND note_id = %s
+            """,
+            (canvas_note_id, note_id),
+        ),
+        "AI canvas note not found",
+    )
+
+
+def create_canvas_note_for_chat(note: dict, connection: Connection) -> dict:
+    count_row = fetch_one(
+        connection,
+        "SELECT COUNT(*) AS count FROM ai_canvas_notes WHERE note_id = %s",
+        (note["id"],),
+    )
+    if count_row and count_row["count"] >= MAX_AI_CANVAS_NOTES_PER_NOTE:
+        raise HTTPException(
+            status_code=409,
+            detail=f"AI Canvas Notes are limited to {MAX_AI_CANVAS_NOTES_PER_NOTE} per note",
+        )
+
+    return execute_returning(
+        connection,
+        """
+        INSERT INTO ai_canvas_notes (folder_id, note_id, title, markdown, source_page_start, source_page_end)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        RETURNING id, folder_id, note_id, title, markdown, source_page_start, source_page_end, created_at, updated_at
+        """,
+        (
+            note["folder_id"],
+            note["id"],
+            DEFAULT_CANVAS_TITLE,
+            DEFAULT_CANVAS_MARKDOWN,
+            None,
+            None,
+        ),
+    )
 
 
 def select_chat_context_pages(pages: list[dict], page_number: int | None) -> list[dict]:
@@ -212,8 +332,78 @@ def create_ai_chat_message(
         (session_id,),
     )
     model = payload.model or session.get("model") or get_settings().default_ai_model
+    canvas_edit = None
+    canvas_action = resolve_canvas_action(payload.content, payload.canvas_action, model)
 
-    if payload.use_rag:
+    if canvas_action in {"canvas_edit", "canvas_create"}:
+        created_canvas_note = False
+        if canvas_action == "canvas_create" or not payload.canvas_note_id:
+            canvas_note = create_canvas_note_for_chat(note, connection)
+            created_canvas_note = True
+            canvas_action = "canvas_create"
+        else:
+            canvas_note = get_canvas_note_for_chat(payload.canvas_note_id, session["note_id"], connection)
+
+        try:
+            context_pages = select_chat_context_pages(pages, payload.page_number)
+            canvas_markdown = generate_ai_canvas_edit_from_chat(
+                model=model,
+                note=note,
+                pages=context_pages,
+                messages=previous_messages,
+                user_content=payload.content,
+                canvas_title=canvas_note["title"],
+                canvas_markdown=canvas_note["markdown"],
+                current_page_number=payload.page_number,
+                selection_image=payload.selection_image,
+                selection_image_url=payload.selection_image_url,
+            )
+            canvas_title = canvas_note["title"]
+            if canvas_action == "canvas_create" or payload.canvas_note_needs_title:
+                try:
+                    canvas_title = generate_ai_canvas_title(
+                        model=model,
+                        note=note,
+                        user_content=payload.content,
+                        canvas_markdown=canvas_markdown,
+                    )
+                except Exception:
+                    canvas_title = canvas_note["title"]
+
+            updated_canvas_note = execute_returning(
+                connection,
+                """
+                UPDATE ai_canvas_notes
+                SET title = %s, markdown = %s, updated_at = now()
+                WHERE id = %s
+                RETURNING id, folder_id, note_id, title, markdown, source_page_start, source_page_end, created_at, updated_at
+                """,
+                (
+                    canvas_title,
+                    canvas_markdown,
+                    canvas_note["id"],
+                ),
+            )
+        except Exception:
+            if created_canvas_note:
+                try:
+                    execute_commit(connection, "DELETE FROM ai_canvas_notes WHERE id = %s", (canvas_note["id"],))
+                except Exception:
+                    pass
+            raise
+        answer = (
+            "새 Canvas를 만들고 반영했습니다. Canvas 패널에서 확인해 주세요."
+            if canvas_action == "canvas_create"
+            else "Canvas에 반영했습니다."
+        )
+        canvas_edit = {
+            "action": canvas_action,
+            "canvas_note_id": updated_canvas_note["id"],
+            "markdown": updated_canvas_note["markdown"],
+            "title": updated_canvas_note["title"],
+            "canvas_note": updated_canvas_note,
+        }
+    elif payload.use_rag:
         documents = load_note_documents(connection, note_ids=[session["note_id"]], user_id=current_user["id"])
         answer = ask_with_rag(
             question=payload.content,
@@ -295,6 +485,7 @@ def create_ai_chat_message(
         "user_message": user_message,
         "assistant_message": assistant_message,
         "chat_session": updated_session,
+        "canvas_edit": canvas_edit,
     }
 
 

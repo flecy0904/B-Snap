@@ -220,6 +220,7 @@ export function AppShell(props: {
                   aiPanelMode={notesState.aiPanelMode}
                   selectionRect={notesState.selectionRect}
                   selectionPreviewUri={notesState.selectionPreviewUri}
+                  copiedSelectionImageUri={notesState.copiedSelectionImageUri}
                   aiQuestion={notesState.aiQuestion}
                   aiAnswer={notesState.aiAnswer}
                   aiMessages={notesState.aiMessages}
@@ -279,9 +280,11 @@ export function AppShell(props: {
                   onCreateAiChatSession={notesState.createAiChatSession}
                   onRequestAiAnswer={notesState.requestAiAnswer}
                   onAskAiAboutSelection={notesState.askAiAboutSelection}
+                  onRequestAiCanvasCommand={notesState.requestAiCanvasCommand}
                   onInsertAiAnswerPage={notesState.insertAiAnswerPage}
                   onSelectionChange={notesState.changeSelection}
                   onSelectionPreviewChange={notesState.changeSelectionPreview}
+                  onCopySelectionImage={notesState.copySelectionImage}
                   onClearSelection={notesState.clearCurrentSelection}
                   onUndoInk={notesState.undoInk}
                   onRedoInk={notesState.redoInk}
@@ -502,6 +505,7 @@ export function AppShell(props: {
                   onCreateAiChatSession={notesState.createAiChatSession}
                   onRequestAiAnswer={notesState.requestAiAnswer}
                   onAskAiAboutSelection={notesState.askAiAboutSelection}
+                  onRequestAiCanvasCommand={notesState.requestAiCanvasCommand}
                   onInsertAiAnswerPage={notesState.insertAiAnswerPage}
                   onSelectionChange={notesState.changeSelection}
                   onSelectionPreviewChange={notesState.changeSelectionPreview}

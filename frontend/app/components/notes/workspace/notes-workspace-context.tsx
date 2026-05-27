@@ -15,6 +15,7 @@ export type DesktopNotesWorkspaceContextValue = {
   aiPanelMode: 'floating' | 'sidebar';
   selectionRect: SelectionRect | null;
   selectionPreviewUri: string | null;
+  copiedSelectionImageUri: string | null;
   aiQuestion: string;
   normalizedQuestion: string;
   aiResponse: string;
@@ -97,6 +98,7 @@ export type DesktopNotesWorkspaceContextValue = {
   onCreateAiChatSession: () => void;
   onRequestAiAnswer: () => void;
   onAskAiAboutSelection: () => void;
+  onRequestAiCanvasCommand: (command: string, options?: { selectionImageUri?: string | null }) => Promise<boolean>;
   onInsertAiAnswerPage: () => void;
   onGoToPreviousDocumentPage: () => void;
   onGoToNextDocumentPage: () => void;
@@ -152,6 +154,7 @@ export type DesktopNotesWorkspaceContextValue = {
   onEraseInkAtPoint: (point: InkPoint, radius: number, snapshot?: boolean) => boolean;
   onSelectionChange: (rect: SelectionRect | null) => void;
   onSelectionPreviewChange: (uri: string | null) => void;
+  onCopySelectionImage: () => void;
   onClearSelection: () => void;
   deleteSelectedStrokes: () => void;
   changeSelectedStrokesColor: (color: string) => void;

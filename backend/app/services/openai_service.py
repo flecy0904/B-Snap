@@ -12,8 +12,10 @@ from openai import OpenAI, OpenAIError
 from backend.app.core.config import get_settings
 from backend.app.services.note_page_content import extract_ai_page_text
 from backend.app.services.prompts.ai_canvas import AI_CANVAS_EDIT_INSTRUCTIONS
+from backend.app.services.prompts.ai_chat import AI_CHAT_INSTRUCTIONS
+from backend.app.services.prompts.canvas_intent import CANVAS_INTENT_INSTRUCTIONS
+from backend.app.services.prompts.canvas_title import CANVAS_TITLE_INSTRUCTIONS
 from backend.app.services.prompts.chat_title import CHAT_TITLE_INSTRUCTIONS
-from backend.app.services.prompts.note_assistant import NOTE_CHAT_INSTRUCTIONS
 from backend.app.services.prompts.vision import CAPTURE_IMAGE_ANALYSIS_INSTRUCTIONS
 
 
@@ -181,7 +183,7 @@ def generate_note_chat_answer(
 ) -> str:
     return generate_text_response(
         model=model,
-        instructions=NOTE_CHAT_INSTRUCTIONS,
+        instructions=AI_CHAT_INSTRUCTIONS,
         input_items=build_response_input(
             note,
             pages,
@@ -226,6 +228,118 @@ def generate_chat_title(
         }],
     )
     return normalize_chat_title(title, fallback)
+
+
+def generate_ai_canvas_title(
+    *,
+    model: str,
+    note: dict,
+    user_content: str,
+    canvas_markdown: str,
+) -> str:
+    fallback = normalize_chat_title(user_content, "AI Canvas")
+    title = generate_text_response(
+        model=model,
+        instructions=CANVAS_TITLE_INSTRUCTIONS,
+        input_items=[{
+            "role": "user",
+            "content": "\n".join([
+                f"Note title: {note['title']}",
+                "",
+                "User request:",
+                user_content,
+                "",
+                "Canvas markdown:",
+                canvas_markdown[:2000],
+            ]),
+        }],
+    )
+    return normalize_chat_title(title, fallback)
+
+
+def generate_ai_canvas_intent(
+    *,
+    model: str,
+    user_content: str,
+) -> str:
+    intent = generate_text_response(
+        model=model,
+        instructions=CANVAS_INTENT_INSTRUCTIONS,
+        input_items=[{
+            "role": "user",
+            "content": user_content,
+        }],
+    ).strip().lower()
+    if intent in {"chat_only", "canvas_edit", "canvas_create"}:
+        return intent
+    return "chat_only"
+
+
+def generate_ai_canvas_edit_from_chat(
+    *,
+    model: str,
+    note: dict,
+    pages: list[dict],
+    messages: list[dict],
+    user_content: str,
+    canvas_title: str,
+    canvas_markdown: str,
+    current_page_number: int | None = None,
+    selection_image: str | None = None,
+    selection_image_url: str | None = None,
+) -> str:
+    input_items: list[dict[str, Any]] = [
+        {
+            "role": "user",
+            "content": "\n".join([
+                "Canvas edit context follows. Apply the priority rules from the system instructions.",
+                "",
+                "User request:",
+                user_content,
+                "",
+                f"Canvas title: {canvas_title}",
+                "",
+                "Current Canvas Markdown:",
+                canvas_markdown or "(empty)",
+                "",
+                "Note/PDF context:",
+                build_note_context(note, pages, current_page_number=current_page_number),
+                "",
+                (
+                    "Edit the Canvas directly according to the user's request. "
+                    "Return the complete updated Markdown document only."
+                ),
+            ]),
+        }
+    ]
+
+    if messages:
+        input_items.append({
+            "role": "user",
+            "content": (
+                "Recent conversation below is for continuity only. "
+                "Use it to understand the user's intent and preferred format."
+            ),
+        })
+        for message in messages[-4:]:
+            role = message["role"] if message["role"] in {"user", "assistant"} else "user"
+            input_items.append({"role": role, "content": message["content"]})
+
+    image_url = _prepare_input_image_url(selection_image or selection_image_url)
+    if image_url:
+        input_items.append({
+            "role": "user",
+            "content": [
+                {"type": "input_text", "text": "Selected region image for the user's request:"},
+                {"type": "input_image", "image_url": image_url},
+            ],
+        })
+
+    return generate_text_response(
+        model=model,
+        instructions=AI_CANVAS_EDIT_INSTRUCTIONS,
+        input_items=input_items,
+    )
 
 
 def generate_ai_canvas_edit(
