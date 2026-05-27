@@ -40,6 +40,7 @@ export type DesktopNotesWorkspaceContextValue = {
   activeAiChatSessionId: number | null;
   aiChatReadOnly: boolean;
   aiLoading: boolean;
+  aiCanvasRequestBusy: boolean;
   aiError: string | null;
   aiCanvas: UseAiCanvasNotesResult;
   classInsight: BackendClassInsight | null;

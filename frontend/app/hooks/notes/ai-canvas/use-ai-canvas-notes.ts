@@ -31,23 +31,25 @@ export type UseAiCanvasNotesResult = {
   selectNote: (noteId: number) => void;
   setMarkdownDraft: (value: string) => void;
   createNote: () => Promise<void>;
-  saveNote: () => Promise<void>;
   renameNote: (title: string, noteId?: number) => Promise<boolean>;
-  renameActiveNote: (title: string) => Promise<boolean>;
   deleteNote: (noteId?: number) => Promise<void>;
-  deleteActiveNote: () => Promise<void>;
   ensureNoteForChatEdit: () => Promise<{ note: BackendAiCanvasNote; needsTitle: boolean } | null>;
   applyChatCanvasEdit: (payload: { action: 'canvas_edit' | 'canvas_create'; canvasNote: BackendAiCanvasNote }) => void;
   undoCanvasEdit: () => void;
   redoCanvasEdit: () => void;
+  showFeedback: (message: string) => void;
 };
 
-const DEFAULT_CANVAS_TITLE = 'AI Canvas Note';
-const DEFAULT_CANVAS_MARKDOWN = '# AI Canvas Note\n\n정리할 내용을 입력하거나 AI에게 추가를 요청해보세요.';
+const DEFAULT_CANVAS_TITLE = 'Canvas Note';
+const DEFAULT_CANVAS_MARKDOWN = '';
 const MAX_AI_CANVAS_NOTES_PER_NOTE = 3;
 const DIRECT_EDIT_BATCH_DELAY_MS = 1200;
 const TRANSIENT_ERROR_DELAY_MS = 3000;
 const MAX_UNDO_STACK_SIZE = 50;
+
+function normalizeAiCanvasMarkdown(markdown: string) {
+  return markdown.replace(/&nbsp;/g, '').replace(/\u00A0/g, '').trim();
+}
 
 function appendUndoSnapshot(stack: string[], snapshot: string) {
   if (stack[stack.length - 1] === snapshot) return stack;
@@ -55,8 +57,13 @@ function appendUndoSnapshot(stack: string[], snapshot: string) {
 }
 
 function hasMeaningfulUndoState(markdown: string) {
-  const normalized = markdown.trim();
-  return Boolean(normalized) && normalized !== DEFAULT_CANVAS_MARKDOWN;
+  const normalized = normalizeAiCanvasMarkdown(markdown);
+  return Boolean(normalized);
+}
+
+export function hasUsefulAiCanvasMarkdown(markdown: string) {
+  const normalized = normalizeAiCanvasMarkdown(markdown);
+  return Boolean(normalized);
 }
 
 export function useAiCanvasNotes({
@@ -83,9 +90,20 @@ export function useAiCanvasNotes({
   const [undoStack, setUndoStack] = useState<string[]>([]);
   const [redoStack, setRedoStack] = useState<string[]>([]);
   const detailRequestIdRef = useRef(0);
+  const autosaveRequestIdRef = useRef(0);
+  const autosaveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const activeNoteIdRef = useRef<number | null>(null);
+  const activeNoteRevisionRef = useRef<number | null>(null);
+  const markdownDraftRef = useRef('');
   const directEditBaselineRef = useRef<string | null>(null);
   const directEditTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const transientErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    activeNoteIdRef.current = activeNote?.id ?? null;
+    activeNoteRevisionRef.current = activeNote?.revision ?? null;
+    markdownDraftRef.current = markdownDraft;
+  }, [activeNote?.id, activeNote?.revision, markdownDraft]);
 
   const finishDirectEditBatch = useCallback(() => {
     if (directEditTimerRef.current) {
@@ -269,26 +287,6 @@ export function useAiCanvasNotes({
     }
   }, [createCanvasNote, onFeedback]);
 
-  const saveNote = useCallback(async () => {
-    if (!activeNote) return;
-
-    setSaving(true);
-    setError(null);
-    try {
-      const updated = await updateBackendAiCanvasNote({
-        canvasNoteId: activeNote.id,
-        markdown: markdownDraft,
-      });
-      setNotes((current) => current.map((note) => (note.id === updated.id ? updated : note)));
-      applyActiveNote(updated);
-      onFeedback('AI Canvas Note를 저장했습니다.');
-    } catch {
-      setError('AI Canvas Note를 저장하지 못했습니다.');
-    } finally {
-      setSaving(false);
-    }
-  }, [activeNote, applyActiveNote, markdownDraft, onFeedback]);
-
   const renameNote = useCallback(async (title: string, noteIdToRename?: number) => {
     const targetNoteId = noteIdToRename ?? activeNote?.id ?? null;
     if (!targetNoteId) return false;
@@ -306,6 +304,9 @@ export function useAiCanvasNotes({
         canvasNoteId: targetNoteId,
         title: nextTitle,
         markdown: targetNoteId === activeNote?.id ? markdownDraft : undefined,
+        expectedRevision: targetNoteId === activeNote?.id
+          ? activeNote.revision
+          : notes.find((note) => note.id === targetNoteId)?.revision,
       });
       setNotes((current) => current.map((note) => (note.id === updated.id ? updated : note)));
       if (updated.id === activeNote?.id) {
@@ -320,8 +321,6 @@ export function useAiCanvasNotes({
       setSaving(false);
     }
   }, [activeNote, applyActiveNote, markdownDraft, onFeedback]);
-
-  const renameActiveNote = useCallback((title: string) => renameNote(title), [renameNote]);
 
   const deleteNote = useCallback(async (noteIdToDelete?: number) => {
     const targetNoteId = noteIdToDelete ?? activeNote?.id ?? null;
@@ -349,32 +348,54 @@ export function useAiCanvasNotes({
     }
   }, [activeNote, applyActiveNote, loadCanvasNoteDetail, notes, onFeedback]);
 
-  const deleteActiveNote = useCallback(() => deleteNote(), [deleteNote]);
-
   useEffect(() => {
     if (!activeNote || markdownDraft === activeNote.markdown) return;
 
     const timer = setTimeout(() => {
-      setSaving(true);
-      setError(null);
-      updateBackendAiCanvasNote({
-        canvasNoteId: activeNote.id,
-        markdown: markdownDraft,
-      })
-        .then((updated) => {
-          setActiveNote(updated);
-          setNotes((current) => current.map((note) => (note.id === updated.id ? updated : note)));
-        })
-        .catch(() => {
-          setError('AI Canvas Note 자동 저장에 실패했습니다.');
-        })
-        .finally(() => {
-          setSaving(false);
+      const requestId = autosaveRequestIdRef.current + 1;
+      autosaveRequestIdRef.current = requestId;
+      const targetNoteId = activeNote.id;
+      const targetMarkdown = markdownDraft;
+
+      autosaveQueueRef.current = autosaveQueueRef.current
+        .catch(() => undefined)
+        .then(async () => {
+          if (
+            autosaveRequestIdRef.current !== requestId
+            || activeNoteIdRef.current !== targetNoteId
+            || markdownDraftRef.current !== targetMarkdown
+          ) {
+            return;
+          }
+          try {
+            const expectedRevision = activeNoteRevisionRef.current;
+            if (expectedRevision === null) return;
+            const updated = await updateBackendAiCanvasNote({
+              canvasNoteId: targetNoteId,
+              markdown: targetMarkdown,
+              expectedRevision,
+            });
+            setNotes((current) => current.map((note) => (note.id === updated.id ? updated : note)));
+            if (activeNoteIdRef.current === updated.id) {
+              activeNoteRevisionRef.current = updated.revision;
+            }
+            if (
+              autosaveRequestIdRef.current === requestId
+              && activeNoteIdRef.current === updated.id
+              && markdownDraftRef.current === targetMarkdown
+            ) {
+              setActiveNote(updated);
+            }
+          } catch {
+            if (autosaveRequestIdRef.current === requestId) {
+              onFeedback('Canvas 자동 저장에 실패했습니다.');
+            }
+          }
         });
     }, 700);
 
     return () => clearTimeout(timer);
-  }, [activeNote, markdownDraft]);
+  }, [activeNote, markdownDraft, onFeedback]);
 
   const ensureNoteForChatEdit = useCallback(async () => {
     if (!enabled || !noteId) {
@@ -398,11 +419,15 @@ export function useAiCanvasNotes({
     setActiveNote(canvasNote);
     setActiveNoteId(canvasNote.id);
     setMarkdownDraft(canvasNote.markdown);
+    activeNoteIdRef.current = canvasNote.id;
+    activeNoteRevisionRef.current = canvasNote.revision;
+    markdownDraftRef.current = canvasNote.markdown;
     setNotes((current) => {
       const exists = current.some((note) => note.id === canvasNote.id);
       if (!exists) return [canvasNote, ...current];
       return current.map((note) => (note.id === canvasNote.id ? canvasNote : note));
     });
+    autosaveRequestIdRef.current += 1;
     setError(null);
     onFeedback(action === 'canvas_create' ? 'AI Chat에서 Canvas를 만들었습니다.' : 'AI Chat이 Canvas를 수정했습니다.');
   }, [finishDirectEditBatch, markdownDraft, onFeedback, onRecordWorkspaceAction]);
@@ -446,14 +471,12 @@ export function useAiCanvasNotes({
     selectNote,
     setMarkdownDraft: changeMarkdownDraft,
     createNote,
-    saveNote,
     renameNote,
-    renameActiveNote,
     deleteNote,
-    deleteActiveNote,
     ensureNoteForChatEdit,
     applyChatCanvasEdit,
     undoCanvasEdit,
     redoCanvasEdit,
+    showFeedback: onFeedback,
   };
 }

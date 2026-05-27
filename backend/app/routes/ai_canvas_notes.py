@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from psycopg import Connection
+from psycopg.rows import dict_row
 
 from backend.app.core.auth import get_current_user
 from backend.app.db.crud import execute_commit, execute_returning, fetch_all, fetch_one, require_row
@@ -34,6 +35,7 @@ def get_ai_canvas_note(canvas_note_id: int, connection: Connection, user_id: int
                    ai_canvas_notes.note_id,
                    ai_canvas_notes.title,
                    ai_canvas_notes.markdown,
+                   ai_canvas_notes.revision,
                    ai_canvas_notes.source_page_start,
                    ai_canvas_notes.source_page_end,
                    ai_canvas_notes.created_at,
@@ -73,7 +75,7 @@ def create_ai_canvas_note(
         """
         INSERT INTO ai_canvas_notes (folder_id, note_id, title, markdown, source_page_start, source_page_end)
         VALUES (%s, %s, %s, %s, %s, %s)
-        RETURNING id, folder_id, note_id, title, markdown, source_page_start, source_page_end, created_at, updated_at
+        RETURNING id, folder_id, note_id, title, markdown, revision, source_page_start, source_page_end, created_at, updated_at
         """,
         (
             note["folder_id"],
@@ -96,7 +98,7 @@ def list_ai_canvas_notes_for_note(
     return fetch_all(
         connection,
         """
-        SELECT id, folder_id, note_id, title, source_page_start, source_page_end, created_at, updated_at
+        SELECT id, folder_id, note_id, title, revision, source_page_start, source_page_end, created_at, updated_at
         FROM ai_canvas_notes
         WHERE note_id = %s
         ORDER BY updated_at DESC, id DESC
@@ -118,7 +120,7 @@ def list_ai_canvas_notes_for_folder(
     return fetch_all(
         connection,
         """
-        SELECT id, folder_id, note_id, title, source_page_start, source_page_end, created_at, updated_at
+        SELECT id, folder_id, note_id, title, revision, source_page_start, source_page_end, created_at, updated_at
         FROM ai_canvas_notes
         WHERE folder_id = %s
         ORDER BY updated_at DESC, id DESC
@@ -161,12 +163,11 @@ def update_ai_canvas_note(
     ):
         raise HTTPException(status_code=422, detail="source_page_end must be greater than or equal to source_page_start")
 
-    return execute_returning(
-        connection,
-        """
+    query = """
         UPDATE ai_canvas_notes
         SET title = %s,
             markdown = %s,
+            revision = revision + 1,
             source_page_start = %s,
             source_page_end = %s,
             updated_at = now()
@@ -177,17 +178,31 @@ def update_ai_canvas_note(
               WHERE notes.id = ai_canvas_notes.note_id
                 AND notes.user_id = %s
           )
-        RETURNING id, folder_id, note_id, title, markdown, source_page_start, source_page_end, created_at, updated_at
-        """,
-        (
-            normalize_title(payload.title) if payload.title is not None else current["title"],
-            payload.markdown if payload.markdown is not None else current["markdown"],
-            next_source_page_start,
-            next_source_page_end,
-            canvas_note_id,
-            current_user["id"],
-        ),
-    )
+    """
+    params = [
+        normalize_title(payload.title) if payload.title is not None else current["title"],
+        payload.markdown if payload.markdown is not None else current["markdown"],
+        next_source_page_start,
+        next_source_page_end,
+        canvas_note_id,
+        current_user["id"],
+    ]
+    if payload.expected_revision is not None:
+        query += " AND revision = %s"
+        params.append(payload.expected_revision)
+    query += """
+        RETURNING id, folder_id, note_id, title, markdown, revision, source_page_start, source_page_end, created_at, updated_at
+    """
+
+    with connection.cursor(row_factory=dict_row) as cursor:
+        cursor.execute(query, tuple(params))
+        updated = cursor.fetchone()
+    connection.commit()
+    if updated is None and payload.expected_revision is not None:
+        raise HTTPException(status_code=409, detail="AI canvas note was updated by another request")
+    if updated is None:
+        raise HTTPException(status_code=404, detail="AI canvas note not found")
+    return updated
 
 
 @router.delete("/ai-canvas-notes/{canvas_note_id}", status_code=204)

@@ -33,6 +33,8 @@ def apply_auth_migration(engine) -> None:
         connection.execute(text("ALTER TABLE notes ADD COLUMN IF NOT EXISTS file_url TEXT"))
         connection.execute(text("ALTER TABLE notes ADD COLUMN IF NOT EXISTS thumbnail_url TEXT"))
         connection.execute(text("ALTER TABLE notes ADD COLUMN IF NOT EXISTS page_count INTEGER"))
+        connection.execute(text("ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'chat'"))
+        connection.execute(text("ALTER TABLE ai_canvas_notes ADD COLUMN IF NOT EXISTS revision INTEGER NOT NULL DEFAULT 0"))
         connection.execute(text("UPDATE folders SET user_id = :user_id WHERE user_id IS NULL"), {"user_id": legacy_user_id})
         connection.execute(text("UPDATE notes SET user_id = folders.user_id FROM folders WHERE notes.folder_id = folders.id AND notes.user_id IS NULL"))
         connection.execute(text("UPDATE notes SET user_id = :user_id WHERE user_id IS NULL"), {"user_id": legacy_user_id})

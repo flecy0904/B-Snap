@@ -23,6 +23,7 @@ class AiCanvasNoteCreate(BaseModel):
 class AiCanvasNoteUpdate(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     markdown: str | None = None
+    expected_revision: int | None = Field(default=None, ge=0)
     source_page_start: int | None = Field(default=None, ge=1)
     source_page_end: int | None = Field(default=None, ge=1)
 
@@ -42,6 +43,7 @@ class AiCanvasNoteSummaryRead(BaseModel):
     folder_id: int
     note_id: int
     title: str
+    revision: int = 0
     source_page_start: int | None = None
     source_page_end: int | None = None
     created_at: datetime

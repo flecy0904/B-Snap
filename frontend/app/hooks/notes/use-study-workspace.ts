@@ -106,6 +106,7 @@ export function useStudyWorkspace(props: {
   const [incomingBannerQueue, setIncomingBannerQueue] = useState<CaptureAsset[]>([]);
   const [aiAnswer, setAiAnswer] = useState<AiAnswer | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
+  const [aiCanvasRequestBusy, setAiCanvasRequestBusy] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const [selectionPreviewByDocument, setSelectionPreviewByDocument] = useState<Record<number, string | null>>({});
   const [chatSessionByDocument, setChatSessionByDocument] = useState<Record<number, number>>({});
@@ -830,6 +831,7 @@ export function useStudyWorkspace(props: {
     setAllChatSessions,
     setAiMessagesBySession,
     activeCanvasNoteId: aiCanvas.activeNoteId,
+    activeCanvasMarkdown: aiCanvas.markdownDraft,
     onApplyCanvasEditFromChat: aiCanvas.applyChatCanvasEdit,
     clearSelection: clearSelectionForCurrentDocument,
     buildContextHint: (question) => buildClassInsightContext({
@@ -902,8 +904,9 @@ export function useStudyWorkspace(props: {
       question: command,
       source: 'canvas-mini',
       selectionImageUri: options?.selectionImageUri ?? null,
+      canvasMarkdown: aiCanvas.markdownDraft,
     })
-  ), [requestAiAnswer]);
+  ), [aiCanvas.markdownDraft, requestAiAnswer]);
 
   const acceptIncomingAsset = () => {
     if (!incomingAssetSuggestion) return;
@@ -1300,6 +1303,7 @@ export function useStudyWorkspace(props: {
     activeAiChatSessionId,
     aiChatReadOnly,
     aiLoading,
+    aiCanvasRequestBusy,
     aiError,
     aiCanvas,
     classInsight: currentClassInsight,

@@ -80,6 +80,7 @@ export type BackendChatMessage = {
   session_id: number;
   role: 'user' | 'assistant' | string;
   content: string;
+  source: string;
   selection_image_url?: string | null;
   model: string | null;
   created_at: string;
@@ -98,6 +99,7 @@ export type BackendAiCanvasNoteSummary = {
   folder_id: number;
   note_id: number;
   title: string;
+  revision: number;
   source_page_start: number | null;
   source_page_end: number | null;
   created_at: string;
@@ -137,6 +139,7 @@ export type BackendAiMessageResponse = {
     session_id: number;
     role: 'assistant';
     content: string;
+    source: string;
     model: string | null;
     created_at: string;
   };
@@ -636,6 +639,7 @@ export async function updateBackendAiCanvasNote(payload: {
   canvasNoteId: number;
   title?: string;
   markdown?: string;
+  expectedRevision?: number;
   sourcePageStart?: number | null;
   sourcePageEnd?: number | null;
 }) {
@@ -644,6 +648,7 @@ export async function updateBackendAiCanvasNote(payload: {
     body: {
       title: payload.title,
       markdown: payload.markdown,
+      expected_revision: payload.expectedRevision,
       source_page_start: payload.sourcePageStart,
       source_page_end: payload.sourcePageEnd,
     },
@@ -719,9 +724,11 @@ export async function sendBackendAiMessage(payload: {
   pageNumber?: number | null;
   selectionImageUri?: string | null;
   contextHint?: string | null;
+  source?: 'chat' | 'canvas-mini';
   canvasNoteId?: number | null;
   canvasAction?: 'auto' | 'chat_only' | 'canvas_edit' | 'canvas_create';
   canvasNoteNeedsTitle?: boolean;
+  canvasMarkdown?: string | null;
 }) {
   return request<BackendAiMessageResponse>(`/chat-sessions/${payload.sessionId}/ai-messages`, {
     method: 'POST',
@@ -734,9 +741,11 @@ export async function sendBackendAiMessage(payload: {
       page_number: payload.pageNumber ?? null,
       selection_image_url: payload.selectionImageUri ?? null,
       context_hint: payload.contextHint ?? null,
+      source: payload.source ?? 'chat',
       canvas_note_id: payload.canvasNoteId ?? null,
       canvas_action: payload.canvasAction ?? 'auto',
       canvas_note_needs_title: payload.canvasNoteNeedsTitle ?? false,
+      canvas_markdown: payload.canvasMarkdown ?? null,
     },
   });
 }

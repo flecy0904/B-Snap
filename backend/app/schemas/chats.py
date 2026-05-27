@@ -5,6 +5,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.schemas.ai_canvas_notes import AiCanvasNoteRead
 
+ChatMessageSource = Literal["chat", "canvas-mini"]
+
 
 class ChatSessionCreate(BaseModel):
     title: str
@@ -31,6 +33,7 @@ class ChatMessageCreate(BaseModel):
     role: str
     content: str
     model: str | None = None
+    source: ChatMessageSource = "chat"
 
 
 class SelectionRectPayload(BaseModel):
@@ -46,12 +49,14 @@ class SelectionRectPayload(BaseModel):
 class ChatAiMessageCreate(BaseModel):
     content: str
     model: str | None = None
+    source: ChatMessageSource = "chat"
     page_number: int | None = Field(default=None, ge=1)
     selection_image_url: str | None = None
     context_hint: str | None = Field(default=None, max_length=4000)
     canvas_note_id: int | None = Field(default=None, ge=1)
     canvas_action: Literal["auto", "chat_only", "canvas_edit", "canvas_create"] = "auto"
     canvas_note_needs_title: bool = False
+    canvas_markdown: str | None = None
     use_rag: bool = False
     top_k: int = Field(default=5, ge=1, le=20)
     selection_image: str | None = None
@@ -63,6 +68,7 @@ class ChatMessageRead(BaseModel):
     session_id: int
     role: str
     content: str
+    source: str = "chat"
     model: str | None = None
     created_at: datetime
 

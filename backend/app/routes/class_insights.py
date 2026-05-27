@@ -352,6 +352,7 @@ def get_class_insights(
                 JOIN chat_messages m ON m.session_id = s.id
                 WHERE s.note_id IN ({note_placeholders})
                   AND m.role = 'user'
+                  AND COALESCE(m.source, 'chat') <> 'canvas-mini'
                 """,
                 note_values,
             )

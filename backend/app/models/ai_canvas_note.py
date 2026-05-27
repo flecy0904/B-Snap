@@ -14,6 +14,7 @@ class AiCanvasNote(Base):
     note_id: Mapped[int] = mapped_column(ForeignKey("notes.id", ondelete="CASCADE"), index=True)
     title: Mapped[str] = mapped_column(String(200))
     markdown: Mapped[str] = mapped_column(Text, default="")
+    revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     source_page_start: Mapped[int] = mapped_column(Integer, nullable=True)
     source_page_end: Mapped[int] = mapped_column(Integer, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
