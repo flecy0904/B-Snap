@@ -138,7 +138,7 @@ export const NotesWorkspaceToolbar = React.memo(function NotesWorkspaceToolbar()
   const canvasContext = useCanvasContext();
   const usesAppAiPanelLayout = Boolean(workspaceContext.usesAppAiPanelLayout);
   const chatToolActive = usesAppAiPanelLayout
-    ? workspaceContext.appRightSidebarPanel === 'chat' || workspaceContext.appChatMode === 'floating'
+    ? workspaceContext.appRightSidebarPanel === 'chat' || (workspaceContext.appChatMode === 'floating' && workspaceContext.aiPanelOpen)
     : workspaceContext.aiPanelOpen;
   const canvasToolActive = usesAppAiPanelLayout
     ? workspaceContext.appRightSidebarPanel === 'canvas'
