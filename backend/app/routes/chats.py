@@ -23,7 +23,7 @@ from backend.app.services.openai_service import (
     generate_chat_title,
     generate_note_chat_answer,
 )
-from backend.app.services.rag_service import ask_with_rag, load_note_documents
+from backend.app.services.rag_service import ask_with_rag, build_rag_context_hint, load_note_documents
 
 
 router = APIRouter(tags=["chats"])
@@ -413,6 +413,17 @@ def create_ai_chat_message(
         ).answer
     else:
         context_pages = select_chat_context_pages(pages, payload.page_number)
+        documents = load_note_documents(connection, note_ids=[session["note_id"]], user_id=current_user["id"])
+        rag_context_hint = build_rag_context_hint(
+            question=payload.content,
+            documents=documents,
+            top_k=payload.top_k,
+        )
+        context_hint = "\n\n".join(
+            hint
+            for hint in [payload.context_hint, rag_context_hint]
+            if hint
+        ) or None
         answer = generate_note_chat_answer(
             model=model,
             note=note,
@@ -423,7 +434,7 @@ def create_ai_chat_message(
             selection_rect=payload.selection_rect.model_dump() if payload.selection_rect else None,
             page_number=payload.page_number,
             selection_image_url=payload.selection_image_url,
-            context_hint=payload.context_hint,
+            context_hint=context_hint,
         )
     user_message = execute_returning(
         connection,
