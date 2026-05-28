@@ -21,7 +21,7 @@ static NSInteger const BsnPdfMaxBaseRenderTargetWidth = 1200;
 static NSInteger const BsnPdfMaxHiResRenderTargetWidth = 2400;
 static CGFloat const BsnPdfMaxPageAspectRatio = 12.0;
 static CGFloat const BsnPdfMaxDecodedImagePixel = 2048.0;
-static BOOL const BsnPdfPageDebugLoggingEnabled = YES;
+static BOOL const BsnPdfPageDebugLoggingEnabled = NO;
 
 #define BsnPdfPageDebugLog(...) do { if (BsnPdfPageDebugLoggingEnabled) NSLog(__VA_ARGS__); } while (0)
 #define BsnPdfPerfLog(view, ...) do { if ((view).perfLoggingEnabled) NSLog(__VA_ARGS__); } while (0)
@@ -334,6 +334,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 - (NSInteger)pageNumberNearContentPoint:(CGPoint)contentPoint;
 - (void)scheduleBaseRendersForce:(BOOL)force;
 - (void)pruneBaseRenderQueueForWantedKeys:(NSSet<NSString *> *)wantedKeys;
+- (NSArray<NSNumber *> *)visibleRenderPriorityIndexes;
 - (NSString *)hiResRenderKeyForRequest:(BsnPdfHiResRequest *)request;
 - (void)pruneHiResRenderQueueForWantedKeys:(NSSet<NSString *> *)wantedKeys;
 - (void)requestHiResOverlayAfterDelay:(NSTimeInterval)delayMs;
@@ -382,6 +383,8 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 - (void)stopInertia;
 - (void)stopViewportMotionAndSettle;
 - (BOOL)isViewportMotionActive;
+- (BOOL)isViewportUserInteractionActive;
+- (BOOL)isCustomViewportDrivingScroll;
 - (void)flushDeferredViewportInvalidations;
 - (void)clampViewportOffsetSnap:(BOOL)snap;
 - (void)clampViewportOffsetSnap:(BOOL)snap preservingContentPoint:(CGPoint)contentPoint atViewPoint:(CGPoint)viewPoint;
@@ -1178,7 +1181,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   CGSize nextSize = self.bounds.size;
   BOOL sizeChanged = fabs(nextSize.width - previousSize.width) > 0.5
     || fabs(nextSize.height - previousSize.height) > 0.5;
-  if (sizeChanged && !self.scrollView.isTracking && !self.scrollView.isDragging) {
+  if (sizeChanged && ![self isViewportUserInteractionActive]) {
     [self stopViewportMotionAndSettle];
     if (self.pendingLayoutTransitionAnchor == nil) {
       self.pendingLayoutTransitionAnchor = [self captureViewportAnchor];
@@ -1222,8 +1225,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   if (oldSize.width <= 0 || oldSize.height <= 0 || newSize.width <= 0 || newSize.height <= 0) return NO;
   if (fabs(newSize.height - oldSize.height) > 0.5) return NO;
   if (self.pendingScrollToRequestedPage) return NO;
-  if (self.scrollView.isTracking || self.scrollView.isDragging || self.scrollView.isDecelerating) return NO;
-  if (self.viewportPinchActive || self.viewportPanActive || self.inertiaDisplayLink != nil) return NO;
+  if ([self isViewportUserInteractionActive]) return NO;
   return fabs(newSize.width - oldSize.width) > 0.5;
 }
 
@@ -1279,9 +1281,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     && CACurrentMediaTime() < self.suppressScrollPageEventsUntil
     && self.protectedPageNumber > 1
     && nextPage != self.protectedPageNumber
-    && !self.scrollView.isTracking
-    && !self.scrollView.isDragging
-    && !self.scrollView.isDecelerating;
+    && ![self isViewportUserInteractionActive];
   if (propSyncDuringProtectedScroll) {
     BsnPdfPageDebugLog(@"[BsnPdfViewport][page-debug] ignore setRequestedPage protected-scroll incoming=%ld protected=%ld last=%ld reported=%ld offsetY=%.1f",
       (long)nextPage,
@@ -1328,9 +1328,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     && suppressingProgrammaticLayout
     && nextPage == 1
     && stablePage > 1
-    && !self.scrollView.isTracking
-    && !self.scrollView.isDragging
-    && !self.scrollView.isDecelerating
+    && ![self isViewportUserInteractionActive]
   ) {
     BsnPdfPageDebugLog(@"[BsnPdfViewport][page-debug] ignore explicit stale-one during anchor restore incoming=%ld stable=%ld last=%ld reported=%ld serial=%ld offsetY=%.1f",
       (long)nextPage,
@@ -1372,9 +1370,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     && nextPage == 1
     && stablePage > 1
     && (self.scrollView.contentOffset.y > MAX(160.0, self.bounds.size.height * 0.35) || [self savedAnchorPageNumber] > 1)
-    && !self.scrollView.isTracking
-    && !self.scrollView.isDragging
-    && !self.scrollView.isDecelerating
+    && ![self isViewportUserInteractionActive]
   ) {
     BsnPdfPageDebugLog(@"[BsnPdfViewport][page-debug] ignore setRequestedPage stale-one incoming=%ld stable=%ld last=%ld reported=%ld offsetY=%.1f",
       (long)nextPage,
@@ -2025,7 +2021,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 {
   if (self.restoringViewportAnchor) return NO;
   if (![self isSuppressingProgrammaticLayout]) return NO;
-  if (self.scrollView.isTracking || self.scrollView.isDragging || self.scrollView.isDecelerating) return NO;
+  if ([self isViewportUserInteractionActive]) return NO;
   NSDictionary *anchor = self.fileUri.length > 0 ? BsnPdfSavedViewportAnchors()[self.fileUri] : nil;
   NSInteger anchorPage = [anchor[@"pageNumber"] integerValue];
   if (anchorPage <= 1) return NO;
@@ -2052,7 +2048,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 - (BOOL)restoreProtectedPageAfterProgrammaticScrollCandidate:(NSInteger)pageNumber source:(NSString *)source
 {
   if (self.protectedPageNumber <= 1) return NO;
-  if (self.scrollView.isTracking || self.scrollView.isDragging || self.scrollView.isDecelerating) return NO;
+  if ([self isViewportUserInteractionActive]) return NO;
   NSDictionary *anchor = self.fileUri.length > 0 ? BsnPdfSavedViewportAnchors()[self.fileUri] : nil;
   NSInteger anchorPage = [anchor[@"pageNumber"] integerValue];
   BsnPdfPageDebugLog(@"[BsnPdfViewport][page-debug] restoreProtectedProgrammaticScroll source=%@ candidate=%ld protected=%ld anchorPage=%ld offsetY=%.1f",
@@ -2081,9 +2077,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 - (BOOL)isSuppressingProgrammaticLayout
 {
   return CACurrentMediaTime() < self.suppressAnchorSaveUntil
-    && !self.scrollView.isTracking
-    && !self.scrollView.isDragging
-    && !self.scrollView.isDecelerating;
+    && ![self isViewportUserInteractionActive];
 }
 
 - (NSInteger)savedAnchorPageNumber
@@ -2171,7 +2165,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 {
   if (![source isEqualToString:@"scrollViewDidScroll"]) return NO;
   if (CACurrentMediaTime() >= self.suppressAnchorSaveUntil) return NO;
-  if (self.scrollView.isTracking || self.scrollView.isDragging || self.scrollView.isDecelerating) return NO;
+  if ([self isViewportUserInteractionActive]) return NO;
   NSInteger stablePage = MAX(MAX(self.requestedPage, self.reportedPageNumber), self.lastPageNumber);
   if (stablePage <= 1 || pageNumber >= stablePage) return NO;
 
@@ -2274,6 +2268,10 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 
 - (void)scrollViewDidScroll:(UIScrollView *)scrollView
 {
+  if ([self isCustomViewportDrivingScroll]) {
+    self.lastContentOffsetY = scrollView.contentOffset.y;
+    return;
+  }
   if ([self restoreAnchorIfNeededForLayoutResetScroll]) return;
   CGFloat deltaY = scrollView.contentOffset.y - self.lastContentOffsetY;
   self.lastContentOffsetY = scrollView.contentOffset.y;
@@ -2292,16 +2290,16 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 
 - (void)scrollViewDidZoom:(UIScrollView *)scrollView
 {
+  if (self.viewportPinchActive) {
+    self.lastContentOffsetY = scrollView.contentOffset.y;
+    return;
+  }
   [self logScrollDebugWithSource:@"scrollViewDidZoom" deltaY:0 force:YES];
-  if (!self.viewportPinchActive) {
-    [self scheduleBaseRendersForce:NO];
-    if (![self isViewportMotionActive]) {
-      [self requestHiResOverlayAfterDelay:160];
-    }
+  [self scheduleBaseRendersForce:NO];
+  if (![self isViewportMotionActive]) {
+    [self requestHiResOverlayAfterDelay:160];
   }
-  if (!self.viewportPinchActive) {
-    [self emitPageChangedIfNeededFromSource:@"scrollViewDidZoom"];
-  }
+  [self emitPageChangedIfNeededFromSource:@"scrollViewDidZoom"];
   [self requestViewportChangedForce:NO];
 }
 
@@ -2693,6 +2691,21 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     || hypot(self.inertiaVelocity.x, self.inertiaVelocity.y) > 0.5;
 }
 
+- (BOOL)isViewportUserInteractionActive
+{
+  return self.scrollView.isTracking
+    || self.scrollView.isDragging
+    || self.scrollView.isDecelerating
+    || [self isViewportMotionActive];
+}
+
+- (BOOL)isCustomViewportDrivingScroll
+{
+  return self.viewportPanActive
+    || self.viewportPinchActive
+    || self.inertiaDisplayLink != nil;
+}
+
 - (void)flushDeferredViewportInvalidations
 {
   if (self.inkInteractionActive || [self isViewportMotionActive]) return;
@@ -2827,6 +2840,9 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     NSNumber *value = @(index);
     if (![indexes containsObject:value]) [indexes addObject:value];
   };
+  for (NSNumber *visibleIndex in [self visibleRenderPriorityIndexes]) {
+    addIndex(visibleIndex.integerValue);
+  }
   addIndex(centerIndex);
   if (self.baseRenderDirection > 0) {
     for (NSInteger offset = 1; offset <= 5; offset += 1) addIndex(centerIndex + offset);
@@ -2836,6 +2852,37 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     NSArray<NSNumber *> *offsets = @[@(-1), @(1), @(-2), @(2), @(3)];
     for (NSNumber *offset in offsets) addIndex(centerIndex + offset.integerValue);
   }
+  return indexes;
+}
+
+- (NSArray<NSNumber *> *)visibleRenderPriorityIndexes
+{
+  if (self.layouts.count == 0 || self.bounds.size.width <= 0 || self.bounds.size.height <= 0) return @[];
+  CGFloat zoom = MAX(0.0001, self.scrollView.zoomScale);
+  CGRect viewport = CGRectMake(
+    self.scrollView.contentOffset.x / zoom,
+    self.scrollView.contentOffset.y / zoom,
+    self.bounds.size.width / zoom,
+    self.bounds.size.height / zoom
+  );
+  CGRect priorityViewport = CGRectInset(viewport, 0, -CGRectGetHeight(viewport) * 0.2);
+  CGPoint viewportCenter = CGPointMake(CGRectGetMidX(viewport), CGRectGetMidY(viewport));
+  NSMutableArray<NSDictionary *> *entries = [NSMutableArray array];
+  for (NSInteger index = 0; index < self.layouts.count; index += 1) {
+    BsnPdfPageLayout *layout = self.layouts[index];
+    if (layout.pageNumber == nil || !CGRectIntersectsRect(priorityViewport, layout.frame)) continue;
+    CGRect overlap = CGRectIntersection(priorityViewport, layout.frame);
+    CGFloat overlapArea = MAX(0, overlap.size.width) * MAX(0, overlap.size.height);
+    CGFloat distance = hypot(CGRectGetMidX(layout.frame) - viewportCenter.x, CGRectGetMidY(layout.frame) - viewportCenter.y);
+    [entries addObject:@{@"index": @(index), @"overlap": @(overlapArea), @"distance": @(distance)}];
+  }
+  [entries sortUsingComparator:^NSComparisonResult(NSDictionary *first, NSDictionary *second) {
+    NSComparisonResult overlapResult = [second[@"overlap"] compare:first[@"overlap"]];
+    if (overlapResult != NSOrderedSame) return overlapResult;
+    return [first[@"distance"] compare:second[@"distance"]];
+  }];
+  NSMutableArray<NSNumber *> *indexes = [NSMutableArray array];
+  for (NSDictionary *entry in entries) [indexes addObject:entry[@"index"]];
   return indexes;
 }
 
@@ -3310,8 +3357,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
       && CACurrentMediaTime() < self.suppressScrollPageEventsUntil
       && self.protectedPageNumber > 0
       && pageNumber != self.protectedPageNumber
-      && !self.scrollView.isTracking
-      && !self.scrollView.isDragging;
+      && ![self isViewportUserInteractionActive];
     if (protectedProgrammaticScroll) {
       BsnPdfPageDebugLog(@"[BsnPdfViewport][page-debug] ignore pageCandidate source=%@ page=%ld previousLast=%ld protected=%ld reason=programmatic-scroll-settle offsetY=%.1f",
         pageChangeSource,
@@ -3323,9 +3369,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
       return;
     }
     BOOL suppressingProgrammaticLayout = CACurrentMediaTime() < self.suppressAnchorSaveUntil
-      && !self.scrollView.isTracking
-      && !self.scrollView.isDragging
-      && !self.scrollView.isDecelerating;
+      && ![self isViewportUserInteractionActive];
     if (suppressingProgrammaticLayout && self.lastPageNumber > 0) {
       BsnPdfPageDebugLog(@"[BsnPdfViewport][page-debug] ignore pageCandidate source=%@ page=%ld previousLast=%ld reason=tool-layout offsetY=%.1f",
         pageChangeSource,
