@@ -460,14 +460,19 @@ export function NotesAiCanvasPanel() {
           {canvas.activeNote ? (
             <View style={workspace.styles.aiCanvasEditorShell}>
               <AiCanvasMarkdownEditor
-                markdown={canvas.markdownDraft}
+                documentJson={canvas.documentDraft}
+                fallbackMarkdown={canvas.markdownDraft}
                 editable={editorEditable}
                 placeholder="Markdown으로 정리 내용을 작성하세요."
-                onChangeMarkdown={async (value) => {
-                  canvas.setMarkdownDraft(value);
+                pendingOperations={canvas.pendingCanvasOperations}
+                onChangeDocument={async (change) => {
+                  canvas.setDocumentDraft(change);
                 }}
                 onFocusEditor={async () => {
                   workspace.onFocusWorkspaceTarget('aiCanvas');
+                }}
+                onApplyOperationsResult={async (requestId, applied) => {
+                  canvas.completeCanvasOperations(requestId, applied);
                 }}
                 dom={{
                   style: workspace.styles.aiCanvasMarkdownWebView,

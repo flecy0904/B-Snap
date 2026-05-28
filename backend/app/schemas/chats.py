@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -57,6 +57,7 @@ class ChatAiMessageCreate(BaseModel):
     canvas_action: Literal["auto", "chat_only", "canvas_edit", "canvas_create"] = "auto"
     canvas_note_needs_title: bool = False
     canvas_markdown: str | None = None
+    canvas_document_json: dict[str, Any] | None = None
     use_rag: bool = False
     top_k: int = Field(default=5, ge=1, le=20)
     selection_image: str | None = None
@@ -82,9 +83,9 @@ class ChatSessionDetail(ChatSessionRead):
 class ChatCanvasEditRead(BaseModel):
     action: Literal["canvas_edit", "canvas_create"]
     canvas_note_id: int
-    markdown: str
     title: str
     canvas_note: AiCanvasNoteRead
+    operations: list[dict[str, Any]]
 
 
 class ChatAiMessageRead(BaseModel):

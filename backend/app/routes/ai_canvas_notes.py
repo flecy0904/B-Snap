@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from psycopg import Connection
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 
 from backend.app.core.auth import get_current_user
 from backend.app.db.crud import execute_commit, execute_returning, fetch_all, fetch_one, require_row
@@ -35,6 +36,7 @@ def get_ai_canvas_note(canvas_note_id: int, connection: Connection, user_id: int
                    ai_canvas_notes.note_id,
                    ai_canvas_notes.title,
                    ai_canvas_notes.markdown,
+                   ai_canvas_notes.document_json,
                    ai_canvas_notes.revision,
                    ai_canvas_notes.source_page_start,
                    ai_canvas_notes.source_page_end,
@@ -73,15 +75,16 @@ def create_ai_canvas_note(
     return execute_returning(
         connection,
         """
-        INSERT INTO ai_canvas_notes (folder_id, note_id, title, markdown, source_page_start, source_page_end)
-        VALUES (%s, %s, %s, %s, %s, %s)
-        RETURNING id, folder_id, note_id, title, markdown, revision, source_page_start, source_page_end, created_at, updated_at
+        INSERT INTO ai_canvas_notes (folder_id, note_id, title, markdown, document_json, source_page_start, source_page_end)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        RETURNING id, folder_id, note_id, title, markdown, document_json, revision, source_page_start, source_page_end, created_at, updated_at
         """,
         (
             note["folder_id"],
             note_id,
             title,
             payload.markdown,
+            Jsonb(payload.document_json),
             payload.source_page_start,
             payload.source_page_end,
         ),
@@ -167,6 +170,7 @@ def update_ai_canvas_note(
         UPDATE ai_canvas_notes
         SET title = %s,
             markdown = %s,
+            document_json = %s,
             revision = revision + 1,
             source_page_start = %s,
             source_page_end = %s,
@@ -182,6 +186,7 @@ def update_ai_canvas_note(
     params = [
         normalize_title(payload.title) if payload.title is not None else current["title"],
         payload.markdown if payload.markdown is not None else current["markdown"],
+        Jsonb(payload.document_json if payload.document_json is not None else current["document_json"]),
         next_source_page_start,
         next_source_page_end,
         canvas_note_id,
@@ -191,7 +196,7 @@ def update_ai_canvas_note(
         query += " AND revision = %s"
         params.append(payload.expected_revision)
     query += """
-        RETURNING id, folder_id, note_id, title, markdown, revision, source_page_start, source_page_end, created_at, updated_at
+        RETURNING id, folder_id, note_id, title, markdown, document_json, revision, source_page_start, source_page_end, created_at, updated_at
     """
 
     with connection.cursor(row_factory=dict_row) as cursor:

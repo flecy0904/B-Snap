@@ -1,6 +1,7 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func, text as sql_text
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from backend.app.db.base import Base
@@ -14,6 +15,11 @@ class AiCanvasNote(Base):
     note_id: Mapped[int] = mapped_column(ForeignKey("notes.id", ondelete="CASCADE"), index=True)
     title: Mapped[str] = mapped_column(String(200))
     markdown: Mapped[str] = mapped_column(Text, default="")
+    document_json: Mapped[dict] = mapped_column(
+        JSONB,
+        nullable=False,
+        server_default=sql_text("'{\"type\":\"doc\",\"content\":[]}'::jsonb"),
+    )
     revision: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
     source_page_start: Mapped[int] = mapped_column(Integer, nullable=True)
     source_page_end: Mapped[int] = mapped_column(Integer, nullable=True)

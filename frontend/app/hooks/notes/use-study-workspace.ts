@@ -308,6 +308,13 @@ export function useStudyWorkspace(props: {
     onRecordWorkspaceAction: () => recordWorkspaceActionTarget('aiCanvas'),
   });
   const currentClassInsight = studyDocumentId ? classInsightByDocument[studyDocumentId] ?? null : null;
+  const applyCanvasEditFromChat = useCallback((
+    payload: Parameters<typeof aiCanvas.applyChatCanvasEdit>[0],
+  ) => {
+    aiCanvas.applyChatCanvasEdit(payload);
+    setAppRightSidebarPanel('canvas');
+    if (appChatMode === 'sidebar') setAiPanelOpen(false);
+  }, [aiCanvas.applyChatCanvasEdit, appChatMode]);
 
   useEffect(() => {
     if (!workspaceFeedback) return;
@@ -823,6 +830,7 @@ export function useStudyWorkspace(props: {
     setAiQuestion,
     setAiError,
     setAiLoading,
+    setAiCanvasRequestBusy,
     setSelectionPreviewByDocument,
     setChatSessionByDocument,
     setViewingAiChatSessionId,
@@ -832,7 +840,8 @@ export function useStudyWorkspace(props: {
     setAiMessagesBySession,
     activeCanvasNoteId: aiCanvas.activeNoteId,
     activeCanvasMarkdown: aiCanvas.markdownDraft,
-    onApplyCanvasEditFromChat: aiCanvas.applyChatCanvasEdit,
+    activeCanvasDocumentJson: aiCanvas.documentDraft,
+    onApplyCanvasEditFromChat: applyCanvasEditFromChat,
     clearSelection: clearSelectionForCurrentDocument,
     buildContextHint: (question) => buildClassInsightContext({
       question,
@@ -905,8 +914,9 @@ export function useStudyWorkspace(props: {
       source: 'canvas-mini',
       selectionImageUri: options?.selectionImageUri ?? null,
       canvasMarkdown: aiCanvas.markdownDraft,
+      canvasDocumentJson: aiCanvas.documentDraft,
     })
-  ), [aiCanvas.markdownDraft, requestAiAnswer]);
+  ), [aiCanvas.documentDraft, aiCanvas.markdownDraft, requestAiAnswer]);
 
   const acceptIncomingAsset = () => {
     if (!incomingAssetSuggestion) return;

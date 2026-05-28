@@ -274,8 +274,91 @@ def generate_ai_canvas_intent(
         return intent
     return "chat_only"
 
+ALLOWED_CANVAS_OPERATION_TYPES = {"insert_after", "insert_before", "replace", "delete"}
+ALLOWED_CANVAS_ROOT_NODE_TYPES = {
+    "paragraph",
+    "heading",
+    "bulletList",
+    "orderedList",
+    "listItem",
+    "codeBlock",
+    "horizontalRule",
+}
+ALLOWED_CANVAS_NODE_TYPES = ALLOWED_CANVAS_ROOT_NODE_TYPES | {"text"}
+ALLOWED_CANVAS_MARK_TYPES = {"bold", "italic", "strike"}
 
-def generate_ai_canvas_edit_from_chat(
+
+def _validate_canvas_node(node: Any, *, allow_text: bool = True) -> dict[str, Any]:
+    if not isinstance(node, dict):
+        raise HTTPException(status_code=502, detail="AI returned an invalid Canvas node")
+    node_type = node.get("type")
+    allowed_node_types = ALLOWED_CANVAS_NODE_TYPES if allow_text else ALLOWED_CANVAS_ROOT_NODE_TYPES
+    if node_type not in allowed_node_types:
+        raise HTTPException(status_code=502, detail="AI returned an unsupported Canvas node")
+
+    validated: dict[str, Any] = {"type": node_type}
+    attrs = node.get("attrs")
+    if isinstance(attrs, dict):
+        clean_attrs: dict[str, Any] = {}
+        if "blockId" in attrs and isinstance(attrs["blockId"], str):
+            clean_attrs["blockId"] = attrs["blockId"][:80]
+        if node_type == "heading":
+            level = attrs.get("level")
+            clean_attrs["level"] = level if level in {1, 2, 3} else 2
+        if clean_attrs:
+            validated["attrs"] = clean_attrs
+    elif node_type == "heading":
+        validated["attrs"] = {"level": 2}
+
+    if node_type == "text":
+        text = node.get("text")
+        validated["text"] = text if isinstance(text, str) else ""
+        marks = node.get("marks")
+        if isinstance(marks, list):
+            clean_marks = [
+                {"type": mark.get("type")}
+                for mark in marks
+                if isinstance(mark, dict) and mark.get("type") in ALLOWED_CANVAS_MARK_TYPES
+            ]
+            if clean_marks:
+                validated["marks"] = clean_marks
+        return validated
+
+    content = node.get("content")
+    if isinstance(content, list):
+        validated["content"] = [_validate_canvas_node(child, allow_text=True) for child in content]
+    return validated
+
+
+def _validate_canvas_operations(raw: Any) -> list[dict[str, Any]]:
+    payload = raw.get("operations") if isinstance(raw, dict) else raw
+    if not isinstance(payload, list):
+        raise HTTPException(status_code=502, detail="AI returned invalid Canvas operations")
+
+    operations: list[dict[str, Any]] = []
+    for item in payload[:12]:
+        if not isinstance(item, dict):
+            continue
+        op = item.get("op")
+        if op not in ALLOWED_CANVAS_OPERATION_TYPES:
+            continue
+        target_block_id = item.get("targetBlockId")
+        if op != "insert_after" and not isinstance(target_block_id, str):
+            continue
+        if op == "insert_after" and target_block_id is not None and not isinstance(target_block_id, str):
+            continue
+
+        operation: dict[str, Any] = {"op": op, "targetBlockId": target_block_id}
+        if op != "delete":
+            operation["node"] = _validate_canvas_node(item.get("node"), allow_text=False)
+        operations.append(operation)
+
+    if not operations:
+        raise HTTPException(status_code=502, detail="AI returned no usable Canvas operations")
+    return operations
+
+
+def generate_ai_canvas_operations_from_chat(
     *,
     model: str,
     note: dict,
@@ -284,10 +367,11 @@ def generate_ai_canvas_edit_from_chat(
     user_content: str,
     canvas_title: str,
     canvas_markdown: str,
+    canvas_document_json: dict[str, Any],
     current_page_number: int | None = None,
     selection_image: str | None = None,
     selection_image_url: str | None = None,
-) -> str:
+) -> list[dict[str, Any]]:
     input_items: list[dict[str, Any]] = [
         {
             "role": "user",
@@ -299,16 +383,16 @@ def generate_ai_canvas_edit_from_chat(
                 "",
                 f"Canvas title: {canvas_title}",
                 "",
-                "Current Canvas Markdown:",
+                "Current Canvas document JSON:",
+                json.dumps(canvas_document_json or {"type": "doc", "content": []}, ensure_ascii=False),
+                "",
+                "Current Canvas Markdown cache:",
                 canvas_markdown or "(empty)",
                 "",
                 "Note/PDF context:",
                 build_note_context(note, pages, current_page_number=current_page_number),
                 "",
-                (
-                    "Edit the Canvas directly according to the user's request. "
-                    "Return the complete updated Markdown document only."
-                ),
+                "Return Canvas operations JSON only.",
             ]),
         }
     ]
@@ -335,11 +419,18 @@ def generate_ai_canvas_edit_from_chat(
             ],
         })
 
-    return generate_text_response(
+    raw = generate_text_response(
         model=model,
         instructions=AI_CANVAS_EDIT_INSTRUCTIONS,
         input_items=input_items,
     )
+    parsed = _parse_json_object(raw)
+    if parsed is None:
+        try:
+            parsed = json.loads(raw)
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail="AI returned invalid Canvas JSON") from exc
+    return _validate_canvas_operations(parsed)
 
 
 def generate_capture_image_analysis(

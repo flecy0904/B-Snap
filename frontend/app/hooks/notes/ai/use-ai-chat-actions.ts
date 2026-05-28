@@ -12,6 +12,7 @@ import {
   type BackendChatSession,
 } from '../../../services/backend-api';
 import type { AiAnswer, StudyDocumentEntry } from '../../../types';
+import type { AiCanvasDocumentJson, CanvasOperation } from '../../../types/ai-canvas';
 import type { SelectionRect } from '../../../ui-types';
 import { getStudyDocumentBackendNoteId } from '../document/backend-sync';
 import { buildAiChatTitle } from './ai-chat-title';
@@ -122,7 +123,12 @@ export function useAiChatActions(params: {
   setAiMessagesBySession: SetState<Record<number, BackendChatMessage[]>>;
   activeCanvasNoteId?: number | null;
   activeCanvasMarkdown?: string | null;
-  onApplyCanvasEditFromChat?: (payload: { action: 'canvas_edit' | 'canvas_create'; canvasNote: BackendAiCanvasNote }) => void;
+  activeCanvasDocumentJson?: AiCanvasDocumentJson | null;
+  onApplyCanvasEditFromChat?: (payload: {
+    action: 'canvas_edit' | 'canvas_create';
+    canvasNote: BackendAiCanvasNote;
+    operations: CanvasOperation[];
+  }) => void;
   clearSelection?: () => void;
   buildContextHint?: (question: string) => string | null;
 }) {
@@ -376,6 +382,7 @@ export function useAiChatActions(params: {
     source?: 'chat' | 'canvas-mini';
     canvasAction?: CanvasAction;
     canvasMarkdown?: string | null;
+    canvasDocumentJson?: AiCanvasDocumentJson | null;
   }) => {
     if (!params.studyDocumentId) return false;
     if (params.aiChatReadOnly) {
@@ -490,6 +497,9 @@ export function useAiChatActions(params: {
         canvasMarkdown: canvasAction === 'canvas_edit' || (canvasAction === 'auto' && shouldLockCanvas)
           ? override?.canvasMarkdown ?? params.activeCanvasMarkdown ?? null
           : null,
+        canvasDocumentJson: canvasAction === 'canvas_edit' || (canvasAction === 'auto' && shouldLockCanvas)
+          ? override?.canvasDocumentJson ?? params.activeCanvasDocumentJson ?? null
+          : null,
         contextHint,
       });
       const userMessageWithAttachment = {
@@ -540,6 +550,7 @@ export function useAiChatActions(params: {
         params.onApplyCanvasEditFromChat({
           action: response.canvas_edit.action,
           canvasNote: response.canvas_edit.canvas_note,
+          operations: response.canvas_edit.operations,
         });
       } else if (canvasAction === 'canvas_edit' || canvasAction === 'canvas_create') {
         params.setAiError('Canvas 수정 응답을 받지 못했습니다. 백엔드 서버를 다시 실행해 주세요.');
@@ -565,6 +576,7 @@ export function useAiChatActions(params: {
     canvasAction?: CanvasAction;
     selectionImageUri?: string | null;
     canvasMarkdown?: string | null;
+    canvasDocumentJson?: AiCanvasDocumentJson | null;
   }) => requestAiAnswerInternal(options);
 
   const requestAiAnswerForQuestion = async (question: string, options?: {
