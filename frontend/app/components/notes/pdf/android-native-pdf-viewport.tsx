@@ -55,6 +55,7 @@ type NativePageCaptureReferenceActionEvent = NativeSyntheticEvent<{
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
 
 const PDF_RENDER_DEBUG_LOGGING = process.env.EXPO_PUBLIC_PDF_RENDER_DEBUG === '1';
+const IOS_CUSTOM_PDF_CORE = process.env.EXPO_PUBLIC_IOS_CUSTOM_PDF_CORE !== '0';
 
 export type PdfViewportOverlayPage = {
   id: string;
@@ -124,6 +125,7 @@ type BsnPdfViewportNativeProps = {
   selectionMenuEnabled?: boolean;
   selectionMenuEditable?: boolean;
   textGestureEnabled?: boolean;
+  customViewportCoreEnabled?: boolean;
   perfLoggingEnabled?: boolean;
   renderDebugLoggingEnabled?: boolean;
   style?: StyleProp<ViewStyle>;
@@ -1535,6 +1537,7 @@ export function AndroidNativePdfViewport(props: {
         selectionMenuEnabled={nativeSelectionMenu?.enabled ?? false}
         selectionMenuEditable={nativeSelectionMenu?.editable ?? false}
         textGestureEnabled={nativeTextGestureEnabled}
+        {...(Platform.OS === 'ios' ? { customViewportCoreEnabled: IOS_CUSTOM_PDF_CORE } : {})}
         perfLoggingEnabled={Platform.OS === 'ios' && __DEV__}
         renderDebugLoggingEnabled={Platform.OS === 'ios' && PDF_RENDER_DEBUG_LOGGING}
         style={styles.nativeView}

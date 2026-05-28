@@ -121,6 +121,10 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 @property (nonatomic, weak) BsnPdfViewportView *owner;
 @end
 
+@interface BsnPdfCustomCoreView : UIView
+@property (nonatomic, weak) BsnPdfViewportView *owner;
+@end
+
 @interface BsnPdfTiledLayer : CATiledLayer
 @end
 
@@ -180,6 +184,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 @property (nonatomic) BOOL selectionMenuEnabled;
 @property (nonatomic) BOOL selectionMenuEditable;
 @property (nonatomic) BOOL textGestureEnabled;
+@property (nonatomic) BOOL customViewportCoreEnabled;
 @property (nonatomic) BOOL perfLoggingEnabled;
 @property (nonatomic) BOOL renderDebugLoggingEnabled;
 @property (nonatomic, strong) UIScrollView *scrollView;
@@ -201,6 +206,8 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 - (void)drawImageAnnotationsForLayout:(BsnPdfPageLayout *)layout inContext:(CGContextRef)context;
 - (void)drawSelectionOverlayForLayout:(BsnPdfPageLayout *)layout inContext:(CGContextRef)context;
 - (void)drawSelectionMenuForLayout:(BsnPdfPageLayout *)layout inContext:(CGContextRef)context;
+- (void)drawDocumentPagesInContext:(CGContextRef)context dirtyRect:(CGRect)rect drawEditing:(BOOL)drawEditing;
+- (void)drawCustomCoreInContext:(CGContextRef)context dirtyRect:(CGRect)rect;
 - (void)drawLiveInkInContext:(CGContextRef)context dirtyRect:(CGRect)dirtyRect;
 - (NSArray<NSDictionary *> *)visibleInkStrokesIncludingPending;
 - (nullable UIImage *)baseImageForPageNumber:(NSInteger)pageNumber;
@@ -230,6 +237,8 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 @interface BsnPdfViewportView ()
 @property (nonatomic, strong) BsnPdfContentView *contentView;
 @property (nonatomic, strong) BsnPdfEditOverlayView *editOverlayView;
+@property (nonatomic, strong) BsnPdfCustomCoreView *customCoreView;
+@property (nonatomic, strong) UIView *customNativeSubviewLayer;
 @property (nonatomic, strong) BsnPdfLiveInkView *liveInkView;
 @property (nonatomic, strong) BsnPdfInkInputView *inkInputView;
 @property (nonatomic, strong) UIPanGestureRecognizer *viewportPanGesture;
@@ -286,6 +295,12 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 @property (nonatomic) NSInteger hiResGeneration;
 @property (nonatomic) NSInteger baseRenderDirection;
 @property (nonatomic) CGFloat lastContentOffsetY;
+@property (nonatomic) CGFloat coreScale;
+@property (nonatomic) CGFloat coreScrollYDocument;
+@property (nonatomic) CGFloat coreTranslateX;
+@property (nonatomic) CGFloat coreContentHeight;
+@property (nonatomic) CGFloat coreContentWidth;
+@property (nonatomic) BOOL syncingCustomViewportToScrollView;
 @property (nonatomic) CGFloat pinchStartZoom;
 @property (nonatomic) CGPoint pinchFocusContentPoint;
 @property (nonatomic) CGPoint pinchLastFocusViewPoint;
@@ -341,6 +356,17 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 - (void)requestViewportChangedForce:(BOOL)force;
 - (void)emitViewportChangedThrottled;
 - (void)emitViewportChangedForce:(BOOL)force;
+- (CGFloat)viewportScale;
+- (CGPoint)viewportContentOffset;
+- (CGSize)viewportContentSize;
+- (CGPoint)contentPointForViewportPoint:(CGPoint)viewPoint;
+- (CGRect)rawViewportRectForContentRect:(CGRect)contentRect;
+- (void)syncCustomCoreFromScrollView;
+- (void)syncScrollViewFromCustomCore;
+- (void)updateViewportModeViews;
+- (void)clampCustomViewportSnap:(BOOL)snap;
+- (void)clampCustomViewportSnap:(BOOL)snap preservingContentPoint:(CGPoint)contentPoint atViewPoint:(CGPoint)viewPoint;
+- (void)applyCustomViewportDidChangeWithDeltaY:(CGFloat)deltaY force:(BOOL)force;
 - (CGRect)viewportRectForContentRect:(CGRect)contentRect;
 - (CGRect)contentRectForViewportRect:(CGRect)viewportRect;
 - (void)setLiveInkNeedsDisplayInContentRect:(CGRect)contentRect;
@@ -436,6 +462,28 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 - (NSString *)selectionActionForPoint:(NSDictionary *)point resizeCorner:(NSString * __autoreleasing *)resizeCorner;
 @end
 
+@implementation BsnPdfCustomCoreView
+
+- (instancetype)initWithFrame:(CGRect)frame
+{
+  if ((self = [super initWithFrame:frame])) {
+    self.backgroundColor = [UIColor colorWithRed:0.95 green:0.96 blue:0.98 alpha:1.0];
+    self.opaque = YES;
+    self.userInteractionEnabled = NO;
+    self.contentMode = UIViewContentModeRedraw;
+  }
+  return self;
+}
+
+- (void)drawRect:(CGRect)rect
+{
+  CGContextRef context = UIGraphicsGetCurrentContext();
+  if (self.owner == nil || context == nil) return;
+  [self.owner drawCustomCoreInContext:context dirtyRect:rect];
+}
+
+@end
+
 @implementation BsnPdfTiledLayer
 
 + (CFTimeInterval)fadeDuration
@@ -470,53 +518,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   CGContextRef context = UIGraphicsGetCurrentContext();
   if (owner == nil || context == nil) return;
 
-  [[UIColor colorWithRed:0.95 green:0.96 blue:0.98 alpha:1.0] setFill];
-  CGContextFillRect(context, rect);
-
-  if (owner.layouts.count == 0) {
-    NSDictionary *attrs = @{
-      NSFontAttributeName: [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold],
-      NSForegroundColorAttributeName: [UIColor colorWithRed:0.50 green:0.55 blue:0.65 alpha:1.0],
-    };
-    NSString *message = [owner emptyStateMessage];
-    CGSize size = [message sizeWithAttributes:attrs];
-    [message drawAtPoint:CGPointMake((self.bounds.size.width - size.width) * 0.5, (self.bounds.size.height - size.height) * 0.5) withAttributes:attrs];
-    return;
-  }
-
-  for (BsnPdfPageLayout *layout in owner.layouts) {
-    if (!CGRectIntersectsRect(rect, layout.frame)) continue;
-    [[UIColor whiteColor] setFill];
-    CGContextFillRect(context, layout.frame);
-
-    if ([layout.kind isEqualToString:@"pdf"] && layout.pageNumber != nil && owner.document != nil) {
-      UIImage *baseImage = [owner baseImageForPageNumber:layout.pageNumber.integerValue];
-      if (baseImage != nil) {
-        [baseImage drawInRect:layout.frame];
-      } else {
-        [[UIColor colorWithRed:0.97 green:0.98 blue:1.0 alpha:1.0] setFill];
-        CGContextFillRect(context, layout.frame);
-        NSDictionary *attrs = @{
-          NSFontAttributeName: [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold],
-          NSForegroundColorAttributeName: [UIColor colorWithRed:0.50 green:0.55 blue:0.65 alpha:1.0],
-        };
-        [layout.label drawAtPoint:CGPointMake(CGRectGetMidX(layout.frame) - 22, CGRectGetMidY(layout.frame) - 8) withAttributes:attrs];
-        [owner requestBaseRenderForLayout:layout priority:0];
-      }
-      [owner drawHiResOverlayForLayout:layout inContext:context];
-    } else {
-      [[UIColor colorWithRed:1.0 green:0.99 blue:0.97 alpha:1.0] setFill];
-      CGContextFillRect(context, layout.frame);
-      NSDictionary *attrs = @{
-        NSFontAttributeName: [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold],
-        NSForegroundColorAttributeName: [UIColor colorWithRed:0.72 green:0.44 blue:0.12 alpha:1.0],
-      };
-      [layout.label drawAtPoint:CGPointMake(layout.frame.origin.x + 32, layout.frame.origin.y + 32) withAttributes:attrs];
-    }
-
-    [[UIColor colorWithRed:0.88 green:0.9 blue:0.94 alpha:1.0] setStroke];
-    CGContextStrokeRectWithWidth(context, layout.frame, 1.0 / MAX(1.0, owner.scrollView.zoomScale));
-  }
+  [owner drawDocumentPagesInContext:context dirtyRect:rect drawEditing:NO];
 }
 
 @end
@@ -574,8 +576,8 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 {
   CGContextRef context = UIGraphicsGetCurrentContext();
   if (self.owner == nil || context == nil) return;
-  CGFloat zoom = MAX(0.0001, self.owner.scrollView.zoomScale);
-  CGPoint offset = self.owner.scrollView.contentOffset;
+  CGFloat zoom = MAX(0.0001, [self.owner viewportScale]);
+  CGPoint offset = [self.owner viewportContentOffset];
   CGRect contentDirtyRect = [self.owner contentRectForViewportRect:rect];
   CGContextSaveGState(context);
   CGContextTranslateCTM(context, -offset.x, -offset.y);
@@ -995,6 +997,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     _selectionMenuEnabled = NO;
     _selectionMenuEditable = NO;
     _textGestureEnabled = NO;
+    _customViewportCoreEnabled = NO;
     _selectionColorPickerOpen = NO;
     _perfLoggingEnabled = NO;
     _renderDebugLoggingEnabled = NO;
@@ -1015,6 +1018,12 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     _renderGeneration = 0;
     _hiResGeneration = 0;
     _baseRenderDirection = 0;
+    _coreScale = BsnPdfMinZoom;
+    _coreScrollYDocument = 0;
+    _coreTranslateX = 0;
+    _coreContentHeight = 1;
+    _coreContentWidth = 1;
+    _syncingCustomViewportToScrollView = NO;
     _pinchStartZoom = 1.0;
     _pinchFocusContentPoint = CGPointZero;
     _pinchLastFocusViewPoint = CGPointZero;
@@ -1065,6 +1074,17 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     _editOverlayView.owner = self;
     _editOverlayView.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     [_contentView addSubview:_editOverlayView];
+
+    _customCoreView = [[BsnPdfCustomCoreView alloc] initWithFrame:self.bounds];
+    _customCoreView.owner = self;
+    _customCoreView.hidden = YES;
+    [self addSubview:_customCoreView];
+
+    _customNativeSubviewLayer = [[UIView alloc] initWithFrame:self.bounds];
+    _customNativeSubviewLayer.backgroundColor = UIColor.clearColor;
+    _customNativeSubviewLayer.opaque = NO;
+    _customNativeSubviewLayer.hidden = YES;
+    [self addSubview:_customNativeSubviewLayer];
 
     _liveInkView = [[BsnPdfLiveInkView alloc] initWithFrame:CGRectZero];
     _liveInkView.owner = self;
@@ -1188,6 +1208,8 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     }
   }
   self.scrollView.frame = self.bounds;
+  self.customCoreView.frame = self.bounds;
+  self.customNativeSubviewLayer.frame = self.bounds;
   self.editOverlayView.frame = self.contentView.bounds;
   self.liveInkView.frame = self.bounds;
   self.inkInputView.frame = self.bounds;
@@ -1246,6 +1268,18 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   BsnPdfPageDebugLog(@"[BsnPdfViewport][page-debug] setFileUri changed old=%@ new=%@", _fileUri ?: @"", fileUri ?: @"");
   _fileUri = [fileUri copy];
   [self openDocument];
+}
+
+- (void)setCustomViewportCoreEnabled:(BOOL)customViewportCoreEnabled
+{
+  if (_customViewportCoreEnabled == customViewportCoreEnabled) return;
+  if (customViewportCoreEnabled) {
+    [self syncCustomCoreFromScrollView];
+  } else if (_customViewportCoreEnabled) {
+    [self syncScrollViewFromCustomCore];
+  }
+  _customViewportCoreEnabled = customViewportCoreEnabled;
+  [self updateViewportModeViews];
 }
 
 - (void)setRequestedPage:(NSInteger)requestedPage
@@ -1741,6 +1775,98 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   return @"PDF layout is empty.";
 }
 
+- (void)drawDocumentPagesInContext:(CGContextRef)context dirtyRect:(CGRect)rect drawEditing:(BOOL)drawEditing
+{
+  [[UIColor colorWithRed:0.95 green:0.96 blue:0.98 alpha:1.0] setFill];
+  CGContextFillRect(context, rect);
+
+  if (self.layouts.count == 0) {
+    NSDictionary *attrs = @{
+      NSFontAttributeName: [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold],
+      NSForegroundColorAttributeName: [UIColor colorWithRed:0.50 green:0.55 blue:0.65 alpha:1.0],
+    };
+    NSString *message = [self emptyStateMessage];
+    CGSize size = [message sizeWithAttributes:attrs];
+    [message drawAtPoint:CGPointMake((self.bounds.size.width - size.width) * 0.5, (self.bounds.size.height - size.height) * 0.5) withAttributes:attrs];
+    return;
+  }
+
+  CGFloat zoom = MAX(1.0, [self viewportScale]);
+  for (BsnPdfPageLayout *layout in self.layouts) {
+    if (!CGRectIntersectsRect(rect, layout.frame)) continue;
+    [[UIColor whiteColor] setFill];
+    CGContextFillRect(context, layout.frame);
+
+    if ([layout.kind isEqualToString:@"pdf"] && layout.pageNumber != nil && self.document != nil) {
+      UIImage *baseImage = [self baseImageForPageNumber:layout.pageNumber.integerValue];
+      if (baseImage != nil) {
+        [baseImage drawInRect:layout.frame];
+      } else {
+        [[UIColor colorWithRed:0.97 green:0.98 blue:1.0 alpha:1.0] setFill];
+        CGContextFillRect(context, layout.frame);
+        NSDictionary *attrs = @{
+          NSFontAttributeName: [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold],
+          NSForegroundColorAttributeName: [UIColor colorWithRed:0.50 green:0.55 blue:0.65 alpha:1.0],
+        };
+        [layout.label drawAtPoint:CGPointMake(CGRectGetMidX(layout.frame) - 22, CGRectGetMidY(layout.frame) - 8) withAttributes:attrs];
+        [self requestBaseRenderForLayout:layout priority:0];
+      }
+      [self drawHiResOverlayForLayout:layout inContext:context];
+    } else {
+      [[UIColor colorWithRed:1.0 green:0.99 blue:0.97 alpha:1.0] setFill];
+      CGContextFillRect(context, layout.frame);
+      NSDictionary *attrs = @{
+        NSFontAttributeName: [UIFont systemFontOfSize:13 weight:UIFontWeightSemibold],
+        NSForegroundColorAttributeName: [UIColor colorWithRed:0.72 green:0.44 blue:0.12 alpha:1.0],
+      };
+      [layout.label drawAtPoint:CGPointMake(layout.frame.origin.x + 32, layout.frame.origin.y + 32) withAttributes:attrs];
+    }
+
+    if (drawEditing) {
+      [self drawImageAnnotationsForLayout:layout inContext:context];
+      [self drawInkForLayout:layout inContext:context];
+      [self drawSelectionOverlayForLayout:layout inContext:context];
+      [self drawSelectionMenuForLayout:layout inContext:context];
+    }
+
+    [[UIColor colorWithRed:0.88 green:0.9 blue:0.94 alpha:1.0] setStroke];
+    CGContextStrokeRectWithWidth(context, layout.frame, 1.0 / zoom);
+  }
+}
+
+- (void)drawCustomCoreInContext:(CGContextRef)context dirtyRect:(CGRect)rect
+{
+  [[UIColor colorWithRed:0.95 green:0.96 blue:0.98 alpha:1.0] setFill];
+  CGContextFillRect(context, rect);
+  if (!self.customViewportCoreEnabled) return;
+
+  if (self.layouts.count == 0) {
+    NSDictionary *attrs = @{
+      NSFontAttributeName: [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold],
+      NSForegroundColorAttributeName: [UIColor colorWithRed:0.50 green:0.55 blue:0.65 alpha:1.0],
+    };
+    NSString *message = [self emptyStateMessage];
+    CGSize size = [message sizeWithAttributes:attrs];
+    [message drawAtPoint:CGPointMake((self.bounds.size.width - size.width) * 0.5, (self.bounds.size.height - size.height) * 0.5) withAttributes:attrs];
+    return;
+  }
+
+  CGFloat zoom = MAX(0.0001, self.coreScale);
+  CGPoint offset = CGPointMake(-self.coreTranslateX, self.coreScrollYDocument * zoom);
+  CGRect contentDirtyRect = CGRectMake(
+    (rect.origin.x + offset.x) / zoom,
+    (rect.origin.y + offset.y) / zoom,
+    rect.size.width / zoom,
+    rect.size.height / zoom
+  );
+
+  CGContextSaveGState(context);
+  CGContextTranslateCTM(context, -offset.x, -offset.y);
+  CGContextScaleCTM(context, zoom, zoom);
+  [self drawDocumentPagesInContext:context dirtyRect:contentDirtyRect drawEditing:YES];
+  CGContextRestoreGState(context);
+}
+
 - (CGRect)safeBoundsForPage:(PDFPage *)page displayBox:(PDFDisplayBox *)displayBox
 {
   PDFDisplayBox selectedBox = kPDFDisplayBoxCropBox;
@@ -2200,6 +2326,13 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     self.editOverlayView.frame = self.contentView.bounds;
     self.liveInkView.frame = self.bounds;
     self.scrollView.contentSize = self.contentView.frame.size;
+    self.coreContentWidth = self.contentView.bounds.size.width;
+    self.coreContentHeight = self.contentView.bounds.size.height;
+    if (self.customViewportCoreEnabled) {
+      [self clampCustomViewportSnap:NO];
+      [self syncScrollViewFromCustomCore];
+      [self.customCoreView setNeedsDisplay];
+    }
     [self updateTextAnnotationViews];
     [self updatePageReferenceViews];
     [self setContentNeedsDisplaySafely];
@@ -2232,6 +2365,8 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   self.editOverlayView.frame = self.contentView.bounds;
   self.liveInkView.frame = self.bounds;
   self.scrollView.contentSize = self.contentView.frame.size;
+  self.coreContentWidth = self.contentView.bounds.size.width;
+  self.coreContentHeight = self.contentView.bounds.size.height;
   [CATransaction commit];
   [self updateTextAnnotationViews];
   [self updatePageReferenceViews];
@@ -2246,6 +2381,10 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     MIN(MAX(0, self.scrollView.contentOffset.y), maxOffsetY)
   );
   self.lastContentOffsetY = self.scrollView.contentOffset.y;
+  if (self.customViewportCoreEnabled) {
+    [self syncCustomCoreFromScrollView];
+    [self syncScrollViewFromCustomCore];
+  }
   BsnPdfPageDebugLog(@"[BsnPdfViewport][page-debug] rebuildLayout done offsetY=%.1f contentH=%.1f last=%ld reported=%ld requested=%ld",
     self.scrollView.contentOffset.y,
     self.scrollView.contentSize.height,
@@ -2254,6 +2393,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     (long)self.requestedPage);
   [self setContentNeedsDisplaySafely];
   [self setEditOverlayNeedsDisplaySafely];
+  if (self.customViewportCoreEnabled) [self.customCoreView setNeedsDisplay];
   [self scrollToRequestedPageIfNeeded];
   [self scheduleBaseRendersForce:YES];
   [self requestHiResOverlayAfterDelay:0];
@@ -2373,9 +2513,19 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     [self stopInertia];
     [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(startHiResOverlayRender) object:nil];
     self.viewportPanActive = YES;
+    if (self.customViewportCoreEnabled) [self syncCustomCoreFromScrollView];
     self.lastContentOffsetY = self.scrollView.contentOffset.y;
   } else if (gesture.state == UIGestureRecognizerStateChanged) {
     CGPoint translation = [gesture translationInView:self];
+    if (self.customViewportCoreEnabled) {
+      CGFloat previousY = self.coreScrollYDocument;
+      CGFloat zoom = MAX(0.0001, self.coreScale);
+      self.coreTranslateX += translation.x;
+      self.coreScrollYDocument -= translation.y / zoom;
+      [gesture setTranslation:CGPointZero inView:self];
+      [self applyCustomViewportDidChangeWithDeltaY:self.coreScrollYDocument - previousY force:NO];
+      return;
+    }
     CGFloat previousY = self.scrollView.contentOffset.y;
     self.scrollView.contentOffset = CGPointMake(
       self.scrollView.contentOffset.x - translation.x,
@@ -2553,13 +2703,15 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     [self stopInertia];
     [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(startHiResOverlayRender) object:nil];
     self.viewportPinchActive = YES;
-    self.pinchStartZoom = MAX(0.0001, self.scrollView.zoomScale);
+    if (self.customViewportCoreEnabled) [self syncCustomCoreFromScrollView];
+    self.pinchStartZoom = self.customViewportCoreEnabled ? MAX(0.0001, self.coreScale) : MAX(0.0001, self.scrollView.zoomScale);
     self.pinchLastFocusViewPoint = focus;
-    CGPoint offset = self.scrollView.contentOffset;
-    self.pinchFocusContentPoint = CGPointMake(
-      (focus.x + offset.x) / self.pinchStartZoom,
-      (focus.y + offset.y) / self.pinchStartZoom
-    );
+    self.pinchFocusContentPoint = self.customViewportCoreEnabled
+      ? [self contentPointForViewportPoint:focus]
+      : CGPointMake(
+        (focus.x + self.scrollView.contentOffset.x) / self.pinchStartZoom,
+        (focus.y + self.scrollView.contentOffset.y) / self.pinchStartZoom
+      );
     NSInteger focusPage = [self pageNumberNearContentPoint:self.pinchFocusContentPoint];
     if (focusPage > 0) {
       self.protectedPageNumber = focusPage;
@@ -2568,6 +2720,20 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   } else if (gesture.state == UIGestureRecognizerStateChanged) {
     CGFloat nextZoom = MIN(BsnPdfMaxZoom, MAX(BsnPdfMinZoom, self.pinchStartZoom * gesture.scale));
     self.pinchLastFocusViewPoint = focus;
+    if (self.customViewportCoreEnabled) {
+      CGFloat previousY = self.coreScrollYDocument;
+      self.coreScale = nextZoom;
+      self.coreScrollYDocument = self.pinchFocusContentPoint.y - focus.y / MAX(0.0001, nextZoom);
+      self.coreTranslateX = focus.x - self.pinchFocusContentPoint.x * nextZoom;
+      [self clampCustomViewportSnap:NO preservingContentPoint:self.pinchFocusContentPoint atViewPoint:focus];
+      [self applyCustomViewportDidChangeWithDeltaY:self.coreScrollYDocument - previousY force:NO];
+      NSInteger focusPage = [self pageNumberNearContentPoint:self.pinchFocusContentPoint];
+      if (focusPage > 0) {
+        self.protectedPageNumber = focusPage;
+        _requestedPage = focusPage;
+      }
+      return;
+    }
     [CATransaction begin];
     [CATransaction setDisableActions:YES];
     [UIView performWithoutAnimation:^{
@@ -2588,6 +2754,26 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     [self requestViewportChangedForce:NO];
   } else if (gesture.state == UIGestureRecognizerStateEnded) {
     self.pinchLastFocusViewPoint = focus;
+    if (self.customViewportCoreEnabled) {
+      [self clampCustomViewportSnap:YES preservingContentPoint:self.pinchFocusContentPoint atViewPoint:self.pinchLastFocusViewPoint];
+      [self syncScrollViewFromCustomCore];
+      NSInteger focusPage = [self pageNumberNearContentPoint:self.pinchFocusContentPoint];
+      if (focusPage > 0) {
+        self.protectedPageNumber = focusPage;
+        _requestedPage = focusPage;
+      }
+      self.viewportPinchActive = NO;
+      [self.customCoreView setNeedsDisplay];
+      [self.liveInkView setNeedsDisplay];
+      [self updateTextAnnotationViews];
+      [self updatePageReferenceViews];
+      [self saveViewportAnchor];
+      [self flushDeferredViewportInvalidations];
+      [self scheduleBaseRendersForce:YES];
+      [self requestHiResOverlayAfterDelay:180];
+      [self requestViewportChangedForce:YES];
+      return;
+    }
     [self clampViewportOffsetSnap:YES preservingContentPoint:self.pinchFocusContentPoint atViewPoint:self.pinchLastFocusViewPoint];
     NSInteger focusPage = [self pageNumberNearContentPoint:self.pinchFocusContentPoint];
     if (focusPage > 0) {
@@ -2602,6 +2788,20 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     [self requestHiResOverlayAfterDelay:180];
     [self requestViewportChangedForce:YES];
   } else if (gesture.state == UIGestureRecognizerStateCancelled || gesture.state == UIGestureRecognizerStateFailed) {
+    if (self.customViewportCoreEnabled) {
+      [self clampCustomViewportSnap:YES preservingContentPoint:self.pinchFocusContentPoint atViewPoint:self.pinchLastFocusViewPoint];
+      [self syncScrollViewFromCustomCore];
+      self.viewportPinchActive = NO;
+      [self.customCoreView setNeedsDisplay];
+      [self.liveInkView setNeedsDisplay];
+      [self updateTextAnnotationViews];
+      [self updatePageReferenceViews];
+      [self saveViewportAnchor];
+      [self flushDeferredViewportInvalidations];
+      [self requestHiResOverlayAfterDelay:180];
+      [self requestViewportChangedForce:YES];
+      return;
+    }
     [self clampViewportOffsetSnap:YES preservingContentPoint:self.pinchFocusContentPoint atViewPoint:self.pinchLastFocusViewPoint];
     NSInteger focusPage = [self pageNumberNearContentPoint:self.pinchFocusContentPoint];
     if (focusPage > 0) {
@@ -2641,6 +2841,34 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   CFTimeInterval now = CACurrentMediaTime();
   CGFloat dt = self.inertiaLastTimestamp > 0 ? MIN(MAX(now - self.inertiaLastTimestamp, 0.001), 0.034) : 0.016;
   self.inertiaLastTimestamp = now;
+  if (self.customViewportCoreEnabled) {
+    CGFloat previousY = self.coreScrollYDocument;
+    CGFloat zoom = MAX(0.0001, self.coreScale);
+    self.coreTranslateX -= self.inertiaVelocity.x * dt;
+    self.coreScrollYDocument += self.inertiaVelocity.y * dt / zoom;
+    [self clampCustomViewportSnap:NO];
+    CGFloat maxOffsetX = MAX(0, self.coreContentWidth * zoom - self.bounds.size.width);
+    CGFloat maxScrollY = MAX(0, self.coreContentHeight - self.bounds.size.height / zoom);
+    CGFloat offsetX = -self.coreTranslateX;
+    if ((offsetX <= 0 && self.inertiaVelocity.x < 0) || (offsetX >= maxOffsetX && self.inertiaVelocity.x > 0)) {
+      self.inertiaVelocity = CGPointMake(0, self.inertiaVelocity.y);
+    }
+    if ((self.coreScrollYDocument <= 0 && self.inertiaVelocity.y < 0) || (self.coreScrollYDocument >= maxScrollY && self.inertiaVelocity.y > 0)) {
+      self.inertiaVelocity = CGPointMake(self.inertiaVelocity.x, 0);
+    }
+    CGFloat decay = exp(-2.2 * dt);
+    self.inertiaVelocity = CGPointMake(self.inertiaVelocity.x * decay, self.inertiaVelocity.y * decay);
+    [self applyCustomViewportDidChangeWithDeltaY:self.coreScrollYDocument - previousY force:NO];
+
+    if (hypot(self.inertiaVelocity.x, self.inertiaVelocity.y) <= 100.0) {
+      [self stopInertia];
+      [self resetBaseRenderDirection];
+      [self scheduleBaseRendersForce:YES];
+      [self requestHiResOverlayAfterDelay:160];
+      [self flushDeferredViewportInvalidations];
+    }
+    return;
+  }
   CGPoint previousOffset = self.scrollView.contentOffset;
   self.scrollView.contentOffset = CGPointMake(
     self.scrollView.contentOffset.x + self.inertiaVelocity.x * dt,
@@ -2701,7 +2929,8 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 
 - (BOOL)isCustomViewportDrivingScroll
 {
-  return self.viewportPanActive
+  return self.syncingCustomViewportToScrollView
+    || self.viewportPanActive
     || self.viewportPinchActive
     || self.inertiaDisplayLink != nil;
 }
@@ -3743,8 +3972,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 
 - (nullable NSDictionary *)hitPagePointAtViewPoint:(CGPoint)viewPoint
 {
-  CGFloat zoom = MAX(0.0001, self.scrollView.zoomScale);
-  CGPoint contentPoint = CGPointMake((viewPoint.x + self.scrollView.contentOffset.x) / zoom, (viewPoint.y + self.scrollView.contentOffset.y) / zoom);
+  CGPoint contentPoint = [self contentPointForViewportPoint:viewPoint];
   for (BsnPdfPageLayout *layout in self.layouts) {
     if (!CGRectContainsPoint(layout.frame, contentPoint)) continue;
     CGFloat x = (contentPoint.x - layout.frame.origin.x) / MAX(1.0, layout.frame.size.width) * layout.logicalSize.width;
@@ -3962,24 +4190,153 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   }
 }
 
-- (CGRect)viewportRectForContentRect:(CGRect)contentRect
+- (CGFloat)viewportScale
+{
+  return self.customViewportCoreEnabled ? MAX(0.0001, self.coreScale) : MAX(0.0001, self.scrollView.zoomScale);
+}
+
+- (CGPoint)viewportContentOffset
+{
+  if (!self.customViewportCoreEnabled) return self.scrollView.contentOffset;
+  CGFloat zoom = MAX(0.0001, self.coreScale);
+  return CGPointMake(-self.coreTranslateX, self.coreScrollYDocument * zoom);
+}
+
+- (CGSize)viewportContentSize
+{
+  if (!self.customViewportCoreEnabled) return self.scrollView.contentSize;
+  CGFloat zoom = MAX(0.0001, self.coreScale);
+  return CGSizeMake(MAX(1.0, self.coreContentWidth * zoom), MAX(1.0, self.coreContentHeight * zoom));
+}
+
+- (CGPoint)contentPointForViewportPoint:(CGPoint)viewPoint
+{
+  CGFloat zoom = [self viewportScale];
+  CGPoint offset = [self viewportContentOffset];
+  return CGPointMake((viewPoint.x + offset.x) / zoom, (viewPoint.y + offset.y) / zoom);
+}
+
+- (CGRect)rawViewportRectForContentRect:(CGRect)contentRect
 {
   if (CGRectIsNull(contentRect)) return CGRectNull;
-  CGFloat zoom = MAX(0.0001, self.scrollView.zoomScale);
-  CGPoint offset = self.scrollView.contentOffset;
-  CGRect viewportRect = CGRectMake(
+  CGFloat zoom = [self viewportScale];
+  CGPoint offset = [self viewportContentOffset];
+  return CGRectMake(
     contentRect.origin.x * zoom - offset.x,
     contentRect.origin.y * zoom - offset.y,
     contentRect.size.width * zoom,
     contentRect.size.height * zoom
   );
+}
+
+- (void)syncCustomCoreFromScrollView
+{
+  CGFloat zoom = MAX(BsnPdfMinZoom, MIN(BsnPdfMaxZoom, self.scrollView.zoomScale));
+  self.coreScale = zoom;
+  self.coreScrollYDocument = self.scrollView.contentOffset.y / MAX(0.0001, zoom);
+  self.coreTranslateX = -self.scrollView.contentOffset.x;
+  self.coreContentWidth = MAX(1.0, self.contentView.bounds.size.width);
+  self.coreContentHeight = MAX(1.0, self.contentView.bounds.size.height);
+  [self clampCustomViewportSnap:NO];
+}
+
+- (void)syncScrollViewFromCustomCore
+{
+  CGFloat zoom = MAX(BsnPdfMinZoom, MIN(BsnPdfMaxZoom, self.coreScale));
+  CGPoint offset = CGPointMake(-self.coreTranslateX, self.coreScrollYDocument * zoom);
+  self.syncingCustomViewportToScrollView = YES;
+  [CATransaction begin];
+  [CATransaction setDisableActions:YES];
+  [UIView performWithoutAnimation:^{
+    self.scrollView.minimumZoomScale = BsnPdfMinZoom;
+    self.scrollView.maximumZoomScale = BsnPdfMaxZoom;
+    self.scrollView.zoomScale = zoom;
+    self.scrollView.contentOffset = offset;
+    [self.scrollView layoutIfNeeded];
+  }];
+  [CATransaction commit];
+  self.syncingCustomViewportToScrollView = NO;
+  self.lastContentOffsetY = self.scrollView.contentOffset.y;
+}
+
+- (void)updateViewportModeViews
+{
+  self.scrollView.hidden = self.customViewportCoreEnabled;
+  self.customCoreView.hidden = !self.customViewportCoreEnabled;
+  self.customNativeSubviewLayer.hidden = !self.customViewportCoreEnabled;
+  if (self.customViewportCoreEnabled) {
+    [self syncCustomCoreFromScrollView];
+    [self syncScrollViewFromCustomCore];
+    [self.customCoreView setNeedsDisplay];
+  } else {
+    [self syncScrollViewFromCustomCore];
+    [self setContentNeedsDisplaySafely];
+    [self setEditOverlayNeedsDisplaySafely];
+  }
+  [self updateTextAnnotationViews];
+  [self updatePageReferenceViews];
+  [self requestViewportChangedForce:YES];
+}
+
+- (void)clampCustomViewportSnap:(BOOL)snap
+{
+  [self clampCustomViewportSnap:snap preservingContentPoint:CGPointMake(NAN, NAN) atViewPoint:CGPointZero];
+}
+
+- (void)clampCustomViewportSnap:(BOOL)snap preservingContentPoint:(CGPoint)contentPoint atViewPoint:(CGPoint)viewPoint
+{
+  CGFloat zoom = MIN(BsnPdfMaxZoom, MAX(BsnPdfMinZoom, self.coreScale));
+  if (snap && zoom <= 1.02) {
+    zoom = BsnPdfMinZoom;
+    [self resetHiResOverlayState];
+  }
+  self.coreScale = zoom;
+  BOOL hasFocus = isfinite(contentPoint.x) && isfinite(contentPoint.y);
+  if (hasFocus) {
+    self.coreScrollYDocument = contentPoint.y - viewPoint.y / zoom;
+    self.coreTranslateX = viewPoint.x - contentPoint.x * zoom;
+  }
+
+  CGFloat contentWidth = MAX(1.0, self.coreContentWidth);
+  CGFloat contentHeight = MAX(1.0, self.coreContentHeight);
+  CGFloat maxScrollY = MAX(0, contentHeight - self.bounds.size.height / zoom);
+  self.coreScrollYDocument = MIN(MAX(0, self.coreScrollYDocument), maxScrollY);
+
+  if (zoom <= BsnPdfMinZoom + 0.0001) {
+    self.coreTranslateX = 0;
+  } else {
+    CGFloat minTranslateX = MIN(0, self.bounds.size.width - contentWidth * zoom);
+    self.coreTranslateX = MIN(0, MAX(minTranslateX, self.coreTranslateX));
+  }
+}
+
+- (void)applyCustomViewportDidChangeWithDeltaY:(CGFloat)deltaY force:(BOOL)force
+{
+  if (!self.customViewportCoreEnabled) return;
+  [self clampCustomViewportSnap:NO];
+  [self syncScrollViewFromCustomCore];
+  [self updateBaseRenderDirection:deltaY];
+  [self.customCoreView setNeedsDisplay];
+  [self.liveInkView setNeedsDisplay];
+  [self updateTextAnnotationViews];
+  [self updatePageReferenceViews];
+  [self scheduleBaseRendersForce:NO];
+  [self emitPageChangedIfNeededFromSource:self.viewportPinchActive ? @"customViewportPinch" : (self.viewportPanActive ? @"customViewportPan" : @"customViewport")];
+  [self saveViewportAnchor];
+  [self requestViewportChangedForce:force];
+}
+
+- (CGRect)viewportRectForContentRect:(CGRect)contentRect
+{
+  if (CGRectIsNull(contentRect)) return CGRectNull;
+  CGRect viewportRect = [self rawViewportRectForContentRect:contentRect];
   return CGRectIntersection(CGRectInset(self.liveInkView.bounds, -64.0, -64.0), CGRectInset(viewportRect, -8.0, -8.0));
 }
 
 - (CGRect)contentRectForViewportRect:(CGRect)viewportRect
 {
-  CGFloat zoom = MAX(0.0001, self.scrollView.zoomScale);
-  CGPoint offset = self.scrollView.contentOffset;
+  CGFloat zoom = [self viewportScale];
+  CGPoint offset = [self viewportContentOffset];
   return CGRectMake(
     (viewportRect.origin.x + offset.x) / zoom,
     (viewportRect.origin.y + offset.y) / zoom,
@@ -4075,6 +4432,10 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     return;
   }
   [self logRenderDebugEvent:@"invalidate" target:@"content" action:@"set-full" rect:self.contentView.bounds extra:@""];
+  if (self.customViewportCoreEnabled) {
+    [self.customCoreView setNeedsDisplay];
+    return;
+  }
   [self.contentView setNeedsDisplay];
 }
 
@@ -4095,6 +4456,13 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     return;
   }
   [self logRenderDebugEvent:@"invalidate" target:@"content" action:@"set-rect" rect:rect extra:@""];
+  if (self.customViewportCoreEnabled) {
+    CGRect viewportRect = [self rawViewportRectForContentRect:rect];
+    if (!CGRectIsNull(viewportRect) && !CGRectIsEmpty(viewportRect)) {
+      [self.customCoreView setNeedsDisplayInRect:CGRectInset(viewportRect, -4.0, -4.0)];
+    }
+    return;
+  }
   [self.contentView setNeedsDisplayInRect:rect];
 }
 
@@ -4106,9 +4474,20 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   self.deferredContentInvalidationRect = CGRectNull;
   if (CGRectIsNull(rect)) {
     [self logRenderDebugEvent:@"invalidate" target:@"content" action:@"flush-full" rect:CGRectNull extra:@""];
+    if (self.customViewportCoreEnabled) {
+      [self.customCoreView setNeedsDisplay];
+      return;
+    }
     [self.contentView setNeedsDisplay];
   } else {
     [self logRenderDebugEvent:@"invalidate" target:@"content" action:@"flush-rect" rect:rect extra:@""];
+    if (self.customViewportCoreEnabled) {
+      CGRect viewportRect = [self rawViewportRectForContentRect:rect];
+      if (!CGRectIsNull(viewportRect) && !CGRectIsEmpty(viewportRect)) {
+        [self.customCoreView setNeedsDisplayInRect:CGRectInset(viewportRect, -4.0, -4.0)];
+      }
+      return;
+    }
     [self.contentView setNeedsDisplayInRect:rect];
   }
 }
@@ -4122,6 +4501,10 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     return;
   }
   [self logRenderDebugEvent:@"invalidate" target:@"editOverlay" action:@"set-full" rect:self.editOverlayView.bounds extra:@""];
+  if (self.customViewportCoreEnabled) {
+    [self.customCoreView setNeedsDisplay];
+    return;
+  }
   [self.editOverlayView setNeedsDisplay];
 }
 
@@ -4143,6 +4526,13 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     return;
   }
   [self logRenderDebugEvent:@"invalidate" target:@"editOverlay" action:@"set-rect" rect:rect extra:@""];
+  if (self.customViewportCoreEnabled) {
+    CGRect viewportRect = [self rawViewportRectForContentRect:rect];
+    if (!CGRectIsNull(viewportRect) && !CGRectIsEmpty(viewportRect)) {
+      [self.customCoreView setNeedsDisplayInRect:CGRectInset(viewportRect, -8.0, -8.0)];
+    }
+    return;
+  }
   [self.editOverlayView setNeedsDisplayInRect:rect];
 }
 
@@ -4154,9 +4544,20 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   self.deferredEditOverlayInvalidationRect = CGRectNull;
   if (CGRectIsNull(rect)) {
     [self logRenderDebugEvent:@"invalidate" target:@"editOverlay" action:@"flush-full" rect:CGRectNull extra:@""];
+    if (self.customViewportCoreEnabled) {
+      [self.customCoreView setNeedsDisplay];
+      return;
+    }
     [self.editOverlayView setNeedsDisplay];
   } else {
     [self logRenderDebugEvent:@"invalidate" target:@"editOverlay" action:@"flush-rect" rect:rect extra:@""];
+    if (self.customViewportCoreEnabled) {
+      CGRect viewportRect = [self rawViewportRectForContentRect:rect];
+      if (!CGRectIsNull(viewportRect) && !CGRectIsEmpty(viewportRect)) {
+        [self.customCoreView setNeedsDisplayInRect:CGRectInset(viewportRect, -8.0, -8.0)];
+      }
+      return;
+    }
     [self.editOverlayView setNeedsDisplayInRect:rect];
   }
 }
@@ -4341,7 +4742,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
       CGContextSetFillColorWithColor(context, fill.CGColor);
       CGContextFillRect(context, rect);
       CGContextSetStrokeColorWithColor(context, stroke.CGColor);
-      CGContextSetLineWidth(context, 1.0 / MAX(1.0, self.scrollView.zoomScale));
+      CGContextSetLineWidth(context, 1.0 / MAX(1.0, [self viewportScale]));
       CGContextStrokeRect(context, rect);
     }
     CGContextRestoreGState(context);
@@ -4461,7 +4862,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   CGContextSaveGState(context);
   UIColor *strokeColor = [UIColor colorWithRed:0.15 green:0.39 blue:0.92 alpha:self.selectionOverlayDraft ? 0.88 : 0.96];
   UIColor *fillColor = [UIColor colorWithRed:0.31 green:0.55 blue:1.0 alpha:self.selectionOverlayDraft ? 0.05 : 0.08];
-  CGFloat zoom = MAX(1.0, self.scrollView.zoomScale);
+  CGFloat zoom = MAX(1.0, [self viewportScale]);
   CGFloat lineWidth = 2.0 / zoom;
   CGFloat dash[] = { 7.0 / zoom, 5.0 / zoom };
 
@@ -4537,7 +4938,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   if (!self.selectionMenuEnabled || self.selectionOverlayDraft || ![self selectionOverlayAppliesToLayout:layout]) return;
   CGRect menuRect = [self selectionMenuRectForLayout:layout];
   if (CGRectIsEmpty(menuRect) || CGRectIsNull(menuRect)) return;
-  CGFloat zoom = MAX(1.0, self.scrollView.zoomScale);
+  CGFloat zoom = MAX(1.0, [self viewportScale]);
   CGFloat radius = 13.0 / zoom;
   CGContextSaveGState(context);
   UIBezierPath *path = [UIBezierPath bezierPathWithRoundedRect:menuRect cornerRadius:radius];
@@ -4629,7 +5030,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 
 - (CGRect)selectionMenuRectForLayout:(BsnPdfPageLayout *)layout
 {
-  CGFloat zoom = MAX(0.0001, self.scrollView.zoomScale);
+  CGFloat zoom = MAX(0.0001, [self viewportScale]);
   NSArray<NSString *> *symbols = [self selectionMenuSymbols];
   CGFloat button = 40.0 / zoom;
   CGFloat gap = 10.0 / zoom;
@@ -4663,12 +5064,8 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 - (nullable NSDictionary *)selectionMenuActionAtViewPoint:(CGPoint)viewPoint
 {
   if (!self.selectionMenuEnabled || self.selectionOverlayDraft) return nil;
-  CGFloat contentZoom = MAX(0.0001, self.scrollView.zoomScale);
-  CGFloat zoom = MAX(1.0, self.scrollView.zoomScale);
-  CGPoint contentPoint = CGPointMake(
-    (viewPoint.x + self.scrollView.contentOffset.x) / contentZoom,
-    (viewPoint.y + self.scrollView.contentOffset.y) / contentZoom
-  );
+  CGFloat zoom = MAX(1.0, [self viewportScale]);
+  CGPoint contentPoint = [self contentPointForViewportPoint:viewPoint];
   CGFloat button = 40.0 / zoom;
   CGFloat gap = 10.0 / zoom;
   CGFloat paddingX = 12.0 / zoom;
@@ -4720,7 +5117,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   for (BsnPdfPageLayout *layout in self.layouts) {
     if (![self selectionOverlayAppliesToLayout:layout]) continue;
     CGRect rect = [self selectionOverlayRectForLayout:layout];
-    CGFloat padding = MAX(44.0, 36.0 / MAX(1.0, self.scrollView.zoomScale));
+    CGFloat padding = MAX(44.0, 36.0 / MAX(1.0, [self viewportScale]));
     dirtyRect = CGRectUnion(dirtyRect, CGRectInset(rect, -padding, -padding));
     if (self.selectionMenuEnabled) dirtyRect = CGRectUnion(dirtyRect, CGRectInset([self selectionMenuRectForLayout:layout], -padding, -padding));
   }
@@ -4757,6 +5154,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 - (void)updateTextAnnotationViews
 {
   if (self.contentView == nil) return;
+  UIView *container = self.customViewportCoreEnabled ? self.customNativeSubviewLayer : self.contentView;
   NSMutableSet<NSString *> *seenIds = [NSMutableSet set];
   for (NSDictionary *annotation in self.textAnnotations ?: @[]) {
     NSString *annotationId = [RCTConvert NSString:annotation[@"id"]];
@@ -4770,10 +5168,13 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     if (host == nil) {
       host = [[BsnPdfTextAnnotationView alloc] initWithOwner:self annotationId:annotationId];
       self.textAnnotationViews[annotationId] = host;
-      [self.contentView addSubview:host];
+      [container addSubview:host];
+    } else if (host.superview != container) {
+      [container addSubview:host];
     }
     host.hidden = [self.hiddenTextAnnotationIdSet containsObject:annotationId];
-    host.frame = [self frameForTextAnnotation:annotation layout:layout];
+    CGRect contentFrame = [self frameForTextAnnotation:annotation layout:layout];
+    host.frame = self.customViewportCoreEnabled ? [self rawViewportRectForContentRect:contentFrame] : contentFrame;
     NSString *text = [RCTConvert NSString:annotation[@"text"]] ?: @"";
     if (![host.textView.text isEqualToString:text] && !host.textView.isFirstResponder) host.textView.text = text;
     CGFloat fontSize = annotation[@"fontSize"] != nil ? [annotation[@"fontSize"] doubleValue] : 17.0;
@@ -4858,6 +5259,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 - (void)updatePageReferenceViews
 {
   if (self.contentView == nil) return;
+  UIView *container = self.customViewportCoreEnabled ? self.customNativeSubviewLayer : self.contentView;
   NSArray<NSDictionary *> *references = [self.pageCaptureReferences isKindOfClass:NSArray.class] ? self.pageCaptureReferences : @[];
   NSMutableDictionary<NSString *, NSNumber *> *pageCounts = [NSMutableDictionary dictionary];
   for (NSDictionary *reference in references) {
@@ -4885,7 +5287,9 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     if (host == nil) {
       host = [[BsnPdfPageReferenceView alloc] initWithOwner:self referenceId:referenceId];
       self.pageReferenceViews[referenceId] = host;
-      [self.contentView addSubview:host];
+      [container addSubview:host];
+    } else if (host.superview != container) {
+      [container addSubview:host];
     }
 
     CGFloat margin = 14.0;
@@ -4898,10 +5302,11 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     if (open && y + height > CGRectGetMaxY(layout.frame) - margin) {
       y = MAX(layout.frame.origin.y + margin, CGRectGetMaxY(layout.frame) - margin - height);
     }
-    host.frame = CGRectMake(x, y, width, height);
+    CGRect contentFrame = CGRectMake(x, y, width, height);
+    host.frame = self.customViewportCoreEnabled ? [self rawViewportRectForContentRect:contentFrame] : contentFrame;
     [host configureWithReference:reference image:[self imageForPageReference:reference] count:count open:open];
     [seenIds addObject:referenceId];
-    [self.contentView bringSubviewToFront:host];
+    [container bringSubviewToFront:host];
   }
 
   NSArray<NSString *> *existingIds = self.pageReferenceViews.allKeys;
@@ -4947,11 +5352,17 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   if (annotation == nil || layout == nil) return @{};
   CGFloat pageWidth = MAX(1.0, annotation[@"pageWidth"] != nil ? [annotation[@"pageWidth"] doubleValue] : layout.logicalSize.width);
   CGFloat pageHeight = MAX(1.0, annotation[@"pageHeight"] != nil ? [annotation[@"pageHeight"] doubleValue] : layout.logicalSize.height);
+  CGRect frame = host.frame;
+  if (self.customViewportCoreEnabled) {
+    CGFloat zoom = [self viewportScale];
+    CGPoint contentOrigin = [self contentPointForViewportPoint:frame.origin];
+    frame = CGRectMake(contentOrigin.x, contentOrigin.y, frame.size.width / zoom, frame.size.height / zoom);
+  }
   return @{
-    @"x": @((host.frame.origin.x - layout.frame.origin.x) / MAX(1.0, layout.frame.size.width) * pageWidth),
-    @"y": @((host.frame.origin.y - layout.frame.origin.y) / MAX(1.0, layout.frame.size.height) * pageHeight),
-    @"width": @(host.frame.size.width / MAX(1.0, layout.frame.size.width) * pageWidth),
-    @"height": @(host.frame.size.height / MAX(1.0, layout.frame.size.height) * pageHeight),
+    @"x": @((frame.origin.x - layout.frame.origin.x) / MAX(1.0, layout.frame.size.width) * pageWidth),
+    @"y": @((frame.origin.y - layout.frame.origin.y) / MAX(1.0, layout.frame.size.height) * pageHeight),
+    @"width": @(frame.size.width / MAX(1.0, layout.frame.size.width) * pageWidth),
+    @"height": @(frame.size.height / MAX(1.0, layout.frame.size.height) * pageHeight),
   };
 }
 
@@ -4967,7 +5378,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   if (host == nil) return;
   self.activeTextAnnotationId = host.annotationId;
   for (BsnPdfTextAnnotationView *item in self.textAnnotationViews.allValues) [item setActive:[item.annotationId isEqualToString:host.annotationId]];
-  [self.contentView bringSubviewToFront:host];
+  [host.superview bringSubviewToFront:host];
   if (focus) [host.textView becomeFirstResponder];
 }
 
@@ -5040,7 +5451,8 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   if (layout == nil || host.frame.size.width <= 0) return;
   CGSize targetSize = [host.textView sizeThatFits:CGSizeMake(host.bounds.size.width, CGFLOAT_MAX)];
   CGFloat minHeight = 34.0;
-  CGFloat maxHeight = MAX(minHeight, CGRectGetMaxY(layout.frame) - host.frame.origin.y);
+  CGRect layoutFrame = self.customViewportCoreEnabled ? [self rawViewportRectForContentRect:layout.frame] : layout.frame;
+  CGFloat maxHeight = MAX(minHeight, CGRectGetMaxY(layoutFrame) - host.frame.origin.y);
   CGFloat nextHeight = MIN(maxHeight, MAX(minHeight, ceil(targetSize.height) + 2.0));
   if (fabs(nextHeight - host.frame.size.height) < 1.0) return;
   CGRect frame = host.frame;
@@ -5072,10 +5484,11 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     [host.textView resignFirstResponder];
     host.startFrame = host.frame;
   } else if (gesture.state == UIGestureRecognizerStateChanged) {
-    CGPoint translation = [gesture translationInView:self.contentView];
+    CGPoint translation = [gesture translationInView:self.customViewportCoreEnabled ? self : self.contentView];
+    CGRect layoutFrame = self.customViewportCoreEnabled ? [self rawViewportRectForContentRect:layout.frame] : layout.frame;
     CGRect frame = host.startFrame;
-    frame.origin.x = MIN(MAX(layout.frame.origin.x, frame.origin.x + translation.x), CGRectGetMaxX(layout.frame) - frame.size.width);
-    frame.origin.y = MIN(MAX(layout.frame.origin.y, frame.origin.y + translation.y), CGRectGetMaxY(layout.frame) - frame.size.height);
+    frame.origin.x = MIN(MAX(layoutFrame.origin.x, frame.origin.x + translation.x), CGRectGetMaxX(layoutFrame) - frame.size.width);
+    frame.origin.y = MIN(MAX(layoutFrame.origin.y, frame.origin.y + translation.y), CGRectGetMaxY(layoutFrame) - frame.size.height);
     host.frame = frame;
   } else if (gesture.state == UIGestureRecognizerStateEnded || gesture.state == UIGestureRecognizerStateCancelled || gesture.state == UIGestureRecognizerStateFailed) {
     NSDictionary *frame = [self logicalTextFrameForHost:host];
@@ -5097,10 +5510,11 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     [host.textView resignFirstResponder];
     host.startFrame = host.frame;
   } else if (gesture.state == UIGestureRecognizerStateChanged) {
-    CGPoint translation = [gesture translationInView:self.contentView];
+    CGPoint translation = [gesture translationInView:self.customViewportCoreEnabled ? self : self.contentView];
+    CGRect layoutFrame = self.customViewportCoreEnabled ? [self rawViewportRectForContentRect:layout.frame] : layout.frame;
     CGRect frame = host.startFrame;
-    frame.size.width = MIN(MAX(44.0, frame.size.width + translation.x), CGRectGetMaxX(layout.frame) - frame.origin.x);
-    frame.size.height = MIN(MAX(30.0, frame.size.height + translation.y), CGRectGetMaxY(layout.frame) - frame.origin.y);
+    frame.size.width = MIN(MAX(44.0, frame.size.width + translation.x), CGRectGetMaxX(layoutFrame) - frame.origin.x);
+    frame.size.height = MIN(MAX(30.0, frame.size.height + translation.y), CGRectGetMaxY(layoutFrame) - frame.origin.y);
     host.frame = frame;
     [host setNeedsLayout];
   } else if (gesture.state == UIGestureRecognizerStateEnded || gesture.state == UIGestureRecognizerStateCancelled || gesture.state == UIGestureRecognizerStateFailed) {
@@ -5795,6 +6209,7 @@ RCT_EXPORT_VIEW_PROPERTY(selectionOverlayPath, NSArray)
 RCT_EXPORT_VIEW_PROPERTY(selectionMenuEnabled, BOOL)
 RCT_EXPORT_VIEW_PROPERTY(selectionMenuEditable, BOOL)
 RCT_EXPORT_VIEW_PROPERTY(textGestureEnabled, BOOL)
+RCT_EXPORT_VIEW_PROPERTY(customViewportCoreEnabled, BOOL)
 RCT_EXPORT_VIEW_PROPERTY(perfLoggingEnabled, BOOL)
 RCT_EXPORT_VIEW_PROPERTY(renderDebugLoggingEnabled, BOOL)
 RCT_EXPORT_VIEW_PROPERTY(onDocumentLoaded, RCTDirectEventBlock)
