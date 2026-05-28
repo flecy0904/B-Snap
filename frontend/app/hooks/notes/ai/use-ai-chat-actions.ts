@@ -64,11 +64,6 @@ function getCanvasAction(question: string, source: 'chat' | 'canvas-mini' = 'cha
   return 'auto';
 }
 
-function isCanvasEditIntent(question: string) {
-  const action = getCanvasAction(question);
-  return action === 'canvas_edit' || action === 'canvas_create';
-}
-
 export function useAiChatActions(params: {
   studyDocumentId: number | null;
   studyDocument: StudyDocumentEntry | null;
@@ -96,7 +91,6 @@ export function useAiChatActions(params: {
   activeCanvasNoteId?: number | null;
   onApplyCanvasEditFromChat?: (payload: { action: 'canvas_edit' | 'canvas_create'; canvasNote: BackendAiCanvasNote }) => void;
   clearSelection?: () => void;
-  onRequestCanvasEditFromChat?: (payload: { question: string; answer: string }) => Promise<void>;
   buildContextHint?: (question: string) => string | null;
 }) {
   const getCurrentBackendNoteId = () => getStudyDocumentBackendNoteId(params.studyDocument);
@@ -504,8 +498,6 @@ export function useAiChatActions(params: {
         });
       } else if (canvasAction === 'canvas_edit' || canvasAction === 'canvas_create') {
         params.setAiError('Canvas 수정 응답을 받지 못했습니다. 백엔드 서버를 다시 실행해 주세요.');
-      } else if (params.onRequestCanvasEditFromChat && isCanvasEditIntent(question)) {
-        void params.onRequestCanvasEditFromChat({ question, answer: content });
       }
       return true;
     } catch (error) {

@@ -129,11 +129,6 @@ export type BackendClassInsight = {
   pages: BackendClassInsightPageSignal[];
 };
 
-export type BackendAiCanvasEditResponse = {
-  markdown: string;
-  model: string;
-};
-
 export type BackendAiMessageResponse = {
   model: string;
   user_message: BackendChatMessage;
@@ -658,20 +653,6 @@ export async function updateBackendAiCanvasNote(payload: {
 export function deleteBackendAiCanvasNote(canvasNoteId: number) {
   return request<void>(`/ai-canvas-notes/${canvasNoteId}`, {
     method: 'DELETE',
-  });
-}
-
-export async function requestBackendAiCanvasEdit(payload: {
-  canvasNoteId: number;
-  instruction: string;
-  model?: string | null;
-}) {
-  return request<BackendAiCanvasEditResponse>(`/ai-canvas-notes/${payload.canvasNoteId}/ai-edit`, {
-    method: 'POST',
-    body: {
-      instruction: payload.instruction,
-      model: payload.model ?? null,
-    },
   });
 }
 

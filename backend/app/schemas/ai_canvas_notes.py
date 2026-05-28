@@ -52,13 +52,3 @@ class AiCanvasNoteSummaryRead(BaseModel):
 
 class AiCanvasNoteRead(AiCanvasNoteSummaryRead):
     markdown: str
-
-
-class AiCanvasNoteAiEditCreate(BaseModel):
-    instruction: str = Field(min_length=1, max_length=2000)
-    model: str | None = None
-
-
-class AiCanvasNoteAiEditRead(BaseModel):
-    markdown: str
-    model: str

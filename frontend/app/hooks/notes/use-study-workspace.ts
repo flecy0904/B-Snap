@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Keyboard } from 'react-native';
 import {
   getBackendClassInsight,
   isBackendApiEnabled,
@@ -34,14 +35,19 @@ import { normalizeDocumentFile } from './document/document-file-utils';
 import { useBackendNotePageSync } from './document/use-backend-note-page-sync';
 import { confirmDeleteAction } from './ui/confirm-delete-action';
 import { useInkActions, type WorkspaceEditSnapshot } from './ink/use-ink-actions';
+import { isInkStrokeOnPage } from './ink/ink-helpers';
 import { useCaptureAssetActions } from './capture/use-capture-asset-actions';
 import { usePageCaptureReferenceActions } from './capture/use-page-capture-references';
 import { useIncomingAssetSubscription } from './workspace/use-incoming-asset-subscription';
 import { useStudyWorkspaceDerivedState } from './workspace/use-study-workspace-derived-state';
 import { useStudyWorkspacePersistence } from './workspace/use-study-workspace-persistence';
 import { isSameDocumentPage, isShapeTool } from '../../ui-helpers';
-import type { InkBrush, InkBrushSettings, InkLinePattern, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../ui-types';
+import type { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../ui-types';
 import type { AiAnswer, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../types';
+
+export type WorkspaceFocusTarget = 'document' | 'aiCanvas';
+export type AppRightSidebarPanel = 'chat' | 'canvas' | null;
+export type AppChatMode = 'sidebar' | 'floating';
 
 export function useStudyWorkspace(props: {
   wide: boolean;
@@ -76,6 +82,12 @@ export function useStudyWorkspace(props: {
   const [textAnnotationsByDocument, setTextAnnotationsByDocument] = useState<Record<number, InkTextAnnotation[]>>({});
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
   const [aiPanelMode, setAiPanelMode] = useState<'floating' | 'sidebar'>('floating');
+  const [appRightSidebarPanel, setAppRightSidebarPanel] = useState<AppRightSidebarPanel>('chat');
+  const [appChatMode, setAppChatMode] = useState<AppChatMode>('sidebar');
+  const [appRightSidebarWidth, setAppRightSidebarWidth] = useState(380);
+  const [focusedWorkspaceTarget, setFocusedWorkspaceTarget] = useState<WorkspaceFocusTarget | null>(null);
+  const [workspaceActionHistory, setWorkspaceActionHistory] = useState<WorkspaceFocusTarget[]>([]);
+  const [workspaceRedoActionHistory, setWorkspaceRedoActionHistory] = useState<WorkspaceFocusTarget[]>([]);
   const [selectionByDocument, setSelectionByDocument] = useState<Record<number, SelectionRect | null>>({});
   const [copiedSelectionImageByDocument, setCopiedSelectionImageByDocument] = useState<Record<number, string | null>>({});
   const [aiQuestion, setAiQuestion] = useState('');
@@ -281,12 +293,18 @@ export function useStudyWorkspace(props: {
     aiChatSearchQuery,
     backendPageIdsByDocument,
   });
+  const recordWorkspaceActionTarget = useCallback((target: WorkspaceFocusTarget) => {
+    setFocusedWorkspaceTarget(target);
+    setWorkspaceActionHistory((current) => [...current, target].slice(-100));
+    setWorkspaceRedoActionHistory([]);
+  }, []);
   const currentAiCanvasPageNumber = currentDocumentPage?.kind === 'pdf' ? currentDocumentPage.pageNumber : currentPdfPage;
   const aiCanvas = useAiCanvasNotes({
     noteId: studyDocumentBackendNoteId,
     enabled: workspaceHydrated && isBackendApiEnabled() && !!studyDocumentBackendNoteId && currentDocumentHasBackendPages,
     currentPageNumber: currentAiCanvasPageNumber ?? null,
     onFeedback: setWorkspaceFeedback,
+    onRecordWorkspaceAction: () => recordWorkspaceActionTarget('aiCanvas'),
   });
   const currentClassInsight = studyDocumentId ? classInsightByDocument[studyDocumentId] ?? null : null;
 
@@ -735,6 +753,7 @@ export function useStudyWorkspace(props: {
   };
 
   const copySelectionImage = useCallback(() => {
+    Keyboard.dismiss();
     if (!studyDocumentId || !selectionRect) {
       setWorkspaceFeedback('복사할 선택 영역을 먼저 선택해 주세요.');
       return;
@@ -813,7 +832,6 @@ export function useStudyWorkspace(props: {
     activeCanvasNoteId: aiCanvas.activeNoteId,
     onApplyCanvasEditFromChat: aiCanvas.applyChatCanvasEdit,
     clearSelection: clearSelectionForCurrentDocument,
-    onRequestCanvasEditFromChat: aiCanvas.requestAiEditFromChat,
     buildContextHint: (question) => buildClassInsightContext({
       question,
       studyDocument,
@@ -836,6 +854,8 @@ export function useStudyWorkspace(props: {
     setViewingAiChatSessionId(null);
     setAiPanelOpen(true);
     setAiPanelMode('floating');
+    setAppChatMode('floating');
+    setAppRightSidebarPanel(null);
     setAiQuestion((current) => current.trim() || '이 선택 영역을 설명해줘');
     setWorkspaceFeedback(selectionPreviewUri
       ? '선택 영역을 AI 질문창에 첨부했습니다.'
@@ -959,23 +979,23 @@ export function useStudyWorkspace(props: {
   const {
     pushWorkspaceHistorySnapshot,
     clearCurrentSelection,
-    clearInk,
+    clearInk: clearInkBase,
     undoInk,
     redoInk,
-    commitInkStroke,
-    removeInkStroke,
-    addTextAnnotation,
-    updateTextAnnotation,
-    removeTextAnnotation,
-    moveTextAnnotation,
-    resizeTextAnnotation,
-    eraseInkAtPoint,
-    deleteSelectedStrokes,
-    changeSelectedStrokesColor,
-    duplicateSelectedStrokes,
-    resizeSelectedStrokes,
-    resizeSelectedStrokesToRect,
-    nudgeSelectedStrokes,
+    commitInkStroke: commitInkStrokeBase,
+    removeInkStroke: removeInkStrokeBase,
+    addTextAnnotation: addTextAnnotationBase,
+    updateTextAnnotation: updateTextAnnotationBase,
+    removeTextAnnotation: removeTextAnnotationBase,
+    moveTextAnnotation: moveTextAnnotationBase,
+    resizeTextAnnotation: resizeTextAnnotationBase,
+    eraseInkAtPoint: eraseInkAtPointBase,
+    deleteSelectedStrokes: deleteSelectedStrokesBase,
+    changeSelectedStrokesColor: changeSelectedStrokesColorBase,
+    duplicateSelectedStrokes: duplicateSelectedStrokesBase,
+    resizeSelectedStrokes: resizeSelectedStrokesBase,
+    resizeSelectedStrokesToRect: resizeSelectedStrokesToRectBase,
+    nudgeSelectedStrokes: nudgeSelectedStrokesBase,
   } = useInkActions({
     studyDocumentId,
     studyDocument,
@@ -1002,6 +1022,68 @@ export function useStudyWorkspace(props: {
     setWorkspaceFeedback,
     onMarkPageDirty: markBackendPageDirty,
   });
+  const recordDocumentAction = useCallback(() => recordWorkspaceActionTarget('document'), [recordWorkspaceActionTarget]);
+  const clearInk = useCallback(() => {
+    recordDocumentAction();
+    clearInkBase();
+  }, [clearInkBase, recordDocumentAction]);
+  const commitInkStroke = useCallback((stroke: InkStroke) => {
+    recordDocumentAction();
+    commitInkStrokeBase(stroke);
+  }, [commitInkStrokeBase, recordDocumentAction]);
+  const removeInkStroke = useCallback((strokeId: string) => {
+    recordDocumentAction();
+    removeInkStrokeBase(strokeId);
+  }, [recordDocumentAction, removeInkStrokeBase]);
+  const addTextAnnotation = useCallback((point: InkPoint) => {
+    recordDocumentAction();
+    addTextAnnotationBase(point);
+  }, [addTextAnnotationBase, recordDocumentAction]);
+  const updateTextAnnotation = useCallback((annotationId: string, text: string) => {
+    recordDocumentAction();
+    updateTextAnnotationBase(annotationId, text);
+  }, [recordDocumentAction, updateTextAnnotationBase]);
+  const removeTextAnnotation = useCallback((annotationId: string) => {
+    recordDocumentAction();
+    removeTextAnnotationBase(annotationId);
+  }, [recordDocumentAction, removeTextAnnotationBase]);
+  const moveTextAnnotation = useCallback((annotationId: string, x: number, y: number) => {
+    recordDocumentAction();
+    moveTextAnnotationBase(annotationId, x, y);
+  }, [moveTextAnnotationBase, recordDocumentAction]);
+  const resizeTextAnnotation = useCallback((annotationId: string, width: number, height: number) => {
+    recordDocumentAction();
+    resizeTextAnnotationBase(annotationId, width, height);
+  }, [recordDocumentAction, resizeTextAnnotationBase]);
+  const eraseInkAtPoint = useCallback((point: InkPoint, radius: number, snapshot?: boolean) => {
+    const changed = eraseInkAtPointBase(point, radius, snapshot);
+    if (changed) recordDocumentAction();
+    return changed;
+  }, [eraseInkAtPointBase, recordDocumentAction]);
+  const deleteSelectedStrokes = useCallback(() => {
+    recordDocumentAction();
+    deleteSelectedStrokesBase();
+  }, [deleteSelectedStrokesBase, recordDocumentAction]);
+  const changeSelectedStrokesColor = useCallback((color: string) => {
+    recordDocumentAction();
+    changeSelectedStrokesColorBase(color);
+  }, [changeSelectedStrokesColorBase, recordDocumentAction]);
+  const duplicateSelectedStrokes = useCallback(() => {
+    recordDocumentAction();
+    duplicateSelectedStrokesBase();
+  }, [duplicateSelectedStrokesBase, recordDocumentAction]);
+  const resizeSelectedStrokes = useCallback((scale: number) => {
+    recordDocumentAction();
+    resizeSelectedStrokesBase(scale);
+  }, [recordDocumentAction, resizeSelectedStrokesBase]);
+  const resizeSelectedStrokesToRect = useCallback((rect: SelectionRect) => {
+    recordDocumentAction();
+    resizeSelectedStrokesToRectBase(rect);
+  }, [recordDocumentAction, resizeSelectedStrokesToRectBase]);
+  const nudgeSelectedStrokes = useCallback((dx: number, dy: number) => {
+    recordDocumentAction();
+    nudgeSelectedStrokesBase(dx, dy);
+  }, [nudgeSelectedStrokesBase, recordDocumentAction]);
 
   const openWorkspaceAttachment = (attachmentId: string) => {
     if (!studyDocumentId) return;
@@ -1092,6 +1174,91 @@ export function useStudyWorkspace(props: {
           ? '저장됨'
           : '저장 준비 중';
 
+  const documentInkHistory = studyDocumentId ? inkHistoryByDocument[studyDocumentId] ?? [] : [];
+  const documentRedoHistory = studyDocumentId ? redoInkHistoryByDocument[studyDocumentId] ?? [] : [];
+  const documentPageStrokes = useMemo(() => {
+    if (!studyDocumentId) return [];
+    return (inkByDocument[studyDocumentId] ?? []).filter((stroke) => isInkStrokeOnPage({
+      stroke,
+      currentDocumentPage,
+      currentPdfPage,
+      studyDocumentType: studyDocument?.type,
+    }));
+  }, [currentDocumentPage, currentPdfPage, inkByDocument, studyDocument?.type, studyDocumentId]);
+  const documentRedoPageStrokes = useMemo(() => {
+    if (!studyDocumentId) return [];
+    return (redoInkByDocument[studyDocumentId] ?? []).filter((stroke) => isInkStrokeOnPage({
+      stroke,
+      currentDocumentPage,
+      currentPdfPage,
+      studyDocumentType: studyDocument?.type,
+    }));
+  }, [currentDocumentPage, currentPdfPage, redoInkByDocument, studyDocument?.type, studyDocumentId]);
+  const canUndoDocumentAction = documentInkHistory.length > 0 || documentPageStrokes.length > 0;
+  const canRedoDocumentAction = documentRedoHistory.length > 0 || documentRedoPageStrokes.length > 0;
+  const canUndoWorkspaceTarget = (target: WorkspaceFocusTarget) => (target === 'document' ? canUndoDocumentAction : aiCanvas.canUndo);
+  const canRedoWorkspaceTarget = (target: WorkspaceFocusTarget) => (target === 'document' ? canRedoDocumentAction : aiCanvas.canRedo);
+  const lastUndoWorkspaceTarget = [...workspaceActionHistory].reverse().find(canUndoWorkspaceTarget)
+    ?? (focusedWorkspaceTarget && canUndoWorkspaceTarget(focusedWorkspaceTarget) ? focusedWorkspaceTarget : null);
+  const lastRedoWorkspaceTarget = [...workspaceRedoActionHistory].reverse().find(canRedoWorkspaceTarget)
+    ?? (focusedWorkspaceTarget && canRedoWorkspaceTarget(focusedWorkspaceTarget) ? focusedWorkspaceTarget : null);
+  const canUndoFocusedWorkspaceAction = Boolean(lastUndoWorkspaceTarget);
+  const canRedoFocusedWorkspaceAction = Boolean(lastRedoWorkspaceTarget);
+  const removeLastWorkspaceTarget = (items: WorkspaceFocusTarget[], target: WorkspaceFocusTarget) => {
+    const index = items.lastIndexOf(target);
+    if (index < 0) return items;
+    return [...items.slice(0, index), ...items.slice(index + 1)];
+  };
+  const undoFocusedWorkspaceAction = () => {
+    const target = lastUndoWorkspaceTarget;
+    if (!target) return;
+    setWorkspaceActionHistory((current) => removeLastWorkspaceTarget(current, target));
+    setWorkspaceRedoActionHistory((current) => [...current, target].slice(-100));
+    setFocusedWorkspaceTarget(target);
+    if (target === 'document') {
+      undoInk();
+      return;
+    }
+    aiCanvas.undoCanvasEdit();
+  };
+  const redoFocusedWorkspaceAction = () => {
+    const target = lastRedoWorkspaceTarget;
+    if (!target) return;
+    setWorkspaceRedoActionHistory((current) => removeLastWorkspaceTarget(current, target));
+    setWorkspaceActionHistory((current) => [...current, target].slice(-100));
+    setFocusedWorkspaceTarget(target);
+    if (target === 'document') {
+      redoInk();
+      return;
+    }
+    aiCanvas.redoCanvasEdit();
+  };
+  const openAppChatSidebar = () => {
+    setAppChatMode('sidebar');
+    setAppRightSidebarPanel('chat');
+    setAiPanelMode('sidebar');
+    setViewingAiChatSessionId(null);
+    setAiPanelOpen(true);
+  };
+  const openAppAiCanvasSidebar = () => {
+    setAppRightSidebarPanel('canvas');
+    aiCanvas.open();
+    if (appChatMode === 'sidebar') setAiPanelOpen(false);
+  };
+  const closeAppRightSidebar = () => {
+    setAppRightSidebarPanel(null);
+  };
+  const floatAppAiChatPanel = () => {
+    setAppChatMode('floating');
+    setAppRightSidebarPanel(null);
+    setAiPanelMode('floating');
+    setViewingAiChatSessionId(null);
+    setAiPanelOpen(true);
+  };
+  const dockAppAiChatPanel = () => {
+    openAppChatSidebar();
+  };
+
   return {
     subjectId,
     subject,
@@ -1113,6 +1280,12 @@ export function useStudyWorkspace(props: {
     textAnnotationsByDocument,
     aiPanelOpen,
     aiPanelMode,
+    appRightSidebarPanel,
+    appChatMode,
+    appRightSidebarWidth,
+    focusedWorkspaceTarget,
+    canUndoFocusedWorkspaceAction,
+    canRedoFocusedWorkspaceAction,
     selectionRect,
     selectionPreviewUri,
     copiedSelectionImageUri: studyDocumentId ? copiedSelectionImageByDocument[studyDocumentId] ?? null : null,
@@ -1190,6 +1363,15 @@ export function useStudyWorkspace(props: {
       return next;
     }),
     setAiPanelMode,
+    setAppRightSidebarWidth,
+    setFocusedWorkspaceTarget,
+    openAppChatSidebar,
+    openAppAiCanvasSidebar,
+    closeAppRightSidebar,
+    floatAppAiChatPanel,
+    dockAppAiChatPanel,
+    undoFocusedWorkspaceAction,
+    redoFocusedWorkspaceAction,
     setAiQuestion,
     setAiChatScope: changeAiChatScope,
     onChangeAiChatScope: changeAiChatScope,

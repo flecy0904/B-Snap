@@ -1,6 +1,6 @@
 import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { Image, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { Image, PanResponder, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { subjects as allSubjects } from '../../../app-defaults';
 import { useDesktopNotesWorkspaceViewModel } from '../../../hooks/notes/use-desktop-notes-workspace-view-model';
 import { buildAiResponse, NoteSummaryContent } from '../shared/notes-shared';
@@ -11,9 +11,10 @@ import { NotesWorkspaceToolbar, NotesPageListOverlay } from '../workspace/notes-
 import { NotesWorkspaceDock } from '../workspace/notes-workspace-dock';
 import { NotesDetailHeader } from './notes-detail-header';
 import { NotesBrowser } from './notes-browser';
-import { DesktopNotesWorkspaceProvider } from '../workspace/notes-workspace-context';
+import { DesktopNotesWorkspaceProvider, useDesktopNotesWorkspaceContext } from '../workspace/notes-workspace-context';
 import type { BackendChatMessage, BackendChatSession, BackendClassInsight } from '../../../services/backend-api';
 import type { UseAiCanvasNotesResult } from '../../../hooks/notes/ai-canvas/use-ai-canvas-notes';
+import type { AppChatMode, AppRightSidebarPanel, WorkspaceFocusTarget } from '../../../hooks/notes/use-study-workspace';
 import {
   AiAnswer,
   CaptureAsset,
@@ -29,6 +30,72 @@ import {
   WorkspaceAttachment,
 } from '../../../types';
 import { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
+
+const APP_RIGHT_SIDEBAR_MIN_WIDTH = 320;
+const APP_RIGHT_SIDEBAR_MAX_WIDTH = 560;
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(Math.max(value, min), max);
+}
+
+function AppRightSidebar() {
+  const workspace = useDesktopNotesWorkspaceContext();
+  const { width } = useWindowDimensions();
+  const maxWidth = Math.max(APP_RIGHT_SIDEBAR_MIN_WIDTH, Math.min(APP_RIGHT_SIDEBAR_MAX_WIDTH, Math.floor(width * 0.48)));
+  const [localWidth, setLocalWidth] = React.useState(() => clamp(workspace.appRightSidebarWidth, APP_RIGHT_SIDEBAR_MIN_WIDTH, maxWidth));
+  const localWidthRef = React.useRef(localWidth);
+  const dragStartWidthRef = React.useRef(localWidth);
+  const onChangeAppRightSidebarWidth = workspace.onChangeAppRightSidebarWidth;
+
+  React.useEffect(() => {
+    const next = clamp(workspace.appRightSidebarWidth, APP_RIGHT_SIDEBAR_MIN_WIDTH, maxWidth);
+    setLocalWidth(next);
+    localWidthRef.current = next;
+    dragStartWidthRef.current = next;
+  }, [maxWidth, workspace.appRightSidebarWidth]);
+
+  const changeLocalWidth = React.useCallback((next: number) => {
+    localWidthRef.current = next;
+    setLocalWidth(next);
+  }, []);
+
+  const resizePanResponder = React.useMemo(
+    () => PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, gesture) => Math.abs(gesture.dx) > 3,
+      onPanResponderGrant: () => {
+        dragStartWidthRef.current = localWidthRef.current;
+      },
+      onPanResponderMove: (_, gesture) => {
+        changeLocalWidth(clamp(dragStartWidthRef.current - gesture.dx, APP_RIGHT_SIDEBAR_MIN_WIDTH, maxWidth));
+      },
+      onPanResponderRelease: (_, gesture) => {
+        const next = clamp(dragStartWidthRef.current - gesture.dx, APP_RIGHT_SIDEBAR_MIN_WIDTH, maxWidth);
+        dragStartWidthRef.current = next;
+        changeLocalWidth(next);
+        onChangeAppRightSidebarWidth(next);
+      },
+      onPanResponderTerminate: (_, gesture) => {
+        const next = clamp(dragStartWidthRef.current - gesture.dx, APP_RIGHT_SIDEBAR_MIN_WIDTH, maxWidth);
+        dragStartWidthRef.current = next;
+        changeLocalWidth(next);
+        onChangeAppRightSidebarWidth(next);
+      },
+    }),
+    [changeLocalWidth, maxWidth, onChangeAppRightSidebarWidth],
+  );
+
+  if (!workspace.appRightSidebarPanel) return null;
+
+  return (
+    <View style={[workspace.styles.appRightSidebar, { width: localWidth }]}>
+      <View style={workspace.styles.appRightSidebarResizeHandle} {...resizePanResponder.panHandlers} />
+      <View style={workspace.styles.appRightSidebarBody}>
+        {workspace.appRightSidebarPanel === 'chat' ? <NotesAiAssistantPanel /> : <NotesAiCanvasPanel />}
+      </View>
+    </View>
+  );
+}
 
 export type DesktopNotesViewProps = {
   compact: boolean;
@@ -56,6 +123,12 @@ export type DesktopNotesViewProps = {
   textAnnotationsByDocument: Record<number, InkTextAnnotation[]>;
   aiPanelOpen: boolean;
   aiPanelMode: 'floating' | 'sidebar';
+  appRightSidebarPanel: AppRightSidebarPanel;
+  appChatMode: AppChatMode;
+  appRightSidebarWidth: number;
+  focusedWorkspaceTarget: WorkspaceFocusTarget | null;
+  canUndoFocusedWorkspaceAction: boolean;
+  canRedoFocusedWorkspaceAction: boolean;
   selectionRect: SelectionRect | null;
   selectionPreviewUri: string | null;
   copiedSelectionImageUri: string | null;
@@ -109,6 +182,15 @@ export type DesktopNotesViewProps = {
   onChangeBrushSettings: (settings: Partial<InkBrushSettings>) => void;
   onToggleAiPanel: () => void;
   onChangeAiPanelMode: (mode: 'floating' | 'sidebar') => void;
+  onOpenAppChatSidebar: () => void;
+  onOpenAppAiCanvasSidebar: () => void;
+  onCloseAppRightSidebar: () => void;
+  onFloatAppAiChatPanel: () => void;
+  onDockAppAiChatPanel: () => void;
+  onChangeAppRightSidebarWidth: (width: number) => void;
+  onFocusWorkspaceTarget: (target: WorkspaceFocusTarget | null) => void;
+  onUndoFocusedWorkspaceAction: () => void;
+  onRedoFocusedWorkspaceAction: () => void;
   onChangeAiQuestion: (value: string) => void;
   onChangeAiChatScope: (scope: 'note' | 'all') => void;
   onLoadAllAiChatSessions: () => void;
@@ -196,6 +278,13 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
   const [renameOpen, setRenameOpen] = React.useState(false);
   const [renameDraft, setRenameDraft] = React.useState('');
   const [focusMode, setFocusMode] = React.useState(false);
+  const isNativeWideApp = props.isWeb === false;
+  const showAppRightSidebar = isNativeWideApp && props.appRightSidebarPanel !== null;
+  const showFloatingChat = !focusMode && (
+    isNativeWideApp
+      ? props.appChatMode === 'floating' && props.aiPanelOpen
+      : props.aiPanelMode === 'floating'
+  );
   const { normalizedQuestion, aiResponse, aiResponseSections } = buildAiResponse(props.aiQuestion, props.selectionRect, true);
   const workspace = useDesktopNotesWorkspaceViewModel({
     incomingAssetSuggestion: props.incomingAssetSuggestion,
@@ -218,6 +307,11 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
     setFocusMode(false);
     setPageListOpen(false);
   }, [props.studyDocument?.id]);
+
+  React.useEffect(() => {
+    if (!isNativeWideApp || !props.studyDocument || props.appChatMode !== 'sidebar' || props.appRightSidebarPanel !== 'chat' || props.aiPanelOpen) return;
+    props.onOpenAppChatSidebar();
+  }, [isNativeWideApp, props.appChatMode, props.appRightSidebarPanel, props.aiPanelOpen, props.onOpenAppChatSidebar, props.studyDocument]);
 
   const toggleFocusMode = () => {
     setFocusMode((current) => !current);
@@ -275,8 +369,17 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
         value={{
           styles: props.styles,
           blueColor: props.blueColor,
+          usesAppAiPanelLayout: isNativeWideApp,
+          isAppChatSidebarPanel: isNativeWideApp && props.appRightSidebarPanel === 'chat' && props.appChatMode === 'sidebar',
+          isAppAiCanvasSidebarPanel: isNativeWideApp && props.appRightSidebarPanel === 'canvas',
           aiPanelOpen: props.aiPanelOpen,
-          aiPanelMode: props.aiPanelMode,
+          aiPanelMode: isNativeWideApp && props.appChatMode === 'sidebar' && props.appRightSidebarPanel === 'chat' ? 'sidebar' : props.aiPanelMode,
+          appRightSidebarPanel: props.appRightSidebarPanel,
+          appChatMode: props.appChatMode,
+          appRightSidebarWidth: props.appRightSidebarWidth,
+          focusedWorkspaceTarget: props.focusedWorkspaceTarget,
+          canUndoFocusedWorkspaceAction: props.canUndoFocusedWorkspaceAction,
+          canRedoFocusedWorkspaceAction: props.canRedoFocusedWorkspaceAction,
           selectionRect: props.selectionRect,
           selectionPreviewUri: props.selectionPreviewUri,
           copiedSelectionImageUri: props.copiedSelectionImageUri,
@@ -351,6 +454,15 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           activeGeneratedPreviewImage: workspace.activeGeneratedPreviewImage,
           onToggleAiPanel: props.onToggleAiPanel,
           onChangeAiPanelMode: props.onChangeAiPanelMode,
+          onOpenAppChatSidebar: props.onOpenAppChatSidebar,
+          onOpenAppAiCanvasSidebar: props.onOpenAppAiCanvasSidebar,
+          onCloseAppRightSidebar: props.onCloseAppRightSidebar,
+          onFloatAppAiChatPanel: props.onFloatAppAiChatPanel,
+          onDockAppAiChatPanel: props.onDockAppAiChatPanel,
+          onChangeAppRightSidebarWidth: props.onChangeAppRightSidebarWidth,
+          onFocusWorkspaceTarget: props.onFocusWorkspaceTarget,
+          onUndoFocusedWorkspaceAction: props.onUndoFocusedWorkspaceAction,
+          onRedoFocusedWorkspaceAction: props.onRedoFocusedWorkspaceAction,
           onChangeAiQuestion: props.onChangeAiQuestion,
           onChangeAiChatScope: props.onChangeAiChatScope,
           onLoadAllAiChatSessions: props.onLoadAllAiChatSessions,
@@ -490,7 +602,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
             </View>
           ) : null}
           <View style={[props.styles.desktopDocumentDetailBody, focusMode && props.styles.desktopDocumentDetailBodyFocus]}>
-            {!focusMode && props.aiPanelMode === 'floating' ? <NotesAiAssistantPanel /> : null}
+            {showFloatingChat ? <NotesAiAssistantPanel /> : null}
             <NotesWorkspaceToolbar />
             {props.workspaceFeedback ? (
               <View style={props.styles.workspaceToast}>
@@ -498,13 +610,26 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
                 <Text style={props.styles.workspaceToastText}>{props.workspaceFeedback}</Text>
               </View>
             ) : null}
-            <View style={[props.styles.desktopDocumentSidebarContentRow, focusMode && props.styles.desktopDocumentSidebarContentRowFocus]}>
-              {!focusMode && props.aiPanelMode === 'sidebar' ? <NotesAiAssistantPanel /> : null}
-              <View style={[props.styles.desktopDocumentViewerPane, focusMode && props.styles.desktopDocumentViewerPaneFocus]}>
+            <View
+              style={[
+                props.styles.desktopDocumentSidebarContentRow,
+                !isNativeWideApp && !focusMode && props.styles.desktopDocumentSidebarContentRowGapped,
+                focusMode && props.styles.desktopDocumentSidebarContentRowFocus,
+              ]}
+            >
+              {!focusMode && !isNativeWideApp && props.aiPanelMode === 'sidebar' ? <NotesAiAssistantPanel /> : null}
+              <View
+                style={[props.styles.desktopDocumentViewerPane, focusMode && props.styles.desktopDocumentViewerPaneFocus]}
+                onTouchStart={() => props.onFocusWorkspaceTarget('document')}
+              >
                 {!focusMode && workspace.showWorkspaceDock ? <NotesWorkspaceDock /> : null}
                 <NotesDocumentViewer />
               </View>
-              {!focusMode && props.aiCanvas.isOpen ? <NotesAiCanvasPanel /> : null}
+              {!focusMode && showAppRightSidebar ? (
+                <AppRightSidebar />
+              ) : !focusMode && !isNativeWideApp && props.aiCanvas.isOpen ? (
+                <NotesAiCanvasPanel />
+              ) : null}
             </View>
           </View>
         </View>

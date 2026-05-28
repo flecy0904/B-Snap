@@ -4,6 +4,8 @@ import { ActivityIndicator, Image, Pressable, Text, TextInput, View } from 'reac
 
 import { useDesktopNotesWorkspaceContext } from '../workspace/notes-workspace-context';
 
+const AI_CANVAS_MINI_PROMPTS = ['마무리 다듬기', '수준 조정', '길이 조절'];
+
 export function NotesAiCanvasPanel() {
   const workspace = useDesktopNotesWorkspaceContext();
   const canvas = workspace.aiCanvas;
@@ -17,6 +19,9 @@ export function NotesAiCanvasPanel() {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = React.useState(false);
   const [miniCommand, setMiniCommand] = React.useState('');
   const [miniSelectionImageUri, setMiniSelectionImageUri] = React.useState<string | null>(null);
+  const [miniComposerOpen, setMiniComposerOpen] = React.useState(false);
+  const isAppAiCanvasSidebar = Boolean(workspace.isAppAiCanvasSidebarPanel);
+  const miniCommandReady = Boolean(miniCommand.trim());
 
   const noteActionMenuNote = React.useMemo(
     () => canvas.notes.find((note) => note.id === noteActionMenuId) ?? null,
@@ -72,18 +77,37 @@ export function NotesAiCanvasPanel() {
     if (sent) {
       setMiniCommand('');
       setMiniSelectionImageUri(null);
+      setMiniComposerOpen(false);
     }
+  };
+  const closeMiniComposer = () => {
+    setMiniCommand('');
+    setMiniSelectionImageUri(null);
+    setMiniComposerOpen(false);
   };
   const pasteCopiedSelectionImage = () => {
     if (!workspace.copiedSelectionImageUri) return;
     setMiniSelectionImageUri(workspace.copiedSelectionImageUri);
   };
+  const closeCanvasPanel = () => {
+    if (isAppAiCanvasSidebar) {
+      workspace.onCloseAppRightSidebar();
+      return;
+    }
+    canvas.close();
+  };
   const renderMiniCommandInput = () => {
     if (workspace.aiPanelOpen) return null;
 
     return (
-      <View style={workspace.styles.aiCanvasMiniComposer}>
-        {miniSelectionImageUri ? (
+      <View
+        pointerEvents="box-none"
+        style={[
+          workspace.styles.aiCanvasMiniComposer,
+          !miniComposerOpen && workspace.styles.aiCanvasMiniComposerFloating,
+        ]}
+      >
+        {miniComposerOpen && miniSelectionImageUri ? (
           <View style={workspace.styles.aiCanvasMiniAttachment}>
             <Image source={{ uri: miniSelectionImageUri }} style={workspace.styles.aiCanvasMiniAttachmentImage} resizeMode="cover" />
             <Pressable
@@ -93,143 +117,139 @@ export function NotesAiCanvasPanel() {
               <MaterialCommunityIcons name="close" size={12} color="#FFFFFF" />
             </Pressable>
           </View>
-        ) : workspace.copiedSelectionImageUri ? (
+        ) : miniComposerOpen && workspace.copiedSelectionImageUri ? (
           <Pressable style={workspace.styles.aiCanvasPasteSelectionButton} onPress={pasteCopiedSelectionImage}>
             <MaterialCommunityIcons name="content-paste" size={14} color="#405CD1" />
             <Text style={workspace.styles.aiCanvasPasteSelectionText}>복사한 선택 영역 붙여넣기</Text>
           </Pressable>
         ) : null}
-        <View style={workspace.styles.aiCanvasMiniInputBar}>
-          <TextInput
-            value={miniCommand}
-            onChangeText={setMiniCommand}
-            placeholder="이 Canvas에 추가하거나 수정할 내용을 입력하세요"
-            placeholderTextColor="#9AA3B2"
-            style={workspace.styles.aiCanvasMiniInput}
-            multiline
-            textAlignVertical="center"
-            editable={!workspace.aiLoading}
-            onSubmitEditing={submitMiniCommand}
-          />
-          <Pressable
-            style={[
-              workspace.styles.aiCanvasMiniSendButton,
-              (!miniCommand.trim() || workspace.aiLoading) && workspace.styles.aiCanvasMiniSendButtonDisabled,
-            ]}
-            onPress={submitMiniCommand}
-            disabled={!miniCommand.trim() || workspace.aiLoading}
-          >
-            {workspace.aiLoading ? (
-              <ActivityIndicator size="small" color="#FFFFFF" />
-            ) : (
-              <MaterialCommunityIcons name="arrow-up" size={18} color="#FFFFFF" />
-            )}
-          </Pressable>
-        </View>
+        {miniComposerOpen ? (
+          <View style={workspace.styles.aiCanvasMiniQuickRow}>
+            {AI_CANVAS_MINI_PROMPTS.map((prompt) => (
+              <Pressable
+                key={prompt}
+                style={workspace.styles.aiCanvasMiniQuickChip}
+                onPress={() => setMiniCommand(prompt)}
+                disabled={workspace.aiLoading}
+              >
+                <Text style={workspace.styles.aiCanvasMiniQuickChipText}>{prompt}</Text>
+              </Pressable>
+            ))}
+          </View>
+        ) : null}
+        {miniComposerOpen ? (
+          <View style={workspace.styles.aiCanvasMiniInputBar}>
+            <TextInput
+              value={miniCommand}
+              onChangeText={setMiniCommand}
+              placeholder="AI에게 수정 요청"
+              placeholderTextColor="#8F96A3"
+              style={workspace.styles.aiCanvasMiniInput}
+              multiline
+              editable={!workspace.aiLoading}
+              onSubmitEditing={submitMiniCommand}
+              autoFocus
+            />
+            <Pressable
+              style={[
+                workspace.styles.aiCanvasMiniSendButton,
+                workspace.aiLoading && workspace.styles.aiCanvasMiniSendButtonDisabled,
+              ]}
+              onPress={miniCommandReady ? submitMiniCommand : closeMiniComposer}
+              disabled={workspace.aiLoading}
+            >
+              {workspace.aiLoading ? (
+                <ActivityIndicator size="small" color="#FFFFFF" />
+              ) : miniCommandReady ? (
+                <MaterialCommunityIcons name="arrow-up" size={18} color="#FFFFFF" />
+              ) : (
+                <MaterialCommunityIcons name="close" size={18} color="#FFFFFF" />
+              )}
+            </Pressable>
+          </View>
+        ) : (
+          <View style={workspace.styles.aiCanvasMiniFabAnchor}>
+            <Pressable
+              style={workspace.styles.aiCanvasMiniSendButton}
+              onPress={() => setMiniComposerOpen(true)}
+            >
+              <MaterialCommunityIcons name="pencil-outline" size={20} color="#FFFFFF" />
+            </Pressable>
+          </View>
+        )}
+      </View>
+    );
+  };
+  const renderNoteListMenu = () => {
+    if (!noteListOpen) return null;
+
+    return (
+      <View style={workspace.styles.aiCanvasNoteListMenu}>
+        {canvas.notes.map((note) => {
+          const active = note.id === canvas.activeNoteId;
+          return (
+            <View key={note.id} style={workspace.styles.aiCanvasNoteListMenuItemWrap}>
+              <Pressable
+                style={[
+                  workspace.styles.aiCanvasNoteListMenuItem,
+                  active && workspace.styles.aiCanvasNoteListMenuItemActive,
+                ]}
+                onPress={() => {
+                  canvas.selectNote(note.id);
+                  setNoteListOpen(false);
+                  setNoteActionMenuId(null);
+                }}
+                onLongPress={() => {
+                  setNoteActionMenuId(note.id);
+                }}
+                delayLongPress={350}
+              >
+                <Text
+                  style={[
+                    workspace.styles.aiCanvasNoteListMenuText,
+                    active && workspace.styles.aiCanvasNoteListMenuTextActive,
+                  ]}
+                  numberOfLines={1}
+                >
+                  {note.title}
+                </Text>
+              </Pressable>
+              {noteActionMenuId === note.id ? (
+                <View style={workspace.styles.aiCanvasNoteActionMenu}>
+                  <Pressable
+                    style={workspace.styles.aiCanvasTitleMenuItem}
+                    onPress={startRename}
+                  >
+                    <Text style={workspace.styles.aiCanvasTitleMenuText}>이름 바꾸기</Text>
+                  </Pressable>
+                  <Pressable
+                    style={workspace.styles.aiCanvasTitleMenuItem}
+                    onPress={openDeleteConfirm}
+                    disabled={canvas.saving}
+                  >
+                    <Text style={workspace.styles.aiCanvasTitleMenuDangerText}>삭제하기</Text>
+                  </Pressable>
+                </View>
+              ) : null}
+            </View>
+          );
+        })}
       </View>
     );
   };
 
   return (
-    <View style={workspace.styles.aiCanvasPanel}>
+    <View style={[workspace.styles.aiCanvasPanel, isAppAiCanvasSidebar && workspace.styles.appRightSidebarAiCanvasPanel]}>
       {noteListOpen ? (
         <Pressable style={workspace.styles.aiCanvasMenuDismissLayer} onPress={closeMenus} />
       ) : null}
       <View style={workspace.styles.aiCanvasHeader}>
         <View style={workspace.styles.aiCanvasHeaderTitleWrap}>
-          <Text style={workspace.styles.aiCanvasEyebrow}>AI Canvas</Text>
-          <View style={workspace.styles.aiCanvasTitleRow}>
-            <View style={workspace.styles.aiCanvasTitleButton}>
-              <Text style={workspace.styles.aiCanvasTitle} numberOfLines={1}>
-                {canvas.activeNote?.title ?? 'Canvas Notes'}
-              </Text>
-            </View>
-            <Pressable
-              style={workspace.styles.aiCanvasDropdownButton}
-              onPress={() => {
-                setNoteActionMenuId(null);
-                setNoteListOpen((current) => !current);
-              }}
-              disabled={!canvas.notes.length}
-            >
-              <MaterialCommunityIcons
-                name={noteListOpen ? 'chevron-up' : 'chevron-down'}
-                size={18}
-                color="#5D6676"
-              />
-            </Pressable>
-          </View>
-          {noteListOpen ? (
-            <View style={workspace.styles.aiCanvasNoteListMenu}>
-              {canvas.notes.map((note) => {
-                const active = note.id === canvas.activeNoteId;
-                return (
-                  <View key={note.id} style={workspace.styles.aiCanvasNoteListMenuItemWrap}>
-                    <Pressable
-                      style={[
-                        workspace.styles.aiCanvasNoteListMenuItem,
-                        active && workspace.styles.aiCanvasNoteListMenuItemActive,
-                      ]}
-                      onPress={() => {
-                        canvas.selectNote(note.id);
-                        setNoteListOpen(false);
-                        setNoteActionMenuId(null);
-                      }}
-                      onLongPress={() => {
-                        setNoteActionMenuId(note.id);
-                      }}
-                      delayLongPress={350}
-                    >
-                      <Text
-                        style={[
-                          workspace.styles.aiCanvasNoteListMenuText,
-                          active && workspace.styles.aiCanvasNoteListMenuTextActive,
-                        ]}
-                        numberOfLines={1}
-                      >
-                        {note.title}
-                      </Text>
-                    </Pressable>
-                    {noteActionMenuId === note.id ? (
-                      <View style={workspace.styles.aiCanvasNoteActionMenu}>
-                        <Pressable
-                          style={workspace.styles.aiCanvasTitleMenuItem}
-                          onPress={startRename}
-                        >
-                          <Text style={workspace.styles.aiCanvasTitleMenuText}>이름 바꾸기</Text>
-                        </Pressable>
-                        <Pressable
-                          style={workspace.styles.aiCanvasTitleMenuItem}
-                          onPress={openDeleteConfirm}
-                          disabled={canvas.saving}
-                        >
-                          <Text style={workspace.styles.aiCanvasTitleMenuDangerText}>삭제하기</Text>
-                        </Pressable>
-                      </View>
-                    ) : null}
-                  </View>
-                );
-              })}
-            </View>
-          ) : null}
+          <Text style={workspace.styles.aiCanvasTitle} numberOfLines={1}>
+            {canvas.activeNote?.title ?? 'Canvas Notes'}
+          </Text>
         </View>
         <View style={workspace.styles.aiCanvasHeaderActions}>
-          <View style={workspace.styles.aiCanvasHistoryActions}>
-            <Pressable
-              style={[workspace.styles.aiCanvasHistoryButton, !canvas.canUndo && workspace.styles.aiCanvasHistoryButtonDisabled]}
-              onPress={canvas.undoCanvasEdit}
-              disabled={!canvas.canUndo}
-            >
-              <MaterialCommunityIcons name="undo" size={18} color={canvas.canUndo ? '#405CD1' : '#A8B0BF'} />
-            </Pressable>
-            <Pressable
-              style={[workspace.styles.aiCanvasHistoryButton, !canvas.canRedo && workspace.styles.aiCanvasHistoryButtonDisabled]}
-              onPress={canvas.redoCanvasEdit}
-              disabled={!canvas.canRedo}
-            >
-              <MaterialCommunityIcons name="redo" size={18} color={canvas.canRedo ? '#405CD1' : '#A8B0BF'} />
-            </Pressable>
-          </View>
           <Pressable
             style={[
               workspace.styles.aiCanvasHeaderNewButton,
@@ -238,10 +258,23 @@ export function NotesAiCanvasPanel() {
             onPress={canvas.createNote}
             disabled={canvas.saving}
           >
-            <MaterialCommunityIcons name="note-edit-outline" size={20} color="#111827" />
+            <MaterialCommunityIcons name="note-edit-outline" size={18} color="#111827" />
           </Pressable>
-          <Pressable style={workspace.styles.aiCanvasIconButton} onPress={canvas.close}>
-            <MaterialCommunityIcons name="close" size={22} color="#303744" />
+          <View style={workspace.styles.aiHeaderMenuWrap}>
+            <Pressable
+              style={workspace.styles.aiCanvasIconButton}
+              onPress={() => {
+                setNoteActionMenuId(null);
+                setNoteListOpen((current) => !current);
+              }}
+              disabled={!canvas.notes.length}
+            >
+              <MaterialCommunityIcons name="dots-vertical" size={20} color="#303744" />
+            </Pressable>
+            {renderNoteListMenu()}
+          </View>
+          <Pressable style={workspace.styles.aiCanvasIconButton} onPress={closeCanvasPanel}>
+            <MaterialCommunityIcons name="close" size={20} color="#303744" />
           </Pressable>
         </View>
       </View>
@@ -268,6 +301,7 @@ export function NotesAiCanvasPanel() {
               <TextInput
                 value={canvas.markdownDraft}
                 onChangeText={canvas.setMarkdownDraft}
+                onFocus={() => workspace.onFocusWorkspaceTarget('aiCanvas')}
                 placeholder="Markdown으로 정리 내용을 작성하세요."
                 placeholderTextColor="#A2AAB8"
                 multiline
