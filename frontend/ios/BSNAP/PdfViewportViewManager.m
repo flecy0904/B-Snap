@@ -303,6 +303,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 @property (nonatomic) BOOL syncingCustomViewportToScrollView;
 @property (nonatomic) CGFloat pinchStartZoom;
 @property (nonatomic) CGPoint pinchFocusContentPoint;
+@property (nonatomic, copy, nullable) NSDictionary *pinchFocusAnchor;
 @property (nonatomic) CGPoint pinchLastFocusViewPoint;
 @property (nonatomic) BOOL viewportPinchActive;
 @property (nonatomic) BOOL viewportPanActive;
@@ -311,6 +312,9 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 @property (nonatomic, strong, nullable) CADisplayLink *inertiaDisplayLink;
 @property (nonatomic) CGSize lastViewportSize;
 @property (nonatomic) CGSize pendingDeferredLayoutSize;
+@property (nonatomic, copy, nullable) NSDictionary *pendingCustomLayoutAnchor;
+@property (nonatomic) CGPoint pendingCustomLayoutViewPoint;
+@property (nonatomic, copy, nullable) NSString *pendingCustomLayoutReason;
 @property (nonatomic) BOOL deferredWidthLayoutPending;
 @property (nonatomic) CFTimeInterval suppressAnchorSaveUntil;
 @property (nonatomic) CFTimeInterval suppressInkViewportEventsUntil;
@@ -360,6 +364,8 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 - (CGPoint)viewportContentOffset;
 - (CGSize)viewportContentSize;
 - (CGPoint)contentPointForViewportPoint:(CGPoint)viewPoint;
+- (nullable NSDictionary *)captureCustomViewportAnchorAtViewPoint:(CGPoint)viewPoint;
+- (CGPoint)contentPointForCustomViewportAnchor:(NSDictionary *)anchor fallbackContentPoint:(CGPoint)fallbackContentPoint;
 - (CGRect)rawViewportRectForContentRect:(CGRect)contentRect;
 - (void)syncCustomCoreFromScrollView;
 - (void)syncScrollViewFromCustomCore;
@@ -1028,6 +1034,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     _syncingCustomViewportToScrollView = NO;
     _pinchStartZoom = 1.0;
     _pinchFocusContentPoint = CGPointZero;
+    _pinchFocusAnchor = nil;
     _pinchLastFocusViewPoint = CGPointZero;
     _viewportPinchActive = NO;
     _viewportPanActive = NO;
@@ -1035,6 +1042,9 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     _inertiaLastTimestamp = 0;
     _lastViewportSize = CGSizeZero;
     _pendingDeferredLayoutSize = CGSizeZero;
+    _pendingCustomLayoutAnchor = nil;
+    _pendingCustomLayoutViewPoint = CGPointZero;
+    _pendingCustomLayoutReason = nil;
     _deferredWidthLayoutPending = NO;
     _suppressAnchorSaveUntil = 0;
     _suppressInkViewportEventsUntil = 0;
@@ -1210,9 +1220,9 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     && previousSize.height > 0
     && nextSize.width > 0
     && nextSize.height > 0;
-  CGPoint customResizeFocusContentPoint = CGPointZero;
+  NSDictionary *customResizeAnchor = nil;
   if (shouldLockCustomResizeFocus) {
-    customResizeFocusContentPoint = [self contentPointForViewportPoint:CGPointMake(previousSize.width * 0.5, previousSize.height * 0.5)];
+    customResizeAnchor = [self captureCustomViewportAnchorAtViewPoint:CGPointMake(previousSize.width * 0.5, previousSize.height * 0.5)];
   }
   if (sizeChanged && ![self isViewportUserInteractionActive]) {
     [self stopViewportMotionAndSettle];
@@ -1228,9 +1238,6 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   self.inkInputView.frame = self.bounds;
   if (self.bounds.size.width <= 0 || self.bounds.size.height <= 0) return;
   if (!sizeChanged) return;
-  if (shouldLockCustomResizeFocus) {
-    [self preserveCustomViewportContentPoint:customResizeFocusContentPoint atViewPoint:CGPointMake(nextSize.width * 0.5, nextSize.height * 0.5) reason:@"layout-resize"];
-  }
   BsnPdfPageDebugLog(@"[BsnPdfViewport][page-debug] layoutSubviews sizeChanged old=%.1fx%.1f new=%.1fx%.1f page=%ld reported=%ld offsetY=%.1f",
     previousSize.width,
     previousSize.height,
@@ -1240,6 +1247,18 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     (long)self.reportedPageNumber,
     self.scrollView.contentOffset.y);
   self.lastViewportSize = nextSize;
+  if (self.customViewportCoreEnabled) {
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(performDeferredWidthLayoutRebuild) object:nil];
+    self.deferredWidthLayoutPending = NO;
+    self.pendingDeferredLayoutSize = CGSizeZero;
+    self.suppressAnchorSaveUntil = CACurrentMediaTime() + 0.28;
+    self.pendingCustomLayoutAnchor = customResizeAnchor;
+    self.pendingCustomLayoutViewPoint = CGPointMake(nextSize.width * 0.5, nextSize.height * 0.5);
+    self.pendingCustomLayoutReason = @"layout-resize-realtime";
+    [self logRenderDebugEvent:@"layout" target:@"viewport" action:@"rebuild-resize-realtime" rect:self.bounds extra:@""];
+    [self rebuildLayout];
+    return;
+  }
   if ([self shouldDeferWidthOnlyLayoutFromSize:previousSize toSize:nextSize]) {
     self.deferredWidthLayoutPending = YES;
     self.pendingDeferredLayoutSize = nextSize;
@@ -1263,9 +1282,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   if (oldSize.width <= 0 || oldSize.height <= 0 || newSize.width <= 0 || newSize.height <= 0) return NO;
   if (self.pendingScrollToRequestedPage) return NO;
   if ([self isViewportUserInteractionActive]) return NO;
-  if (self.customViewportCoreEnabled) {
-    return fabs(newSize.width - oldSize.width) > 0.5 || fabs(newSize.height - oldSize.height) > 0.5;
-  }
+  if (self.customViewportCoreEnabled) return NO;
   if (fabs(newSize.height - oldSize.height) > 0.5) return NO;
   return fabs(newSize.width - oldSize.width) > 0.5;
 }
@@ -1980,8 +1997,9 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 - (nullable NSDictionary *)captureViewportAnchor
 {
   if (self.layouts.count == 0 || self.bounds.size.height <= 0) return nil;
-  CGFloat zoom = MAX(1.0, self.scrollView.zoomScale);
-  CGFloat centerY = (self.scrollView.contentOffset.y + self.bounds.size.height * 0.5) / zoom;
+  CGFloat zoom = MAX(1.0, [self viewportScale]);
+  CGPoint offset = [self viewportContentOffset];
+  CGFloat centerY = (offset.y + self.bounds.size.height * 0.5) / zoom;
   BsnPdfPageLayout *containing = nil;
   BsnPdfPageLayout *before = nil;
   BsnPdfPageLayout *after = nil;
@@ -2351,6 +2369,12 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 - (void)rebuildLayout
 {
   [self logRenderDebugEvent:@"layout" target:@"viewport" action:@"rebuild-enter" rect:self.bounds extra:[NSString stringWithFormat:@"pendingScroll=%@", self.pendingScrollToRequestedPage ? @"YES" : @"NO"]];
+  NSDictionary *customLayoutAnchor = self.pendingCustomLayoutAnchor;
+  CGPoint customLayoutViewPoint = self.pendingCustomLayoutViewPoint;
+  NSString *customLayoutReason = self.pendingCustomLayoutReason;
+  self.pendingCustomLayoutAnchor = nil;
+  self.pendingCustomLayoutViewPoint = CGPointZero;
+  self.pendingCustomLayoutReason = nil;
   if (self.bounds.size.width <= 0 || self.bounds.size.height <= 0 || self.document == nil) {
     self.pendingLayoutTransitionAnchor = nil;
     self.contentView.frame = CGRectMake(0, 0, MAX(1.0, self.bounds.size.width), MAX(1.0, self.bounds.size.height));
@@ -2373,8 +2397,9 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     return;
   }
 
+  BOOL hasCustomLayoutAnchor = self.customViewportCoreEnabled && customLayoutAnchor != nil;
   NSDictionary *anchor = nil;
-  if (!self.pendingScrollToRequestedPage) {
+  if (!self.pendingScrollToRequestedPage && !hasCustomLayoutAnchor) {
     anchor = self.pendingLayoutTransitionAnchor ?: [self captureViewportAnchor];
   }
   self.pendingLayoutTransitionAnchor = nil;
@@ -2386,7 +2411,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     self.scrollView.contentOffset.y,
     (long)self.lastPageNumber,
     (long)self.reportedPageNumber);
-  CGFloat previousZoom = MAX(BsnPdfMinZoom, self.scrollView.zoomScale);
+  CGFloat previousZoom = MAX(BsnPdfMinZoom, self.customViewportCoreEnabled ? self.coreScale : self.scrollView.zoomScale);
   self.layouts = [self buildNotebookLayouts];
   BsnPdfPageLayout *last = self.layouts.lastObject;
   CGFloat contentHeight = last != nil ? CGRectGetMaxY(last.frame) : self.bounds.size.height;
@@ -2404,18 +2429,29 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   self.scrollView.minimumZoomScale = BsnPdfMinZoom;
   self.scrollView.maximumZoomScale = BsnPdfMaxZoom;
   self.scrollView.zoomScale = MIN(BsnPdfMaxZoom, MAX(BsnPdfMinZoom, previousZoom));
-  if (anchor != nil) [self restoreViewportAnchor:anchor];
-  CGFloat maxOffsetX = MAX(0, self.scrollView.contentSize.width - self.bounds.size.width);
-  CGFloat maxOffsetY = MAX(0, self.scrollView.contentSize.height - self.bounds.size.height);
-  self.scrollView.contentOffset = CGPointMake(
-    MIN(MAX(0, self.scrollView.contentOffset.x), maxOffsetX),
-    MIN(MAX(0, self.scrollView.contentOffset.y), maxOffsetY)
-  );
-  self.lastContentOffsetY = self.scrollView.contentOffset.y;
-  if (self.customViewportCoreEnabled) {
-    [self syncCustomCoreFromScrollView];
-    [self syncScrollViewFromCustomCore];
+  if (hasCustomLayoutAnchor) {
+    CGPoint fallbackContentPoint = CGPointMake(
+      [customLayoutAnchor[@"contentX"] doubleValue],
+      [customLayoutAnchor[@"contentY"] doubleValue]
+    );
+    CGPoint focusContentPoint = [self contentPointForCustomViewportAnchor:customLayoutAnchor fallbackContentPoint:fallbackContentPoint];
+    [self preserveCustomViewportContentPoint:focusContentPoint atViewPoint:customLayoutViewPoint reason:customLayoutReason ?: @"layout"];
+  } else if (anchor != nil) {
+    [self restoreViewportAnchor:anchor];
   }
+  if (self.customViewportCoreEnabled) {
+    if (!hasCustomLayoutAnchor && anchor == nil) [self syncCustomCoreFromScrollView];
+    [self clampCustomViewportSnap:NO];
+    [self syncScrollViewFromCustomCore];
+  } else {
+    CGFloat maxOffsetX = MAX(0, self.scrollView.contentSize.width - self.bounds.size.width);
+    CGFloat maxOffsetY = MAX(0, self.scrollView.contentSize.height - self.bounds.size.height);
+    self.scrollView.contentOffset = CGPointMake(
+      MIN(MAX(0, self.scrollView.contentOffset.x), maxOffsetX),
+      MIN(MAX(0, self.scrollView.contentOffset.y), maxOffsetY)
+    );
+  }
+  self.lastContentOffsetY = self.scrollView.contentOffset.y;
   BsnPdfPageDebugLog(@"[BsnPdfViewport][page-debug] rebuildLayout done offsetY=%.1f contentH=%.1f last=%ld reported=%ld requested=%ld",
     self.scrollView.contentOffset.y,
     self.scrollView.contentSize.height,
@@ -2735,12 +2771,16 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     self.viewportPinchActive = YES;
     self.pinchStartZoom = self.customViewportCoreEnabled ? MAX(0.0001, self.coreScale) : MAX(0.0001, self.scrollView.zoomScale);
     self.pinchLastFocusViewPoint = focus;
-    self.pinchFocusContentPoint = self.customViewportCoreEnabled
+    self.pinchFocusAnchor = self.customViewportCoreEnabled ? [self captureCustomViewportAnchorAtViewPoint:focus] : nil;
+    CGPoint rawFocusContentPoint = self.customViewportCoreEnabled
       ? [self contentPointForViewportPoint:focus]
       : CGPointMake(
         (focus.x + self.scrollView.contentOffset.x) / self.pinchStartZoom,
         (focus.y + self.scrollView.contentOffset.y) / self.pinchStartZoom
       );
+    self.pinchFocusContentPoint = self.pinchFocusAnchor != nil
+      ? [self contentPointForCustomViewportAnchor:self.pinchFocusAnchor fallbackContentPoint:rawFocusContentPoint]
+      : rawFocusContentPoint;
     NSInteger focusPage = [self pageNumberNearContentPoint:self.pinchFocusContentPoint];
     if (focusPage > 0) {
       self.protectedPageNumber = focusPage;
@@ -2763,10 +2803,14 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     self.pinchLastFocusViewPoint = focus;
     if (self.customViewportCoreEnabled) {
       CGFloat previousY = self.coreScrollYDocument;
+      CGPoint focusContentPoint = self.pinchFocusAnchor != nil
+        ? [self contentPointForCustomViewportAnchor:self.pinchFocusAnchor fallbackContentPoint:self.pinchFocusContentPoint]
+        : self.pinchFocusContentPoint;
+      self.pinchFocusContentPoint = focusContentPoint;
       self.coreScale = nextZoom;
-      [self clampCustomViewportSnap:NO preservingContentPoint:self.pinchFocusContentPoint atViewPoint:focus];
+      [self clampCustomViewportSnap:NO preservingContentPoint:focusContentPoint atViewPoint:focus];
       [self applyCustomViewportDidChangeWithDeltaY:self.coreScrollYDocument - previousY force:NO];
-      NSInteger focusPage = [self pageNumberNearContentPoint:self.pinchFocusContentPoint];
+      NSInteger focusPage = [self pageNumberNearContentPoint:focusContentPoint];
       if (focusPage > 0) {
         self.protectedPageNumber = focusPage;
         _requestedPage = focusPage;
@@ -2794,14 +2838,19 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   } else if (gesture.state == UIGestureRecognizerStateEnded) {
     self.pinchLastFocusViewPoint = focus;
     if (self.customViewportCoreEnabled) {
-      [self clampCustomViewportSnap:YES preservingContentPoint:self.pinchFocusContentPoint atViewPoint:self.pinchLastFocusViewPoint];
+      CGPoint focusContentPoint = self.pinchFocusAnchor != nil
+        ? [self contentPointForCustomViewportAnchor:self.pinchFocusAnchor fallbackContentPoint:self.pinchFocusContentPoint]
+        : self.pinchFocusContentPoint;
+      self.pinchFocusContentPoint = focusContentPoint;
+      [self clampCustomViewportSnap:YES preservingContentPoint:focusContentPoint atViewPoint:self.pinchLastFocusViewPoint];
       [self syncScrollViewFromCustomCore];
-      NSInteger focusPage = [self pageNumberNearContentPoint:self.pinchFocusContentPoint];
+      NSInteger focusPage = [self pageNumberNearContentPoint:focusContentPoint];
       if (focusPage > 0) {
         self.protectedPageNumber = focusPage;
         _requestedPage = focusPage;
       }
       self.viewportPinchActive = NO;
+      self.pinchFocusAnchor = nil;
       [self invalidateCustomViewportSurfaces];
       [self saveViewportAnchor];
       [self flushDeferredViewportInvalidations];
@@ -2825,9 +2874,14 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     [self requestViewportChangedForce:YES];
   } else if (gesture.state == UIGestureRecognizerStateCancelled || gesture.state == UIGestureRecognizerStateFailed) {
     if (self.customViewportCoreEnabled) {
-      [self clampCustomViewportSnap:YES preservingContentPoint:self.pinchFocusContentPoint atViewPoint:self.pinchLastFocusViewPoint];
+      CGPoint focusContentPoint = self.pinchFocusAnchor != nil
+        ? [self contentPointForCustomViewportAnchor:self.pinchFocusAnchor fallbackContentPoint:self.pinchFocusContentPoint]
+        : self.pinchFocusContentPoint;
+      self.pinchFocusContentPoint = focusContentPoint;
+      [self clampCustomViewportSnap:YES preservingContentPoint:focusContentPoint atViewPoint:self.pinchLastFocusViewPoint];
       [self syncScrollViewFromCustomCore];
       self.viewportPinchActive = NO;
+      self.pinchFocusAnchor = nil;
       [self invalidateCustomViewportSurfaces];
       [self saveViewportAnchor];
       [self flushDeferredViewportInvalidations];
@@ -3079,8 +3133,9 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 
 - (NSInteger)centerLayoutIndex
 {
-  CGFloat zoom = MAX(0.0001, self.scrollView.zoomScale);
-  CGFloat centerY = (self.scrollView.contentOffset.y + self.bounds.size.height * 0.5) / zoom;
+  CGFloat zoom = MAX(0.0001, [self viewportScale]);
+  CGPoint offset = [self viewportContentOffset];
+  CGFloat centerY = (offset.y + self.bounds.size.height * 0.5) / zoom;
   NSInteger bestIndex = -1;
   CGFloat bestDistance = CGFLOAT_MAX;
   for (NSInteger index = 0; index < self.layouts.count; index += 1) {
@@ -3120,10 +3175,11 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 - (NSArray<NSNumber *> *)visibleRenderPriorityIndexes
 {
   if (self.layouts.count == 0 || self.bounds.size.width <= 0 || self.bounds.size.height <= 0) return @[];
-  CGFloat zoom = MAX(0.0001, self.scrollView.zoomScale);
+  CGFloat zoom = MAX(0.0001, [self viewportScale]);
+  CGPoint offset = [self viewportContentOffset];
   CGRect viewport = CGRectMake(
-    self.scrollView.contentOffset.x / zoom,
-    self.scrollView.contentOffset.y / zoom,
+    offset.x / zoom,
+    offset.y / zoom,
     self.bounds.size.width / zoom,
     self.bounds.size.height / zoom
   );
@@ -3378,8 +3434,9 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 
 - (NSArray<BsnPdfHiResRequest *> *)buildVisibleHiResRequests
 {
-  CGFloat zoom = MAX(0.0001, self.scrollView.zoomScale);
-  CGRect viewport = CGRectMake(self.scrollView.contentOffset.x / zoom, self.scrollView.contentOffset.y / zoom, self.bounds.size.width / zoom, self.bounds.size.height / zoom);
+  CGFloat zoom = MAX(0.0001, [self viewportScale]);
+  CGPoint offset = [self viewportContentOffset];
+  CGRect viewport = CGRectMake(offset.x / zoom, offset.y / zoom, self.bounds.size.width / zoom, self.bounds.size.height / zoom);
   NSMutableArray<NSDictionary *> *entries = [NSMutableArray array];
   for (BsnPdfPageLayout *layout in self.layouts) {
     if (layout.pageNumber == nil || !CGRectIntersectsRect(viewport, layout.frame)) continue;
@@ -3605,8 +3662,9 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 {
   if (self.inkInteractionActive || CACurrentMediaTime() < self.suppressInkViewportEventsUntil) return;
   NSString *pageChangeSource = source.length > 0 ? source : @"unknown";
-  CGFloat zoom = MAX(0.0001, self.scrollView.zoomScale);
-  CGFloat centerY = (self.scrollView.contentOffset.y + self.bounds.size.height * 0.5) / zoom;
+  CGFloat zoom = MAX(0.0001, [self viewportScale]);
+  CGPoint offset = [self viewportContentOffset];
+  CGFloat centerY = (offset.y + self.bounds.size.height * 0.5) / zoom;
   BsnPdfPageLayout *best = nil;
   CGFloat bestDistance = CGFLOAT_MAX;
   for (BsnPdfPageLayout *layout in self.layouts) {
@@ -4251,6 +4309,129 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   CGFloat zoom = [self viewportScale];
   CGPoint offset = [self viewportContentOffset];
   return CGPointMake((viewPoint.x + offset.x) / zoom, (viewPoint.y + offset.y) / zoom);
+}
+
+- (NSMutableDictionary *)customViewportAnchorForLayout:(BsnPdfPageLayout *)layout contentPoint:(CGPoint)contentPoint clamped:(BOOL)clamped
+{
+  CGFloat progressX = (contentPoint.x - CGRectGetMinX(layout.frame)) / MAX(1.0, layout.frame.size.width);
+  CGFloat progressY = (contentPoint.y - CGRectGetMinY(layout.frame)) / MAX(1.0, layout.frame.size.height);
+  if (clamped) {
+    progressX = MIN(1.0, MAX(0, progressX));
+    progressY = MIN(1.0, MAX(0, progressY));
+  }
+  NSMutableDictionary *anchor = [@{
+    @"type": @"page",
+    @"pageId": layout.pageId ?: @"",
+    @"progressX": @(progressX),
+    @"progressY": @(progressY),
+    @"contentX": @(contentPoint.x),
+    @"contentY": @(contentPoint.y),
+  } mutableCopy];
+  if (layout.pageNumber != nil) anchor[@"pageNumber"] = layout.pageNumber;
+  if (layout.generatedPageId != nil) anchor[@"generatedPageId"] = layout.generatedPageId;
+  return anchor;
+}
+
+- (nullable NSDictionary *)captureCustomViewportAnchorAtViewPoint:(CGPoint)viewPoint
+{
+  if (self.layouts.count == 0) return nil;
+  CGPoint contentPoint = [self contentPointForViewportPoint:viewPoint];
+  BsnPdfPageLayout *containing = nil;
+  BsnPdfPageLayout *before = nil;
+  BsnPdfPageLayout *after = nil;
+  BsnPdfPageLayout *nearest = nil;
+  CGFloat nearestDistance = CGFLOAT_MAX;
+  for (BsnPdfPageLayout *layout in self.layouts) {
+    if (CGRectContainsPoint(layout.frame, contentPoint)) containing = layout;
+    if (CGRectGetMaxY(layout.frame) <= contentPoint.y) before = layout;
+    if (after == nil && CGRectGetMinY(layout.frame) >= contentPoint.y) after = layout;
+    CGFloat distance = CGRectContainsPoint(layout.frame, contentPoint)
+      ? 0
+      : hypot(CGRectGetMidX(layout.frame) - contentPoint.x, CGRectGetMidY(layout.frame) - contentPoint.y);
+    if (distance < nearestDistance) {
+      nearestDistance = distance;
+      nearest = layout;
+    }
+  }
+  if (containing != nil) return [self customViewportAnchorForLayout:containing contentPoint:contentPoint clamped:NO];
+  if (before != nil && after != nil) {
+    CGFloat gapTop = CGRectGetMaxY(before.frame);
+    CGFloat gapBottom = CGRectGetMinY(after.frame);
+    CGFloat gapProgressY = (contentPoint.y - gapTop) / MAX(1.0, gapBottom - gapTop);
+    CGFloat progressX = contentPoint.x / MAX(1.0, self.coreContentWidth);
+    NSMutableDictionary *anchor = [@{
+      @"type": @"gap",
+      @"gapBeforePageId": before.pageId ?: @"",
+      @"gapAfterPageId": after.pageId ?: @"",
+      @"gapProgressY": @(MIN(1.0, MAX(0, gapProgressY))),
+      @"progressX": @(MIN(1.0, MAX(0, progressX))),
+      @"contentX": @(contentPoint.x),
+      @"contentY": @(contentPoint.y),
+    } mutableCopy];
+    if (before.pageNumber != nil) anchor[@"gapBeforePageNumber"] = before.pageNumber;
+    if (after.pageNumber != nil) anchor[@"gapAfterPageNumber"] = after.pageNumber;
+    return anchor;
+  }
+  if (nearest != nil) return [self customViewportAnchorForLayout:nearest contentPoint:contentPoint clamped:YES];
+  return @{
+    @"type": @"absolute",
+    @"contentX": @(contentPoint.x),
+    @"contentY": @(contentPoint.y),
+  };
+}
+
+- (BOOL)layout:(BsnPdfPageLayout *)layout matchesPageId:(NSString *)pageId generatedPageId:(NSString *)generatedPageId pageNumber:(NSNumber *)pageNumber
+{
+  if (layout == nil) return NO;
+  if (pageId.length > 0 && [layout.pageId isEqualToString:pageId]) return YES;
+  if (generatedPageId.length > 0 && [layout.generatedPageId isEqualToString:generatedPageId]) return YES;
+  if (pageNumber != nil && layout.pageNumber != nil && layout.pageNumber.integerValue == pageNumber.integerValue) return YES;
+  return NO;
+}
+
+- (CGPoint)contentPointForCustomViewportAnchor:(NSDictionary *)anchor fallbackContentPoint:(CGPoint)fallbackContentPoint
+{
+  if (anchor == nil || self.layouts.count == 0) return fallbackContentPoint;
+  NSString *type = [RCTConvert NSString:anchor[@"type"]] ?: @"absolute";
+  if ([type isEqualToString:@"page"]) {
+    NSString *pageId = [RCTConvert NSString:anchor[@"pageId"]];
+    NSString *generatedPageId = [RCTConvert NSString:anchor[@"generatedPageId"]];
+    NSNumber *pageNumber = anchor[@"pageNumber"] != nil ? [RCTConvert NSNumber:anchor[@"pageNumber"]] : nil;
+    for (BsnPdfPageLayout *layout in self.layouts) {
+      if (![self layout:layout matchesPageId:pageId generatedPageId:generatedPageId pageNumber:pageNumber]) continue;
+      CGFloat progressX = [anchor[@"progressX"] doubleValue];
+      CGFloat progressY = [anchor[@"progressY"] doubleValue];
+      return CGPointMake(
+        CGRectGetMinX(layout.frame) + layout.frame.size.width * progressX,
+        CGRectGetMinY(layout.frame) + layout.frame.size.height * progressY
+      );
+    }
+  } else if ([type isEqualToString:@"gap"]) {
+    NSString *beforePageId = [RCTConvert NSString:anchor[@"gapBeforePageId"]];
+    NSString *afterPageId = [RCTConvert NSString:anchor[@"gapAfterPageId"]];
+    NSNumber *beforePageNumber = anchor[@"gapBeforePageNumber"] != nil ? [RCTConvert NSNumber:anchor[@"gapBeforePageNumber"]] : nil;
+    NSNumber *afterPageNumber = anchor[@"gapAfterPageNumber"] != nil ? [RCTConvert NSNumber:anchor[@"gapAfterPageNumber"]] : nil;
+    BsnPdfPageLayout *before = nil;
+    BsnPdfPageLayout *after = nil;
+    for (BsnPdfPageLayout *layout in self.layouts) {
+      if (before == nil && [self layout:layout matchesPageId:beforePageId generatedPageId:nil pageNumber:beforePageNumber]) before = layout;
+      if (after == nil && [self layout:layout matchesPageId:afterPageId generatedPageId:nil pageNumber:afterPageNumber]) after = layout;
+    }
+    if (before != nil && after != nil) {
+      CGFloat gapTop = CGRectGetMaxY(before.frame);
+      CGFloat gapBottom = CGRectGetMinY(after.frame);
+      CGFloat progressY = MIN(1.0, MAX(0, [anchor[@"gapProgressY"] doubleValue]));
+      CGFloat progressX = MIN(1.0, MAX(0, [anchor[@"progressX"] doubleValue]));
+      return CGPointMake(
+        self.coreContentWidth * progressX,
+        gapTop + MAX(1.0, gapBottom - gapTop) * progressY
+      );
+    }
+  }
+  NSNumber *contentX = anchor[@"contentX"] != nil ? [RCTConvert NSNumber:anchor[@"contentX"]] : nil;
+  NSNumber *contentY = anchor[@"contentY"] != nil ? [RCTConvert NSNumber:anchor[@"contentY"]] : nil;
+  if (contentX != nil && contentY != nil) return CGPointMake(contentX.doubleValue, contentY.doubleValue);
+  return fallbackContentPoint;
 }
 
 - (CGRect)rawViewportRectForContentRect:(CGRect)contentRect
