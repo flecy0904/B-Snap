@@ -366,6 +366,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 - (CGPoint)contentPointForViewportPoint:(CGPoint)viewPoint;
 - (nullable NSDictionary *)captureCustomViewportAnchorAtViewPoint:(CGPoint)viewPoint;
 - (CGPoint)contentPointForCustomViewportAnchor:(NSDictionary *)anchor fallbackContentPoint:(CGPoint)fallbackContentPoint;
+- (CGSize)customCoreDocumentContentSize;
 - (CGRect)rawViewportRectForContentRect:(CGRect)contentRect;
 - (void)syncCustomCoreFromScrollView;
 - (void)syncScrollViewFromCustomCore;
@@ -2389,8 +2390,9 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     self.editOverlayView.frame = self.contentView.bounds;
     self.liveInkView.frame = self.bounds;
     self.scrollView.contentSize = self.contentView.frame.size;
-    self.coreContentWidth = self.contentView.bounds.size.width;
-    self.coreContentHeight = self.contentView.bounds.size.height;
+    CGSize customContentSize = [self customCoreDocumentContentSize];
+    self.coreContentWidth = customContentSize.width;
+    self.coreContentHeight = customContentSize.height;
     if (self.customViewportCoreEnabled) {
       [self clampCustomViewportSnap:NO];
       [self syncScrollViewFromCustomCore];
@@ -2429,8 +2431,8 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   self.editOverlayView.frame = self.contentView.bounds;
   self.liveInkView.frame = self.bounds;
   self.scrollView.contentSize = self.contentView.frame.size;
-  self.coreContentWidth = self.contentView.bounds.size.width;
-  self.coreContentHeight = self.contentView.bounds.size.height;
+  self.coreContentWidth = MAX(1.0, self.bounds.size.width);
+  self.coreContentHeight = MAX(1.0, contentHeight);
   [CATransaction commit];
   [self updateTextAnnotationViews];
   [self updatePageReferenceViews];
@@ -4319,6 +4321,15 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   return CGPointMake((viewPoint.x + offset.x) / zoom, (viewPoint.y + offset.y) / zoom);
 }
 
+- (CGSize)customCoreDocumentContentSize
+{
+  CGFloat width = MAX(1.0, self.bounds.size.width);
+  CGFloat height = MAX(1.0, self.bounds.size.height);
+  BsnPdfPageLayout *last = self.layouts.lastObject;
+  if (last != nil) height = MAX(height, CGRectGetMaxY(last.frame));
+  return CGSizeMake(width, height);
+}
+
 - (NSMutableDictionary *)customViewportAnchorForLayout:(BsnPdfPageLayout *)layout contentPoint:(CGPoint)contentPoint clamped:(BOOL)clamped
 {
   CGFloat progressX = (contentPoint.x - CGRectGetMinX(layout.frame)) / MAX(1.0, layout.frame.size.width);
@@ -4461,8 +4472,9 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   self.coreScale = zoom;
   self.coreScrollYDocument = self.scrollView.contentOffset.y / MAX(0.0001, zoom);
   self.coreTranslateX = -self.scrollView.contentOffset.x;
-  self.coreContentWidth = MAX(1.0, self.contentView.bounds.size.width);
-  self.coreContentHeight = MAX(1.0, self.contentView.bounds.size.height);
+  CGSize customContentSize = [self customCoreDocumentContentSize];
+  self.coreContentWidth = customContentSize.width;
+  self.coreContentHeight = customContentSize.height;
   [self clampCustomViewportSnap:NO];
 }
 
