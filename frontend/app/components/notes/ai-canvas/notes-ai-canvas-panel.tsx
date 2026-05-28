@@ -1,6 +1,6 @@
 import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { ActivityIndicator, Image, PanResponder, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Image, Keyboard, PanResponder, Platform, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
 
 import { useDesktopNotesWorkspaceContext } from '../workspace/notes-workspace-context';
 
@@ -77,6 +77,7 @@ export function NotesAiCanvasPanel() {
   const [deleteConfirmOpen, setDeleteConfirmOpen] = React.useState(false);
   const [miniCommand, setMiniCommand] = React.useState('');
   const [miniSelectionImageUri, setMiniSelectionImageUri] = React.useState<string | null>(null);
+  const [editorFocused, setEditorFocused] = React.useState(false);
 
   React.useEffect(() => {
     setCanvasWidth((current) => {
@@ -365,19 +366,36 @@ export function NotesAiCanvasPanel() {
                 style={workspace.styles.aiCanvasEditorScroll}
                 contentContainerStyle={workspace.styles.aiCanvasEditorContent}
                 keyboardShouldPersistTaps="handled"
+                keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
                 nestedScrollEnabled
                 showsVerticalScrollIndicator
               >
                 {canvas.mode === 'edit' ? (
-                  <TextInput
-                    value={canvas.markdownDraft}
-                    onChangeText={canvas.setMarkdownDraft}
-                    placeholder="Markdown으로 정리 내용을 작성하세요."
-                    placeholderTextColor="#A2AAB8"
-                    multiline
-                    textAlignVertical="top"
-                    style={workspace.styles.aiCanvasMarkdownInput}
-                  />
+                  <View style={workspace.styles.aiCanvasMarkdownInputWrap}>
+                    <TextInput
+                      value={canvas.markdownDraft}
+                      onChangeText={canvas.setMarkdownDraft}
+                      onFocus={() => setEditorFocused(true)}
+                      onBlur={() => setEditorFocused(false)}
+                      placeholder="Markdown으로 정리 내용을 작성하세요."
+                      placeholderTextColor="#A2AAB8"
+                      multiline
+                      textAlignVertical="top"
+                      style={workspace.styles.aiCanvasMarkdownInput}
+                    />
+                    {editorFocused ? (
+                      <Pressable
+                        style={workspace.styles.aiCanvasKeyboardDoneButton}
+                        onPress={() => {
+                          Keyboard.dismiss();
+                          setEditorFocused(false);
+                        }}
+                      >
+                        <MaterialCommunityIcons name="keyboard-close-outline" size={14} color="#4B5565" />
+                        <Text style={workspace.styles.aiCanvasKeyboardDoneText}>완료</Text>
+                      </Pressable>
+                    ) : null}
+                  </View>
                 ) : (
                   <View style={workspace.styles.aiCanvasPreviewBox}>
                     <MarkdownPreview markdown={canvas.markdownDraft} styles={workspace.styles} />

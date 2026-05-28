@@ -1,7 +1,8 @@
 import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { ActivityIndicator, Animated, Image, PanResponder, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Animated, Image, Keyboard, PanResponder, Platform, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { isClassInsightQuestion, isClassInsightTargetDocument } from '../../../hooks/notes/class-insight';
+import type { BackendChatMessage, BackendChatSession, BackendClassInsightPageSignal } from '../../../services/backend-api';
 import { AiResponseContent } from './ai-response-content';
 import { useNotesGlobalContext } from '../workspace/notes-global-context';
 
@@ -9,6 +10,7 @@ const FLOATING_PANEL_WIDTH = 300;
 const FLOATING_PANEL_HEIGHT = 620;
 const FLOATING_PANEL_TOP = 66;
 const FLOATING_PANEL_MARGIN = 8;
+const SIDEBAR_KEYBOARD_TOP_OFFSET = 96;
 const SIDEBAR_MIN_WIDTH = 300;
 const SIDEBAR_DEFAULT_WIDTH = 340;
 
@@ -16,8 +18,9 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
-function getFloatingPanelHeight(windowHeight: number, panelY: number) {
-  return Math.min(FLOATING_PANEL_HEIGHT, Math.max(360, windowHeight - panelY - FLOATING_PANEL_MARGIN));
+function getFloatingPanelHeight(windowHeight: number, panelY: number, keyboardTop?: number | null) {
+  const bottomEdge = keyboardTop ?? windowHeight;
+  return Math.min(FLOATING_PANEL_HEIGHT, Math.max(260, bottomEdge - panelY - FLOATING_PANEL_MARGIN));
 }
 
 function formatPriorityLabel(priority: string) {
@@ -30,6 +33,15 @@ const CLASS_INSIGHT_QUICK_PROMPTS = [
   { label: '중요 페이지', question: '시험에 나올만한 중요 페이지 추천해줘' },
   { label: '다음 순위', question: '다음 순위 중요 페이지도 더 알려줘' },
   { label: '복습 순서', question: '이 PDF에서 먼저 복습할 순서 알려줘' },
+  { label: '예상 문제', question: '이 내용에서 시험 예상 문제를 만들어줘' },
+  { label: '암기 포인트', question: '시험 전에 외워야 할 핵심 포인트만 정리해줘' },
+] as const;
+
+const DEFAULT_AI_QUICK_PROMPTS = [
+  { label: '핵심 3개', question: '여기서 중요한 개념 3개만 알려줘' },
+  { label: '쉽게 설명', question: '이 부분을 쉽게 풀어서 설명해줘' },
+  { label: '예상 문제', question: '이 내용으로 시험 예상 문제를 만들어줘' },
+  { label: '요약', question: '현재 페이지를 짧게 요약해줘' },
 ] as const;
 
 export function NotesAiAssistantPanel() {
@@ -52,19 +64,19 @@ export function NotesAiAssistantPanel() {
   const [editingTitle, setEditingTitle] = React.useState('');
   const [editingTitleError, setEditingTitleError] = React.useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = React.useState<{ id: number; title: string } | null>(null);
+  const [keyboardTop, setKeyboardTop] = React.useState<number | null>(null);
   const messagesScrollRef = React.useRef<ScrollView | null>(null);
   const hasChatHistory = workspace.aiMessages.length > 0;
   const quickPrompts = React.useMemo(() => (
     isClassInsightTargetDocument(workspace.studyDocument, workspace.subject)
       ? CLASS_INSIGHT_QUICK_PROMPTS
-      : []
+      : DEFAULT_AI_QUICK_PROMPTS
   ), [workspace.studyDocument, workspace.subject]);
   const showQuickPrompts = Boolean(
     !workspace.aiChatReadOnly
     && !workspace.aiLoading
     && quickPrompts.length
     && !workspace.aiQuestion.trim()
-    && !hasChatHistory,
   );
   const shouldShowClassInsightPages = React.useMemo(() => (
     isClassInsightQuestion(workspace.aiQuestion)
@@ -76,8 +88,8 @@ export function NotesAiAssistantPanel() {
     return (workspace.classInsight?.pages ?? []).slice(0, 3);
   }, [shouldShowClassInsightPages, workspace.classInsight?.pages, workspace.studyDocument, workspace.subject]);
   const activeSession = workspace.activeAiChatSessionId
-    ? workspace.allAiChatSessions.find((session: any) => session.id === workspace.activeAiChatSessionId)
-      ?? workspace.noteAiChatSessions.find((session: any) => session.id === workspace.activeAiChatSessionId)
+    ? workspace.allAiChatSessions.find((session: BackendChatSession) => session.id === workspace.activeAiChatSessionId)
+      ?? workspace.noteAiChatSessions.find((session: BackendChatSession) => session.id === workspace.activeAiChatSessionId)
       ?? null
     : null;
   const canManageActiveSession = Boolean(activeSession && !workspace.aiChatReadOnly);
@@ -86,18 +98,49 @@ export function NotesAiAssistantPanel() {
     workspace.onChangeInkTool?.('view');
   }, [workspace.onChangeInkTool, workspace.onSetCurrentPdfPage]);
   const chatSearchTerm = workspace.aiChatSearchQuery.trim().toLowerCase();
-  const sidebarSessions = workspace.allAiChatSessions.filter((session: any) => {
+  const sidebarSessions = workspace.allAiChatSessions.filter((session: BackendChatSession) => {
     if (!chatSearchTerm) return true;
     return `${session.title} ${session.model ?? ''}`.toLowerCase().includes(chatSearchTerm);
   });
   const currentNoteSessionIds = React.useMemo(
-    () => new Set(workspace.noteAiChatSessions.map((session: any) => session.id)),
+    () => new Set(workspace.noteAiChatSessions.map((session: BackendChatSession) => session.id)),
     [workspace.noteAiChatSessions],
   );
-  const floatingPanelHeight = getFloatingPanelHeight(height, floatingPosition.y);
+  const keyboardVisible = keyboardTop !== null && keyboardTop < height;
+  const floatingPanelHeight = getFloatingPanelHeight(height, floatingPosition.y, keyboardTop);
   const floatingMaxX = Math.max(FLOATING_PANEL_MARGIN, width - FLOATING_PANEL_WIDTH - FLOATING_PANEL_MARGIN);
-  const floatingMaxY = Math.max(FLOATING_PANEL_TOP, height - 360 - FLOATING_PANEL_MARGIN);
+  const floatingMaxY = Math.max(FLOATING_PANEL_TOP, (keyboardTop ?? height) - 360 - FLOATING_PANEL_MARGIN);
   const sidebarMaxWidth = Math.max(SIDEBAR_MIN_WIDTH, Math.floor(width * 0.5));
+  const keyboardAwareSidebarHeight = keyboardVisible
+    ? Math.max(280, (keyboardTop ?? height) - SIDEBAR_KEYBOARD_TOP_OFFSET - FLOATING_PANEL_MARGIN)
+    : undefined;
+  const effectivePanelMode = workspace.aiPanelMode;
+
+  React.useEffect(() => {
+    const updateKeyboardFrame = (event: { endCoordinates?: { screenY?: number; height?: number } }) => {
+      const screenY = event.endCoordinates?.screenY;
+      const keyboardHeight = event.endCoordinates?.height;
+      const nextTop = typeof screenY === 'number'
+        ? screenY
+        : typeof keyboardHeight === 'number'
+          ? height - keyboardHeight
+          : height;
+      setKeyboardTop(nextTop < height ? nextTop : null);
+    };
+    const hideKeyboardFrame = () => setKeyboardTop(null);
+    const showSub = Keyboard.addListener('keyboardWillChangeFrame', updateKeyboardFrame);
+    const changeSub = Keyboard.addListener('keyboardDidChangeFrame', updateKeyboardFrame);
+    const showFallbackSub = Keyboard.addListener('keyboardDidShow', updateKeyboardFrame);
+    const hideSub = Keyboard.addListener('keyboardWillHide', hideKeyboardFrame);
+    const hideFallbackSub = Keyboard.addListener('keyboardDidHide', hideKeyboardFrame);
+    return () => {
+      showSub.remove();
+      changeSub.remove();
+      showFallbackSub.remove();
+      hideSub.remove();
+      hideFallbackSub.remove();
+    };
+  }, [height]);
 
   React.useEffect(() => {
     setFloatingPosition((current) => ({
@@ -124,7 +167,7 @@ export function NotesAiAssistantPanel() {
     () => PanResponder.create({
       onStartShouldSetPanResponder: () => workspace.aiPanelMode === 'floating',
       onMoveShouldSetPanResponder: (_, gesture) => (
-        workspace.aiPanelMode === 'floating'
+        effectivePanelMode === 'floating'
         && Math.abs(gesture.dx) + Math.abs(gesture.dy) > 3
       ),
       onPanResponderGrant: () => {
@@ -146,7 +189,7 @@ export function NotesAiAssistantPanel() {
           x: clamp(start.x + gesture.dx, FLOATING_PANEL_MARGIN, floatingMaxX),
           y: clamp(start.y + gesture.dy, FLOATING_PANEL_TOP, floatingMaxY),
         };
-        const nextHeight = getFloatingPanelHeight(height, next.y);
+        const nextHeight = getFloatingPanelHeight(height, next.y, keyboardTop);
         floatingPositionRef.current = next;
         setFloatingPosition(next);
         floatingAnimatedPosition.setValue(next);
@@ -158,21 +201,21 @@ export function NotesAiAssistantPanel() {
           x: clamp(start.x + gesture.dx, FLOATING_PANEL_MARGIN, floatingMaxX),
           y: clamp(start.y + gesture.dy, FLOATING_PANEL_TOP, floatingMaxY),
         };
-        const nextHeight = getFloatingPanelHeight(height, next.y);
+        const nextHeight = getFloatingPanelHeight(height, next.y, keyboardTop);
         floatingPositionRef.current = next;
         setFloatingPosition(next);
         floatingAnimatedPosition.setValue(next);
         floatingAnimatedHeight.setValue(nextHeight);
       },
     }),
-    [floatingAnimatedHeight, floatingAnimatedPosition, floatingMaxX, floatingMaxY, floatingPanelHeight, height, workspace.aiPanelMode],
+    [effectivePanelMode, floatingAnimatedHeight, floatingAnimatedPosition, floatingMaxX, floatingMaxY, floatingPanelHeight, height, keyboardTop, workspace.aiPanelMode],
   );
 
   const sidebarResizePanResponder = React.useMemo(
     () => PanResponder.create({
       onStartShouldSetPanResponder: () => workspace.aiPanelMode === 'sidebar',
       onMoveShouldSetPanResponder: (_, gesture) => (
-        workspace.aiPanelMode === 'sidebar'
+        effectivePanelMode === 'sidebar'
         && Math.abs(gesture.dx) > 3
       ),
       onPanResponderGrant: () => {
@@ -192,7 +235,7 @@ export function NotesAiAssistantPanel() {
         setSidebarWidth(next);
       },
     }),
-    [sidebarMaxWidth, workspace.aiPanelMode],
+    [effectivePanelMode, sidebarMaxWidth, workspace.aiPanelMode],
   );
 
   const startEditingSession = (sessionId: number, title: string) => {
@@ -243,6 +286,7 @@ export function NotesAiAssistantPanel() {
   };
 
   const startNewChat = () => {
+    Keyboard.dismiss();
     setHeaderMenuOpen(false);
     workspace.onStartNewAiChatSession();
     closeSidebar();
@@ -313,8 +357,14 @@ export function NotesAiAssistantPanel() {
 
   const closeSidebar = () => setSidebarOpen(false);
   const openSidebar = () => {
+    Keyboard.dismiss();
     workspace.onLoadAllAiChatSessions();
     setSidebarOpen(true);
+  };
+
+  const requestAiAnswer = () => {
+    Keyboard.dismiss();
+    workspace.onRequestAiAnswer();
   };
 
   const sidebarAnimatedStyle = {
@@ -341,9 +391,9 @@ export function NotesAiAssistantPanel() {
   };
 
   if (!workspace.aiPanelOpen) return null;
-  const panelStyle = workspace.aiPanelMode === 'floating'
+  const panelStyle = effectivePanelMode === 'floating'
     ? [workspace.styles.aiPanel, { left: floatingAnimatedPosition.x, top: floatingAnimatedPosition.y, bottom: undefined, height: floatingAnimatedHeight }]
-    : [workspace.styles.aiPanel, workspace.styles.aiPanelSidebar, { width: sidebarWidth }];
+    : [workspace.styles.aiPanel, workspace.styles.aiPanelSidebar, { width: sidebarWidth }, keyboardAwareSidebarHeight ? { height: keyboardAwareSidebarHeight, alignSelf: 'flex-start' as const } : null];
 
   return (
     <Animated.View style={panelStyle}>
@@ -376,16 +426,18 @@ export function NotesAiAssistantPanel() {
           </View>
 
           <ScrollView style={workspace.styles.aiSidebarList} contentContainerStyle={workspace.styles.aiSidebarListContent} showsVerticalScrollIndicator={false}>
-            {sidebarSessions.length ? sidebarSessions.map((session: any) => {
+            {sidebarSessions.length ? sidebarSessions.map((session: BackendChatSession) => {
               const active = session.id === workspace.activeAiChatSessionId;
               const connected = currentNoteSessionIds.has(session.id);
               const editing = false;
-              const contextMenuProps = {
-                onContextMenu: (event: { preventDefault?: () => void }) => {
-                  event.preventDefault?.();
-                  setMenuSessionId((current) => (current === session.id ? null : session.id));
-                },
-              } as any;
+              const contextMenuProps = Platform.OS === 'web'
+                ? {
+                    onContextMenu: (event: { preventDefault?: () => void }) => {
+                      event.preventDefault?.();
+                      setMenuSessionId((current) => (current === session.id ? null : session.id));
+                    },
+                  }
+                : undefined;
 
               return (
                 <View key={session.id} style={workspace.styles.aiSidebarChatRowWrap}>
@@ -448,51 +500,19 @@ export function NotesAiAssistantPanel() {
         {headerMenuOpen ? (
           <Pressable style={workspace.styles.aiHomeMenuDismissLayer} onPress={closeOpenMenus} />
         ) : null}
-        <View style={[workspace.styles.aiPanelHeader, workspace.aiPanelMode === 'floating' && workspace.styles.aiPanelHeaderDraggable]} {...(workspace.aiPanelMode === 'floating' ? floatingPanResponder.panHandlers : {})}>
-          <Pressable style={workspace.styles.aiHeaderIconButton} onPress={openSidebar}>
-            <MaterialCommunityIcons name="menu" size={20} color="#303744" />
-          </Pressable>
-
-          <View style={workspace.styles.aiHeaderTitleWrap}>
-            {headerEditing && activeSession ? (
-              <View style={workspace.styles.aiHeaderEditRow}>
-                <TextInput
-                  value={headerEditingTitle}
-                  onChangeText={setHeaderEditingTitle}
-                  style={workspace.styles.aiHeaderEditInput}
-                  returnKeyType="done"
-                  onSubmitEditing={saveHeaderEditing}
-                  autoFocus
-                />
-                <Pressable style={workspace.styles.aiHeaderEditButton} onPress={saveHeaderEditing} disabled={workspace.aiLoading}>
-                  <MaterialCommunityIcons name="check" size={14} color="#111827" />
-                </Pressable>
-                <Pressable style={workspace.styles.aiHeaderEditButton} onPress={() => setHeaderEditing(false)} disabled={workspace.aiLoading}>
-                  <MaterialCommunityIcons name="close" size={14} color="#111827" />
-                </Pressable>
-              </View>
-            ) : (
-              <>
-                <Text style={workspace.styles.aiHeaderTitle} numberOfLines={1}>
-                  {activeSession ? activeSession.title : '새 채팅'}
-                </Text>
-                {workspace.aiChatReadOnly ? (
-                  <Text style={workspace.styles.aiHeaderSubtitle} numberOfLines={1}>읽기 전용</Text>
-                ) : null}
-              </>
-            )}
-          </View>
-
-          <View style={workspace.styles.aiHeaderActions}>
+        <View style={workspace.styles.aiPanelHeader}>
+          <View style={workspace.styles.aiHeaderButtonCluster}>
+            <Pressable style={workspace.styles.aiHeaderIconButton} onPress={openSidebar}>
+              <MaterialCommunityIcons name="menu" size={20} color="#303744" />
+            </Pressable>
+            <Pressable style={workspace.styles.aiHeaderIconButton} onPress={startNewChat} disabled={workspace.aiLoading}>
+              <MaterialCommunityIcons name="square-edit-outline" size={17} color="#303744" />
+            </Pressable>
             <Pressable
-              style={[workspace.styles.aiHeaderIconButton, workspace.aiPanelMode === 'sidebar' && workspace.styles.aiHeaderIconButtonActive]}
+              style={[workspace.styles.aiHeaderIconButton, effectivePanelMode === 'sidebar' && workspace.styles.aiHeaderIconButtonActive]}
               onPress={togglePanelMode}
             >
-              <MaterialCommunityIcons name={workspace.aiPanelMode === 'floating' ? 'dock-left' : 'window-restore'} size={18} color="#303744" />
-            </Pressable>
-            <Pressable style={workspace.styles.aiHeaderNewChatButton} onPress={startNewChat} disabled={workspace.aiLoading}>
-              <MaterialCommunityIcons name="square-edit-outline" size={16} color="#303744" />
-              <Text style={workspace.styles.aiHeaderNewChatButtonText}>새 채팅</Text>
+              <MaterialCommunityIcons name={effectivePanelMode === 'floating' ? 'dock-left' : 'window-restore'} size={18} color="#303744" />
             </Pressable>
             <View style={workspace.styles.aiHeaderMenuWrap}>
               <Pressable
@@ -516,6 +536,44 @@ export function NotesAiAssistantPanel() {
               ) : null}
             </View>
           </View>
+
+          <View
+            style={[workspace.styles.aiHeaderTitleWrap, effectivePanelMode === 'floating' && !headerEditing && workspace.styles.aiPanelHeaderDraggable]}
+            {...(effectivePanelMode === 'floating' && !headerEditing ? floatingPanResponder.panHandlers : {})}
+          >
+            {headerEditing && activeSession ? (
+              <View style={workspace.styles.aiHeaderEditRow}>
+                <TextInput
+                  value={headerEditingTitle}
+                  onChangeText={setHeaderEditingTitle}
+                  style={workspace.styles.aiHeaderEditInput}
+                  returnKeyType="done"
+                  onSubmitEditing={saveHeaderEditing}
+                  autoFocus
+                />
+                <Pressable style={workspace.styles.aiHeaderEditButton} onPress={saveHeaderEditing} disabled={workspace.aiLoading}>
+                  <MaterialCommunityIcons name="check" size={14} color="#111827" />
+                </Pressable>
+                <Pressable style={workspace.styles.aiHeaderEditButton} onPress={() => setHeaderEditing(false)} disabled={workspace.aiLoading}>
+                  <MaterialCommunityIcons name="close" size={14} color="#111827" />
+                </Pressable>
+              </View>
+            ) : (
+              <View style={workspace.styles.aiHeaderDragZone}>
+                <View style={workspace.styles.aiHeaderTitleTextWrap}>
+                  <Text style={workspace.styles.aiHeaderTitle} numberOfLines={1}>
+                    {activeSession ? activeSession.title : '새 채팅'}
+                  </Text>
+                  {workspace.aiChatReadOnly ? (
+                    <Text style={workspace.styles.aiHeaderSubtitle} numberOfLines={1}>읽기 전용</Text>
+                  ) : null}
+                </View>
+                {effectivePanelMode === 'floating' ? (
+                  <MaterialCommunityIcons name="drag-horizontal-variant" size={17} color="#8A94A6" />
+                ) : null}
+              </View>
+            )}
+          </View>
         </View>
 
         <View style={workspace.styles.aiConversationShell}>
@@ -524,8 +582,10 @@ export function NotesAiAssistantPanel() {
           style={workspace.styles.aiMessagesScroll}
           contentContainerStyle={workspace.styles.aiMessagesContent}
           showsVerticalScrollIndicator={false}
+          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+          keyboardShouldPersistTaps="handled"
         >
-          {hasChatHistory ? workspace.aiMessages.map((message: any) => {
+          {hasChatHistory ? workspace.aiMessages.map((message: BackendChatMessage) => {
             const isUser = message.role === 'user';
             return (
               <View
@@ -613,7 +673,7 @@ export function NotesAiAssistantPanel() {
                 <Text style={workspace.styles.aiClassInsightMeta}>수업 필기 흐름 기준</Text>
               </View>
               <View style={workspace.styles.aiClassInsightChipRow}>
-                {classInsightPages.map((page: any) => (
+                {classInsightPages.map((page: BackendClassInsightPageSignal) => (
                   <Pressable
                     key={page.page_number}
                     style={workspace.styles.aiClassInsightChip}
@@ -631,13 +691,19 @@ export function NotesAiAssistantPanel() {
             <TextInput
               value={workspace.aiQuestion}
               onChangeText={workspace.onChangeAiQuestion}
-              placeholder={workspace.selectionRect || workspace.selectionPreviewUri ? '선택 영역에 대해 물어보세요' : '메시지 입력'}
+              placeholder={workspace.selectionPreviewUri ? '선택 영역에 대해 물어보세요' : '메시지 입력'}
               placeholderTextColor="#8F96A3"
               multiline
               editable={!workspace.aiChatReadOnly && !workspace.aiLoading}
+              onFocus={scrollToLatestMessage}
               style={workspace.styles.aiComposerInput}
             />
-            <Pressable style={[workspace.styles.aiSendButton, workspace.aiChatReadOnly && workspace.styles.aiSendButtonDisabled]} onPress={workspace.onRequestAiAnswer} disabled={workspace.aiLoading || workspace.aiChatReadOnly}>
+            {keyboardVisible ? (
+              <Pressable style={workspace.styles.aiComposerKeyboardButton} onPress={() => Keyboard.dismiss()}>
+                <MaterialCommunityIcons name="keyboard-close-outline" size={17} color="#6B7280" />
+              </Pressable>
+            ) : null}
+            <Pressable style={[workspace.styles.aiSendButton, workspace.aiChatReadOnly && workspace.styles.aiSendButtonDisabled]} onPress={requestAiAnswer} disabled={workspace.aiLoading || workspace.aiChatReadOnly}>
               {workspace.aiLoading ? <ActivityIndicator size="small" color="#FFFFFF" /> : <MaterialCommunityIcons name="arrow-up" size={18} color="#FFFFFF" />}
             </Pressable>
           </View>
@@ -647,7 +713,7 @@ export function NotesAiAssistantPanel() {
       {sidebarVisible ? (
         <Pressable style={workspace.styles.aiSidebarHomeDismissLayer} onPress={closeSidebar} />
       ) : null}
-      {workspace.aiPanelMode === 'sidebar' ? (
+      {effectivePanelMode === 'sidebar' ? (
         <View style={workspace.styles.aiPanelSidebarResizeHandle} {...sidebarResizePanResponder.panHandlers}>
           <View style={workspace.styles.aiPanelSidebarResizeGrip}>
             <View style={workspace.styles.aiPanelSidebarResizeDot} />

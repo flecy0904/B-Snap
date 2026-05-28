@@ -7,19 +7,34 @@ import { runOnJS } from 'react-native-reanimated';
 import Svg, { Path } from 'react-native-svg';
 import { captureRef } from 'react-native-view-shot';
 import { InkPath } from '../canvas/ink-path';
+import { SelectionContextMenu } from '../canvas/selection-context-menu';
+import { getSelectedObjectIdsForSelection } from '../canvas/selection-move-preview';
 import { TextAnnotationLayer } from '../canvas/text-annotation-layer';
 import { getPencilHoverPoint, getPencilHoverSize, getPencilHoverToolLabel, isStylusHoverEvent, shouldPreviewPencilHover, type PencilHoverPoint } from '../canvas/native-pencil-hover';
 import { shouldActivateNativeInkGesture, type NativeGestureStateManager, type NativeInkGestureEvent, type NativeInkTouchEvent } from '../canvas/native-ink-gesture-policy';
 import { getCaptureOriginalImageSource, getPageCaptureReferenceImageSource } from '../shared/capture-assets';
 import { AndroidNativePdfViewport } from './android-native-pdf-viewport';
-import { cleanAiDisplayText, finalizeInkStroke, findHitInkStrokeId, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize, shouldAppendInkPoint } from '../../../ui-helpers';
-import { InkBrush, InkBrushSettings, InkEraserMode, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
+import { buildSelectionRectFromDrag, buildSelectionRectFromPoints, cleanAiDisplayText, finalizeInkStroke, findHitInkStrokeId, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize, shouldAppendInkPoint } from '../../../ui-helpers';
+import { InkBrush, InkBrushSettings, InkEraserMode, InkImageAnnotation, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { CaptureAsset, NotebookPage, PageCaptureReference } from '../../../types';
 import { renderPdfPageToImage, type PdfRenderSource, type RenderedPdfPage } from '../../../services/pdf-page-renderer';
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
 const PDF_RENDER_PAGE_RADIUS = 3;
 const PDF_RENDER_CACHE_RADIUS = 3;
 const PDF_RENDER_JS_CACHE_LIMIT = 11;
+const PDF_MIN_ZOOM = 1;
+const PDF_MAX_ZOOM = 2.5;
+const USE_IOS_NATIVE_PDF_ENGINE = process.env.EXPO_PUBLIC_IOS_PDF_ENGINE !== 'legacy';
+const PDF_PAGE_DEBUG_LOGGING = process.env.EXPO_PUBLIC_PDF_PAGE_DEBUG === '1';
+
+function clampPdfZoomScale(scale: number) {
+  return Math.max(PDF_MIN_ZOOM, Math.min(PDF_MAX_ZOOM, scale));
+}
+
+function logPdfPageDebug(event: string, payload?: Record<string, unknown>) {
+  if (!__DEV__ || !PDF_PAGE_DEBUG_LOGGING) return;
+  console.log(`[PdfPreview][page-debug] ${event}`, payload ?? {});
+}
 
 function shouldLockScrollForTool(tool: InkTool, fingerDrawingEnabled: boolean | undefined) {
   return tool === 'text'
@@ -149,39 +164,8 @@ function resizeRectFromCorner(source: SelectionRect, corner: ResizeCorner, point
     y: Math.max(0, nextTop),
     width: Math.max(minSize, nextRight - nextLeft),
     height: Math.max(minSize, nextBottom - nextTop),
-    pageWidth: point.pageWidth,
-    pageHeight: point.pageHeight,
-  };
-}
-
-function getSelectionRectFromPoints(points: InkPoint[]): SelectionRect | null {
-  if (points.length < 2) return null;
-  const xs = points.map((point) => point.x);
-  const ys = points.map((point) => point.y);
-  const minX = Math.min(...xs);
-  const minY = Math.min(...ys);
-  const maxX = Math.max(...xs);
-  const maxY = Math.max(...ys);
-  const reference = points[0];
-  return {
-    x: Math.max(0, minX),
-    y: Math.max(0, minY),
-    width: Math.max(1, maxX - minX),
-    height: Math.max(1, maxY - minY),
-    mode: 'lasso',
-    path: points,
-    pageWidth: reference.pageWidth,
-    pageHeight: reference.pageHeight,
-  };
-}
-
-function getSelectionRectFromDrag(origin: InkPoint, point: InkPoint): SelectionRect {
-  return {
-    x: Math.min(origin.x, point.x),
-    y: Math.min(origin.y, point.y),
-    width: Math.abs(point.x - origin.x),
-    height: Math.abs(point.y - origin.y),
-    mode: 'rect',
+    pageNumber: source.pageNumber ?? point.pageNumber,
+    generatedPageId: source.generatedPageId ?? point.generatedPageId,
     pageWidth: point.pageWidth,
     pageHeight: point.pageHeight,
   };
@@ -266,15 +250,18 @@ export function PdfPreview(props: {
   brushSettings?: InkBrushSettings;
   inkStrokes: InkStroke[];
   textAnnotations: InkTextAnnotation[];
+  imageAnnotations?: InkImageAnnotation[];
   textAnnotationVariant?: 'floating' | 'marker';
   selectionRect: SelectionRect | null;
   onCommitInkStroke: (stroke: InkStroke) => void;
   onRemoveInkStroke: (strokeId: string) => void;
+  onReplaceInkStrokes?: (removedStrokeIds: string[], addedStrokes: InkStroke[]) => void;
   onAddTextAnnotation: (point: InkPoint) => void;
   onUpdateTextAnnotation: (id: string, text: string) => void;
   onRemoveTextAnnotation: (id: string) => void;
   onMoveTextAnnotation: (id: string, x: number, y: number) => void;
   onResizeTextAnnotation: (id: string, width: number, height: number) => void;
+  onChangeTextAnnotationFontSize: (id: string, fontSize: number) => void;
   onEraseInkAtPoint?: (point: InkPoint, radius: number, snapshot?: boolean) => boolean;
   onSelectionChange: (rect: SelectionRect | null) => void;
   onMoveSelection?: (dx: number, dy: number) => void;
@@ -299,7 +286,9 @@ export function PdfPreview(props: {
   onChangeInkTool?: (tool: InkTool) => void;
   styles: any;
 }) {
-  if (Platform.OS === 'android' || Platform.OS === 'ios') {
+  const useNativeViewport = Platform.OS === 'android' || (Platform.OS === 'ios' && USE_IOS_NATIVE_PDF_ENGINE);
+
+  if (useNativeViewport) {
     return (
       <View style={props.styles.pdfViewerCard}>
         <AndroidNativePdfViewport
@@ -311,10 +300,13 @@ export function PdfPreview(props: {
           penWidth={props.penWidth}
           brushType={props.brushType}
           linePattern={props.linePattern}
+          eraserMode={props.eraserMode}
+          eraserWidth={props.eraserWidth}
           selectionMode={props.selectionMode}
           brushSettings={props.brushSettings}
           inkStrokes={props.inkStrokes}
           textAnnotations={props.textAnnotations}
+          imageAnnotations={props.imageAnnotations ?? []}
           textAnnotationVariant={props.textAnnotationVariant}
           selectionRect={props.selectionRect}
           notebookPages={props.notebookPages}
@@ -323,15 +315,22 @@ export function PdfPreview(props: {
           incomingAssetSuggestion={props.incomingAssetSuggestion}
           onCommitInkStroke={props.onCommitInkStroke}
           onRemoveInkStroke={props.onRemoveInkStroke}
+          onReplaceInkStrokes={props.onReplaceInkStrokes}
+          onEraseInkAtPoint={props.onEraseInkAtPoint}
           onAddTextAnnotation={props.onAddTextAnnotation}
           onUpdateTextAnnotation={props.onUpdateTextAnnotation}
           onRemoveTextAnnotation={props.onRemoveTextAnnotation}
           onMoveTextAnnotation={props.onMoveTextAnnotation}
           onResizeTextAnnotation={props.onResizeTextAnnotation}
+          onChangeTextAnnotationFontSize={props.onChangeTextAnnotationFontSize}
           onSelectionChange={props.onSelectionChange}
           onMoveSelection={props.onMoveSelection}
           onResizeSelection={props.onResizeSelection}
           onSelectionPreviewChange={props.onSelectionPreviewChange}
+          onAskAiAboutSelection={props.onAskAiAboutSelection}
+          onDuplicateSelection={props.onDuplicateSelection}
+          onDeleteSelection={props.onDeleteSelection}
+          onChangeSelectedStrokesColor={props.onChangeSelectedStrokesColor}
           onAcceptIncomingAsset={props.onAcceptIncomingAsset}
           onArchiveIncomingAsset={props.onArchiveIncomingAsset}
           onDismissIncomingAsset={props.onDismissIncomingAsset}
@@ -349,16 +348,22 @@ export function PdfPreview(props: {
   const { width, height } = useWindowDimensions();
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const availableWidth = Math.max(320, containerSize.width || width);
+  const availableHeight = Math.max(320, containerSize.height || height);
   const compactViewer = width < 900;
   const phoneViewer = width < 700;
-  const baseViewerWidth = phoneViewer
+  const maxViewerWidth = phoneViewer
     ? Math.max(320, availableWidth - 12)
-    : compactViewer
-      ? Math.max(360, availableWidth - 24)
-      : Math.min(1900, Math.max(420, availableWidth - 12));
-  const viewerWidth = baseViewerWidth;
+      : compactViewer
+        ? Math.max(360, availableWidth - 24)
+        : Math.min(1900, Math.max(420, availableWidth - 12));
+  const [pdfZoomScale, setPdfZoomScale] = useState(1);
   const [pdfPageSize, setPdfPageSize] = useState<{ width: number; height: number } | null>(null);
   const pageAspectRatio = pdfPageSize ? Math.max(0.45, Math.min(3.2, pdfPageSize.width / pdfPageSize.height)) : 16 / 9;
+  const maxViewerHeight = Math.max(280, availableHeight - (phoneViewer ? 20 : 32));
+  const widthForFullPageFit = Math.round(maxViewerHeight * pageAspectRatio);
+  const fitViewerWidth = Math.max(Math.min(320, widthForFullPageFit), Math.min(maxViewerWidth, widthForFullPageFit));
+  const viewerWidth = Math.round(fitViewerWidth * pdfZoomScale);
+  const baseViewerWidth = viewerWidth;
   const viewerHeight = Math.round(viewerWidth / pageAspectRatio);
   const pageGap = 10;
   const [documentPageCount, setDocumentPageCount] = useState(Math.max(1, props.page));
@@ -374,6 +379,7 @@ export function PdfPreview(props: {
   const [renderedPdfPages, setRenderedPdfPages] = useState<Record<string, RenderedPdfPage>>({});
   const [cachedRenderedPdfPages, setCachedRenderedPdfPages] = useState<Record<string, RenderedPdfPage>>({});
   const [openReferenceId, setOpenReferenceId] = useState<string | null>(null);
+  const [systemScrollLocked, setSystemScrollLocked] = useState(false);
   const currentStrokeRef = useRef<InkStroke | null>(null);
   const reportedDocumentPageCountRef = useRef(documentPageCount);
   const pdfRenderGenerationRef = useRef(0);
@@ -395,8 +401,21 @@ export function PdfPreview(props: {
   const pageCaptureRefs = useRef<Record<string, View | null>>({});
   const listRef = useRef<FlatList<NotebookPage> | null>(null);
   const pageIndicatorTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const userScrollReleaseTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pageIndicatorVisibleRef = useRef(false);
   const inkGestureActiveRef = useRef(false);
+  const userScrollActiveRef = useRef(false);
+  const lastScrollOffsetYRef = useRef(0);
+  const lastItemLengthRef = useRef(0);
+  const pdfZoomScaleRef = useRef(1);
+  const pinchStartZoomScaleRef = useRef(1);
+  const debugSnapshotRef = useRef('');
+  const lastAutoScrollSignatureRef = useRef('');
+  const lastLayoutAnchorSignatureRef = useRef('');
+  const layoutAnchorRestoreTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const layoutAnchorUnlockTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const layoutAnchorGuardUntilRef = useRef(0);
+  const layoutAnchorTargetOffsetRef = useRef<number | null>(null);
   const scrollStateRef = useRef({
     activeGeneratedPageId: props.activeGeneratedPageId,
     onOpenGeneratedPage: props.onOpenGeneratedPage,
@@ -417,6 +436,28 @@ export function PdfPreview(props: {
         })),
     [documentPageCount, props.notebookPages],
   );
+
+  const layoutReady = containerSize.width > 0 && containerSize.height > 0 && viewerWidth > 0 && viewerHeight > 0;
+  const itemLength = viewerHeight + pageGap;
+
+  useEffect(() => {
+    const snapshot = {
+      page: props.page,
+      activeGeneratedPageId: props.activeGeneratedPageId ?? null,
+      tool: props.inkTool,
+      zoom: Number(pdfZoomScale.toFixed(2)),
+      viewerWidth,
+      viewerHeight,
+      containerWidth: containerSize.width,
+      containerHeight: containerSize.height,
+      pages: pageItems.length,
+    };
+    const nextSnapshotKey = JSON.stringify(snapshot);
+    if (debugSnapshotRef.current === nextSnapshotKey) return;
+    debugSnapshotRef.current = nextSnapshotKey;
+    logPdfPageDebug('prop/layout change', snapshot);
+  }, [containerSize.height, containerSize.width, pageItems.length, pdfZoomScale, props.activeGeneratedPageId, props.inkTool, props.page, viewerHeight, viewerWidth]);
+
   const strokeBuckets = useMemo(() => {
     const pdf = new Map<number, InkStroke[]>();
     const generated = new Map<string, InkStroke[]>();
@@ -483,7 +524,7 @@ export function PdfPreview(props: {
     `${pdfSourceKey}:${pageNumber}:${Math.round(baseViewerWidth)}`
   ), [baseViewerWidth, pdfSourceKey]);
   const inkInputLocksScroll = shouldLockScrollForTool(props.inkTool, props.fingerDrawingEnabled);
-  const scrollEnabled = !inkInputLocksScroll && !inkGestureActive;
+  const scrollEnabled = !inkInputLocksScroll && !inkGestureActive && !systemScrollLocked;
   const [visiblePageKeys, setVisiblePageKeys] = useState<Set<string>>(() => new Set([getNotebookPageKey(pageItems[0])]));
   const visiblePdfPageNumbers = useMemo(() => {
     const pageNumbers: number[] = [];
@@ -540,6 +581,10 @@ export function PdfPreview(props: {
   }, []);
 
   useEffect(() => {
+    logPdfPageDebug('pdf source reset', {
+      page: props.page,
+      source: pdfSourceKey,
+    });
     setLoadError(null);
     setPdfPageSize(null);
     setDocumentPageCount(Math.max(1, props.page));
@@ -551,6 +596,10 @@ export function PdfPreview(props: {
     setVisiblePageKeys(new Set([getNotebookPageKey(pageItems[0])]));
     visiblePageKeysRef.current = '';
     suppressNextAutoScrollRef.current = false;
+    lastAutoScrollSignatureRef.current = '';
+    pdfZoomScaleRef.current = 1;
+    pinchStartZoomScaleRef.current = 1;
+    setPdfZoomScale(1);
   }, [pdfSourceKey]);
 
   const pdfPagesToRender = useMemo(() => {
@@ -729,13 +778,22 @@ export function PdfPreview(props: {
 
   const beginInteraction = (page: NotebookPage) => {
     if (page.generatedPageId) props.onOpenGeneratedPage?.(page.generatedPageId);
-    if (page.pageNumber) props.onPageChanged?.(page.pageNumber);
+    if (page.pageNumber) {
+      logPdfPageDebug('beginInteraction emit page', {
+        page: page.pageNumber,
+        currentPage: props.page,
+        tool: props.inkTool,
+        suppressNextAutoScroll: true,
+      });
+      suppressNextAutoScrollRef.current = true;
+      props.onPageChanged?.(page.pageNumber);
+    }
   };
 
-  const updateVisiblePagesFromScroll = useCallback((offsetY: number, viewportHeight: number) => {
+  const updateVisiblePagesFromScroll = useCallback((offsetY: number, viewportHeight: number, allowPageChange: boolean) => {
     if (!pageItems.length || viewportHeight <= 0) return;
 
-    const itemLength = viewerHeight + pageGap;
+    lastScrollOffsetYRef.current = Math.max(0, offsetY);
     const visibleTop = Math.max(0, offsetY);
     const visibleBottom = Math.max(visibleTop, offsetY + viewportHeight);
     const firstIndex = Math.max(0, Math.floor(visibleTop / itemLength));
@@ -749,24 +807,46 @@ export function PdfPreview(props: {
       setVisiblePageKeys(new Set(keys));
     }
 
-    const state = scrollStateRef.current;
-    if (!state.scrollEnabled) return;
-
     const viewportCenter = visibleTop + viewportHeight / 2;
     const centerIndex = Math.max(0, Math.min(pageItems.length - 1, Math.floor(viewportCenter / itemLength)));
     const nextPage = pageItems[centerIndex] ?? visibleItems[0];
+    const state = scrollStateRef.current;
+
+    if (nextPage?.pageNumber && nextPage.pageNumber !== state.page) {
+      logPdfPageDebug('scroll candidate', {
+        candidate: nextPage.pageNumber,
+        currentPage: state.page,
+        allowPageChange,
+        scrollEnabled: state.scrollEnabled,
+        offsetY: Math.round(offsetY),
+        viewportHeight: Math.round(viewportHeight),
+        centerIndex,
+        visible: keys.join(','),
+      });
+    }
+
+    if (!allowPageChange || !state.scrollEnabled) return;
+
     if (nextPage?.generatedPageId && nextPage.generatedPageId !== state.activeGeneratedPageId) {
+      logPdfPageDebug('emit generated page from scroll', {
+        generatedPageId: nextPage.generatedPageId,
+        offsetY: Math.round(offsetY),
+      });
       suppressNextAutoScrollRef.current = true;
       state.onOpenGeneratedPage?.(nextPage.generatedPageId);
     }
     if (nextPage?.pageNumber && nextPage.pageNumber !== state.page) {
+      logPdfPageDebug('emit page from scroll', {
+        page: nextPage.pageNumber,
+        previousPage: state.page,
+        offsetY: Math.round(offsetY),
+      });
       suppressNextAutoScrollRef.current = true;
       state.onPageChanged?.(nextPage.pageNumber);
     }
-  }, [pageGap, pageItems, viewerHeight]);
+  }, [itemLength, pageItems]);
 
-  const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
-    updateVisiblePagesFromScroll(event.nativeEvent.contentOffset.y, event.nativeEvent.layoutMeasurement.height);
+  const showPageIndicator = useCallback(() => {
     if (!pageIndicatorVisibleRef.current) {
       pageIndicatorVisibleRef.current = true;
       setPageIndicatorVisible(true);
@@ -776,10 +856,104 @@ export function PdfPreview(props: {
       pageIndicatorVisibleRef.current = false;
       setPageIndicatorVisible(false);
     }, 900);
-  }, [updateVisiblePagesFromScroll]);
+  }, []);
+
+  const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    const offsetY = event.nativeEvent.contentOffset.y;
+    const guardTarget = layoutAnchorTargetOffsetRef.current;
+    const guardActive = guardTarget != null && Date.now() < layoutAnchorGuardUntilRef.current && !userScrollActiveRef.current;
+    if (guardActive && Math.abs(offsetY - guardTarget) > Math.max(96, itemLength * 0.35)) {
+      logPdfPageDebug('layout anchor guard snap', {
+        page: scrollStateRef.current.page,
+        offsetY: Math.round(offsetY),
+        targetOffset: Math.round(guardTarget),
+      });
+      listRef.current?.scrollToOffset({ offset: guardTarget, animated: false });
+      lastScrollOffsetYRef.current = guardTarget;
+      return;
+    }
+    updateVisiblePagesFromScroll(offsetY, event.nativeEvent.layoutMeasurement.height, userScrollActiveRef.current);
+    showPageIndicator();
+  }, [itemLength, showPageIndicator, updateVisiblePagesFromScroll]);
+
+  const handleScrollBeginDrag = useCallback(() => {
+    if (userScrollReleaseTimeoutRef.current) clearTimeout(userScrollReleaseTimeoutRef.current);
+    userScrollReleaseTimeoutRef.current = null;
+    userScrollActiveRef.current = true;
+    logPdfPageDebug('scroll begin drag', { page: scrollStateRef.current.page });
+  }, []);
+
+  const handleScrollEndDrag = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    logPdfPageDebug('scroll end drag', {
+      page: scrollStateRef.current.page,
+      offsetY: Math.round(event.nativeEvent.contentOffset.y),
+    });
+    updateVisiblePagesFromScroll(event.nativeEvent.contentOffset.y, event.nativeEvent.layoutMeasurement.height, true);
+    showPageIndicator();
+    if (userScrollReleaseTimeoutRef.current) clearTimeout(userScrollReleaseTimeoutRef.current);
+    userScrollReleaseTimeoutRef.current = setTimeout(() => {
+      userScrollActiveRef.current = false;
+      userScrollReleaseTimeoutRef.current = null;
+    }, 180);
+  }, [showPageIndicator, updateVisiblePagesFromScroll]);
+
+  const handleMomentumScrollBegin = useCallback(() => {
+    if (userScrollReleaseTimeoutRef.current) clearTimeout(userScrollReleaseTimeoutRef.current);
+    userScrollReleaseTimeoutRef.current = null;
+    userScrollActiveRef.current = true;
+    logPdfPageDebug('momentum begin', { page: scrollStateRef.current.page });
+  }, []);
+
+  const handleMomentumScrollEnd = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    logPdfPageDebug('momentum end', {
+      page: scrollStateRef.current.page,
+      offsetY: Math.round(event.nativeEvent.contentOffset.y),
+    });
+    updateVisiblePagesFromScroll(event.nativeEvent.contentOffset.y, event.nativeEvent.layoutMeasurement.height, true);
+    if (userScrollReleaseTimeoutRef.current) clearTimeout(userScrollReleaseTimeoutRef.current);
+    userScrollReleaseTimeoutRef.current = null;
+    userScrollActiveRef.current = false;
+    showPageIndicator();
+  }, [showPageIndicator, updateVisiblePagesFromScroll]);
+
+  const beginPdfPinchZoom = useCallback(() => {
+    if (userScrollReleaseTimeoutRef.current) clearTimeout(userScrollReleaseTimeoutRef.current);
+    userScrollReleaseTimeoutRef.current = null;
+    userScrollActiveRef.current = false;
+    pinchStartZoomScaleRef.current = pdfZoomScaleRef.current;
+    logPdfPageDebug('pinch begin', {
+      page: scrollStateRef.current.page,
+      zoom: Number(pdfZoomScaleRef.current.toFixed(2)),
+    });
+  }, []);
+
+  const updatePdfPinchZoom = useCallback((scale: number) => {
+    const nextScale = clampPdfZoomScale(pinchStartZoomScaleRef.current * scale);
+    if (Math.abs(nextScale - pdfZoomScaleRef.current) < 0.015) return;
+    pdfZoomScaleRef.current = nextScale;
+    logPdfPageDebug('pinch update', {
+      page: scrollStateRef.current.page,
+      zoom: Number(nextScale.toFixed(2)),
+    });
+    setPdfZoomScale(nextScale);
+  }, []);
+
+  const pdfPinchGesture = Gesture.Pinch()
+    .enabled(Platform.OS === 'ios')
+    .onBegin(() => {
+      'worklet';
+      runOnJS(beginPdfPinchZoom)();
+    })
+    .onUpdate((event) => {
+      'worklet';
+      runOnJS(updatePdfPinchZoom)(event.scale);
+    });
 
   useEffect(() => () => {
     if (pageIndicatorTimeoutRef.current) clearTimeout(pageIndicatorTimeoutRef.current);
+    if (userScrollReleaseTimeoutRef.current) clearTimeout(userScrollReleaseTimeoutRef.current);
+    if (layoutAnchorRestoreTimeoutRef.current) clearTimeout(layoutAnchorRestoreTimeoutRef.current);
+    if (layoutAnchorUnlockTimeoutRef.current) clearTimeout(layoutAnchorUnlockTimeoutRef.current);
     pageIndicatorVisibleRef.current = false;
   }, []);
 
@@ -807,6 +981,67 @@ export function PdfPreview(props: {
   ), [props.activeGeneratedPageId, props.page]);
 
   useEffect(() => {
+    if (!layoutReady) return;
+    const currentIndex = pageItems.findIndex(isCurrentNotebookPage);
+    if (currentIndex < 0) return;
+
+    const previousItemLength = lastItemLengthRef.current > 0 ? lastItemLengthRef.current : itemLength;
+    const previousPageOffset = currentIndex * previousItemLength;
+    const progressWithinPage = Math.max(
+      0,
+      Math.min(0.98, (lastScrollOffsetYRef.current - previousPageOffset) / Math.max(1, previousItemLength)),
+    );
+    const targetOffset = Math.max(0, currentIndex * itemLength + progressWithinPage * itemLength);
+    const signature = [
+      currentIndex,
+      Math.round(containerSize.width),
+      Math.round(containerSize.height),
+      Math.round(viewerWidth),
+      Math.round(viewerHeight),
+      Math.round(pdfZoomScale * 100),
+      pageItems.length,
+    ].join(':');
+
+    lastItemLengthRef.current = itemLength;
+    if (lastLayoutAnchorSignatureRef.current === signature) return;
+    lastLayoutAnchorSignatureRef.current = signature;
+    if (userScrollActiveRef.current || inkGestureActiveRef.current) {
+      logPdfPageDebug('layout anchor deferred', {
+        page: props.page,
+        index: currentIndex,
+        userScrollActive: userScrollActiveRef.current,
+        inkGestureActive: inkGestureActiveRef.current,
+      });
+      return;
+    }
+
+    if (layoutAnchorRestoreTimeoutRef.current) clearTimeout(layoutAnchorRestoreTimeoutRef.current);
+    logPdfPageDebug('layout anchor restore', {
+      page: props.page,
+      activeGeneratedPageId: props.activeGeneratedPageId ?? null,
+      index: currentIndex,
+      previousItemLength: Math.round(previousItemLength),
+      itemLength: Math.round(itemLength),
+      targetOffset: Math.round(targetOffset),
+    });
+    if (layoutAnchorUnlockTimeoutRef.current) clearTimeout(layoutAnchorUnlockTimeoutRef.current);
+    layoutAnchorTargetOffsetRef.current = targetOffset;
+    layoutAnchorGuardUntilRef.current = Date.now() + 420;
+    setSystemScrollLocked(true);
+    layoutAnchorRestoreTimeoutRef.current = setTimeout(() => {
+      listRef.current?.scrollToOffset({ offset: targetOffset, animated: false });
+      lastScrollOffsetYRef.current = targetOffset;
+      layoutAnchorRestoreTimeoutRef.current = null;
+      layoutAnchorUnlockTimeoutRef.current = setTimeout(() => {
+        setSystemScrollLocked(false);
+        layoutAnchorTargetOffsetRef.current = null;
+        layoutAnchorGuardUntilRef.current = 0;
+        layoutAnchorUnlockTimeoutRef.current = null;
+      }, 220);
+    }, 0);
+  }, [containerSize.height, containerSize.width, itemLength, layoutReady, pageItems, pdfZoomScale, props.activeGeneratedPageId, props.page, viewerHeight, viewerWidth]);
+
+  useEffect(() => {
     if (!openReferenceId) return;
     if (!(props.pageCaptureReferences ?? []).some((reference) => reference.id === openReferenceId)) {
       setOpenReferenceId(null);
@@ -815,13 +1050,54 @@ export function PdfPreview(props: {
 
   useEffect(() => {
     const currentIndex = pageItems.findIndex(isCurrentNotebookPage);
-    if (currentIndex < 0) return;
+    if (currentIndex < 0) {
+      logPdfPageDebug('autoScroll skip missing current page', {
+        page: props.page,
+        activeGeneratedPageId: props.activeGeneratedPageId ?? null,
+      });
+      return;
+    }
+    if (!layoutReady) {
+      logPdfPageDebug('autoScroll wait layout', {
+        page: props.page,
+        activeGeneratedPageId: props.activeGeneratedPageId ?? null,
+        index: currentIndex,
+        containerWidth: containerSize.width,
+        containerHeight: containerSize.height,
+        viewerWidth,
+        viewerHeight,
+      });
+      return;
+    }
+    const signature = [
+      props.activeGeneratedPageId ?? props.page,
+      currentIndex,
+      layoutReady ? 'ready' : 'pending',
+    ].join(':');
     if (suppressNextAutoScrollRef.current) {
+      logPdfPageDebug('autoScroll suppressed', {
+        page: props.page,
+        activeGeneratedPageId: props.activeGeneratedPageId ?? null,
+        index: currentIndex,
+      });
+      lastAutoScrollSignatureRef.current = signature;
       suppressNextAutoScrollRef.current = false;
       return;
     }
-    listRef.current?.scrollToIndex({ index: currentIndex, animated: false });
-  }, [props.activeGeneratedPageId, props.page, pageItems]);
+    if (lastAutoScrollSignatureRef.current === signature) return;
+    lastAutoScrollSignatureRef.current = signature;
+    logPdfPageDebug('autoScroll to prop page', {
+      page: props.page,
+      activeGeneratedPageId: props.activeGeneratedPageId ?? null,
+      index: currentIndex,
+      viewerWidth,
+      viewerHeight,
+    });
+    requestAnimationFrame(() => {
+      listRef.current?.scrollToIndex({ index: currentIndex, animated: false });
+      lastScrollOffsetYRef.current = Math.max(0, currentIndex * itemLength);
+    });
+  }, [itemLength, layoutReady, props.activeGeneratedPageId, props.page, pageItems, viewerHeight, viewerWidth]);
 
   const renderInkLayers = (page: NotebookPage, pageStrokes: InkStroke[], pageTextAnnotations: InkTextAnnotation[], currentPage: boolean) => {
     const selectionForView = currentPage ? scaleSelectionRectToPageSize(props.selectionRect, viewerWidth, viewerHeight) : null;
@@ -829,6 +1105,12 @@ export function PdfPreview(props: {
     const draftForView = draftSelectionPageKey === pageKey ? draftSelection : null;
     const draftLassoForView = draftSelectionPageKey === pageKey ? draftSelectionPath : [];
     const draftRectForView = draftForView?.mode === 'lasso' ? null : draftForView;
+    const selectedObjectCount = selectionForView
+      ? (() => {
+          const { strokeIds, textAnnotationIds } = getSelectedObjectIdsForSelection(selectionForView, pageStrokes, pageTextAnnotations);
+          return strokeIds.size + textAnnotationIds.size;
+        })()
+      : 0;
     const hasHighlight = pageStrokes.some((stroke) => stroke.style === 'highlight') || ((page.generatedPageId ? currentStroke?.generatedPageId === page.generatedPageId : currentStroke?.pageNumber === page.pageNumber) && currentStroke?.style === 'highlight');
     const hasInk = pageStrokes.some((stroke) => stroke.style !== 'highlight') || ((page.generatedPageId ? currentStroke?.generatedPageId === page.generatedPageId : currentStroke?.pageNumber === page.pageNumber) && currentStroke?.style !== 'highlight' && currentStroke);
     const hasTextAnnotations = pageTextAnnotations.length > 0;
@@ -850,6 +1132,7 @@ export function PdfPreview(props: {
             onChangeText={props.onUpdateTextAnnotation}
             onMove={props.onMoveTextAnnotation}
             onResize={props.onResizeTextAnnotation}
+            onChangeFontSize={props.onChangeTextAnnotationFontSize}
             onRemove={props.onRemoveTextAnnotation}
             variant={props.textAnnotationVariant}
           />
@@ -865,6 +1148,28 @@ export function PdfPreview(props: {
         {!capturingSelection && !draftForView && selectionForView ? <SelectionOverlay rect={selectionForView} styles={props.styles} /> : null}
         {!capturingSelection && draftLassoForView.length > 1 ? <SelectionLassoOverlay points={draftLassoForView} /> : null}
         {!capturingSelection && draftRectForView ? <SelectionOverlay rect={draftRectForView} styles={props.styles} draft /> : null}
+        {!capturingSelection && !draftForView && selectionForView ? (
+          <SelectionContextMenu
+            rect={selectionForView}
+            pageWidth={viewerWidth}
+            pageHeight={viewerHeight}
+            styles={props.styles}
+            editable={selectedObjectCount > 0}
+            onAskAi={() => {
+              const token = selectionPreviewTokenRef.current + 1;
+              selectionPreviewTokenRef.current = token;
+              props.onSelectionPreviewChange?.(null);
+              void buildSelectionPreview(page, selectionForView).then((uri) => {
+                if (selectionPreviewTokenRef.current !== token) return;
+                if (uri) props.onSelectionPreviewChange?.(uri);
+                props.onAskAiAboutSelection?.(uri ?? null);
+              });
+            }}
+            onDuplicate={props.onDuplicateSelection}
+            onDelete={props.onDeleteSelection}
+            onChangeColor={props.onChangeSelectedStrokesColor}
+          />
+        ) : null}
       </>
     );
   };
@@ -906,6 +1211,7 @@ export function PdfPreview(props: {
 
     const handleInkGestureStart = (x: number, y: number) => {
       if (!isPointInsidePage(x, y)) return;
+      userScrollActiveRef.current = false;
       setActiveInkGesture(true);
       beginInteraction(page);
       const point = clampPointToPage(page, x, y, props.inkTool === 'text' ? 'annotate' : 'draw');
@@ -1054,7 +1360,7 @@ export function PdfPreview(props: {
         const origin = selectionOriginRef.current;
         if (!origin) return;
         if ((props.selectionMode ?? 'rect') === 'rect') {
-          const rect = getSelectionRectFromDrag(origin, point);
+          const rect = buildSelectionRectFromDrag(origin, point);
           draftSelectionRef.current = rect;
           setDraftSelection(rect);
           return;
@@ -1066,7 +1372,7 @@ export function PdfPreview(props: {
           : currentPath;
         draftSelectionPathRef.current = nextPath;
         setDraftSelectionPath(nextPath);
-        const rect = getSelectionRectFromPoints(nextPath) ?? getSelectionRectFromDrag(origin, point);
+        const rect = buildSelectionRectFromPoints(nextPath) ?? buildSelectionRectFromDrag(origin, point);
         draftSelectionRef.current = rect;
         setDraftSelection(rect);
       }
@@ -1155,7 +1461,7 @@ export function PdfPreview(props: {
       .manualActivation(true)
       .minDistance(0)
       .shouldCancelWhenOutside(false)
-      .cancelsTouchesInView(false)
+      .cancelsTouchesInView(true)
       .onTouchesDown((event: NativeInkTouchEvent, state: NativeGestureStateManager) => {
         'worklet';
         if (shouldActivateNativeInkGesture(gestureInkTool, event, gestureFingerDrawingEnabled)) {
@@ -1192,7 +1498,11 @@ export function PdfPreview(props: {
       onPointerLeave: () => setPencilHover((current) => (current?.pageKey === pageKey ? null : current)),
       onPointerCancel: () => setPencilHover((current) => (current?.pageKey === pageKey ? null : current)),
     } as any;
-    const hoverSize = getPencilHoverSize(props.inkTool, props.penWidth);
+    const hoverSize = getPencilHoverSize(
+      props.inkTool,
+      props.inkTool === 'erase' ? props.eraserWidth ?? 12 : props.penWidth,
+      props.eraserMode,
+    );
     const hoverVisible = pencilHover?.pageKey === pageKey && shouldPreviewPencilHover(props.inkTool);
     const hoverToolLabel = getPencilHoverToolLabel(props.inkTool);
 
@@ -1402,46 +1712,58 @@ export function PdfPreview(props: {
       onLayout={(event) => {
         const nextWidth = Math.floor(event.nativeEvent.layout.width);
         const nextHeight = Math.floor(event.nativeEvent.layout.height);
+        if (nextWidth <= 0 || nextHeight <= 0) {
+          logPdfPageDebug('layout ignored zero size', {
+            page: props.page,
+            width: nextWidth,
+            height: nextHeight,
+          });
+          return;
+        }
         if (nextWidth !== containerSize.width || nextHeight !== containerSize.height) {
           setContainerSize({ width: nextWidth, height: nextHeight });
         }
       }}
     >
-      <FlatList
-        ref={listRef}
-        data={pageItems}
-        keyExtractor={(item) => item.id}
-        renderItem={({ item }) => renderPage(item)}
-        extraData={flatListExtraData}
-        style={{ width: '100%' }}
-        contentContainerStyle={{ alignItems: 'center', paddingTop: 4, paddingBottom: 24 }}
-        scrollEnabled={scrollEnabled}
-        onScroll={handleScroll}
-        onScrollEndDrag={handleScroll}
-        onMomentumScrollEnd={handleScroll}
-        scrollEventThrottle={16}
-        showsVerticalScrollIndicator
-        initialNumToRender={2}
-        maxToRenderPerBatch={2}
-        updateCellsBatchingPeriod={32}
-        windowSize={5}
-        removeClippedSubviews
-        onScrollToIndexFailed={(info) => {
-          setTimeout(() => {
-            listRef.current?.scrollToIndex({ index: info.index, animated: false });
-          }, 80);
-        }}
-        getItemLayout={(_, index) => ({
-          length: viewerHeight + pageGap,
-          offset: (viewerHeight + pageGap) * index,
-          index,
-        })}
-        ListFooterComponent={loadError ? (
-          <View pointerEvents="none" style={{ paddingHorizontal: 24, paddingVertical: 12, alignItems: 'center' }}>
-            <Text style={{ color: '#6B7280', textAlign: 'center', fontWeight: '700' }}>{loadError}</Text>
-          </View>
-        ) : null}
-      />
+      <GestureDetector gesture={pdfPinchGesture}>
+        <FlatList
+          ref={listRef}
+          data={pageItems}
+          keyExtractor={(item) => item.id}
+          renderItem={({ item }) => renderPage(item)}
+          extraData={flatListExtraData}
+          style={{ width: '100%' }}
+          contentContainerStyle={{ alignItems: 'center', paddingTop: 4, paddingBottom: 24 }}
+          scrollEnabled={scrollEnabled}
+          onScroll={handleScroll}
+          onScrollBeginDrag={handleScrollBeginDrag}
+          onScrollEndDrag={handleScrollEndDrag}
+          onMomentumScrollBegin={handleMomentumScrollBegin}
+          onMomentumScrollEnd={handleMomentumScrollEnd}
+          scrollEventThrottle={16}
+          showsVerticalScrollIndicator
+          initialNumToRender={2}
+          maxToRenderPerBatch={2}
+          updateCellsBatchingPeriod={32}
+          windowSize={5}
+          removeClippedSubviews={false}
+          onScrollToIndexFailed={(info) => {
+            setTimeout(() => {
+              listRef.current?.scrollToIndex({ index: info.index, animated: false });
+            }, 80);
+          }}
+          getItemLayout={(_, index) => ({
+            length: itemLength,
+            offset: itemLength * index,
+            index,
+          })}
+          ListFooterComponent={loadError ? (
+            <View pointerEvents="none" style={{ paddingHorizontal: 24, paddingVertical: 12, alignItems: 'center' }}>
+              <Text style={{ color: '#6B7280', textAlign: 'center', fontWeight: '700' }}>{loadError}</Text>
+            </View>
+          ) : null}
+        />
+      </GestureDetector>
       {pageIndicatorVisible ? (
         <View pointerEvents="none" style={props.styles.pdfFloatingPageIndicator}>
           <Text style={props.styles.pdfFloatingPageText}>{floatingPageIndicatorLabel}</Text>

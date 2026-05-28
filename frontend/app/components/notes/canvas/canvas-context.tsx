@@ -1,5 +1,5 @@
 import React, { createContext, useContext } from 'react';
-import type { InkBrush, InkBrushSettings, InkEraserMode, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
+import type { InkBrush, InkBrushSettings, InkEraserMode, InkImageAnnotation, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { useNotesGlobalContext } from '../workspace/notes-global-context';
 
 export type CanvasState = {
@@ -15,11 +15,13 @@ export type CanvasState = {
   brushSettings: InkBrushSettings;
   inkStrokes: InkStroke[];
   textAnnotations: InkTextAnnotation[];
+  imageAnnotations: InkImageAnnotation[];
   selectionRect: SelectionRect | null;
   selectionPreviewUri: string | null;
   inkByDocument: Record<number, InkStroke[]>;
   redoInkByDocument: Record<number, InkStroke[]>;
   textAnnotationsByDocument: Record<number, InkTextAnnotation[]>;
+  imageAnnotationsByDocument: Record<number, InkImageAnnotation[]>;
 };
 
 export type CanvasActions = {
@@ -41,11 +43,14 @@ export type CanvasActions = {
   redoInk: () => void;
   commitInkStroke: (stroke: InkStroke) => void;
   removeInkStroke: (strokeId: string) => void;
+  replaceInkStrokes: (removedStrokeIds: string[], addedStrokes: InkStroke[]) => void;
   addTextAnnotation: (point: InkPoint) => void;
+  addImageAnnotation: (annotation: Partial<InkImageAnnotation> & Pick<InkImageAnnotation, 'uri'>) => void;
   updateTextAnnotation: (id: string, text: string) => void;
   removeTextAnnotation: (id: string) => void;
   moveTextAnnotation: (id: string, x: number, y: number) => void;
   resizeTextAnnotation: (id: string, width: number, height: number) => void;
+  changeTextAnnotationFontSize: (id: string, fontSize: number) => void;
   eraseInkAtPoint: (point: InkPoint, radius: number, snapshot?: boolean, mode?: InkEraserMode) => boolean;
   deleteSelectedStrokes: () => void;
   changeSelectedStrokesColor: (color: string) => void;
@@ -68,16 +73,18 @@ export function CanvasProvider({ children }: { children: React.ReactNode }) {
     brushType: globalContext.brushType,
     linePattern: globalContext.linePattern,
     eraserMode: globalContext.eraserMode ?? 'partial',
-    eraserWidth: globalContext.eraserWidth ?? 6,
+    eraserWidth: globalContext.eraserWidth ?? 12,
     selectionMode: globalContext.selectionMode ?? 'rect',
     brushSettings: globalContext.brushSettings,
     inkStrokes: globalContext.inkStrokes ?? [],
     textAnnotations: globalContext.textAnnotations ?? [],
+    imageAnnotations: globalContext.imageAnnotations ?? [],
     selectionRect: globalContext.selectionRect ?? null,
     selectionPreviewUri: globalContext.selectionPreviewUri ?? null,
     inkByDocument: globalContext.inkByDocument ?? {},
     redoInkByDocument: globalContext.redoInkByDocument ?? {},
     textAnnotationsByDocument: globalContext.textAnnotationsByDocument ?? {},
+    imageAnnotationsByDocument: globalContext.imageAnnotationsByDocument ?? {},
     setInkTool: globalContext.onChangeInkTool,
     setPenColor: globalContext.onChangePenColor,
     setPenWidth: globalContext.onChangePenWidth,
@@ -96,11 +103,14 @@ export function CanvasProvider({ children }: { children: React.ReactNode }) {
     redoInk: globalContext.onRedoInk,
     commitInkStroke: globalContext.onCommitInkStroke,
     removeInkStroke: globalContext.onRemoveInkStroke,
+    replaceInkStrokes: globalContext.onReplaceInkStrokes,
     addTextAnnotation: globalContext.onAddTextAnnotation,
+    addImageAnnotation: globalContext.onAddImageAnnotation,
     updateTextAnnotation: globalContext.onUpdateTextAnnotation,
     removeTextAnnotation: globalContext.onRemoveTextAnnotation,
     moveTextAnnotation: globalContext.onMoveTextAnnotation,
     resizeTextAnnotation: globalContext.onResizeTextAnnotation,
+    changeTextAnnotationFontSize: globalContext.onChangeTextAnnotationFontSize,
     eraseInkAtPoint: globalContext.onEraseInkAtPoint,
     deleteSelectedStrokes: globalContext.deleteSelectedStrokes,
     changeSelectedStrokesColor: globalContext.changeSelectedStrokesColor,

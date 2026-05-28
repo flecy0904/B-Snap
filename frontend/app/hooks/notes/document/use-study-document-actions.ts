@@ -315,11 +315,20 @@ export function useStudyDocumentActions(params: StudyDocumentActionsParams) {
     if (!targetSubjectId) return;
 
     try {
-      const result = await DocumentPicker.getDocumentAsync({
-        type: 'application/pdf',
-        multiple: false,
-        copyToCacheDirectory: true,
-      });
+      let result: DocumentPicker.DocumentPickerResult;
+      try {
+        result = await DocumentPicker.getDocumentAsync({
+          type: 'application/pdf',
+          multiple: false,
+          copyToCacheDirectory: true,
+        });
+      } catch {
+        result = await DocumentPicker.getDocumentAsync({
+          type: 'application/pdf',
+          multiple: false,
+          copyToCacheDirectory: false,
+        });
+      }
 
       if (result.canceled || !result.assets.length) {
         params.setWorkspaceFeedback('PDF 업로드를 취소했습니다.');
@@ -357,7 +366,7 @@ export function useStudyDocumentActions(params: StudyDocumentActionsParams) {
         void params.syncPdfDocumentToBackend(localDocument, targetSubject);
       }
     } catch {
-      params.setWorkspaceFeedback('PDF 파일을 가져오지 못했습니다.');
+      params.setWorkspaceFeedback('PDF 파일을 가져오지 못했습니다. Google Drive 파일이면 한 번 더 선택하거나 기기에 저장 후 열어주세요.');
     }
   };
 

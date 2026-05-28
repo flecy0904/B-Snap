@@ -11,7 +11,7 @@ import { SelectionContextMenu, isPointInSelectionContextMenu } from './selection
 import { PencilHoverOverlay } from './pencil-hover-overlay';
 import { SelectionLassoOverlay, SelectionOverlay } from './selection-overlays';
 import { SelectionMovePreview, getSelectedObjectIdsForSelection, getSelectionMovePreview } from './selection-move-preview';
-import { finalizeInkStroke, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, shouldAppendInkPoint } from '../../../ui-helpers';
+import { buildSelectionRectFromDrag, buildSelectionRectFromPoints, finalizeInkStroke, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, shouldAppendInkPoint } from '../../../ui-helpers';
 import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { useCanvasContext } from './canvas-context';
 import { shouldActivateNativeInkGesture, type NativeGestureStateManager, type NativeInkGestureEvent, type NativeInkTouchEvent } from './native-ink-gesture-policy';
@@ -53,39 +53,6 @@ function resizeRectFromCorner(source: SelectionRect, corner: ResizeCorner, point
     generatedPageId: source.generatedPageId,
     pageWidth: point.pageWidth,
     pageHeight: point.pageHeight,
-  };
-}
-
-function getSelectionRectFromDrag(origin: InkPoint, point: InkPoint): SelectionRect {
-  return {
-    x: Math.min(origin.x, point.x),
-    y: Math.min(origin.y, point.y),
-    width: Math.abs(point.x - origin.x),
-    height: Math.abs(point.y - origin.y),
-    mode: 'rect',
-    pageNumber: origin.pageNumber ?? point.pageNumber,
-    generatedPageId: origin.generatedPageId ?? point.generatedPageId,
-    pageWidth: point.pageWidth,
-    pageHeight: point.pageHeight,
-  };
-}
-
-function getSelectionRectFromPoints(points: InkPoint[]): SelectionRect | null {
-  if (points.length < 2) return null;
-  const xs = points.map((point) => point.x);
-  const ys = points.map((point) => point.y);
-  const reference = points[0];
-  return {
-    x: Math.max(0, Math.min(...xs)),
-    y: Math.max(0, Math.min(...ys)),
-    width: Math.max(1, Math.max(...xs) - Math.min(...xs)),
-    height: Math.max(1, Math.max(...ys) - Math.min(...ys)),
-    mode: 'lasso',
-    path: points,
-    pageNumber: reference.pageNumber,
-    generatedPageId: reference.generatedPageId,
-    pageWidth: reference.pageWidth,
-    pageHeight: reference.pageHeight,
   };
 }
 
@@ -149,6 +116,7 @@ export function BlankNoteCanvas(props: {
     removeTextAnnotation: onRemoveTextAnnotation,
     moveTextAnnotation: onMoveTextAnnotation,
     resizeTextAnnotation: onResizeTextAnnotation,
+    changeTextAnnotationFontSize: onChangeTextAnnotationFontSize,
     setSelectionRect: onSelectionChange,
     setSelectionPreviewUri: onSelectionPreviewChange,
   } = canvasCtx;
@@ -415,7 +383,7 @@ export function BlankNoteCanvas(props: {
       const origin = selectionOriginRef.current;
       if (!origin) return;
       if (selectionMode === 'rect') {
-        const nextRect = getSelectionRectFromDrag(origin, point);
+        const nextRect = buildSelectionRectFromDrag(origin, point);
         draftSelectionRef.current = nextRect;
         setDraftSelection(nextRect);
         return;
@@ -427,7 +395,7 @@ export function BlankNoteCanvas(props: {
         : currentPath;
       draftSelectionPathRef.current = nextPath;
       setDraftSelectionPath(nextPath);
-      const nextRect = getSelectionRectFromPoints(nextPath) ?? getSelectionRectFromDrag(origin, point);
+      const nextRect = buildSelectionRectFromPoints(nextPath) ?? buildSelectionRectFromDrag(origin, point);
       draftSelectionRef.current = nextRect;
       setDraftSelection(nextRect);
     }
@@ -625,6 +593,7 @@ export function BlankNoteCanvas(props: {
           onChangeText={onUpdateTextAnnotation}
           onMove={onMoveTextAnnotation}
           onResize={onResizeTextAnnotation}
+          onChangeFontSize={onChangeTextAnnotationFontSize}
           onRemove={onRemoveTextAnnotation}
         />
 

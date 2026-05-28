@@ -168,6 +168,11 @@ export const NotesWorkspaceToolbar = React.memo(function NotesWorkspaceToolbar()
           <Pressable style={workspaceContext.styles.inkActionButton} onPress={documentContext.onExportCurrentDocument}>
             <MaterialCommunityIcons name="share-variant-outline" size={18} color="#556070" />
           </Pressable>
+          {workspaceContext.focusMode ? (
+            <Pressable style={workspaceContext.styles.inkActionButton} onPress={workspaceContext.onToggleFocusMode}>
+              <MaterialCommunityIcons name="fullscreen-exit" size={18} color="#4F68D2" />
+            </Pressable>
+          ) : null}
         </View>
 
         <View style={workspaceContext.styles.inkToolbarTools}>
@@ -186,11 +191,6 @@ export const NotesWorkspaceToolbar = React.memo(function NotesWorkspaceToolbar()
           <View style={workspaceContext.styles.inkToolbarDivider} />
 
           <View style={workspaceContext.styles.inkSecondaryCluster}>
-            {workspaceContext.focusMode ? (
-              <Pressable style={[workspaceContext.styles.inkActionButton, workspaceContext.styles.inkToolButtonActive]} onPress={workspaceContext.onToggleFocusMode}>
-                <MaterialCommunityIcons name="fullscreen-exit" size={18} color="#4F68D2" />
-              </Pressable>
-            ) : null}
             <Pressable
               style={[workspaceContext.styles.inkActionButton, workspaceContext.styles.aiIconButton, workspaceContext.aiPanelOpen && workspaceContext.styles.aiIconButtonActive]}
               onPress={workspaceContext.onToggleAiPanel}

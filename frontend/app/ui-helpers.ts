@@ -1,5 +1,5 @@
 import getStroke, { StrokeOptions } from 'perfect-freehand';
-import { InkBrush, InkBrushSettings, InkPoint, InkShape, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from './ui-types';
+import { InkBrush, InkBrushSettings, InkImageAnnotation, InkPoint, InkShape, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from './ui-types';
 import { DocumentPageView, GeneratedWorkspacePage, TimetableEntry } from './types';
 
 export const DAYS = ['MON', 'TUE', 'WED', 'THU', 'FRI'] as const;
@@ -305,14 +305,70 @@ export function scaleTextAnnotationToPageSize(annotation: InkTextAnnotation, pag
     y: annotation.y * heightScale,
     width: annotation.width * widthScale,
     height: annotation.height ? annotation.height * heightScale : annotation.height,
+    fontSize: annotation.fontSize ? annotation.fontSize * Math.min(widthScale, heightScale) : annotation.fontSize,
     pageWidth,
     pageHeight,
     anchorRect: scaleSelectionRectToPageSize(annotation.anchorRect ?? null, pageWidth, pageHeight),
   };
 }
 
+export function scaleImageAnnotationToPageSize(annotation: InkImageAnnotation, pageWidth: number, pageHeight: number): InkImageAnnotation {
+  const { widthScale, heightScale } = resolveScale(annotation.pageWidth, annotation.pageHeight, pageWidth, pageHeight);
+
+  if (widthScale === 1 && heightScale === 1) return annotation;
+
+  return {
+    ...annotation,
+    x: annotation.x * widthScale,
+    y: annotation.y * heightScale,
+    width: annotation.width * widthScale,
+    height: annotation.height * heightScale,
+    pageWidth,
+    pageHeight,
+  };
+}
+
+export function buildSelectionRectFromDrag(origin: InkPoint, point: InkPoint): SelectionRect {
+  return {
+    x: Math.min(origin.x, point.x),
+    y: Math.min(origin.y, point.y),
+    width: Math.abs(point.x - origin.x),
+    height: Math.abs(point.y - origin.y),
+    mode: 'rect',
+    pageNumber: origin.pageNumber ?? point.pageNumber,
+    generatedPageId: origin.generatedPageId ?? point.generatedPageId,
+    pageWidth: point.pageWidth ?? origin.pageWidth,
+    pageHeight: point.pageHeight ?? origin.pageHeight,
+  };
+}
+
+export function buildSelectionRectFromPoints(points: InkPoint[]): SelectionRect | null {
+  if (points.length < 2) return null;
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  const reference = points[0];
+  return {
+    x: Math.max(0, Math.min(...xs)),
+    y: Math.max(0, Math.min(...ys)),
+    width: Math.max(1, Math.max(...xs) - Math.min(...xs)),
+    height: Math.max(1, Math.max(...ys) - Math.min(...ys)),
+    mode: 'lasso',
+    path: points,
+    pageNumber: reference.pageNumber,
+    generatedPageId: reference.generatedPageId,
+    pageWidth: reference.pageWidth,
+    pageHeight: reference.pageHeight,
+  };
+}
+
 export function findInkStrokesInRect(strokes: InkStroke[], rect: { x: number; y: number; width: number; height: number }): string[] {
   const selectedIds: string[] = [];
+  const rectPolygon: InkPoint[] = [
+    { x: rect.x, y: rect.y },
+    { x: rect.x + rect.width, y: rect.y },
+    { x: rect.x + rect.width, y: rect.y + rect.height },
+    { x: rect.x, y: rect.y + rect.height },
+  ];
 
   for (const stroke of strokes) {
     const bounds = getInkStrokeBounds(stroke);
@@ -322,27 +378,15 @@ export function findInkStrokesInRect(strokes: InkStroke[], rect: { x: number; y:
         bounds.x + bounds.width >= rect.x &&
         bounds.y <= rect.y + rect.height &&
         bounds.y + bounds.height >= rect.y;
-      if (overlaps) {
-        selectedIds.push(stroke.id);
-        continue;
-      }
+      if (!overlaps) continue;
     }
 
-    // 모든 점이 사각형 안에 있는지 확인 (또는 일부 점이라도 있는지)
-    // 여기서는 선의 일부라도 포함되면 선택되도록 합니다.
-    let isInside = false;
-    for (const point of stroke.points) {
-      if (
-        point.x >= rect.x &&
-        point.x <= rect.x + rect.width &&
-        point.y >= rect.y &&
-        point.y <= rect.y + rect.height
-      ) {
-        isInside = true;
-        break;
-      }
+    if (stroke.points.some((point) => isPointInRect(point, rect))) {
+      selectedIds.push(stroke.id);
+      continue;
     }
-    if (isInside) {
+
+    if (stroke.points.some((point, index) => index > 0 && doesSegmentIntersectPolygon(stroke.points[index - 1], point, rectPolygon))) {
       selectedIds.push(stroke.id);
     }
   }

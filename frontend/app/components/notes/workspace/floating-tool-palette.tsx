@@ -94,11 +94,26 @@ export function FloatingToolPalette() {
   const activateSelectionTool = () => {
     closeDetail();
     if (canvasContext.inkTool === 'select') {
-      setSelectionModeOpen((current) => !current);
+      if (canvasContext.selectionRect) {
+        canvasContext.clearCurrentSelection();
+        canvasContext.setInkTool('view');
+      } else {
+        setSelectionModeOpen((current) => !current);
+      }
+      workspaceContext.setPageListOpen(false);
       return;
     }
     canvasContext.setInkTool('select');
     setSelectionModeOpen(false);
+    workspaceContext.setPageListOpen(false);
+  };
+
+  const openSelectionModePopover = () => {
+    closeDetail();
+    if (canvasContext.inkTool !== 'select') {
+      canvasContext.setInkTool('select');
+    }
+    setSelectionModeOpen(true);
     workspaceContext.setPageListOpen(false);
   };
 
@@ -170,7 +185,7 @@ export function FloatingToolPalette() {
   const detailColors = colorLibraryOpen ? [...detailBaseColors, ...detailExtraColors] : detailBaseColors;
   const detailWidths = detailMode === 'highlight' ? HIGHLIGHT_WIDTHS : PEN_WIDTHS;
   const detailWidthRange = { min: detailWidths[0], max: detailWidths[detailWidths.length - 1], step: detailMode === 'highlight' ? 2 : 1 };
-  const eraserWidthRange = { min: 3, max: 18, step: 1 };
+  const eraserWidthRange = { min: 6, max: 36, step: 2 };
   const detailTitle = detailMode === 'shape' ? '도형' : BRUSH_LABELS[detailBrush];
   const previewDashArray = canvasContext.linePattern === 'dotted'
     ? `${Math.max(1, canvasContext.penWidth * 0.45)} ${Math.max(8, canvasContext.penWidth * 2.3)}`
@@ -517,6 +532,7 @@ export function FloatingToolPalette() {
             <Pressable
               style={[workspaceContext.styles.fixedInkToolButton, canvasContext.inkTool === 'select' && workspaceContext.styles.fixedInkToolButtonActive]}
               onPress={activateSelectionTool}
+              onLongPress={openSelectionModePopover}
             >
               <MaterialCommunityIcons name={canvasContext.selectionMode === 'lasso' ? 'lasso' : 'selection-drag'} size={20} color={canvasContext.inkTool === 'select' ? '#2563EB' : '#334155'} />
             </Pressable>

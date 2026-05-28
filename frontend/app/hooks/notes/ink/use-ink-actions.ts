@@ -1,7 +1,7 @@
 import { useRef } from 'react';
 import type { Dispatch, SetStateAction } from 'react';
 import type { DocumentPageView, GeneratedWorkspacePage, StudyDocumentEntry } from '../../../types';
-import type { InkEraserMode, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
+import type { InkEraserMode, InkImageAnnotation, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { doesRectIntersectPolygon, findHitInkStrokeId, findInkStrokesInLasso, findInkStrokesInRect, scaleInkStrokeToPageSize } from '../../../ui-helpers';
 import { findLastIndex, isInkStrokeOnPage, scopeInkStrokeToPage } from './ink-helpers';
 
@@ -12,6 +12,7 @@ const clamp = (value: number, min: number, max: number) => Math.max(min, Math.mi
 export type WorkspaceEditSnapshot = {
   inkStrokes: InkStroke[];
   textAnnotations: InkTextAnnotation[];
+  imageAnnotations: InkImageAnnotation[];
   selectionRect: SelectionRect | null;
   generatedPages?: GeneratedWorkspacePage[];
   activePage?: DocumentPageView;
@@ -26,6 +27,7 @@ export function useInkActions(params: {
   selectionByDocument: Record<number, SelectionRect | null>;
   inkByDocument: Record<number, InkStroke[]>;
   textAnnotationsByDocument: Record<number, InkTextAnnotation[]>;
+  imageAnnotationsByDocument: Record<number, InkImageAnnotation[]>;
   generatedPagesByDocument?: Record<number, GeneratedWorkspacePage[]>;
   activePageByDocument?: Record<number, DocumentPageView>;
   inkHistoryByDocument: Record<number, WorkspaceEditSnapshot[]>;
@@ -35,6 +37,7 @@ export function useInkActions(params: {
   setInkHistoryByDocument: SetState<Record<number, WorkspaceEditSnapshot[]>>;
   setRedoInkHistoryByDocument: SetState<Record<number, WorkspaceEditSnapshot[]>>;
   setTextAnnotationsByDocument: SetState<Record<number, InkTextAnnotation[]>>;
+  setImageAnnotationsByDocument: SetState<Record<number, InkImageAnnotation[]>>;
   setGeneratedPagesByDocument?: SetState<Record<number, GeneratedWorkspacePage[]>>;
   setActivePageByDocument?: SetState<Record<number, DocumentPageView>>;
   setSelectionByDocument: SetState<Record<number, SelectionRect | null>>;
@@ -132,6 +135,34 @@ export function useInkActions(params: {
     ));
   };
 
+  const getPageImageAnnotationsForSelection = () => {
+    if (!params.studyDocumentId) return [];
+    const annotations = params.imageAnnotationsByDocument[params.studyDocumentId] ?? [];
+    const selectionScope = getSelectionPageScope();
+    return annotations.filter((annotation) => (
+      selectionScope.generatedPageId
+        ? annotation.generatedPageId === selectionScope.generatedPageId
+        : (
+            !annotation.generatedPageId &&
+            (typeof selectionScope.pageNumber === 'number'
+              ? (
+                  params.studyDocument?.type === 'blank'
+                    ? (annotation.pageNumber ?? 1) === selectionScope.pageNumber
+                    : annotation.pageNumber === selectionScope.pageNumber
+                )
+              : (
+                  params.currentDocumentPage?.kind === 'generated'
+                    ? annotation.generatedPageId === params.currentDocumentPage.pageId
+                    : (
+                        params.studyDocument?.type === 'blank'
+                          ? (annotation.pageNumber ?? 1) === params.currentPdfPage
+                          : annotation.pageNumber === params.currentPdfPage
+                      )
+                ))
+          )
+    ));
+  };
+
   const scaleRectToSelection = (rect: SelectionRect): SelectionRect => {
     if (!params.selectionRect?.pageWidth || !params.selectionRect?.pageHeight || !rect.pageWidth || !rect.pageHeight) return rect;
     const widthScale = params.selectionRect.pageWidth / rect.pageWidth;
@@ -160,6 +191,17 @@ export function useInkActions(params: {
         })
   );
 
+  const getImageAnnotationSelectionRect = (annotation: InkImageAnnotation): SelectionRect => (
+    scaleRectToSelection({
+      x: annotation.x,
+      y: annotation.y,
+      width: annotation.width,
+      height: annotation.height,
+      pageWidth: annotation.pageWidth,
+      pageHeight: annotation.pageHeight,
+    })
+  );
+
   const rectsOverlap = (left: SelectionRect, right: SelectionRect) => (
     left.x <= right.x + right.width &&
     left.x + left.width >= right.x &&
@@ -180,6 +222,33 @@ export function useInkActions(params: {
     if (stroke.generatedPageId) return false;
     const targetPage = point.pageNumber ?? params.currentPdfPage;
     return !stroke.pageNumber || stroke.pageNumber === targetPage;
+  };
+
+  const scalePointToStrokeSpace = (point: InkPoint, stroke: InkStroke): InkPoint => {
+    const pointWidth = point.pageWidth;
+    const pointHeight = point.pageHeight;
+    const strokeWidth = stroke.pageWidth;
+    const strokeHeight = stroke.pageHeight;
+    if (!pointWidth || !pointHeight || !strokeWidth || !strokeHeight) return point;
+    if (pointWidth === strokeWidth && pointHeight === strokeHeight) return point;
+    return {
+      ...point,
+      x: point.x / pointWidth * strokeWidth,
+      y: point.y / pointHeight * strokeHeight,
+      pageWidth: strokeWidth,
+      pageHeight: strokeHeight,
+    };
+  };
+
+  const scaleRadiusToStrokeSpace = (radius: number, point: InkPoint, stroke: InkStroke) => {
+    const pointWidth = point.pageWidth;
+    const pointHeight = point.pageHeight;
+    const strokeWidth = stroke.pageWidth;
+    const strokeHeight = stroke.pageHeight;
+    if (!pointWidth || !pointHeight || !strokeWidth || !strokeHeight) return radius;
+    const widthScale = strokeWidth / pointWidth;
+    const heightScale = strokeHeight / pointHeight;
+    return radius * Math.max(0.25, Math.min(4, (widthScale + heightScale) / 2));
   };
 
   const interpolateStrokePoint = (start: InkPoint, end: InkPoint, ratio: number): InkPoint => ({
@@ -268,8 +337,16 @@ export function useInkActions(params: {
 
   const eraseStrokesAtPoint = (strokes: InkStroke[], point: InkPoint, radius: number, mode: InkEraserMode = 'partial') => {
     if (mode === 'stroke') {
+      const targetWidth = point.pageWidth;
+      const targetHeight = point.pageHeight;
       const hitStrokeId = findHitInkStrokeId(
-        strokes.filter((stroke) => isStrokeOnPointPage(stroke, point)),
+        strokes
+          .filter((stroke) => isStrokeOnPointPage(stroke, point))
+          .map((stroke) => (
+            targetWidth && targetHeight
+              ? scaleInkStrokeToPageSize(stroke, targetWidth, targetHeight)
+              : stroke
+          )),
         point,
         radius,
       );
@@ -280,11 +357,13 @@ export function useInkActions(params: {
     const nextStrokes: InkStroke[] = [];
 
     strokes.forEach((stroke) => {
+      const pointForStroke = scalePointToStrokeSpace(point, stroke);
+      const radiusForStroke = scaleRadiusToStrokeSpace(radius, point, stroke);
       if (stroke.style === 'shape') {
         const hitShape = findHitInkStrokeId(
-          isStrokeOnPointPage(stroke, point) ? [stroke] : [],
-          point,
-          radius,
+          isStrokeOnPointPage(stroke, pointForStroke) ? [stroke] : [],
+          pointForStroke,
+          radiusForStroke,
         );
         if (hitShape) {
           changed = true;
@@ -293,7 +372,7 @@ export function useInkActions(params: {
         nextStrokes.push(stroke);
         return;
       }
-      const split = splitStrokeByEraser(stroke, point, radius);
+      const split = splitStrokeByEraser(stroke, pointForStroke, radiusForStroke);
       if (!split) {
         nextStrokes.push(stroke);
         return;
@@ -322,6 +401,23 @@ export function useInkActions(params: {
     );
   };
 
+  const getSelectedImageAnnotationIds = () => {
+    if (!params.selectionRect) return new Set<string>();
+    const selectionPath = params.selectionRect.path;
+    if (selectionPath && selectionPath.length > 2) {
+      return new Set(
+        getPageImageAnnotationsForSelection()
+          .filter((annotation) => doesRectIntersectPolygon(getImageAnnotationSelectionRect(annotation), selectionPath))
+          .map((annotation) => annotation.id),
+      );
+    }
+    return new Set(
+      getPageImageAnnotationsForSelection()
+        .filter((annotation) => rectsOverlap(getImageAnnotationSelectionRect(annotation), params.selectionRect!))
+        .map((annotation) => annotation.id),
+    );
+  };
+
   const clearCurrentSelection = () => {
     if (!params.studyDocumentId) return;
     params.setSelectionByDocument((current) => ({ ...current, [params.studyDocumentId!]: null }));
@@ -345,6 +441,7 @@ export function useInkActions(params: {
   const getCurrentSnapshot = (): WorkspaceEditSnapshot => ({
     inkStrokes: params.studyDocumentId ? (params.inkByDocument[params.studyDocumentId] ?? []) : [],
     textAnnotations: params.studyDocumentId ? (params.textAnnotationsByDocument[params.studyDocumentId] ?? []) : [],
+    imageAnnotations: params.studyDocumentId ? (params.imageAnnotationsByDocument[params.studyDocumentId] ?? []) : [],
     selectionRect: params.selectionRect ?? null,
     generatedPages: params.studyDocumentId ? params.generatedPagesByDocument?.[params.studyDocumentId] : undefined,
     activePage: params.studyDocumentId ? params.activePageByDocument?.[params.studyDocumentId] : undefined,
@@ -359,6 +456,10 @@ export function useInkActions(params: {
     params.setTextAnnotationsByDocument((current) => ({
       ...current,
       [params.studyDocumentId!]: snapshot.textAnnotations,
+    }));
+    params.setImageAnnotationsByDocument((current) => ({
+      ...current,
+      [params.studyDocumentId!]: snapshot.imageAnnotations,
     }));
     params.setSelectionByDocument((current) => ({
       ...current,
@@ -536,6 +637,38 @@ export function useInkActions(params: {
     markCurrentPageDirty();
   };
 
+  const replaceInkStrokes = (removedStrokeIds: string[], addedStrokes: InkStroke[]) => {
+    if (!params.studyDocumentId) return;
+    const removedIds = new Set(removedStrokeIds);
+    const currentStrokes = params.inkByDocument[params.studyDocumentId] ?? [];
+    const hasRemovedStroke = currentStrokes.some((stroke) => removedIds.has(stroke.id));
+    if (!hasRemovedStroke && addedStrokes.length === 0) return;
+
+    pushInkHistorySnapshot();
+    const scopedAddedStrokes = addedStrokes.map((stroke) => scopeInkStrokeToPage({
+      stroke,
+      currentDocumentPage: params.currentDocumentPage,
+      currentPdfPage: params.currentPdfPage,
+    }));
+    params.setInkByDocument((current) => {
+      const strokes = current[params.studyDocumentId!] ?? [];
+      const next = [
+        ...strokes.filter((stroke) => !removedIds.has(stroke.id)),
+        ...scopedAddedStrokes,
+      ];
+      return {
+        ...current,
+        [params.studyDocumentId!]: next,
+      };
+    });
+    params.setRedoInkByDocument((current) => ({
+      ...current,
+      [params.studyDocumentId!]: [],
+    }));
+    const dirtyPage = scopedAddedStrokes.find((stroke) => !stroke.generatedPageId)?.pageNumber ?? params.currentPdfPage;
+    markPageDirty(dirtyPage);
+  };
+
   const addTextAnnotation = (point: InkPoint) => {
     if (!params.studyDocumentId) return;
     pushInkHistorySnapshot();
@@ -550,8 +683,9 @@ export function useInkActions(params: {
       generatedPageId,
       x: anchorX,
       y: anchorY,
-      width: 220,
-      height: 96,
+      width: 104,
+      height: 56,
+      fontSize: 17,
       text: '',
       anchorRect: anchoredSelection,
       pageWidth: anchoredSelection?.pageWidth ?? point.pageWidth,
@@ -571,6 +705,57 @@ export function useInkActions(params: {
     if (!generatedPageId) markPageDirty(pageNumber);
     params.setInkTool('view');
     params.setWorkspaceFeedback(anchoredSelection ? '선택 영역 메모를 추가했습니다.' : '텍스트 메모를 추가했습니다.');
+  };
+
+  const addImageAnnotation = (annotation: Partial<InkImageAnnotation> & Pick<InkImageAnnotation, 'uri'>) => {
+    if (!params.studyDocumentId || !annotation.uri) return;
+    const generatedPageId = annotation.generatedPageId ?? (params.currentDocumentPage?.kind === 'generated' ? params.currentDocumentPage.pageId : undefined);
+    const pageNumber = generatedPageId ? 1 : annotation.pageNumber ?? (params.currentDocumentPage?.kind === 'pdf' ? params.currentDocumentPage.pageNumber : params.currentPdfPage);
+    const anchoredSelection = params.selectionRect && (
+      generatedPageId
+        ? params.selectionRect.generatedPageId === generatedPageId
+        : !params.selectionRect.generatedPageId && (params.selectionRect.pageNumber ?? pageNumber) === pageNumber
+    )
+      ? params.selectionRect
+      : null;
+    const pageWidth = annotation.pageWidth ?? anchoredSelection?.pageWidth;
+    const pageHeight = annotation.pageHeight ?? anchoredSelection?.pageHeight;
+    const defaultWidth = pageWidth ? Math.min(280, Math.max(120, pageWidth * 0.38)) : 260;
+    const defaultHeight = Math.max(90, defaultWidth * 0.68);
+    const width = Math.max(48, annotation.width ?? anchoredSelection?.width ?? defaultWidth);
+    const height = Math.max(48, annotation.height ?? anchoredSelection?.height ?? defaultHeight);
+    const maxX = pageWidth ? Math.max(0, pageWidth - width) : Number.POSITIVE_INFINITY;
+    const maxY = pageHeight ? Math.max(0, pageHeight - height) : Number.POSITIVE_INFINITY;
+    const x = clamp(annotation.x ?? anchoredSelection?.x ?? 42, 0, maxX);
+    const y = clamp(annotation.y ?? anchoredSelection?.y ?? 42, 0, maxY);
+    const nextAnnotation: InkImageAnnotation = {
+      id: annotation.id ?? `image-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      uri: annotation.uri,
+      assetId: annotation.assetId,
+      pageNumber,
+      generatedPageId,
+      x,
+      y,
+      width,
+      height,
+      rotation: annotation.rotation ?? 0,
+      opacity: annotation.opacity ?? 1,
+      pageWidth,
+      pageHeight,
+      zIndex: annotation.zIndex,
+    };
+    pushInkHistorySnapshot();
+    params.setImageAnnotationsByDocument((current) => ({
+      ...current,
+      [params.studyDocumentId!]: [...(current[params.studyDocumentId!] ?? []), nextAnnotation],
+    }));
+    params.setRedoInkByDocument((current) => ({
+      ...current,
+      [params.studyDocumentId!]: [],
+    }));
+    if (anchoredSelection) clearCurrentSelection();
+    if (!generatedPageId) markPageDirty(pageNumber);
+    params.setWorkspaceFeedback('현재 페이지에 이미지를 배치했습니다.');
   };
 
   const updateTextAnnotation = (annotationId: string, text: string) => {
@@ -688,6 +873,25 @@ export function useInkActions(params: {
     if (!targetAnnotation?.generatedPageId) markPageDirty(targetAnnotation?.pageNumber ?? params.currentPdfPage);
   };
 
+  const changeTextAnnotationFontSize = (annotationId: string, fontSize: number) => {
+    if (!params.studyDocumentId) return;
+    const targetAnnotation = (params.textAnnotationsByDocument[params.studyDocumentId] ?? []).find((annotation) => annotation.id === annotationId);
+    if (!targetAnnotation) return;
+    pushTextFrameHistorySnapshot(annotationId);
+    const nextFontSize = Math.max(12, Math.min(40, Math.round(fontSize)));
+    params.setTextAnnotationsByDocument((current) => ({
+      ...current,
+      [params.studyDocumentId!]: (current[params.studyDocumentId!] ?? []).map((annotation) =>
+        annotation.id === annotationId ? { ...annotation, fontSize: nextFontSize } : annotation,
+      ),
+    }));
+    params.setRedoInkByDocument((current) => ({
+      ...current,
+      [params.studyDocumentId!]: [],
+    }));
+    if (!targetAnnotation?.generatedPageId) markPageDirty(targetAnnotation?.pageNumber ?? params.currentPdfPage);
+  };
+
   const eraseInkAtPoint = (point: InkPoint, radius: number, snapshot = false, mode: InkEraserMode = 'partial') => {
     if (!params.studyDocumentId) return false;
     const scopedPoint: InkPoint = {
@@ -722,8 +926,9 @@ export function useInkActions(params: {
     if (!params.studyDocumentId || !params.selectionRect) return;
     const selectedStrokeIds = getSelectedStrokeIds();
     const selectedTextAnnotationIds = getSelectedTextAnnotationIds();
+    const selectedImageAnnotationIds = getSelectedImageAnnotationIds();
 
-    if (selectedStrokeIds.size > 0 || selectedTextAnnotationIds.size > 0) {
+    if (selectedStrokeIds.size > 0 || selectedTextAnnotationIds.size > 0 || selectedImageAnnotationIds.size > 0) {
       pushInkHistorySnapshot();
       params.setInkByDocument((current) => ({
         ...current,
@@ -733,8 +938,12 @@ export function useInkActions(params: {
         ...current,
         [params.studyDocumentId!]: (current[params.studyDocumentId!] ?? []).filter((annotation) => !selectedTextAnnotationIds.has(annotation.id)),
       }));
+      params.setImageAnnotationsByDocument((current) => ({
+        ...current,
+        [params.studyDocumentId!]: (current[params.studyDocumentId!] ?? []).filter((annotation) => !selectedImageAnnotationIds.has(annotation.id)),
+      }));
       markSelectionPageDirty();
-      params.setWorkspaceFeedback(`선택한 객체 ${selectedStrokeIds.size + selectedTextAnnotationIds.size}개를 지웠습니다.`);
+      params.setWorkspaceFeedback(`선택한 객체 ${selectedStrokeIds.size + selectedTextAnnotationIds.size + selectedImageAnnotationIds.size}개를 지웠습니다.`);
     }
     clearCurrentSelection();
     params.setInkTool('view');
@@ -779,9 +988,11 @@ export function useInkActions(params: {
     if (!params.studyDocumentId || !params.selectionRect) return;
     const currentStrokes = params.inkByDocument[params.studyDocumentId] ?? [];
     const currentAnnotations = params.textAnnotationsByDocument[params.studyDocumentId] ?? [];
+    const currentImageAnnotations = params.imageAnnotationsByDocument[params.studyDocumentId] ?? [];
     const selectedStrokeIds = getSelectedStrokeIds();
     const selectedTextAnnotationIds = getSelectedTextAnnotationIds();
-    if (!selectedStrokeIds.size && !selectedTextAnnotationIds.size) return;
+    const selectedImageAnnotationIds = getSelectedImageAnnotationIds();
+    if (!selectedStrokeIds.size && !selectedTextAnnotationIds.size && !selectedImageAnnotationIds.size) return;
 
     const offset = 18;
     const historyGroupId = `duplicate-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -828,6 +1039,20 @@ export function useInkActions(params: {
           })),
       ],
     }));
+    params.setImageAnnotationsByDocument((current) => ({
+      ...current,
+      [params.studyDocumentId!]: [
+        ...(current[params.studyDocumentId!] ?? []),
+        ...currentImageAnnotations
+          .filter((annotation) => selectedImageAnnotationIds.has(annotation.id))
+          .map((annotation, index) => ({
+            ...annotation,
+            id: `${annotation.id}-copy-${Date.now()}-${index}`,
+            x: annotation.x + offset,
+            y: annotation.y + offset,
+          })),
+      ],
+    }));
     params.setRedoInkByDocument((current) => ({
       ...current,
       [params.studyDocumentId!]: [],
@@ -848,7 +1073,7 @@ export function useInkActions(params: {
         : null,
     }));
     markSelectionPageDirty();
-    params.setWorkspaceFeedback(`선택한 객체 ${selectedStrokeIds.size + selectedTextAnnotationIds.size}개를 복제했습니다.`);
+    params.setWorkspaceFeedback(`선택한 객체 ${selectedStrokeIds.size + selectedTextAnnotationIds.size + selectedImageAnnotationIds.size}개를 복제했습니다.`);
     params.setInkTool('select');
   };
 
@@ -856,7 +1081,8 @@ export function useInkActions(params: {
     if (!params.studyDocumentId || !params.selectionRect || !Number.isFinite(scale) || scale <= 0) return;
     const selectedStrokeIds = getSelectedStrokeIds();
     const selectedTextAnnotationIds = getSelectedTextAnnotationIds();
-    if (!selectedStrokeIds.size && !selectedTextAnnotationIds.size) return;
+    const selectedImageAnnotationIds = getSelectedImageAnnotationIds();
+    if (!selectedStrokeIds.size && !selectedTextAnnotationIds.size && !selectedImageAnnotationIds.size) return;
     const centerX = params.selectionRect.x + params.selectionRect.width / 2;
     const centerY = params.selectionRect.y + params.selectionRect.height / 2;
 
@@ -901,6 +1127,19 @@ export function useInkActions(params: {
         };
       }),
     }));
+    params.setImageAnnotationsByDocument((current) => ({
+      ...current,
+      [params.studyDocumentId!]: (current[params.studyDocumentId!] ?? []).map((annotation) => {
+        if (!selectedImageAnnotationIds.has(annotation.id)) return annotation;
+        return {
+          ...annotation,
+          x: centerX + (annotation.x - centerX) * scale,
+          y: centerY + (annotation.y - centerY) * scale,
+          width: Math.max(48, annotation.width * scale),
+          height: Math.max(48, annotation.height * scale),
+        };
+      }),
+    }));
     params.setRedoInkByDocument((current) => ({
       ...current,
       [params.studyDocumentId!]: [],
@@ -924,7 +1163,8 @@ export function useInkActions(params: {
     if (!params.studyDocumentId || !params.selectionRect || nextRect.width < 8 || nextRect.height < 8) return;
     const selectedStrokeIds = getSelectedStrokeIds();
     const selectedTextAnnotationIds = getSelectedTextAnnotationIds();
-    if (!selectedStrokeIds.size && !selectedTextAnnotationIds.size) return;
+    const selectedImageAnnotationIds = getSelectedImageAnnotationIds();
+    if (!selectedStrokeIds.size && !selectedTextAnnotationIds.size && !selectedImageAnnotationIds.size) return;
     const sourceRect = params.selectionRect;
     const sourceWidth = Math.max(1, sourceRect.width);
     const sourceHeight = Math.max(1, sourceRect.height);
@@ -982,6 +1222,19 @@ export function useInkActions(params: {
         };
       }),
     }));
+    params.setImageAnnotationsByDocument((current) => ({
+      ...current,
+      [params.studyDocumentId!]: (current[params.studyDocumentId!] ?? []).map((annotation) => {
+        if (!selectedImageAnnotationIds.has(annotation.id)) return annotation;
+        return {
+          ...annotation,
+          x: nextRect.x + ((annotation.x - sourceRect.x) / sourceWidth) * nextRect.width,
+          y: nextRect.y + ((annotation.y - sourceRect.y) / sourceHeight) * nextRect.height,
+          width: Math.max(48, annotation.width * widthRatio),
+          height: Math.max(48, annotation.height * heightRatio),
+        };
+      }),
+    }));
     params.setRedoInkByDocument((current) => ({
       ...current,
       [params.studyDocumentId!]: [],
@@ -999,7 +1252,8 @@ export function useInkActions(params: {
     if (!params.studyDocumentId || !params.selectionRect) return;
     const selectedStrokeIds = getSelectedStrokeIds();
     const selectedTextAnnotationIds = getSelectedTextAnnotationIds();
-    if (!selectedStrokeIds.size && !selectedTextAnnotationIds.size) return;
+    const selectedImageAnnotationIds = getSelectedImageAnnotationIds();
+    if (!selectedStrokeIds.size && !selectedTextAnnotationIds.size && !selectedImageAnnotationIds.size) return;
     const pageWidth = params.selectionRect.pageWidth;
     const pageHeight = params.selectionRect.pageHeight;
     const boundedX = pageWidth
@@ -1048,6 +1302,18 @@ export function useInkActions(params: {
           : annotation
       )),
     }));
+    params.setImageAnnotationsByDocument((current) => ({
+      ...current,
+      [params.studyDocumentId!]: (current[params.studyDocumentId!] ?? []).map((annotation) => (
+        selectedImageAnnotationIds.has(annotation.id)
+          ? {
+              ...annotation,
+              x: annotation.x + moveDx,
+              y: annotation.y + moveDy,
+            }
+          : annotation
+      )),
+    }));
     params.setRedoInkByDocument((current) => ({
       ...current,
       [params.studyDocumentId!]: [],
@@ -1077,11 +1343,14 @@ export function useInkActions(params: {
     redoInk,
     commitInkStroke,
     removeInkStroke,
+    replaceInkStrokes,
     addTextAnnotation,
+    addImageAnnotation,
     updateTextAnnotation,
     removeTextAnnotation,
     moveTextAnnotation,
     resizeTextAnnotation,
+    changeTextAnnotationFontSize,
     eraseInkAtPoint,
     deleteSelectedStrokes,
     changeSelectedStrokesColor,

@@ -34,9 +34,24 @@ export type InkTextAnnotation = {
   y: number;
   width: number;
   height?: number;
+  fontSize?: number;
   color?: string;
   text: string;
   anchorRect?: SelectionRect | null;
+} & InkPageSize;
+export type InkImageAnnotation = {
+  id: string;
+  uri: string;
+  pageNumber: number;
+  generatedPageId?: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation?: number;
+  opacity?: number;
+  assetId?: string;
+  zIndex?: number;
 } & InkPageSize;
 export type SelectionRect = {
   x: number;

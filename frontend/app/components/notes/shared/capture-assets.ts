@@ -55,6 +55,10 @@ export function getPageCaptureReferenceImageSource(reference: PageCaptureReferen
   return buildImageSource(getCaptureOriginalUri(reference), reference.previewImage);
 }
 
+export function getPageCaptureReferenceImageUri(reference: PageCaptureReference) {
+  return normalizeImageUri(getCaptureOriginalUri(reference)) ?? undefined;
+}
+
 export function formatCaptureDate(value: string) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;

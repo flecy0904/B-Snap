@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   getBackendClassInsight,
   isBackendApiEnabled,
@@ -42,7 +42,7 @@ import { useWorkspaceDocumentIntents } from './workspace/use-workspace-document-
 import { useWorkspaceCaptureIntents } from './workspace/use-workspace-capture-intents';
 import { useWorkspaceAiIntents } from './workspace/use-workspace-ai-intents';
 import { isSameDocumentPage, isShapeTool } from '../../ui-helpers';
-import type { InkBrush, InkBrushSettings, InkEraserMode, InkLinePattern, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../ui-types';
+import type { InkBrush, InkBrushSettings, InkEraserMode, InkImageAnnotation, InkLinePattern, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../ui-types';
 import type { AiAnswer, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../types';
 
 export function useStudyWorkspace(props: {
@@ -65,7 +65,7 @@ export function useStudyWorkspace(props: {
   const [brushType, setBrushType] = useState<InkBrush>('ballpoint');
   const [linePattern, setLinePattern] = useState<InkLinePattern>('solid');
   const [eraserMode, setEraserMode] = useState<InkEraserMode>('partial');
-  const [eraserWidth, setEraserWidth] = useState(6);
+  const [eraserWidth, setEraserWidth] = useState(12);
   const [selectionMode, setSelectionMode] = useState<InkSelectionMode>('rect');
   const [brushSettings, setBrushSettings] = useState<InkBrushSettings>({
     stability: 18,
@@ -78,6 +78,7 @@ export function useStudyWorkspace(props: {
   const [inkHistoryByDocument, setInkHistoryByDocument] = useState<Record<number, WorkspaceEditSnapshot[]>>({});
   const [redoInkHistoryByDocument, setRedoInkHistoryByDocument] = useState<Record<number, WorkspaceEditSnapshot[]>>({});
   const [textAnnotationsByDocument, setTextAnnotationsByDocument] = useState<Record<number, InkTextAnnotation[]>>({});
+  const [imageAnnotationsByDocument, setImageAnnotationsByDocument] = useState<Record<number, InkImageAnnotation[]>>({});
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
   const [aiPanelMode, setAiPanelMode] = useState<'floating' | 'sidebar'>('floating');
   const [selectionByDocument, setSelectionByDocument] = useState<Record<number, SelectionRect | null>>({});
@@ -106,6 +107,7 @@ export function useStudyWorkspace(props: {
   const [lastChatSessionByDocument, setLastChatSessionByDocument] = useState<Record<number, number>>({});
   const [chatSessionsByDocument, setChatSessionsByDocument] = useState<Record<number, BackendChatSession[]>>({});
   const [classInsightByDocument, setClassInsightByDocument] = useState<Record<number, BackendClassInsight | null>>({});
+  const classInsightFetchKeyRef = useRef<Record<number, string>>({});
   const [allChatSessions, setAllChatSessions] = useState<BackendChatSession[]>([]);
   const [aiChatScope, setAiChatScope] = useState<'note' | 'all'>('note');
   const [aiChatSearchQuery, setAiChatSearchQuery] = useState('');
@@ -149,6 +151,7 @@ export function useStudyWorkspace(props: {
     currentPageBookmarked,
     inkStrokes,
     textAnnotations,
+    imageAnnotations,
     inboxPendingCount,
     inboxHint,
     filteredNotes,
@@ -174,6 +177,7 @@ export function useStudyWorkspace(props: {
     bookmarksByDocument,
     inkByDocument,
     textAnnotationsByDocument,
+    imageAnnotationsByDocument,
     selectionByDocument,
     incomingAssetSuggestion,
   });
@@ -201,6 +205,7 @@ export function useStudyWorkspace(props: {
     setGeneratedPagesByDocument(snapshot.generatedPagesByDocument);
     setInkByDocument(snapshot.inkByDocument);
     setTextAnnotationsByDocument(snapshot.textAnnotationsByDocument);
+    setImageAnnotationsByDocument(snapshot.imageAnnotationsByDocument ?? {});
     setCurrentPdfPageByDocument(snapshot.currentPdfPageByDocument);
     setActivePageByDocument(snapshot.activePageByDocument);
     setBookmarksByDocument(snapshot.bookmarksByDocument ?? {});
@@ -218,6 +223,7 @@ export function useStudyWorkspace(props: {
     generatedPagesByDocument,
     inkByDocument,
     textAnnotationsByDocument,
+    imageAnnotationsByDocument,
     currentPdfPageByDocument,
     activePageByDocument,
     bookmarksByDocument,
@@ -233,6 +239,7 @@ export function useStudyWorkspace(props: {
     deletedNoteIds,
     deletedStudyDocumentIds,
     generatedPagesByDocument,
+    imageAnnotationsByDocument,
     inkByDocument,
     lastChatSessionByDocument,
     pageCaptureReferencesByDocument,
@@ -260,9 +267,11 @@ export function useStudyWorkspace(props: {
     userStudyDocuments,
     inkByDocument,
     textAnnotationsByDocument,
+    imageAnnotationsByDocument,
     setUserStudyDocuments,
     setInkByDocument,
     setTextAnnotationsByDocument,
+    setImageAnnotationsByDocument,
     setWorkspaceFeedback,
   });
   const {
@@ -296,6 +305,7 @@ export function useStudyWorkspace(props: {
     onFeedback: setWorkspaceFeedback,
   });
   const currentClassInsight = studyDocumentId ? classInsightByDocument[studyDocumentId] ?? null : null;
+  const currentBackendNoteId = getStudyDocumentBackendNoteId(studyDocument);
 
   usePencilInteractionFeedback({
     enabled: noteWorkspaceMode === 'note' && Boolean(studyDocumentId),
@@ -322,12 +332,17 @@ export function useStudyWorkspace(props: {
   });
 
   useEffect(() => {
-    if (!workspaceHydrated || !isBackendApiEnabled() || !studyDocumentId || !currentDocumentHasBackendPages) return;
-    if (Object.prototype.hasOwnProperty.call(classInsightByDocument, studyDocumentId)) return;
+    if (!workspaceHydrated || !isBackendApiEnabled() || !studyDocumentId || !currentDocumentHasBackendPages || !currentBackendNoteId) return;
+
+    const fetchKey = `${studyDocumentId}:${currentBackendNoteId}`;
+    const cachedInsight = classInsightByDocument[studyDocumentId];
+    if (cachedInsight?.note_id === currentBackendNoteId) return;
+    if (classInsightFetchKeyRef.current[studyDocumentId] === fetchKey) return;
+    classInsightFetchKeyRef.current[studyDocumentId] = fetchKey;
 
     let mounted = true;
 
-    getBackendClassInsight(studyDocumentId, 12)
+    getBackendClassInsight(currentBackendNoteId, 12)
       .then((insight) => {
         if (mounted) setClassInsightByDocument((current) => ({ ...current, [studyDocumentId]: insight }));
       })
@@ -338,7 +353,7 @@ export function useStudyWorkspace(props: {
     return () => {
       mounted = false;
     };
-  }, [classInsightByDocument, currentDocumentHasBackendPages, studyDocumentId, workspaceHydrated]);
+  }, [classInsightByDocument, currentBackendNoteId, currentDocumentHasBackendPages, studyDocumentId, workspaceHydrated]);
 
   useEffect(() => {
     if (!workspaceHydrated || !isBackendApiEnabled()) return;
@@ -641,7 +656,7 @@ export function useStudyWorkspace(props: {
   };
 
   const changeEraserWidth = (width: number) => {
-    setEraserWidth(Math.max(3, Math.min(18, Math.round(width))));
+    setEraserWidth(Math.max(6, Math.min(36, Math.round(width))));
     setInkTool('erase');
   };
 
@@ -793,6 +808,87 @@ export function useStudyWorkspace(props: {
     },
   });
 
+  const addCaptureImageAnnotation = useCallback((annotation: Partial<InkImageAnnotation> & Pick<InkImageAnnotation, 'uri'>) => {
+    if (!studyDocumentId || !annotation.uri) return;
+    const generatedPageId = annotation.generatedPageId ?? (currentDocumentPage?.kind === 'generated' ? currentDocumentPage.pageId : undefined);
+    const pageNumber = generatedPageId ? 1 : annotation.pageNumber ?? (currentDocumentPage?.kind === 'pdf' ? currentDocumentPage.pageNumber : currentPdfPage);
+    const anchoredSelection = selectionRect && (
+      generatedPageId
+        ? selectionRect.generatedPageId === generatedPageId
+        : !selectionRect.generatedPageId && (selectionRect.pageNumber ?? pageNumber) === pageNumber
+    )
+      ? selectionRect
+      : null;
+    const pageWidth = annotation.pageWidth ?? anchoredSelection?.pageWidth;
+    const pageHeight = annotation.pageHeight ?? anchoredSelection?.pageHeight;
+    const defaultWidth = pageWidth ? Math.min(280, Math.max(120, pageWidth * 0.38)) : 260;
+    const defaultHeight = Math.max(90, defaultWidth * 0.68);
+    const width = Math.max(48, annotation.width ?? anchoredSelection?.width ?? defaultWidth);
+    const height = Math.max(48, annotation.height ?? anchoredSelection?.height ?? defaultHeight);
+    const x = Math.max(0, Math.min(pageWidth ? Math.max(0, pageWidth - width) : Number.POSITIVE_INFINITY, annotation.x ?? anchoredSelection?.x ?? 42));
+    const y = Math.max(0, Math.min(pageHeight ? Math.max(0, pageHeight - height) : Number.POSITIVE_INFINITY, annotation.y ?? anchoredSelection?.y ?? 42));
+    const snapshot: WorkspaceEditSnapshot = {
+      inkStrokes: inkByDocument[studyDocumentId] ?? [],
+      textAnnotations: textAnnotationsByDocument[studyDocumentId] ?? [],
+      imageAnnotations: imageAnnotationsByDocument[studyDocumentId] ?? [],
+      selectionRect: selectionRect ?? null,
+      generatedPages: generatedPagesByDocument[studyDocumentId],
+      activePage: activePageByDocument[studyDocumentId],
+    };
+    setInkHistoryByDocument((current) => ({
+      ...current,
+      [studyDocumentId]: [...(current[studyDocumentId] ?? []).slice(-39), snapshot],
+    }));
+    setRedoInkHistoryByDocument((current) => ({
+      ...current,
+      [studyDocumentId]: [],
+    }));
+    setRedoInkByDocument((current) => ({
+      ...current,
+      [studyDocumentId]: [],
+    }));
+    setImageAnnotationsByDocument((current) => ({
+      ...current,
+      [studyDocumentId]: [
+        ...(current[studyDocumentId] ?? []),
+        {
+          id: annotation.id ?? `image-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          uri: annotation.uri,
+          assetId: annotation.assetId,
+          pageNumber,
+          generatedPageId,
+          x,
+          y,
+          width,
+          height,
+          rotation: annotation.rotation ?? 0,
+          opacity: annotation.opacity ?? 1,
+          pageWidth,
+          pageHeight,
+          zIndex: annotation.zIndex,
+        },
+      ],
+    }));
+    if (anchoredSelection) {
+      setSelectionByDocument((current) => ({ ...current, [studyDocumentId]: null }));
+      setSelectionPreviewByDocument((current) => ({ ...current, [studyDocumentId]: null }));
+    }
+    if (!generatedPageId) markBackendPageDirty(studyDocumentId, pageNumber);
+    setWorkspaceFeedback('현재 페이지에 이미지를 배치했습니다.');
+  }, [
+    activePageByDocument,
+    currentDocumentPage,
+    currentPdfPage,
+    generatedPagesByDocument,
+    imageAnnotationsByDocument,
+    inkByDocument,
+    markBackendPageDirty,
+    selectionRect,
+    setWorkspaceFeedback,
+    studyDocumentId,
+    textAnnotationsByDocument,
+  ]);
+
   const {
     linkCaptureAssetToPage,
     linkCaptureAssetToCurrentPage,
@@ -879,11 +975,14 @@ export function useStudyWorkspace(props: {
     redoInk,
     commitInkStroke,
     removeInkStroke,
+    replaceInkStrokes,
     addTextAnnotation,
+    addImageAnnotation,
     updateTextAnnotation,
     removeTextAnnotation,
     moveTextAnnotation,
     resizeTextAnnotation,
+    changeTextAnnotationFontSize,
     eraseInkAtPoint,
     deleteSelectedStrokes,
     changeSelectedStrokesColor,
@@ -900,6 +999,7 @@ export function useStudyWorkspace(props: {
     selectionByDocument,
     inkByDocument,
     textAnnotationsByDocument,
+    imageAnnotationsByDocument,
     generatedPagesByDocument,
     activePageByDocument,
     inkHistoryByDocument,
@@ -909,6 +1009,7 @@ export function useStudyWorkspace(props: {
     setInkHistoryByDocument,
     setRedoInkHistoryByDocument,
     setTextAnnotationsByDocument,
+    setImageAnnotationsByDocument,
     setGeneratedPagesByDocument,
     setActivePageByDocument,
     setSelectionByDocument,
@@ -995,8 +1096,10 @@ export function useStudyWorkspace(props: {
     brushSettings,
     inkStrokes,
     textAnnotations,
+    imageAnnotations,
     inkByDocument,
     textAnnotationsByDocument,
+    imageAnnotationsByDocument,
     aiPanelOpen,
     aiPanelMode,
     selectionRect,
@@ -1099,12 +1202,15 @@ export function useStudyWorkspace(props: {
     resetToSubjectList,
     backToNoteList,
     addTextAnnotation,
+    addImageAnnotation,
     updateTextAnnotation,
     removeTextAnnotation,
     moveTextAnnotation,
     resizeTextAnnotation,
+    changeTextAnnotationFontSize,
     eraseInkAtPoint,
     removeInkStroke,
+    replaceInkStrokes,
     deleteSelectedStrokes,
     changeSelectedStrokesColor,
     duplicateSelectedStrokes,

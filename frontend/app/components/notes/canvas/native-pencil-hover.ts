@@ -31,8 +31,8 @@ export function getPencilHoverPoint(event: unknown): PencilHoverPoint | null {
 
 export function getPencilEraserRadius(penWidth: number, mode: InkEraserMode = 'partial') {
   return mode === 'stroke'
-    ? Math.max(18, penWidth * 3.2)
-    : Math.max(9, penWidth * 2.1);
+    ? Math.max(14, penWidth * 1.35)
+    : Math.max(10, penWidth * 1.35);
 }
 
 export function getPencilHoverSize(tool: InkTool, penWidth: number, eraserMode: InkEraserMode = 'partial') {

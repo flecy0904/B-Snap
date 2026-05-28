@@ -35,6 +35,16 @@ IMPORTANT_NOTE_KEYWORDS = (
     "주의",
 )
 PAGE_REFERENCE_PATTERN = re.compile(r"(\d{1,3})\s*(?:페이지|쪽|p(?:age)?\.?)", re.IGNORECASE)
+COMPUTER_NETWORK_DEMO_FOLDER_KEYS = {"컴퓨터네트워크", "computernetwork", "computernetworks"}
+COMPUTER_NETWORK_DEMO_DOCUMENT_KEYS = {
+    "computernetworksch1wide",
+    "lecturenotechapter1computernetworksandtheinternetwide",
+}
+COMPUTER_NETWORK_DEMO_DOCUMENT_MARKERS = (
+    "computernetworksch1",
+    "computernetworkschapter1",
+    "computernetworksandtheinternet",
+)
 
 
 @dataclass
@@ -114,12 +124,25 @@ def _normalize_match_key(value: str | None) -> str:
     return re.sub(r"[^0-9a-z가-힣]+", "", text)
 
 
+def _is_computer_network_demo_document(document_key: str, folder_key: str) -> bool:
+    if not document_key:
+        return False
+    if document_key in COMPUTER_NETWORK_DEMO_DOCUMENT_KEYS:
+        return True
+    if folder_key not in COMPUTER_NETWORK_DEMO_FOLDER_KEYS:
+        return False
+    return any(marker in document_key for marker in COMPUTER_NETWORK_DEMO_DOCUMENT_MARKERS)
+
+
 def _is_same_class_document(row: dict[str, Any], current_document_key: str, current_folder_key: str) -> bool:
     document_key = _normalize_match_key(row.get("title"))
     folder_key = _normalize_match_key(row.get("folder_name"))
     if document_key and document_key == current_document_key:
         return True
-    return bool(current_folder_key and folder_key == current_folder_key and document_key == current_document_key)
+    return (
+        _is_computer_network_demo_document(current_document_key, current_folder_key)
+        and _is_computer_network_demo_document(document_key, folder_key)
+    )
 
 
 def _count_keyword_hits(text: str) -> int:
@@ -281,24 +304,49 @@ def get_class_insights(
     current_document_key = _normalize_match_key(current_note["title"])
     current_folder_key = _normalize_match_key(current_note["folder_name"])
 
-    candidate_rows = fetch_all(
-        connection,
-        """
-        SELECT n.id AS note_id,
-               n.user_id,
-               n.title,
-               f.name AS folder_name,
-               p.page_number,
-               p.content
-        FROM notes n
-        JOIN folders f ON f.id = n.folder_id
-        JOIN note_pages p ON p.note_id = n.id
-        WHERE lower(n.title) = lower(%s)
-           OR lower(f.name) = lower(%s)
-        ORDER BY p.page_number ASC, p.id ASC
-        """,
-        (current_note["title"], current_note["folder_name"]),
-    )
+    if _is_computer_network_demo_document(current_document_key, current_folder_key):
+        candidate_rows = fetch_all(
+            connection,
+            """
+            SELECT n.id AS note_id,
+                   n.user_id,
+                   n.title,
+                   f.name AS folder_name,
+                   p.page_number,
+                   p.content
+            FROM notes n
+            JOIN folders f ON f.id = n.folder_id
+            JOIN note_pages p ON p.note_id = n.id
+            WHERE lower(n.title) = lower(%s)
+               OR lower(f.name) = lower(%s)
+               OR n.title ILIKE '%%computer%%network%%'
+               OR n.title ILIKE '%%lecture note%%chapter 1%%'
+               OR n.title ILIKE '%%computer-networks-ch1%%'
+               OR f.name ILIKE '%%컴퓨터네트워크%%'
+               OR f.name ILIKE '%%computer%%network%%'
+            ORDER BY p.page_number ASC, p.id ASC
+            """,
+            (current_note["title"], current_note["folder_name"]),
+        )
+    else:
+        candidate_rows = fetch_all(
+            connection,
+            """
+            SELECT n.id AS note_id,
+                   n.user_id,
+                   n.title,
+                   f.name AS folder_name,
+                   p.page_number,
+                   p.content
+            FROM notes n
+            JOIN folders f ON f.id = n.folder_id
+            JOIN note_pages p ON p.note_id = n.id
+            WHERE lower(n.title) = lower(%s)
+               OR lower(f.name) = lower(%s)
+            ORDER BY p.page_number ASC, p.id ASC
+            """,
+            (current_note["title"], current_note["folder_name"]),
+        )
 
     accumulators: dict[int, PageInsightAccumulator] = defaultdict(lambda: PageInsightAccumulator(page_number=0))
     matched_note_ids: set[int] = set()
