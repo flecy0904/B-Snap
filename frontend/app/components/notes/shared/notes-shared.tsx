@@ -46,10 +46,10 @@ export const StaticStrokes = memo(({ strokes }: { strokes: InkStroke[] }) => {
 export function buildAiResponse(question: string, selectionRect: SelectionRect | null, desktop: boolean) {
   const normalizedQuestion = question.trim();
   const aiResponse = !selectionRect
-    ? '먼저 선택 모드로 문서 영역을 드래그해 주세요.'
+    ? '먼저 질문할 부분을 드래그해 주세요.'
     : desktop
-      ? '메시지를 보내면 선택 영역이나 현재 페이지를 바탕으로 백엔드 AI가 답변합니다.'
-      : '응답 생성을 누르면 백엔드 AI가 답변합니다.';
+      ? 'AI에게 질문하면 궁금한 부분이나 현재 페이지를 보고 답변해줄거예요!'
+      : '질문을 보내면 AI가 답변할거에요.';
 
   const aiResponseSections = aiResponse.includes('\n\n')
     ? aiResponse.split('\n\n').map((section) => {

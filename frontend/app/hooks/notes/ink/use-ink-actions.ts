@@ -358,7 +358,7 @@ export function useInkActions(params: {
       }));
       applySnapshot(previousSnapshot);
       markCurrentPageDirty();
-      params.setWorkspaceFeedback('이전 편집 상태로 되돌렸습니다.');
+      params.setWorkspaceFeedback('이전으로 되돌릴게요.');
       return;
     }
 
@@ -405,7 +405,7 @@ export function useInkActions(params: {
       }));
       applySnapshot(nextSnapshot);
       markCurrentPageDirty();
-      params.setWorkspaceFeedback('되돌린 편집 상태를 다시 적용했습니다.');
+      params.setWorkspaceFeedback('이전 상태를 적용했어요.');
       return;
     }
 
@@ -501,7 +501,7 @@ export function useInkActions(params: {
     }
     if (!generatedPageId) markPageDirty(pageNumber);
     params.setInkTool('view');
-    params.setWorkspaceFeedback(anchoredSelection ? '선택 영역 메모를 추가했습니다.' : '텍스트 메모를 추가했습니다.');
+    params.setWorkspaceFeedback(anchoredSelection ? '선택하신 부분을 메모로 추가했어요.' : '텍스트 메모를 추가했어요.');
   };
 
   const updateTextAnnotation = (annotationId: string, text: string) => {
@@ -640,7 +640,7 @@ export function useInkActions(params: {
         [params.studyDocumentId!]: (current[params.studyDocumentId!] ?? []).filter((annotation) => !selectedTextAnnotationIds.has(annotation.id)),
       }));
       markCurrentPageDirty();
-      params.setWorkspaceFeedback(`선택한 객체 ${selectedStrokeIds.size + selectedTextAnnotationIds.size}개를 지웠습니다.`);
+      params.setWorkspaceFeedback(`선택하신 ${selectedStrokeIds.size + selectedTextAnnotationIds.size}개를 삭제했어요.`);
     }
     clearCurrentSelection();
     params.setInkTool('view');
@@ -667,7 +667,7 @@ export function useInkActions(params: {
         [params.studyDocumentId!]: nextStrokes,
       }));
       markCurrentPageDirty();
-      params.setWorkspaceFeedback(`선택한 ${selectedStrokeIds.size}개의 필기 색상을 변경했습니다.`);
+      params.setWorkspaceFeedback('필기 색상을 변경했어요.');
     }
     clearCurrentSelection();
     params.setInkTool('view');
@@ -741,7 +741,7 @@ export function useInkActions(params: {
         : null,
     }));
     markCurrentPageDirty();
-    params.setWorkspaceFeedback(`선택한 객체 ${selectedStrokeIds.size + selectedTextAnnotationIds.size}개를 복제했습니다.`);
+    params.setWorkspaceFeedback(`선택하신 ${selectedStrokeIds.size + selectedTextAnnotationIds.size}개를 복제했어요.`);
     params.setInkTool('select');
   };
 
@@ -809,7 +809,7 @@ export function useInkActions(params: {
       },
     }));
     markCurrentPageDirty();
-    params.setWorkspaceFeedback('선택한 필기 크기를 조절했습니다.');
+    params.setWorkspaceFeedback('필기 크기를 조절했어요.');
     params.setInkTool('select');
   };
 
@@ -884,7 +884,7 @@ export function useInkActions(params: {
       [params.studyDocumentId!]: nextRect,
     }));
     markCurrentPageDirty();
-    params.setWorkspaceFeedback('선택한 필기 크기를 조절했습니다.');
+    params.setWorkspaceFeedback('필기 크기를 조절했어요.');
     params.setInkTool('select');
   };
 
@@ -948,7 +948,7 @@ export function useInkActions(params: {
       },
     }));
     markCurrentPageDirty();
-    params.setWorkspaceFeedback('선택한 객체를 이동했습니다.');
+    params.setWorkspaceFeedback('선택하신 것을 이동했어요.');
     params.setInkTool('select');
   };
 

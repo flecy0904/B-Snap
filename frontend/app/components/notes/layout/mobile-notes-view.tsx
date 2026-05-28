@@ -239,7 +239,7 @@ export function MobileNotesView(props: {
 
   const normalizedQuestion = props.aiAnswer?.question ?? props.aiQuestion.trim();
   const aiResponseSections = props.aiAnswer?.sections ?? null;
-  const aiResponse = props.aiAnswer?.response ?? (props.selectionRect ? '응답 생성을 누르면 선택 영역 기준으로 AI 답변을 요청합니다.' : '먼저 선택 모드로 문서 영역을 드래그해 주세요.');
+  const aiResponse = props.aiAnswer?.response ?? (props.selectionRect ? '질문을 보내면 선택한 부분을 AI가 보고 답변할거에요.' : '먼저 질문할 부분을 드래그해 주세요.');
   const activeDeletedNotes = React.useMemo(
     () => props.subject ? props.deletedNotes.filter((note) => note.subjectId === props.subject!.id) : props.deletedNotes,
     [props.deletedNotes, props.subject],
@@ -278,6 +278,9 @@ export function MobileNotesView(props: {
     () => props.subject ? getSubjectPhotoAssets(props.subject.id) : [],
     [getSubjectPhotoAssets, props.subject],
   );
+  const photoGalleryTitle = currentSubjectPhotoAssets.length === 1
+    ? currentSubjectPhotoAssets[0].title
+    : `${props.subject?.name ?? 'Photo'} 사진 모음`;
   const previewAsset = React.useMemo(
     () => currentSubjectPhotoAssets.find((asset) => asset.id === previewAssetId) ?? null,
     [currentSubjectPhotoAssets, previewAssetId],
@@ -862,7 +865,7 @@ export function MobileNotesView(props: {
               {props.aiChatReadOnly ? (
                 <View style={props.styles.aiReadOnlyNotice}>
                   <MaterialCommunityIcons name="lock-outline" size={14} color="#5B6472" />
-                  <Text style={props.styles.aiReadOnlyNoticeText}>보고 있는 노트와 연결된 대화방이 아니라서 읽기만 가능합니다.</Text>
+                  <Text style={props.styles.aiReadOnlyNoticeText}>현재 대화는 다른 노트의 대화라서 읽기만 가능해요.</Text>
                 </View>
               ) : null}
               <View style={props.styles.aiInputShell}>
@@ -1050,7 +1053,7 @@ export function MobileNotesView(props: {
           <View style={[props.styles.subjectHeroDot, { backgroundColor: currentSubject.color }]} />
           <View style={props.styles.fill}>
             <Text style={[props.styles.subjectHeroMeta, { color: currentSubject.textColor }]}>
-              {props.noteMode === 'photo' ? latestPhoto ? `최근 사진 · ${formatCaptureDate(latestPhoto.createdAt)}` : '촬영하거나 가져온 원본 사진이 아직 없습니다' : props.studyDocuments[0] ? `최근 문서 · ${props.studyDocuments[0].title}` : '아직 등록된 문서가 없습니다'}
+              {props.noteMode === 'photo' ? latestPhoto ? `최근 사진 · ${formatCaptureDate(latestPhoto.createdAt)}` : '촬영하거나 가져온 사진이 아직 없습니다' : props.studyDocuments[0] ? `최근 문서 · ${props.studyDocuments[0].title}` : '아직 등록한 문서가 없어요.'}
             </Text>
           </View>
         </View>
@@ -1060,8 +1063,8 @@ export function MobileNotesView(props: {
                 <View style={props.styles.photoGalleryPanel}>
                   <View style={props.styles.photoGalleryHeader}>
                     <View>
-                      <Text style={props.styles.photoGalleryTitle}>{currentSubject.name} 원본 사진</Text>
-                      <Text style={props.styles.photoGalleryMeta}>{currentSubjectPhotoAssets.length}장 · Photo 라이브러리</Text>
+                      <Text style={props.styles.photoGalleryTitle}>{photoGalleryTitle}</Text>
+                      <Text style={props.styles.photoGalleryMeta}>{currentSubjectPhotoAssets.length}장 · 전처리된 사진</Text>
                     </View>
                   </View>
                   <View style={props.styles.photoGalleryGrid}>
@@ -1086,6 +1089,7 @@ export function MobileNotesView(props: {
                             </View>
                           </View>
                           <View style={props.styles.photoGalleryCardBody}>
+                            <Text style={props.styles.photoGalleryCardTitle} numberOfLines={2}>{asset.title}</Text>
                             <Text style={props.styles.photoGalleryCardMeta} numberOfLines={1}>{formatCaptureDate(asset.createdAt)}</Text>
                             <View style={props.styles.photoGalleryPlacementRow}>
                               <MaterialCommunityIcons name={linked ? 'file-link-outline' : 'link-off'} size={14} color={linked ? '#4F68D2' : '#9AA3B2'} />
@@ -1102,8 +1106,7 @@ export function MobileNotesView(props: {
               )
             : (
                 <View style={[props.styles.emptyCard, { borderColor: currentSubject.color, backgroundColor: currentSubject.bgColor }]}>
-                  <Text style={[props.styles.emptyTitle, { color: currentSubject.textColor }]}>저장된 사진이 없습니다</Text>
-                  <Text style={[props.styles.emptyBody, { color: currentSubject.textColor }]}>카메라나 사진첩에서 가져온 원본 사진은 이 과목 Photo 라이브러리에 모입니다.</Text>
+                  <Text style={[props.styles.emptyTitle, { color: currentSubject.textColor }]}>저장된 이미지가 없습니다.</Text>
                 </View>
               )
           : props.studyDocuments.length
@@ -1134,8 +1137,7 @@ export function MobileNotesView(props: {
               })
             : (
                 <View style={[props.styles.emptyCard, { borderColor: currentSubject.color, backgroundColor: currentSubject.bgColor }]}>
-                  <Text style={[props.styles.emptyTitle, { color: currentSubject.textColor }]}>아직 등록된 문서가 없습니다</Text>
-                  <Text style={[props.styles.emptyBody, { color: currentSubject.textColor }]}>PDF 업로드와 빈 노트는 모바일에서도 같은 방식으로 열 수 있습니다.</Text>
+                  <Text style={[props.styles.emptyTitle, { color: currentSubject.textColor }]}>아직 등록한 문서가 없어요.</Text>
                 </View>
               )}
         <Modal
@@ -1150,7 +1152,7 @@ export function MobileNotesView(props: {
               <View style={props.styles.photoViewerCard}>
                 <View style={props.styles.photoViewerHeader}>
                   <View style={props.styles.fill}>
-                    <Text style={props.styles.photoViewerTitle} numberOfLines={1}>{previewAsset.title || '원본 사진'}</Text>
+                    <Text style={props.styles.photoViewerTitle} numberOfLines={1}>{previewAsset.title || '크롭 사진'}</Text>
                     <View style={props.styles.photoViewerMetaRow}>
                       <View style={props.styles.photoViewerMetaPill}>
                         <MaterialCommunityIcons name="calendar-clock-outline" size={13} color="#7E8798" />
@@ -1235,7 +1237,7 @@ export function MobileNotesView(props: {
                       }}
                     >
                       <MaterialCommunityIcons name="star-four-points" size={16} color="#4F68D2" />
-                      <Text style={props.styles.photoViewerActionText}>AI에게 질문</Text>
+                      <Text style={props.styles.photoViewerActionText}>AI에게 질문하기</Text>
                     </Pressable>
                   ) : null}
                   {previewPrimaryReference ? (

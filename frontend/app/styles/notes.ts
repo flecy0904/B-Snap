@@ -35,6 +35,7 @@ export const notesStyles = {
   photoGalleryStatusBadgeText: { fontSize: 11, lineHeight: 14, fontWeight: '900' as const, color: '#7C8798' },
   photoGalleryStatusBadgeTextLinked: { color: '#4F68D2' },
   photoGalleryCardBody: { paddingHorizontal: 13, paddingVertical: 12 },
+  photoGalleryCardTitle: { fontSize: 14, lineHeight: 19, color: '#263144', fontWeight: '900' as const, marginBottom: 5 },
   photoGalleryCardMeta: { fontSize: 12, lineHeight: 16, color: '#7E8898', fontWeight: '900' as const, marginBottom: 7 },
   photoGalleryPlacementRow: { minHeight: 20, flexDirection: 'row' as const, alignItems: 'center' as const, gap: 5 },
   photoGalleryPlacementText: { flex: 1, minWidth: 0, fontSize: 12, lineHeight: 16, color: '#9AA3B2', fontWeight: '900' as const },

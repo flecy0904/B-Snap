@@ -98,6 +98,9 @@ export function NotesBrowser(props: NotesBrowserProps) {
     () => props.selectedSubject ? getSubjectPhotoAssets(props.selectedSubject.id) : [],
     [getSubjectPhotoAssets, props.selectedSubject],
   );
+  const photoGalleryTitle = selectedPhotoAssets.length === 1
+    ? selectedPhotoAssets[0].title
+    : `${props.selectedSubject?.name ?? 'Photo'} 사진 모음`;
   const previewAsset = React.useMemo(
     () => selectedPhotoAssets.find((asset) => asset.id === previewAssetId) ?? null,
     [previewAssetId, selectedPhotoAssets],
@@ -209,8 +212,8 @@ export function NotesBrowser(props: NotesBrowserProps) {
               <View style={props.styles.photoGalleryPanel}>
                 <View style={props.styles.photoGalleryHeader}>
                   <View>
-                    <Text style={props.styles.photoGalleryTitle}>{props.selectedSubject?.name ?? 'Photo'} 원본 사진</Text>
-                    <Text style={props.styles.photoGalleryMeta}>{selectedPhotoAssets.length}장 · 촬영/가져오기 원본 저장</Text>
+                    <Text style={props.styles.photoGalleryTitle}>{photoGalleryTitle}</Text>
+                    <Text style={props.styles.photoGalleryMeta}>{selectedPhotoAssets.length}장 · 전처리된 사진</Text>
                   </View>
                 </View>
                 <View style={props.styles.photoGalleryGrid}>
@@ -235,6 +238,7 @@ export function NotesBrowser(props: NotesBrowserProps) {
                           </View>
                         </View>
                         <View style={props.styles.photoGalleryCardBody}>
+                          <Text style={props.styles.photoGalleryCardTitle} numberOfLines={2}>{asset.title}</Text>
                           <Text style={props.styles.photoGalleryCardMeta} numberOfLines={1}>{formatCaptureDate(asset.createdAt)}</Text>
                           <View style={props.styles.photoGalleryPlacementRow}>
                             <MaterialCommunityIcons name={linked ? 'file-link-outline' : 'link-off'} size={14} color={linked ? '#4F68D2' : '#9AA3B2'} />
@@ -250,8 +254,7 @@ export function NotesBrowser(props: NotesBrowserProps) {
               </View>
             ) : (
               <View style={props.styles.emptyCard}>
-                <Text style={props.styles.emptyTitle}>저장된 사진이 없습니다</Text>
-                <Text style={props.styles.emptyBody}>카메라나 사진첩에서 가져온 원본 사진은 이 과목 Photo 라이브러리에 모입니다. 필기 중 페이지에 연결해도 여기에는 계속 남아 있어요.</Text>
+                <Text style={props.styles.emptyTitle}>저장된 이미지가 없습니다.</Text>
               </View>
             )
           ) : (
@@ -292,7 +295,7 @@ export function NotesBrowser(props: NotesBrowserProps) {
                     </Pressable>
                   </Pressable>
                 );
-              }) : <View style={props.styles.emptyCard}><Text style={props.styles.emptyTitle}>문서가 없습니다</Text></View>}
+              }) : <View style={props.styles.emptyCard}><Text style={props.styles.emptyTitle}>문서가 없어요.</Text></View>}
             </View>
           )}
         </View>
@@ -309,7 +312,7 @@ export function NotesBrowser(props: NotesBrowserProps) {
             <View style={props.styles.photoViewerCard}>
               <View style={props.styles.photoViewerHeader}>
                 <View style={props.styles.fill}>
-                  <Text style={props.styles.photoViewerTitle} numberOfLines={1}>{previewAsset.title || '원본 사진'}</Text>
+                  <Text style={props.styles.photoViewerTitle} numberOfLines={1}>{previewAsset.title || '크롭 사진'}</Text>
                   <View style={props.styles.photoViewerMetaRow}>
                     <View style={props.styles.photoViewerMetaPill}>
                       <MaterialCommunityIcons name="calendar-clock-outline" size={13} color="#7E8798" />
@@ -394,7 +397,7 @@ export function NotesBrowser(props: NotesBrowserProps) {
                     }}
                   >
                     <MaterialCommunityIcons name="star-four-points" size={16} color="#4F68D2" />
-                    <Text style={props.styles.photoViewerActionText}>AI에게 질문</Text>
+                    <Text style={props.styles.photoViewerActionText}>AI에게 질문하기</Text>
                   </Pressable>
                 ) : null}
                 {previewPrimaryReference ? (

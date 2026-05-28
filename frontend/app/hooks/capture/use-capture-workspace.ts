@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Alert } from 'react-native';
-import * as DocumentPicker from 'expo-document-picker';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import { subjects as fallbackSubjects } from '../../app-defaults';
@@ -28,6 +27,8 @@ function applyUploadAnalysis(asset: CaptureAsset, upload: UploadResult, options?
   }
   if (!upload.analysis) return asset;
   asset.analysisStatus = upload.analysis.status === 'failed' ? 'failed' : upload.analysis.status === 'pending' ? 'pending' : 'ready';
+  const generatedTitle = cleanAiDisplayText(upload.analysis.title);
+  if (generatedTitle) asset.title = generatedTitle.slice(0, 40);
   asset.analysisSummary = cleanAiDisplayText(upload.analysis.summary ?? asset.summary);
   asset.analysisKeywords = upload.analysis.keywords?.filter(Boolean) ?? asset.analysisKeywords;
   return asset;
@@ -88,8 +89,8 @@ export function useCaptureWorkspace(props: {
   const syncBridge = useSyncBridge();
   const syncStatus = useSyncBridgeStatus();
   const [recentUploads, setRecentUploads] = useState<CaptureAsset[]>([]);
-  const [pendingAction, setPendingAction] = useState<'camera' | 'library' | 'pdf' | null>(null);
-  const [lastFailedAction, setLastFailedAction] = useState<'camera' | 'library' | 'pdf' | null>(null);
+  const [pendingAction, setPendingAction] = useState<'camera' | 'library' | null>(null);
+  const [lastFailedAction, setLastFailedAction] = useState<'camera' | 'library' | null>(null);
   const [captureFeedback, setCaptureFeedback] = useState<string | null>(null);
   const [captureError, setCaptureError] = useState<string | null>(null);
   const subjectOptions = props.subjects?.length ? props.subjects : fallbackSubjects;
@@ -111,7 +112,7 @@ export function useCaptureWorkspace(props: {
     if (localOnly) {
       return `실시간 업로드 서버 없이 이 기기에서만 ${assetLabel}를 저장했습니다.`;
     }
-    return `${assetLabel}를 업로드했습니다.`;
+    return `${assetLabel}를 업로드했어요.`;
   };
 
   const pushAsset = async (asset: CaptureAsset) => {
@@ -129,7 +130,7 @@ export function useCaptureWorkspace(props: {
       await saveStudyWorkspaceState(state);
 
     } catch {
-      setCaptureError('실시간 업로드 서버에 연결하지 못했습니다. backend가 켜져 있는지 확인해주세요.');
+      setCaptureError('서버에 연결하지 못했어요.');
     }
   };
 
@@ -153,7 +154,7 @@ export function useCaptureWorkspace(props: {
       });
 
       if (result.canceled || !result.assets.length) {
-        setCaptureFeedback('촬영을 취소했습니다.');
+        setCaptureFeedback('촬영을 취소 했어요.');
         setPendingAction(null);
         return;
       }
@@ -177,7 +178,7 @@ export function useCaptureWorkspace(props: {
       }
       const fallbackChoice = await resolvePreprocessingFallbackChoice(backendUpload);
       if (fallbackChoice === 'cancel') {
-        setCaptureFeedback('촬영을 취소했습니다.');
+        setCaptureFeedback('촬영을 취소 했어요.');
         return;
       }
       const newAsset = createCaptureAsset({
@@ -223,7 +224,7 @@ export function useCaptureWorkspace(props: {
       });
 
       if (result.canceled || !result.assets.length) {
-        setCaptureFeedback('사진 선택을 취소했습니다.');
+        setCaptureFeedback('사진 선택을 취소 했어요.');
         setPendingAction(null);
         return;
       }
@@ -247,7 +248,7 @@ export function useCaptureWorkspace(props: {
       }
       const fallbackChoice = await resolvePreprocessingFallbackChoice(backendUpload);
       if (fallbackChoice === 'cancel') {
-        setCaptureFeedback('이미지 저장을 취소했습니다.');
+        setCaptureFeedback('이미지 저장을 취소 할게요.');
         return;
       }
       const newAsset = createCaptureAsset({
@@ -272,63 +273,6 @@ export function useCaptureWorkspace(props: {
     }
   };
 
-  const pickPdfDocument = async () => {
-    if (!subject || pendingAction) return;
-    setCaptureFeedback(null);
-    setCaptureError(null);
-    setLastFailedAction(null);
-    setPendingAction('pdf');
-    try {
-      const result = await DocumentPicker.getDocumentAsync({
-        type: 'application/pdf',
-        multiple: false,
-        copyToCacheDirectory: true,
-      });
-
-      if (result.canceled || !result.assets.length) {
-        setCaptureFeedback('PDF 선택을 취소했습니다.');
-        setPendingAction(null);
-        return;
-      }
-
-      const picked = result.assets[0];
-      const localFileUri = await persistPickedFileUri({
-        uri: picked.uri,
-        fileName: picked.name,
-        mimeType: picked.mimeType,
-        fallbackExtension: 'pdf',
-      });
-      let previewUri = picked.uri;
-      let backendUpload: UploadResult | null = null;
-      if (isBackendApiEnabled()) {
-        backendUpload = await uploadBackendFile({
-          uri: picked.uri,
-          name: picked.name || `${subject.name} 참고 PDF.pdf`,
-          type: picked.mimeType || 'application/pdf',
-        });
-        previewUri = backendUpload.url;
-      }
-      const newAsset = createCaptureAsset({
-        subjectId: subject.id,
-        subjectName: subject.name,
-        type: 'pdf',
-        source: 'document',
-        fileName: picked.name || `${subject.name} 참고 PDF`,
-      });
-      
-      newAsset.fileUrl = previewUri;
-      newAsset.previewImageKey = localFileUri ?? newAsset.previewImageKey;
-      if (backendUpload) applyUploadAnalysis(newAsset, backendUpload);
-      
-      await pushAsset(newAsset);
-    } catch (error) {
-      setLastFailedAction('pdf');
-      setCaptureError(getCaptureErrorMessage(error, 'PDF를 가져오지 못했습니다.'));
-    } finally {
-      setPendingAction(null);
-    }
-  };
-
   const retryLastFailedAction = async () => {
     if (!lastFailedAction || pendingAction) return;
     if (lastFailedAction === 'camera') {
@@ -337,9 +281,7 @@ export function useCaptureWorkspace(props: {
     }
     if (lastFailedAction === 'library') {
       await pickImageFromLibrary();
-      return;
     }
-    await pickPdfDocument();
   };
 
   return {
@@ -353,6 +295,5 @@ export function useCaptureWorkspace(props: {
     retryLastFailedAction,
     captureFromCamera,
     pickImageFromLibrary,
-    pickPdfDocument,
   };
 }

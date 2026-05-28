@@ -181,6 +181,7 @@ export type BackendUpload = {
   } | null;
   analysis?: {
     status?: 'pending' | 'ready' | 'failed' | string;
+    title?: string | null;
     summary?: string | null;
     keywords?: string[] | null;
     confidence?: number | null;

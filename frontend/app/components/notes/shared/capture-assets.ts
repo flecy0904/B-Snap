@@ -48,7 +48,7 @@ export function getCaptureImageSource(asset: CaptureAsset) {
 }
 
 export function getCaptureOriginalImageSource(asset: CaptureAsset) {
-  return buildImageSource(getCaptureOriginalUri(asset), asset.previewImage);
+  return buildImageSource(getCapturePreviewUri(asset), asset.previewImage);
 }
 
 export function getPageCaptureReferenceImageSource(reference: PageCaptureReference) {

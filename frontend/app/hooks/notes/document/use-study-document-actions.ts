@@ -187,7 +187,7 @@ export function useStudyDocumentActions(params: StudyDocumentActionsParams) {
     }));
   };
 
-  const openCreatedStudyDocument = (document: StudyDocumentEntry, feedback: string) => {
+  const openCreatedStudyDocument = (document: StudyDocumentEntry, feedback?: string | null) => {
     params.setUserStudyDocuments((current) => [document, ...current]);
     params.onOpenNotesTab();
     params.setSubjectId(document.subjectId);
@@ -196,7 +196,7 @@ export function useStudyDocumentActions(params: StudyDocumentActionsParams) {
     params.setNoteWorkspaceMode('note');
     params.setInkTool('view');
     params.setAiPanelOpen(false);
-    params.setWorkspaceFeedback(feedback);
+    if (feedback) params.setWorkspaceFeedback(feedback);
     params.setCurrentPdfPageByDocument((current) => ({
       ...current,
       [document.id]: 1,
@@ -245,10 +245,10 @@ export function useStudyDocumentActions(params: StudyDocumentActionsParams) {
           preview: backendNote.summary ?? '새 빈 노트입니다.',
           backendSyncStatus: 'synced',
         };
-        openCreatedStudyDocument(document, '새 빈 노트를 백엔드에 저장했습니다.');
+        openCreatedStudyDocument(document, '새 노트를 만들었어요.');
         return;
       } catch {
-        params.setWorkspaceFeedback('백엔드 저장에 실패해 이 기기에만 빈 노트를 만들었습니다.');
+        params.setWorkspaceFeedback('서버 연결에 실패했어요. 이 기기에만 노트를 만들었어요.');
       }
     }
 
@@ -263,7 +263,7 @@ export function useStudyDocumentActions(params: StudyDocumentActionsParams) {
       backendSyncStatus: 'local',
     };
 
-    openCreatedStudyDocument(document, '새 빈 노트를 만들었습니다.');
+    openCreatedStudyDocument(document, '새 노트를 만들었어요.');
   };
 
   const requestDeleteStudyDocument = (id: number) => {
@@ -274,9 +274,7 @@ export function useStudyDocumentActions(params: StudyDocumentActionsParams) {
 
     confirmDeleteAction({
       title: 'Note 삭제',
-      message: isBackendDocument
-        ? `"${target.title}" Note 문서와 이 문서에 남긴 필기를 백엔드에서도 삭제할까요?`
-        : `"${target.title}" Note 문서와 이 문서에 남긴 필기를 삭제할까요?`,
+      message: `"${target.title}" 노트와 필기를 모두 삭제할까요?`,
       confirmText: '삭제',
       onConfirm: () => {
         if (isBackendDocument) {
@@ -285,17 +283,17 @@ export function useStudyDocumentActions(params: StudyDocumentActionsParams) {
               clearOpenDocumentState(id);
               params.setAllChatSessions((current) => current.filter((session) => session.note_id !== backendNoteId));
               closeCurrentDocumentIfNeeded(id);
-              params.setWorkspaceFeedback('Note 문서를 백엔드에서 삭제했습니다.');
+              params.setWorkspaceFeedback('노트를 서버에서 삭제했어요.');
             })
             .catch(() => {
-              params.setWorkspaceFeedback('백엔드 노트 삭제에 실패했습니다. 다시 시도해주세요.');
+              params.setWorkspaceFeedback('삭제 중 오류가 발생했어요. 다시 시도 할까요?');
             });
           return;
         }
 
         params.setDeletedStudyDocumentIds((current) => addUniqueId(current, id));
         closeCurrentDocumentIfNeeded(id);
-        params.setWorkspaceFeedback('Note 문서를 삭제했습니다.');
+        params.setWorkspaceFeedback('노트를 삭제했어요.');
       },
     });
   };
@@ -307,7 +305,7 @@ export function useStudyDocumentActions(params: StudyDocumentActionsParams) {
     params.setDeletedStudyDocumentIds((current) => removeId(current, id));
     params.setNoteWorkspaceMode('note');
     params.setSubjectId(target.subjectId);
-    params.setWorkspaceFeedback('Note 문서를 복구했습니다.');
+    params.setWorkspaceFeedback('노트를 복구했어요.');
   };
 
   const uploadPdfDocument = async () => {
@@ -322,14 +320,14 @@ export function useStudyDocumentActions(params: StudyDocumentActionsParams) {
       });
 
       if (result.canceled || !result.assets.length) {
-        params.setWorkspaceFeedback('PDF 업로드를 취소했습니다.');
+        params.setWorkspaceFeedback('PDF 업로드를 취소했어요.');
         return;
       }
 
       const picked = result.assets[0];
       const targetSubject = params.availableSubjects.find((value) => value.id === targetSubjectId);
       if (!targetSubject) return;
-      params.setWorkspaceFeedback('PDF를 이 기기에 저장하는 중입니다.');
+      params.setWorkspaceFeedback('PDF를 이 기기에 저장할게요.');
       const localPdfFileUri = await persistPickedPdfAsset(picked);
       const localPageCount = await readPdfPageCount(picked, localPdfFileUri);
       const localDocumentId = createLocalStudyDocumentId();
@@ -350,14 +348,14 @@ export function useStudyDocumentActions(params: StudyDocumentActionsParams) {
 
       openCreatedStudyDocument(
         localDocument,
-        isBackendApiEnabled() ? 'PDF를 열었습니다. 백엔드 동기화 중입니다.' : 'PDF 파일을 업로드했습니다.',
+        isBackendApiEnabled() ? null : 'PDF를 업로드했어요.',
       );
 
       if (isBackendApiEnabled()) {
         void params.syncPdfDocumentToBackend(localDocument, targetSubject);
       }
     } catch {
-      params.setWorkspaceFeedback('PDF 파일을 가져오지 못했습니다.');
+      params.setWorkspaceFeedback('PDF를 불러오지 못했어요.');
     }
   };
 

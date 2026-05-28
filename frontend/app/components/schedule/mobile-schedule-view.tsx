@@ -89,11 +89,11 @@ export function MobileScheduleView(props: MobileScheduleProps) {
       {props.addModalOpen ? (
         <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 100, justifyContent: 'center', alignItems: 'center' }}>
           <View style={{ width: '90%', maxHeight: '80%', backgroundColor: '#fff', borderRadius: 16, padding: 24, shadowColor: '#000', shadowOffset: { width: 0, height: 4 }, shadowOpacity: 0.15, shadowRadius: 12, elevation: 8 }}>
-            <Text style={{ fontSize: 18, fontWeight: '700', color: '#222', marginBottom: 16 }}>새 수업 추가</Text>
+            <Text style={{ fontSize: 18, fontWeight: '700', color: '#222', marginBottom: 16 }}>새 과목 추가</Text>
             
             <ScrollView showsVerticalScrollIndicator={false} style={{ marginBottom: 20 }}>
               <View style={{ marginBottom: 16 }}>
-                <Text style={{ fontSize: 13, fontWeight: '600', color: '#888', marginBottom: 8 }}>수업명</Text>
+                <Text style={{ fontSize: 13, fontWeight: '600', color: '#888', marginBottom: 8 }}>과목명</Text>
                 <TextInput 
                   style={{ backgroundColor: '#f5f6f8', borderRadius: 10, paddingHorizontal: 14, paddingVertical: 12, fontSize: 15, color: '#222' }} 
                   placeholder="예: 컴퓨터네트워크" 

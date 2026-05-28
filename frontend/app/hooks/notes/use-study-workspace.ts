@@ -125,7 +125,7 @@ export function useStudyWorkspace(props: {
         setAllChatSessions(sessions);
       })
       .catch((error) => {
-        setAiError(getAiBackendErrorMessage(error, 'AI 채팅 내역을 불러오지 못했습니다.'));
+        setAiError(getAiBackendErrorMessage(error, '서버에서 AI와의 대화 내역을 불러오지 못했어요. 네트워크 연결 상태를 확인 후 다시 시도해 주세요.'));
       });
   }, []);
 
@@ -425,7 +425,7 @@ export function useStudyWorkspace(props: {
         setDeletedStudyDocumentIds((current) => current.filter((id) => !backendDocumentIds.has(id)));
       } catch {
         if (mounted) {
-          setWorkspaceFeedback('백엔드 노트 목록을 불러오지 못했습니다.');
+          setWorkspaceFeedback('노트 목록을 불러오지 못했어요,.');
         }
       }
     };
@@ -486,7 +486,7 @@ export function useStudyWorkspace(props: {
         }
       } catch (error) {
         if (mounted) {
-          setAiError(getAiBackendErrorMessage(error, 'AI 채팅 내역을 불러오지 못했습니다.'));
+          setAiError(getAiBackendErrorMessage(error, '서버에서 AI와의 대화 내역을 불러오지 못했어요. 네트워크 연결 상태를 확인 후 다시 시도해 주세요.'));
         }
       }
     };
@@ -531,7 +531,7 @@ export function useStudyWorkspace(props: {
           setNoteId(null);
           setNoteDetailTab('original');
         }
-        setWorkspaceFeedback('Photo를 삭제했습니다.');
+        setWorkspaceFeedback('Photo를 삭제했어요.');
       },
     });
   };
@@ -599,13 +599,13 @@ export function useStudyWorkspace(props: {
     setDeletedNoteIds((current) => removeId(current, id));
     setNoteWorkspaceMode('photo');
     setSubjectId(target.subjectId);
-    setWorkspaceFeedback('Photo를 복구했습니다.');
+    setWorkspaceFeedback('Photo를 복구했어요.');
   };
 
   const renameStudyDocument = (id: number, title: string) => {
     const nextTitle = title.trim();
     if (!nextTitle) {
-      setWorkspaceFeedback('문서 제목을 입력해주세요.');
+      setWorkspaceFeedback('제목을 입력해주세요.');
       return false;
     }
 
@@ -625,10 +625,10 @@ export function useStudyWorkspace(props: {
             updatedAt: 'DB 저장됨',
             backendSyncStatus: 'synced',
           }));
-          setWorkspaceFeedback('문서 제목을 백엔드에 저장했습니다.');
+          setWorkspaceFeedback('문서를 저장했어요.');
         })
         .catch(() => {
-          setWorkspaceFeedback('노트 제목 저장에 실패했습니다. backend 연결을 확인해주세요.');
+          setWorkspaceFeedback('제목 설정 중 오류가 발생했어요.');
         });
       return true;
     }
@@ -638,7 +638,7 @@ export function useStudyWorkspace(props: {
       title: nextTitle,
       updatedAt: '방금 전',
     }));
-    setWorkspaceFeedback('문서 제목을 수정했습니다.');
+    setWorkspaceFeedback('노트 제목을 수정했어요.');
     return true;
   };
 
@@ -755,15 +755,15 @@ export function useStudyWorkspace(props: {
   const copySelectionImage = useCallback(() => {
     Keyboard.dismiss();
     if (!studyDocumentId || !selectionRect) {
-      setWorkspaceFeedback('복사할 선택 영역을 먼저 선택해 주세요.');
+      setWorkspaceFeedback('복사할 영역을 먼저 선택해 주세요.');
       return;
     }
     if (!selectionPreviewUri) {
-      setWorkspaceFeedback('선택 영역 미리보기를 준비 중입니다. 잠시 후 다시 복사해 주세요.');
+      setWorkspaceFeedback('선택한 영역을 준비 중입니다. 잠시 후 다시 시도해 주세요.');
       return;
     }
     setCopiedSelectionImageByDocument((current) => ({ ...current, [studyDocumentId]: selectionPreviewUri }));
-    setWorkspaceFeedback('선택 영역을 복사했습니다. Canvas 입력창에 붙여넣어 첨부할 수 있습니다.');
+    setWorkspaceFeedback('선택한 영역을 복사했어요.');
   }, [selectionPreviewUri, selectionRect, studyDocumentId]);
 
   const {
@@ -847,7 +847,7 @@ export function useStudyWorkspace(props: {
 
   const askAiAboutSelection = () => {
     if (!selectionRect && !selectionPreviewUri) {
-      setWorkspaceFeedback('AI에게 물어볼 영역을 먼저 선택해 주세요.');
+      setWorkspaceFeedback('AI에게 물어볼 부분을 선택해 주세요.');
       return;
     }
 
@@ -858,8 +858,8 @@ export function useStudyWorkspace(props: {
     setAppRightSidebarPanel(null);
     setAiQuestion((current) => current.trim() || '이 선택 영역을 설명해줘');
     setWorkspaceFeedback(selectionPreviewUri
-      ? '선택 영역을 AI 질문창에 첨부했습니다.'
-      : '선택 영역 미리보기를 준비 중입니다. 잠시 후 질문을 보내세요.');
+      ? '선택하신 부분을 질문란에 첨부했어요.'
+      : '선택한 부분을 준비 중이에요. 잠시 후 다시 시도해 주세요.');
   };
 
   const {
@@ -1108,7 +1108,7 @@ export function useStudyWorkspace(props: {
     setNoteWorkspaceMode(asset.type === 'image' ? 'photo' : 'note');
     setNoteId(null);
     setStudyDocumentId(null);
-    setWorkspaceFeedback(asset.type === 'image' ? 'Photo 라이브러리에서 원본 사진을 확인할 수 있습니다.' : 'PDF 자료를 inbox에서 확인할 수 있습니다.');
+    setWorkspaceFeedback(asset.type === 'image' ? 'Photo 라이브러리에서 사진을 확인할 수 있어요.' : 'PDF 자료를 inbox에서 확인할 수 있습니다.');
     setIncomingBannerQueue((current) => current.slice(1));
   };
 

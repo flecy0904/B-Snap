@@ -238,7 +238,7 @@ def delete_note_page_by_number(
     get_note_for_user(note_id, current_user["id"], connection)
     pages = _list_pages_for_note(connection, note_id)
     if len(pages) <= 1:
-        raise HTTPException(status_code=400, detail="마지막 페이지는 삭제할 수 없습니다.")
+        raise HTTPException(status_code=400, detail="마지막 페이지는 삭제할 수 없어요.")
     target = require_row(
         next((page for page in pages if int(page["page_number"]) == page_number), None),
         "note page not found",

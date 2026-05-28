@@ -617,6 +617,7 @@ def _build_upload_analysis_image_data_uri(
 def _fallback_image_analysis(filename: str, status: str = "ready") -> dict:
     return {
         "status": status,
+        "title": "수업 자료 사진",
         "summary": "수업 중 촬영한 원본 사진입니다. PDF 페이지와 연결해 복습 자료로 활용할 수 있습니다.",
         "keywords": ["수업사진", "판서", "복습자료"],
         "confidence": 0.3,
