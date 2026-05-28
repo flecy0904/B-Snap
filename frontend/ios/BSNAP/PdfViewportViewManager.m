@@ -1221,8 +1221,16 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     && nextSize.width > 0
     && nextSize.height > 0;
   NSDictionary *customResizeAnchor = nil;
+  CGPoint customResizeViewPoint = CGPointMake(nextSize.width * 0.5, nextSize.height * 0.5);
+  NSString *customResizeReason = @"layout-resize-realtime";
   if (shouldLockCustomResizeFocus) {
-    customResizeAnchor = [self captureCustomViewportAnchorAtViewPoint:CGPointMake(previousSize.width * 0.5, previousSize.height * 0.5)];
+    if (self.viewportPinchActive && self.pinchFocusAnchor != nil) {
+      customResizeAnchor = self.pinchFocusAnchor;
+      customResizeViewPoint = self.pinchLastFocusViewPoint;
+      customResizeReason = @"layout-resize-pinch";
+    } else {
+      customResizeAnchor = [self captureCustomViewportAnchorAtViewPoint:CGPointMake(previousSize.width * 0.5, previousSize.height * 0.5)];
+    }
   }
   if (sizeChanged && ![self isViewportUserInteractionActive]) {
     [self stopViewportMotionAndSettle];
@@ -1253,8 +1261,8 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     self.pendingDeferredLayoutSize = CGSizeZero;
     self.suppressAnchorSaveUntil = CACurrentMediaTime() + 0.28;
     self.pendingCustomLayoutAnchor = customResizeAnchor;
-    self.pendingCustomLayoutViewPoint = CGPointMake(nextSize.width * 0.5, nextSize.height * 0.5);
-    self.pendingCustomLayoutReason = @"layout-resize-realtime";
+    self.pendingCustomLayoutViewPoint = customResizeViewPoint;
+    self.pendingCustomLayoutReason = customResizeReason;
     [self logRenderDebugEvent:@"layout" target:@"viewport" action:@"rebuild-resize-realtime" rect:self.bounds extra:@""];
     [self rebuildLayout];
     return;
@@ -4503,10 +4511,14 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   if (!isfinite(viewPoint.x) || !isfinite(viewPoint.y)) return;
   CGFloat beforeScrollY = self.coreScrollYDocument;
   CGFloat beforeTranslateX = self.coreTranslateX;
+  CGFloat beforeScale = self.coreScale;
+  CGFloat contentWidth = MAX(1.0, self.coreContentWidth);
+  CGFloat minTranslateX = MIN(0, self.bounds.size.width - contentWidth * MAX(0.0001, beforeScale));
+  CGFloat idealTranslateX = viewPoint.x - contentPoint.x * MAX(0.0001, beforeScale);
   [self clampCustomViewportSnap:NO preservingContentPoint:contentPoint atViewPoint:viewPoint];
   [self syncScrollViewFromCustomCore];
   BsnPdfRenderDebugLog(self,
-    @"[BsnPdfViewport][custom-core] preserve reason=%@ focusDoc=(%.1f,%.1f) view=(%.1f,%.1f) scale=%.3f scrollY %.1f->%.1f translateX %.1f->%.1f",
+    @"[BsnPdfViewport][custom-core] preserve reason=%@ focusDoc=(%.1f,%.1f) view=(%.1f,%.1f) scale=%.3f scrollY %.1f->%.1f translateX %.1f->%.1f idealTX=%.1f minTX=%.1f boundsW=%.1f contentW=%.1f",
     reason ?: @"unknown",
     contentPoint.x,
     contentPoint.y,
@@ -4516,7 +4528,11 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     beforeScrollY,
     self.coreScrollYDocument,
     beforeTranslateX,
-    self.coreTranslateX);
+    self.coreTranslateX,
+    idealTranslateX,
+    minTranslateX,
+    self.bounds.size.width,
+    contentWidth);
   [self invalidateCustomViewportSurfaces];
 }
 
