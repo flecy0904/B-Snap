@@ -322,6 +322,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 @property (nonatomic) NSInteger protectedPageNumber;
 @property (nonatomic) CFTimeInterval lastPerfLogTime;
 @property (nonatomic) CFTimeInterval lastScrollDebugLogTime;
+@property (nonatomic) CFTimeInterval lastPinchDebugLogTime;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSNumber *> *renderDebugLastLogTimes;
 @property (nonatomic) NSInteger baseCacheHits;
 @property (nonatomic) NSInteger baseCacheMisses;
@@ -1012,6 +1013,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     _renderDebugLoggingEnabled = NO;
     _lastPerfLogTime = 0;
     _lastScrollDebugLogTime = 0;
+    _lastPinchDebugLogTime = 0;
     _renderDebugLastLogTimes = [NSMutableDictionary dictionary];
     _baseCacheHits = 0;
     _baseCacheMisses = 0;
@@ -2813,12 +2815,37 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     self.pinchLastFocusViewPoint = focus;
     if (self.customViewportCoreEnabled) {
       CGFloat previousY = self.coreScrollYDocument;
-      CGPoint focusContentPoint = self.pinchFocusAnchor != nil
-        ? [self contentPointForCustomViewportAnchor:self.pinchFocusAnchor fallbackContentPoint:self.pinchFocusContentPoint]
-        : self.pinchFocusContentPoint;
+      CGFloat previousScale = self.coreScale;
+      CGPoint rawFocusContentPoint = [self contentPointForViewportPoint:focus];
+      NSDictionary *focusAnchor = [self captureCustomViewportAnchorAtViewPoint:focus];
+      CGPoint focusContentPoint = focusAnchor != nil
+        ? [self contentPointForCustomViewportAnchor:focusAnchor fallbackContentPoint:rawFocusContentPoint]
+        : rawFocusContentPoint;
+      self.pinchFocusAnchor = focusAnchor;
       self.pinchFocusContentPoint = focusContentPoint;
       self.coreScale = nextZoom;
       [self clampCustomViewportSnap:NO preservingContentPoint:focusContentPoint atViewPoint:focus];
+      CFTimeInterval now = CACurrentMediaTime();
+      if (self.renderDebugLoggingEnabled && now - self.lastPinchDebugLogTime > 0.18) {
+        self.lastPinchDebugLogTime = now;
+        CGFloat idealTranslateX = focus.x - focusContentPoint.x * MAX(0.0001, nextZoom);
+        CGFloat minTranslateX = MIN(0, self.bounds.size.width - self.coreContentWidth * MAX(0.0001, nextZoom));
+        BsnPdfRenderDebugLog(self,
+          @"[BsnPdfViewport][custom-core] pinch-change focusDoc=(%.1f,%.1f) focusView=(%.1f,%.1f) scale %.3f->%.3f scrollY %.1f->%.1f translateX=%.1f idealTX=%.1f minTX=%.1f boundsW=%.1f contentW=%.1f",
+          focusContentPoint.x,
+          focusContentPoint.y,
+          focus.x,
+          focus.y,
+          previousScale,
+          self.coreScale,
+          previousY,
+          self.coreScrollYDocument,
+          self.coreTranslateX,
+          idealTranslateX,
+          minTranslateX,
+          self.bounds.size.width,
+          self.coreContentWidth);
+      }
       [self applyCustomViewportDidChangeWithDeltaY:self.coreScrollYDocument - previousY force:NO];
       NSInteger focusPage = [self pageNumberNearContentPoint:focusContentPoint];
       if (focusPage > 0) {
@@ -2848,9 +2875,11 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   } else if (gesture.state == UIGestureRecognizerStateEnded) {
     self.pinchLastFocusViewPoint = focus;
     if (self.customViewportCoreEnabled) {
-      CGPoint focusContentPoint = self.pinchFocusAnchor != nil
-        ? [self contentPointForCustomViewportAnchor:self.pinchFocusAnchor fallbackContentPoint:self.pinchFocusContentPoint]
-        : self.pinchFocusContentPoint;
+      CGPoint rawFocusContentPoint = [self contentPointForViewportPoint:self.pinchLastFocusViewPoint];
+      NSDictionary *focusAnchor = [self captureCustomViewportAnchorAtViewPoint:self.pinchLastFocusViewPoint] ?: self.pinchFocusAnchor;
+      CGPoint focusContentPoint = focusAnchor != nil
+        ? [self contentPointForCustomViewportAnchor:focusAnchor fallbackContentPoint:rawFocusContentPoint]
+        : rawFocusContentPoint;
       self.pinchFocusContentPoint = focusContentPoint;
       [self clampCustomViewportSnap:YES preservingContentPoint:focusContentPoint atViewPoint:self.pinchLastFocusViewPoint];
       [self syncScrollViewFromCustomCore];
@@ -2884,9 +2913,11 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     [self requestViewportChangedForce:YES];
   } else if (gesture.state == UIGestureRecognizerStateCancelled || gesture.state == UIGestureRecognizerStateFailed) {
     if (self.customViewportCoreEnabled) {
-      CGPoint focusContentPoint = self.pinchFocusAnchor != nil
-        ? [self contentPointForCustomViewportAnchor:self.pinchFocusAnchor fallbackContentPoint:self.pinchFocusContentPoint]
-        : self.pinchFocusContentPoint;
+      CGPoint rawFocusContentPoint = [self contentPointForViewportPoint:self.pinchLastFocusViewPoint];
+      NSDictionary *focusAnchor = [self captureCustomViewportAnchorAtViewPoint:self.pinchLastFocusViewPoint] ?: self.pinchFocusAnchor;
+      CGPoint focusContentPoint = focusAnchor != nil
+        ? [self contentPointForCustomViewportAnchor:focusAnchor fallbackContentPoint:rawFocusContentPoint]
+        : rawFocusContentPoint;
       self.pinchFocusContentPoint = focusContentPoint;
       [self clampCustomViewportSnap:YES preservingContentPoint:focusContentPoint atViewPoint:self.pinchLastFocusViewPoint];
       [self syncScrollViewFromCustomCore];
