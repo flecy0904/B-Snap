@@ -136,6 +136,13 @@ export const NotesWorkspaceToolbar = React.memo(function NotesWorkspaceToolbar()
   const workspaceContext = useDesktopNotesWorkspaceContext();
   const documentContext = useDocumentContext();
   const canvasContext = useCanvasContext();
+  const usesAppAiPanelLayout = Boolean(workspaceContext.usesAppAiPanelLayout);
+  const chatToolActive = usesAppAiPanelLayout
+    ? workspaceContext.appRightSidebarPanel === 'chat' || (workspaceContext.appChatMode === 'floating' && workspaceContext.aiPanelOpen)
+    : workspaceContext.aiPanelOpen;
+  const canvasToolActive = usesAppAiPanelLayout
+    ? workspaceContext.appRightSidebarPanel === 'canvas'
+    : workspaceContext.aiCanvas.isOpen;
 
   return (
     <View style={workspaceContext.styles.inkToolbarWrap}>
@@ -177,11 +184,25 @@ export const NotesWorkspaceToolbar = React.memo(function NotesWorkspaceToolbar()
 
         <View style={workspaceContext.styles.inkToolbarTools}>
           <View style={workspaceContext.styles.inkSecondaryCluster}>
-            <Pressable style={workspaceContext.styles.inkActionButton} onPress={canvasContext.undoInk}>
-              <MaterialCommunityIcons name="undo-variant" size={18} color="#556070" />
+            <Pressable
+              style={[
+                workspaceContext.styles.inkActionButton,
+                !workspaceContext.canUndoFocusedWorkspaceAction && workspaceContext.styles.inkActionButtonDisabled,
+              ]}
+              onPress={workspaceContext.onUndoFocusedWorkspaceAction}
+              disabled={!workspaceContext.canUndoFocusedWorkspaceAction}
+            >
+              <MaterialCommunityIcons name="undo-variant" size={18} color={workspaceContext.canUndoFocusedWorkspaceAction ? '#556070' : '#A8B0BF'} />
             </Pressable>
-            <Pressable style={workspaceContext.styles.inkActionButton} onPress={canvasContext.redoInk}>
-              <MaterialCommunityIcons name="redo-variant" size={18} color="#556070" />
+            <Pressable
+              style={[
+                workspaceContext.styles.inkActionButton,
+                !workspaceContext.canRedoFocusedWorkspaceAction && workspaceContext.styles.inkActionButtonDisabled,
+              ]}
+              onPress={workspaceContext.onRedoFocusedWorkspaceAction}
+              disabled={!workspaceContext.canRedoFocusedWorkspaceAction}
+            >
+              <MaterialCommunityIcons name="redo-variant" size={18} color={workspaceContext.canRedoFocusedWorkspaceAction ? '#556070' : '#A8B0BF'} />
             </Pressable>
             <Pressable style={workspaceContext.styles.inkActionButton} onPress={canvasContext.clearInk}>
               <MaterialCommunityIcons name="trash-can-outline" size={18} color="#556070" />
@@ -192,16 +213,36 @@ export const NotesWorkspaceToolbar = React.memo(function NotesWorkspaceToolbar()
 
           <View style={workspaceContext.styles.inkSecondaryCluster}>
             <Pressable
-              style={[workspaceContext.styles.inkActionButton, workspaceContext.styles.aiIconButton, workspaceContext.aiPanelOpen && workspaceContext.styles.aiIconButtonActive]}
-              onPress={workspaceContext.onToggleAiPanel}
+              style={[
+                workspaceContext.styles.inkActionButton,
+                workspaceContext.styles.aiIconButton,
+                chatToolActive && workspaceContext.styles.aiIconButtonActive,
+              ]}
+              onPress={() => {
+                if (usesAppAiPanelLayout) {
+                  workspaceContext.onOpenAppChatSidebar();
+                  return;
+                }
+                workspaceContext.onToggleAiPanel();
+              }}
             >
-              <MaterialCommunityIcons name="star-four-points" size={18} color={workspaceContext.aiPanelOpen ? '#5A74E8' : '#7786D8'} />
+              <MaterialCommunityIcons name="star-four-points" size={18} color={chatToolActive ? '#5A74E8' : '#7786D8'} />
             </Pressable>
             <Pressable
-              style={[workspaceContext.styles.inkActionButton, workspaceContext.styles.aiCanvasToolbarButton, workspaceContext.aiCanvas.isOpen && workspaceContext.styles.aiCanvasToolbarButtonActive]}
-              onPress={workspaceContext.aiCanvas.toggle}
+              style={[
+                workspaceContext.styles.inkActionButton,
+                workspaceContext.styles.aiCanvasToolbarButton,
+                canvasToolActive && workspaceContext.styles.aiCanvasToolbarButtonActive,
+              ]}
+              onPress={() => {
+                if (usesAppAiPanelLayout) {
+                  workspaceContext.onOpenAppAiCanvasSidebar();
+                  return;
+                }
+                workspaceContext.aiCanvas.toggle();
+              }}
             >
-              <MaterialCommunityIcons name="note-text-outline" size={18} color={workspaceContext.aiCanvas.isOpen ? '#5A74E8' : '#77839A'} />
+              <MaterialCommunityIcons name="note-text-outline" size={18} color={canvasToolActive ? '#5A74E8' : '#77839A'} />
             </Pressable>
           </View>
         </View>

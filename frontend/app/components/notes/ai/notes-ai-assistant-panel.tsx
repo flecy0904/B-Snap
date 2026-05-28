@@ -1,8 +1,7 @@
 import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { ActivityIndicator, Animated, Image, Keyboard, PanResponder, Platform, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Animated, Image, PanResponder, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { isClassInsightQuestion, isClassInsightTargetDocument } from '../../../hooks/notes/class-insight';
-import type { BackendChatMessage, BackendChatSession, BackendClassInsightPageSignal } from '../../../services/backend-api';
 import { AiResponseContent } from './ai-response-content';
 import { useNotesGlobalContext } from '../workspace/notes-global-context';
 
@@ -10,7 +9,8 @@ const FLOATING_PANEL_WIDTH = 300;
 const FLOATING_PANEL_HEIGHT = 620;
 const FLOATING_PANEL_TOP = 66;
 const FLOATING_PANEL_MARGIN = 8;
-const SIDEBAR_KEYBOARD_TOP_OFFSET = 96;
+const APP_DETACHED_PANEL_WIDTH = 380;
+const APP_DETACHED_PANEL_TOP = 60;
 const SIDEBAR_MIN_WIDTH = 300;
 const SIDEBAR_DEFAULT_WIDTH = 340;
 
@@ -18,9 +18,8 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
-function getFloatingPanelHeight(windowHeight: number, panelY: number, keyboardTop?: number | null) {
-  const bottomEdge = keyboardTop ?? windowHeight;
-  return Math.min(FLOATING_PANEL_HEIGHT, Math.max(260, bottomEdge - panelY - FLOATING_PANEL_MARGIN));
+function getFloatingPanelHeight(windowHeight: number, panelY: number) {
+  return Math.min(FLOATING_PANEL_HEIGHT, Math.max(360, windowHeight - panelY - FLOATING_PANEL_MARGIN));
 }
 
 function formatPriorityLabel(priority: string) {
@@ -33,23 +32,11 @@ const CLASS_INSIGHT_QUICK_PROMPTS = [
   { label: '중요 페이지', question: '시험에 나올만한 중요 페이지 추천해줘' },
   { label: '다음 순위', question: '다음 순위 중요 페이지도 더 알려줘' },
   { label: '복습 순서', question: '이 PDF에서 먼저 복습할 순서 알려줘' },
-  { label: '예상 문제', question: '이 내용에서 시험 예상 문제를 만들어줘' },
-  { label: '암기 포인트', question: '시험 전에 외워야 할 핵심 포인트만 정리해줘' },
-] as const;
-
-const DEFAULT_AI_QUICK_PROMPTS = [
-  { label: '핵심 3개', question: '여기서 중요한 개념 3개만 알려줘' },
-  { label: '쉽게 설명', question: '이 부분을 쉽게 풀어서 설명해줘' },
-  { label: '예상 문제', question: '이 내용으로 시험 예상 문제를 만들어줘' },
-  { label: '요약', question: '현재 페이지를 짧게 요약해줘' },
 ] as const;
 
 export function NotesAiAssistantPanel() {
   const workspace = useNotesGlobalContext();
   const { width, height } = useWindowDimensions();
-  const [sidebarOpen, setSidebarOpen] = React.useState(false);
-  const [sidebarVisible, setSidebarVisible] = React.useState(false);
-  const sidebarProgress = React.useRef(new Animated.Value(0)).current;
   const [floatingPosition, setFloatingPosition] = React.useState({ x: FLOATING_PANEL_MARGIN, y: FLOATING_PANEL_TOP });
   const floatingPositionRef = React.useRef(floatingPosition);
   const floatingAnimatedPosition = React.useRef(new Animated.ValueXY(floatingPosition)).current;
@@ -58,25 +45,23 @@ export function NotesAiAssistantPanel() {
   const sidebarWidthRef = React.useRef(SIDEBAR_DEFAULT_WIDTH);
   const [menuSessionId, setMenuSessionId] = React.useState<number | null>(null);
   const [headerMenuOpen, setHeaderMenuOpen] = React.useState(false);
-  const [headerEditing, setHeaderEditing] = React.useState(false);
-  const [headerEditingTitle, setHeaderEditingTitle] = React.useState('');
   const [editingSessionId, setEditingSessionId] = React.useState<number | null>(null);
   const [editingTitle, setEditingTitle] = React.useState('');
   const [editingTitleError, setEditingTitleError] = React.useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = React.useState<{ id: number; title: string } | null>(null);
-  const [keyboardTop, setKeyboardTop] = React.useState<number | null>(null);
   const messagesScrollRef = React.useRef<ScrollView | null>(null);
   const hasChatHistory = workspace.aiMessages.length > 0;
   const quickPrompts = React.useMemo(() => (
     isClassInsightTargetDocument(workspace.studyDocument, workspace.subject)
       ? CLASS_INSIGHT_QUICK_PROMPTS
-      : DEFAULT_AI_QUICK_PROMPTS
+      : []
   ), [workspace.studyDocument, workspace.subject]);
   const showQuickPrompts = Boolean(
     !workspace.aiChatReadOnly
     && !workspace.aiLoading
     && quickPrompts.length
     && !workspace.aiQuestion.trim()
+    && !hasChatHistory,
   );
   const shouldShowClassInsightPages = React.useMemo(() => (
     isClassInsightQuestion(workspace.aiQuestion)
@@ -88,59 +73,38 @@ export function NotesAiAssistantPanel() {
     return (workspace.classInsight?.pages ?? []).slice(0, 3);
   }, [shouldShowClassInsightPages, workspace.classInsight?.pages, workspace.studyDocument, workspace.subject]);
   const activeSession = workspace.activeAiChatSessionId
-    ? workspace.allAiChatSessions.find((session: BackendChatSession) => session.id === workspace.activeAiChatSessionId)
-      ?? workspace.noteAiChatSessions.find((session: BackendChatSession) => session.id === workspace.activeAiChatSessionId)
+    ? workspace.allAiChatSessions.find((session: any) => session.id === workspace.activeAiChatSessionId)
+      ?? workspace.noteAiChatSessions.find((session: any) => session.id === workspace.activeAiChatSessionId)
       ?? null
     : null;
-  const canManageActiveSession = Boolean(activeSession && !workspace.aiChatReadOnly);
   const openLinkedPdfPage = React.useCallback((pageNumber: number) => {
     workspace.onSetCurrentPdfPage?.(pageNumber);
     workspace.onChangeInkTool?.('view');
   }, [workspace.onChangeInkTool, workspace.onSetCurrentPdfPage]);
-  const chatSearchTerm = workspace.aiChatSearchQuery.trim().toLowerCase();
-  const sidebarSessions = workspace.allAiChatSessions.filter((session: BackendChatSession) => {
-    if (!chatSearchTerm) return true;
-    return `${session.title} ${session.model ?? ''}`.toLowerCase().includes(chatSearchTerm);
-  });
-  const currentNoteSessionIds = React.useMemo(
-    () => new Set(workspace.noteAiChatSessions.map((session: BackendChatSession) => session.id)),
-    [workspace.noteAiChatSessions],
+  const recentSessions = workspace.allAiChatSessions.slice(0, 8);
+  const appFloatingChat = Boolean(
+    workspace.usesAppAiPanelLayout
+    && workspace.appChatMode === 'floating'
+    && workspace.aiPanelMode === 'floating',
   );
-  const keyboardVisible = keyboardTop !== null && keyboardTop < height;
-  const floatingPanelHeight = getFloatingPanelHeight(height, floatingPosition.y, keyboardTop);
-  const floatingMaxX = Math.max(FLOATING_PANEL_MARGIN, width - FLOATING_PANEL_WIDTH - FLOATING_PANEL_MARGIN);
-  const floatingMaxY = Math.max(FLOATING_PANEL_TOP, (keyboardTop ?? height) - 360 - FLOATING_PANEL_MARGIN);
+  const appChatSidebar = Boolean(workspace.isAppChatSidebarPanel);
+  const floatingPanelWidth = appFloatingChat ? APP_DETACHED_PANEL_WIDTH : FLOATING_PANEL_WIDTH;
+  const floatingPanelHeight = getFloatingPanelHeight(height, floatingPosition.y);
+  const floatingMaxX = Math.max(FLOATING_PANEL_MARGIN, width - floatingPanelWidth - FLOATING_PANEL_MARGIN);
+  const floatingMaxY = Math.max(FLOATING_PANEL_TOP, height - 360 - FLOATING_PANEL_MARGIN);
   const sidebarMaxWidth = Math.max(SIDEBAR_MIN_WIDTH, Math.floor(width * 0.5));
-  const keyboardAwareSidebarHeight = keyboardVisible
-    ? Math.max(280, (keyboardTop ?? height) - SIDEBAR_KEYBOARD_TOP_OFFSET - FLOATING_PANEL_MARGIN)
-    : undefined;
-  const effectivePanelMode = workspace.aiPanelMode;
 
   React.useEffect(() => {
-    const updateKeyboardFrame = (event: { endCoordinates?: { screenY?: number; height?: number } }) => {
-      const screenY = event.endCoordinates?.screenY;
-      const keyboardHeight = event.endCoordinates?.height;
-      const nextTop = typeof screenY === 'number'
-        ? screenY
-        : typeof keyboardHeight === 'number'
-          ? height - keyboardHeight
-          : height;
-      setKeyboardTop(nextTop < height ? nextTop : null);
+    if (!appFloatingChat) return;
+    const next = {
+      x: Math.max(FLOATING_PANEL_MARGIN, width - APP_DETACHED_PANEL_WIDTH - 10),
+      y: APP_DETACHED_PANEL_TOP,
     };
-    const hideKeyboardFrame = () => setKeyboardTop(null);
-    const showSub = Keyboard.addListener('keyboardWillChangeFrame', updateKeyboardFrame);
-    const changeSub = Keyboard.addListener('keyboardDidChangeFrame', updateKeyboardFrame);
-    const showFallbackSub = Keyboard.addListener('keyboardDidShow', updateKeyboardFrame);
-    const hideSub = Keyboard.addListener('keyboardWillHide', hideKeyboardFrame);
-    const hideFallbackSub = Keyboard.addListener('keyboardDidHide', hideKeyboardFrame);
-    return () => {
-      showSub.remove();
-      changeSub.remove();
-      showFallbackSub.remove();
-      hideSub.remove();
-      hideFallbackSub.remove();
-    };
-  }, [height]);
+    floatingPositionRef.current = next;
+    setFloatingPosition(next);
+    floatingAnimatedPosition.setValue(next);
+    floatingAnimatedHeight.setValue(getFloatingPanelHeight(height, next.y));
+  }, [appFloatingChat, floatingAnimatedHeight, floatingAnimatedPosition, height, width]);
 
   React.useEffect(() => {
     setFloatingPosition((current) => ({
@@ -167,7 +131,7 @@ export function NotesAiAssistantPanel() {
     () => PanResponder.create({
       onStartShouldSetPanResponder: () => workspace.aiPanelMode === 'floating',
       onMoveShouldSetPanResponder: (_, gesture) => (
-        effectivePanelMode === 'floating'
+        workspace.aiPanelMode === 'floating'
         && Math.abs(gesture.dx) + Math.abs(gesture.dy) > 3
       ),
       onPanResponderGrant: () => {
@@ -189,7 +153,7 @@ export function NotesAiAssistantPanel() {
           x: clamp(start.x + gesture.dx, FLOATING_PANEL_MARGIN, floatingMaxX),
           y: clamp(start.y + gesture.dy, FLOATING_PANEL_TOP, floatingMaxY),
         };
-        const nextHeight = getFloatingPanelHeight(height, next.y, keyboardTop);
+        const nextHeight = getFloatingPanelHeight(height, next.y);
         floatingPositionRef.current = next;
         setFloatingPosition(next);
         floatingAnimatedPosition.setValue(next);
@@ -201,21 +165,21 @@ export function NotesAiAssistantPanel() {
           x: clamp(start.x + gesture.dx, FLOATING_PANEL_MARGIN, floatingMaxX),
           y: clamp(start.y + gesture.dy, FLOATING_PANEL_TOP, floatingMaxY),
         };
-        const nextHeight = getFloatingPanelHeight(height, next.y, keyboardTop);
+        const nextHeight = getFloatingPanelHeight(height, next.y);
         floatingPositionRef.current = next;
         setFloatingPosition(next);
         floatingAnimatedPosition.setValue(next);
         floatingAnimatedHeight.setValue(nextHeight);
       },
     }),
-    [effectivePanelMode, floatingAnimatedHeight, floatingAnimatedPosition, floatingMaxX, floatingMaxY, floatingPanelHeight, height, keyboardTop, workspace.aiPanelMode],
+    [floatingAnimatedHeight, floatingAnimatedPosition, floatingMaxX, floatingMaxY, floatingPanelHeight, height, workspace.aiPanelMode],
   );
 
   const sidebarResizePanResponder = React.useMemo(
     () => PanResponder.create({
       onStartShouldSetPanResponder: () => workspace.aiPanelMode === 'sidebar',
       onMoveShouldSetPanResponder: (_, gesture) => (
-        effectivePanelMode === 'sidebar'
+        workspace.aiPanelMode === 'sidebar'
         && Math.abs(gesture.dx) > 3
       ),
       onPanResponderGrant: () => {
@@ -235,7 +199,7 @@ export function NotesAiAssistantPanel() {
         setSidebarWidth(next);
       },
     }),
-    [effectivePanelMode, sidebarMaxWidth, workspace.aiPanelMode],
+    [sidebarMaxWidth, workspace.aiPanelMode],
   );
 
   const startEditingSession = (sessionId: number, title: string) => {
@@ -273,9 +237,8 @@ export function NotesAiAssistantPanel() {
   };
 
   const selectSession = (sessionId: number) => {
-    setMenuSessionId(null);
     void workspace.onSelectAiChatSession(sessionId);
-    closeSidebar();
+    closeOpenMenus();
   };
 
   const removeDeleteTarget = async () => {
@@ -286,10 +249,8 @@ export function NotesAiAssistantPanel() {
   };
 
   const startNewChat = () => {
-    Keyboard.dismiss();
-    setHeaderMenuOpen(false);
     workspace.onStartNewAiChatSession();
-    closeSidebar();
+    closeOpenMenus();
   };
 
   const returnToCurrentNoteSession = () => {
@@ -301,32 +262,37 @@ export function NotesAiAssistantPanel() {
     workspace.onStartNewAiChatSession();
   };
 
-  const startHeaderEditing = () => {
-    if (!activeSession) return;
-    startEditingSession(activeSession.id, activeSession.title);
-  };
-
-  const saveHeaderEditing = async () => {
-    if (!activeSession) return;
-    const saved = await workspace.onRenameAiChatSession(activeSession.id, headerEditingTitle);
-    if (saved) {
-      setHeaderEditing(false);
-      setHeaderEditingTitle('');
-    }
-  };
-
   const closeOpenMenus = () => {
     setHeaderMenuOpen(false);
     setMenuSessionId(null);
   };
 
+  const closeChatPanel = () => {
+    closeOpenMenus();
+    if (workspace.isAppChatSidebarPanel) {
+      workspace.onCloseAppRightSidebar?.();
+      return;
+    }
+    workspace.onToggleAiPanel?.();
+  };
+
   const togglePanelMode = () => {
+    if (workspace.isAppChatSidebarPanel) {
+      closeOpenMenus();
+      workspace.onFloatAppAiChatPanel?.();
+      return;
+    }
+    if (workspace.usesAppAiPanelLayout && workspace.appChatMode === 'floating') {
+      closeOpenMenus();
+      workspace.onDockAppAiChatPanel?.();
+      return;
+    }
     closeOpenMenus();
     workspace.onChangeAiPanelMode(workspace.aiPanelMode === 'floating' ? 'sidebar' : 'floating');
   };
 
   const scrollToLatestMessage = React.useCallback(() => {
-    window.setTimeout(() => {
+    setTimeout(() => {
       messagesScrollRef.current?.scrollToEnd({ animated: true });
     }, 40);
   }, []);
@@ -335,244 +301,113 @@ export function NotesAiAssistantPanel() {
     scrollToLatestMessage();
   }, [workspace.aiMessages.length, workspace.aiLoading, workspace.activeAiChatSessionId, scrollToLatestMessage]);
 
-  React.useEffect(() => {
-    if (sidebarOpen) {
-      setSidebarVisible(true);
-      Animated.timing(sidebarProgress, {
-        toValue: 1,
-        duration: 180,
-        useNativeDriver: true,
-      }).start();
-      return;
-    }
-
-    Animated.timing(sidebarProgress, {
-      toValue: 0,
-      duration: 160,
-      useNativeDriver: true,
-    }).start(({ finished }) => {
-      if (finished) setSidebarVisible(false);
-    });
-  }, [sidebarOpen, sidebarProgress]);
-
-  const closeSidebar = () => setSidebarOpen(false);
-  const openSidebar = () => {
-    Keyboard.dismiss();
-    workspace.onLoadAllAiChatSessions();
-    setSidebarOpen(true);
-  };
-
-  const requestAiAnswer = () => {
-    Keyboard.dismiss();
-    workspace.onRequestAiAnswer();
-  };
-
-  const sidebarAnimatedStyle = {
-    opacity: sidebarProgress,
-    transform: [{
-      translateX: sidebarProgress.interpolate({
-        inputRange: [0, 1],
-        outputRange: [-238, 0],
-      }),
-    }],
-  };
-
-  const homePaneAnimatedStyle = {
-    opacity: sidebarProgress.interpolate({
-      inputRange: [0, 1],
-      outputRange: [1, 0.46],
-    }),
-    transform: [{
-      translateX: sidebarProgress.interpolate({
-        inputRange: [0, 1],
-        outputRange: [0, 238],
-      }),
-    }],
-  };
-
-  if (!workspace.aiPanelOpen) return null;
-  const panelStyle = effectivePanelMode === 'floating'
-    ? [workspace.styles.aiPanel, { left: floatingAnimatedPosition.x, top: floatingAnimatedPosition.y, bottom: undefined, height: floatingAnimatedHeight }]
-    : [workspace.styles.aiPanel, workspace.styles.aiPanelSidebar, { width: sidebarWidth }, keyboardAwareSidebarHeight ? { height: keyboardAwareSidebarHeight, alignSelf: 'flex-start' as const } : null];
+  if (!workspace.aiPanelOpen && !appChatSidebar) return null;
+  const panelStyle = appChatSidebar
+    ? [workspace.styles.aiPanel, workspace.styles.appRightSidebarPanelContent]
+    : appFloatingChat
+      ? [
+          workspace.styles.aiPanel,
+          workspace.styles.appFloatingAiChatPanel,
+          { left: floatingAnimatedPosition.x, top: floatingAnimatedPosition.y, right: undefined, bottom: undefined, height: floatingAnimatedHeight },
+        ]
+    : workspace.aiPanelMode === 'floating'
+      ? [workspace.styles.aiPanel, { left: floatingAnimatedPosition.x, top: floatingAnimatedPosition.y, bottom: undefined, height: floatingAnimatedHeight }]
+      : [workspace.styles.aiPanel, workspace.styles.aiPanelSidebar, { width: sidebarWidth }];
 
   return (
     <Animated.View style={panelStyle}>
       {menuSessionId ? (
         <Pressable style={workspace.styles.aiMenuDismissLayer} onPress={closeOpenMenus} />
       ) : null}
-      {sidebarVisible ? (
-        <Animated.View style={[workspace.styles.aiChatSidebar, sidebarAnimatedStyle]}>
-          <View style={workspace.styles.aiChatSidebarHeader}>
-            <MaterialCommunityIcons name="star-four-points" size={24} color="#5F79FF" />
-            <Pressable style={workspace.styles.aiPanelClose} onPress={closeSidebar}>
-              <MaterialCommunityIcons name="close" size={17} color="#7A8394" />
-            </Pressable>
-          </View>
-
-          <Pressable style={workspace.styles.aiSidebarCommand} onPress={startNewChat} disabled={workspace.aiLoading}>
-            <MaterialCommunityIcons name="square-edit-outline" size={18} color="#111827" />
-            <Text style={workspace.styles.aiSidebarCommandText}>새 채팅</Text>
-          </Pressable>
-
-          <View style={workspace.styles.aiSidebarSearchRow}>
-            <MaterialCommunityIcons name="magnify" size={18} color="#111827" />
-            <TextInput
-              value={workspace.aiChatSearchQuery}
-              onChangeText={workspace.onChangeAiChatSearchQuery}
-              placeholder="채팅 검색"
-              placeholderTextColor="#6B7280"
-              style={workspace.styles.aiSidebarSearchInput}
-            />
-          </View>
-
-          <ScrollView style={workspace.styles.aiSidebarList} contentContainerStyle={workspace.styles.aiSidebarListContent} showsVerticalScrollIndicator={false}>
-            {sidebarSessions.length ? sidebarSessions.map((session: BackendChatSession) => {
-              const active = session.id === workspace.activeAiChatSessionId;
-              const connected = currentNoteSessionIds.has(session.id);
-              const editing = false;
-              const contextMenuProps = Platform.OS === 'web'
-                ? {
-                    onContextMenu: (event: { preventDefault?: () => void }) => {
-                      event.preventDefault?.();
-                      setMenuSessionId((current) => (current === session.id ? null : session.id));
-                    },
-                  }
-                : undefined;
-
-              return (
-                <View key={session.id} style={workspace.styles.aiSidebarChatRowWrap}>
-                  {editing ? (
-                    <View style={workspace.styles.aiSidebarEditRow}>
-                      <TextInput
-                        value={editingTitle}
-                        onChangeText={setEditingTitle}
-                        style={workspace.styles.aiSidebarEditInput}
-                        returnKeyType="done"
-                        onSubmitEditing={saveEditingSession}
-                        autoFocus
-                      />
-                      <Pressable style={workspace.styles.aiSidebarMiniButton} onPress={saveEditingSession} disabled={workspace.aiLoading}>
-                        <MaterialCommunityIcons name="check" size={15} color="#111827" />
-                      </Pressable>
-                      <Pressable style={workspace.styles.aiSidebarMiniButton} onPress={() => setEditingSessionId(null)} disabled={workspace.aiLoading}>
-                        <MaterialCommunityIcons name="close" size={15} color="#111827" />
-                      </Pressable>
-                    </View>
-                  ) : (
-                    <Pressable
-                      {...contextMenuProps}
-                      style={[workspace.styles.aiSidebarChatRow, active && workspace.styles.aiSidebarChatRowActive]}
-                      onPress={() => selectSession(session.id)}
-                      onLongPress={() => setMenuSessionId((current) => (current === session.id ? null : session.id))}
-                      delayLongPress={450}
-                    >
-                      <View style={workspace.styles.aiSidebarChatContent}>
-                        <Text style={workspace.styles.aiSidebarChatText} numberOfLines={1}>{session.title}</Text>
-                        {connected ? (
-                          <Text style={workspace.styles.aiSidebarConnectedBadge}>연결됨</Text>
-                        ) : null}
-                      </View>
-                    </Pressable>
-                  )}
-
-                  {menuSessionId === session.id ? (
-                    <View style={workspace.styles.aiSidebarContextMenu}>
-                      <Pressable style={workspace.styles.aiSidebarContextMenuItem} onPress={() => startEditingSession(session.id, session.title)}>
-                        <MaterialCommunityIcons name="pencil-outline" size={15} color="#111827" />
-                        <Text style={workspace.styles.aiSidebarContextMenuText}>이름 바꾸기</Text>
-                      </Pressable>
-                      <Pressable style={workspace.styles.aiSidebarContextMenuItem} onPress={() => confirmRemoveSession(session.id, session.title)}>
-                        <MaterialCommunityIcons name="trash-can-outline" size={15} color="#C04B4B" />
-                        <Text style={[workspace.styles.aiSidebarContextMenuText, workspace.styles.aiSidebarContextMenuDanger]}>삭제하기</Text>
-                      </Pressable>
-                    </View>
-                  ) : null}
-                </View>
-              );
-            }) : (
-              <Text style={workspace.styles.aiSidebarEmptyText}>{workspace.aiChatSearchQuery ? '검색 결과가 없습니다' : '채팅방이 없습니다'}</Text>
-            )}
-          </ScrollView>
-        </Animated.View>
-      ) : null}
-
-      <Animated.View style={[workspace.styles.aiHomePane, homePaneAnimatedStyle]} pointerEvents={sidebarOpen ? 'none' : 'auto'}>
+      <Animated.View style={workspace.styles.aiHomePane}>
         {headerMenuOpen ? (
           <Pressable style={workspace.styles.aiHomeMenuDismissLayer} onPress={closeOpenMenus} />
         ) : null}
-        <View style={workspace.styles.aiPanelHeader}>
-          <View style={workspace.styles.aiHeaderButtonCluster}>
-            <Pressable style={workspace.styles.aiHeaderIconButton} onPress={openSidebar}>
-              <MaterialCommunityIcons name="menu" size={20} color="#303744" />
-            </Pressable>
-            <Pressable style={workspace.styles.aiHeaderIconButton} onPress={startNewChat} disabled={workspace.aiLoading}>
-              <MaterialCommunityIcons name="square-edit-outline" size={17} color="#303744" />
-            </Pressable>
+        <View
+          style={[
+            workspace.styles.aiPanelHeader,
+            workspace.aiPanelMode === 'floating'
+              && !appChatSidebar
+              && workspace.styles.aiPanelHeaderDraggable,
+          ]}
+          {...(workspace.aiPanelMode === 'floating' && !appChatSidebar ? floatingPanResponder.panHandlers : {})}
+        >
+          <View style={workspace.styles.aiHeaderTitleWrap}>
+            <Text style={workspace.styles.aiHeaderTitle} numberOfLines={1}>
+              {activeSession ? activeSession.title : '새 채팅'}
+            </Text>
+            {workspace.aiChatReadOnly ? (
+              <Text style={workspace.styles.aiHeaderSubtitle} numberOfLines={1}>읽기 전용</Text>
+            ) : null}
+          </View>
+
+          <View style={workspace.styles.aiHeaderActions}>
             <Pressable
-              style={[workspace.styles.aiHeaderIconButton, effectivePanelMode === 'sidebar' && workspace.styles.aiHeaderIconButtonActive]}
+              style={workspace.styles.aiHeaderIconButton}
               onPress={togglePanelMode}
             >
-              <MaterialCommunityIcons name={effectivePanelMode === 'floating' ? 'dock-left' : 'window-restore'} size={18} color="#303744" />
+              <MaterialCommunityIcons name={workspace.aiPanelMode === 'floating' ? 'dock-left' : 'window-restore'} size={18} color="#303744" />
+            </Pressable>
+            <Pressable style={workspace.styles.aiHeaderIconButton} onPress={startNewChat} disabled={workspace.aiLoading}>
+              <MaterialCommunityIcons name="square-edit-outline" size={18} color="#303744" />
             </Pressable>
             <View style={workspace.styles.aiHeaderMenuWrap}>
               <Pressable
-                style={[workspace.styles.aiHeaderIconButton, !canManageActiveSession && workspace.styles.aiHeaderIconButtonDisabled]}
-                onPress={() => canManageActiveSession && setHeaderMenuOpen((current) => !current)}
-                disabled={!canManageActiveSession || workspace.aiLoading}
+                style={workspace.styles.aiHeaderIconButton}
+                onPress={() => {
+                  workspace.onLoadAllAiChatSessions();
+                  setHeaderMenuOpen((current) => !current);
+                }}
+                disabled={workspace.aiLoading}
               >
-                <MaterialCommunityIcons name="dots-vertical" size={20} color={canManageActiveSession ? '#303744' : '#A0A7B3'} />
+                <MaterialCommunityIcons name="dots-vertical" size={20} color="#303744" />
               </Pressable>
-              {headerMenuOpen && activeSession && !workspace.aiChatReadOnly ? (
-                <View style={workspace.styles.aiHeaderContextMenu}>
-                  <Pressable style={workspace.styles.aiSidebarContextMenuItem} onPress={startHeaderEditing}>
-                    <MaterialCommunityIcons name="pencil-outline" size={15} color="#111827" />
-                    <Text style={workspace.styles.aiSidebarContextMenuText}>이름 바꾸기</Text>
-                  </Pressable>
-                  <Pressable style={workspace.styles.aiSidebarContextMenuItem} onPress={() => confirmRemoveSession(activeSession.id, activeSession.title)}>
-                    <MaterialCommunityIcons name="trash-can-outline" size={15} color="#C04B4B" />
-                    <Text style={[workspace.styles.aiSidebarContextMenuText, workspace.styles.aiSidebarContextMenuDanger]}>삭제하기</Text>
-                  </Pressable>
+              {headerMenuOpen ? (
+                <View style={workspace.styles.aiHeaderRecentMenu}>
+                  {recentSessions.length ? recentSessions.map((session: any) => {
+                    const active = session.id === workspace.activeAiChatSessionId;
+                    const contextMenuProps = {
+                      onContextMenu: (event: { preventDefault?: () => void }) => {
+                        event.preventDefault?.();
+                        setMenuSessionId((current) => (current === session.id ? null : session.id));
+                      },
+                    } as any;
+                    return (
+                      <View key={session.id} style={workspace.styles.aiSidebarChatRowWrap}>
+                        <Pressable
+                          {...contextMenuProps}
+                          style={[workspace.styles.aiHeaderRecentMenuItem, active && workspace.styles.aiHeaderRecentMenuItemActive]}
+                          onPress={() => selectSession(session.id)}
+                          onLongPress={() => setMenuSessionId((current) => (current === session.id ? null : session.id))}
+                          delayLongPress={450}
+                        >
+                          <Text style={[workspace.styles.aiHeaderRecentMenuText, active && workspace.styles.aiHeaderRecentMenuTextActive]} numberOfLines={1}>
+                            {session.title}
+                          </Text>
+                        </Pressable>
+                        {menuSessionId === session.id ? (
+                          <View style={workspace.styles.aiSidebarContextMenu}>
+                            <Pressable style={workspace.styles.aiSidebarContextMenuItem} onPress={() => startEditingSession(session.id, session.title)}>
+                              <MaterialCommunityIcons name="pencil-outline" size={15} color="#111827" />
+                              <Text style={workspace.styles.aiSidebarContextMenuText}>이름 바꾸기</Text>
+                            </Pressable>
+                            <Pressable style={workspace.styles.aiSidebarContextMenuItem} onPress={() => confirmRemoveSession(session.id, session.title)}>
+                              <MaterialCommunityIcons name="trash-can-outline" size={15} color="#C04B4B" />
+                              <Text style={[workspace.styles.aiSidebarContextMenuText, workspace.styles.aiSidebarContextMenuDanger]}>삭제하기</Text>
+                            </Pressable>
+                          </View>
+                        ) : null}
+                      </View>
+                    );
+                  }) : (
+                    <Text style={workspace.styles.aiSidebarEmptyText}>최근 대화가 없습니다</Text>
+                  )}
                 </View>
               ) : null}
             </View>
-          </View>
-
-          <View
-            style={[workspace.styles.aiHeaderTitleWrap, effectivePanelMode === 'floating' && !headerEditing && workspace.styles.aiPanelHeaderDraggable]}
-            {...(effectivePanelMode === 'floating' && !headerEditing ? floatingPanResponder.panHandlers : {})}
-          >
-            {headerEditing && activeSession ? (
-              <View style={workspace.styles.aiHeaderEditRow}>
-                <TextInput
-                  value={headerEditingTitle}
-                  onChangeText={setHeaderEditingTitle}
-                  style={workspace.styles.aiHeaderEditInput}
-                  returnKeyType="done"
-                  onSubmitEditing={saveHeaderEditing}
-                  autoFocus
-                />
-                <Pressable style={workspace.styles.aiHeaderEditButton} onPress={saveHeaderEditing} disabled={workspace.aiLoading}>
-                  <MaterialCommunityIcons name="check" size={14} color="#111827" />
-                </Pressable>
-                <Pressable style={workspace.styles.aiHeaderEditButton} onPress={() => setHeaderEditing(false)} disabled={workspace.aiLoading}>
-                  <MaterialCommunityIcons name="close" size={14} color="#111827" />
-                </Pressable>
-              </View>
-            ) : (
-              <View style={workspace.styles.aiHeaderDragZone}>
-                <View style={workspace.styles.aiHeaderTitleTextWrap}>
-                  <Text style={workspace.styles.aiHeaderTitle} numberOfLines={1}>
-                    {activeSession ? activeSession.title : '새 채팅'}
-                  </Text>
-                  {workspace.aiChatReadOnly ? (
-                    <Text style={workspace.styles.aiHeaderSubtitle} numberOfLines={1}>읽기 전용</Text>
-                  ) : null}
-                </View>
-                {effectivePanelMode === 'floating' ? (
-                  <MaterialCommunityIcons name="drag-horizontal-variant" size={17} color="#8A94A6" />
-                ) : null}
-              </View>
-            )}
+            <Pressable style={workspace.styles.aiHeaderIconButton} onPress={closeChatPanel}>
+              <MaterialCommunityIcons name="close" size={20} color="#303744" />
+            </Pressable>
           </View>
         </View>
 
@@ -582,10 +417,8 @@ export function NotesAiAssistantPanel() {
           style={workspace.styles.aiMessagesScroll}
           contentContainerStyle={workspace.styles.aiMessagesContent}
           showsVerticalScrollIndicator={false}
-          keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
-          keyboardShouldPersistTaps="handled"
         >
-          {hasChatHistory ? workspace.aiMessages.map((message: BackendChatMessage) => {
+          {hasChatHistory ? workspace.aiMessages.map((message: any) => {
             const isUser = message.role === 'user';
             return (
               <View
@@ -673,7 +506,7 @@ export function NotesAiAssistantPanel() {
                 <Text style={workspace.styles.aiClassInsightMeta}>수업 필기 흐름 기준</Text>
               </View>
               <View style={workspace.styles.aiClassInsightChipRow}>
-                {classInsightPages.map((page: BackendClassInsightPageSignal) => (
+                {classInsightPages.map((page: any) => (
                   <Pressable
                     key={page.page_number}
                     style={workspace.styles.aiClassInsightChip}
@@ -691,29 +524,21 @@ export function NotesAiAssistantPanel() {
             <TextInput
               value={workspace.aiQuestion}
               onChangeText={workspace.onChangeAiQuestion}
-              placeholder={workspace.selectionPreviewUri ? '선택 영역에 대해 물어보세요' : '메시지 입력'}
+              onFocus={() => workspace.onFocusWorkspaceTarget?.(null)}
+              placeholder={workspace.selectionRect || workspace.selectionPreviewUri ? '선택 영역에 대해 물어보세요' : '메시지 입력'}
               placeholderTextColor="#8F96A3"
               multiline
               editable={!workspace.aiChatReadOnly && !workspace.aiLoading}
-              onFocus={scrollToLatestMessage}
               style={workspace.styles.aiComposerInput}
             />
-            {keyboardVisible ? (
-              <Pressable style={workspace.styles.aiComposerKeyboardButton} onPress={() => Keyboard.dismiss()}>
-                <MaterialCommunityIcons name="keyboard-close-outline" size={17} color="#6B7280" />
-              </Pressable>
-            ) : null}
-            <Pressable style={[workspace.styles.aiSendButton, workspace.aiChatReadOnly && workspace.styles.aiSendButtonDisabled]} onPress={requestAiAnswer} disabled={workspace.aiLoading || workspace.aiChatReadOnly}>
+            <Pressable style={[workspace.styles.aiSendButton, workspace.aiChatReadOnly && workspace.styles.aiSendButtonDisabled]} onPress={workspace.onRequestAiAnswer} disabled={workspace.aiLoading || workspace.aiChatReadOnly}>
               {workspace.aiLoading ? <ActivityIndicator size="small" color="#FFFFFF" /> : <MaterialCommunityIcons name="arrow-up" size={18} color="#FFFFFF" />}
             </Pressable>
           </View>
         </View>
       </View>
       </Animated.View>
-      {sidebarVisible ? (
-        <Pressable style={workspace.styles.aiSidebarHomeDismissLayer} onPress={closeSidebar} />
-      ) : null}
-      {effectivePanelMode === 'sidebar' ? (
+      {workspace.aiPanelMode === 'sidebar' && !workspace.usesAppAiPanelLayout ? (
         <View style={workspace.styles.aiPanelSidebarResizeHandle} {...sidebarResizePanResponder.panHandlers}>
           <View style={workspace.styles.aiPanelSidebarResizeGrip}>
             <View style={workspace.styles.aiPanelSidebarResizeDot} />

@@ -8,6 +8,8 @@ type WorkspaceAiIntentsParams = {
   selectionPreviewUri: string | null;
   setAiPanelOpen: SetState<boolean>;
   setAiPanelMode: SetState<'floating' | 'sidebar'>;
+  setAppChatMode?: SetState<'sidebar' | 'floating'>;
+  setAppRightSidebarPanel?: SetState<'chat' | 'canvas' | null>;
   setAiQuestion: SetState<string>;
   setViewingAiChatSessionId: SetState<number | null>;
   setWorkspaceFeedback: SetState<string | null>;
@@ -33,6 +35,9 @@ export function useWorkspaceAiIntents(params: WorkspaceAiIntentsParams) {
     params.setViewingAiChatSessionId(null);
     params.attachSelectionPreviewToAi(selectionPreviewUri);
     params.setAiPanelOpen(true);
+    params.setAiPanelMode('floating');
+    params.setAppChatMode?.('floating');
+    params.setAppRightSidebarPanel?.(null);
     params.setAiQuestion((current) => current.trim() || '이 선택 영역을 설명해줘');
     params.setWorkspaceFeedback(resolvedSelectionPreviewUri
       ? '선택 영역을 AI 질문창에 첨부했습니다.'

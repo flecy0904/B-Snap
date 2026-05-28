@@ -571,6 +571,7 @@ export function BlankNoteCanvas(props: {
         ref={captureTargetRef}
         collapsable={false}
         style={[props.styles.blankNotePage, { flex: 1, width: '100%', height: '100%', borderRadius: 20, borderWidth: 0, elevation: 0 }]}
+        onTouchStart={() => workspaceContext.onFocusWorkspaceTarget?.('document')}
         onLayout={(e) => setPageSize({ width: e.nativeEvent.layout.width, height: e.nativeEvent.layout.height })}
       >
         {props.backgroundImageUri ? (
