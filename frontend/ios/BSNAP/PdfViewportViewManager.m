@@ -364,6 +364,8 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 - (void)syncCustomCoreFromScrollView;
 - (void)syncScrollViewFromCustomCore;
 - (void)updateViewportModeViews;
+- (void)preserveCustomViewportContentPoint:(CGPoint)contentPoint atViewPoint:(CGPoint)viewPoint reason:(NSString *)reason;
+- (void)invalidateCustomViewportSurfaces;
 - (void)clampCustomViewportSnap:(BOOL)snap;
 - (void)clampCustomViewportSnap:(BOOL)snap preservingContentPoint:(CGPoint)contentPoint atViewPoint:(CGPoint)viewPoint;
 - (void)applyCustomViewportDidChangeWithDeltaY:(CGFloat)deltaY force:(BOOL)force;
@@ -1201,6 +1203,17 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   CGSize nextSize = self.bounds.size;
   BOOL sizeChanged = fabs(nextSize.width - previousSize.width) > 0.5
     || fabs(nextSize.height - previousSize.height) > 0.5;
+  BOOL shouldLockCustomResizeFocus = self.customViewportCoreEnabled
+    && sizeChanged
+    && self.layouts.count > 0
+    && previousSize.width > 0
+    && previousSize.height > 0
+    && nextSize.width > 0
+    && nextSize.height > 0;
+  CGPoint customResizeFocusContentPoint = CGPointZero;
+  if (shouldLockCustomResizeFocus) {
+    customResizeFocusContentPoint = [self contentPointForViewportPoint:CGPointMake(previousSize.width * 0.5, previousSize.height * 0.5)];
+  }
   if (sizeChanged && ![self isViewportUserInteractionActive]) {
     [self stopViewportMotionAndSettle];
     if (self.pendingLayoutTransitionAnchor == nil) {
@@ -1215,6 +1228,9 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   self.inkInputView.frame = self.bounds;
   if (self.bounds.size.width <= 0 || self.bounds.size.height <= 0) return;
   if (!sizeChanged) return;
+  if (shouldLockCustomResizeFocus) {
+    [self preserveCustomViewportContentPoint:customResizeFocusContentPoint atViewPoint:CGPointMake(nextSize.width * 0.5, nextSize.height * 0.5) reason:@"layout-resize"];
+  }
   BsnPdfPageDebugLog(@"[BsnPdfViewport][page-debug] layoutSubviews sizeChanged old=%.1fx%.1f new=%.1fx%.1f page=%ld reported=%ld offsetY=%.1f",
     previousSize.width,
     previousSize.height,
@@ -1245,9 +1261,12 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 {
   if (self.document == nil || self.layouts.count == 0) return NO;
   if (oldSize.width <= 0 || oldSize.height <= 0 || newSize.width <= 0 || newSize.height <= 0) return NO;
-  if (fabs(newSize.height - oldSize.height) > 0.5) return NO;
   if (self.pendingScrollToRequestedPage) return NO;
   if ([self isViewportUserInteractionActive]) return NO;
+  if (self.customViewportCoreEnabled) {
+    return fabs(newSize.width - oldSize.width) > 0.5 || fabs(newSize.height - oldSize.height) > 0.5;
+  }
+  if (fabs(newSize.height - oldSize.height) > 0.5) return NO;
   return fabs(newSize.width - oldSize.width) > 0.5;
 }
 
@@ -2092,6 +2111,10 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
       }];
       [CATransaction commit];
       self.lastContentOffsetY = self.scrollView.contentOffset.y;
+      if (self.customViewportCoreEnabled) {
+        [self syncCustomCoreFromScrollView];
+        [self invalidateCustomViewportSurfaces];
+      }
       [self saveViewportAnchor];
       return;
     }
@@ -2140,6 +2163,10 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   }];
   [CATransaction commit];
   self.lastContentOffsetY = self.scrollView.contentOffset.y;
+  if (self.customViewportCoreEnabled) {
+    [self syncCustomCoreFromScrollView];
+    [self invalidateCustomViewportSurfaces];
+  }
   [self saveViewportAnchor];
 }
 
@@ -2257,6 +2284,10 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   self.lastContentOffsetY = self.scrollView.contentOffset.y;
   self.lastPageNumber = pageNumber;
   self.reportedPageNumber = pageNumber;
+  if (self.customViewportCoreEnabled) {
+    [self syncCustomCoreFromScrollView];
+    [self invalidateCustomViewportSurfaces];
+  }
   [self saveViewportAnchor];
   [self setContentNeedsDisplaySafely];
   [self scheduleBaseRendersForce:YES];
@@ -2513,7 +2544,6 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     [self stopInertia];
     [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(startHiResOverlayRender) object:nil];
     self.viewportPanActive = YES;
-    if (self.customViewportCoreEnabled) [self syncCustomCoreFromScrollView];
     self.lastContentOffsetY = self.scrollView.contentOffset.y;
   } else if (gesture.state == UIGestureRecognizerStateChanged) {
     CGPoint translation = [gesture translationInView:self];
@@ -2703,7 +2733,6 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     [self stopInertia];
     [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(startHiResOverlayRender) object:nil];
     self.viewportPinchActive = YES;
-    if (self.customViewportCoreEnabled) [self syncCustomCoreFromScrollView];
     self.pinchStartZoom = self.customViewportCoreEnabled ? MAX(0.0001, self.coreScale) : MAX(0.0001, self.scrollView.zoomScale);
     self.pinchLastFocusViewPoint = focus;
     self.pinchFocusContentPoint = self.customViewportCoreEnabled
@@ -2717,14 +2746,24 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
       self.protectedPageNumber = focusPage;
       _requestedPage = focusPage;
     }
+    if (self.customViewportCoreEnabled) {
+      BsnPdfRenderDebugLog(self,
+        @"[BsnPdfViewport][custom-core] pinch-begin focusDoc=(%.1f,%.1f) focusView=(%.1f,%.1f) scale=%.3f scrollY=%.1f translateX=%.1f page=%ld",
+        self.pinchFocusContentPoint.x,
+        self.pinchFocusContentPoint.y,
+        focus.x,
+        focus.y,
+        self.coreScale,
+        self.coreScrollYDocument,
+        self.coreTranslateX,
+        (long)focusPage);
+    }
   } else if (gesture.state == UIGestureRecognizerStateChanged) {
     CGFloat nextZoom = MIN(BsnPdfMaxZoom, MAX(BsnPdfMinZoom, self.pinchStartZoom * gesture.scale));
     self.pinchLastFocusViewPoint = focus;
     if (self.customViewportCoreEnabled) {
       CGFloat previousY = self.coreScrollYDocument;
       self.coreScale = nextZoom;
-      self.coreScrollYDocument = self.pinchFocusContentPoint.y - focus.y / MAX(0.0001, nextZoom);
-      self.coreTranslateX = focus.x - self.pinchFocusContentPoint.x * nextZoom;
       [self clampCustomViewportSnap:NO preservingContentPoint:self.pinchFocusContentPoint atViewPoint:focus];
       [self applyCustomViewportDidChangeWithDeltaY:self.coreScrollYDocument - previousY force:NO];
       NSInteger focusPage = [self pageNumberNearContentPoint:self.pinchFocusContentPoint];
@@ -2763,10 +2802,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
         _requestedPage = focusPage;
       }
       self.viewportPinchActive = NO;
-      [self.customCoreView setNeedsDisplay];
-      [self.liveInkView setNeedsDisplay];
-      [self updateTextAnnotationViews];
-      [self updatePageReferenceViews];
+      [self invalidateCustomViewportSurfaces];
       [self saveViewportAnchor];
       [self flushDeferredViewportInvalidations];
       [self scheduleBaseRendersForce:YES];
@@ -2792,10 +2828,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
       [self clampCustomViewportSnap:YES preservingContentPoint:self.pinchFocusContentPoint atViewPoint:self.pinchLastFocusViewPoint];
       [self syncScrollViewFromCustomCore];
       self.viewportPinchActive = NO;
-      [self.customCoreView setNeedsDisplay];
-      [self.liveInkView setNeedsDisplay];
-      [self updateTextAnnotationViews];
-      [self updatePageReferenceViews];
+      [self invalidateCustomViewportSurfaces];
       [self saveViewportAnchor];
       [self flushDeferredViewportInvalidations];
       [self requestHiResOverlayAfterDelay:180];
@@ -3557,6 +3590,10 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   self.lastPageNumber = self.requestedPage;
   self.reportedPageNumber = self.requestedPage;
   if (explicitRequest) self.appliedRequestedPageSerial = self.requestedPageSerial;
+  if (self.customViewportCoreEnabled) {
+    [self syncCustomCoreFromScrollView];
+    [self invalidateCustomViewportSurfaces];
+  }
   [self saveViewportAnchor];
   [self setContentNeedsDisplaySafely];
   [self scheduleBaseRendersForce:YES];
@@ -4278,6 +4315,39 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   [self requestViewportChangedForce:YES];
 }
 
+- (void)preserveCustomViewportContentPoint:(CGPoint)contentPoint atViewPoint:(CGPoint)viewPoint reason:(NSString *)reason
+{
+  if (!self.customViewportCoreEnabled) return;
+  if (!isfinite(contentPoint.x) || !isfinite(contentPoint.y)) return;
+  if (!isfinite(viewPoint.x) || !isfinite(viewPoint.y)) return;
+  CGFloat beforeScrollY = self.coreScrollYDocument;
+  CGFloat beforeTranslateX = self.coreTranslateX;
+  [self clampCustomViewportSnap:NO preservingContentPoint:contentPoint atViewPoint:viewPoint];
+  [self syncScrollViewFromCustomCore];
+  BsnPdfRenderDebugLog(self,
+    @"[BsnPdfViewport][custom-core] preserve reason=%@ focusDoc=(%.1f,%.1f) view=(%.1f,%.1f) scale=%.3f scrollY %.1f->%.1f translateX %.1f->%.1f",
+    reason ?: @"unknown",
+    contentPoint.x,
+    contentPoint.y,
+    viewPoint.x,
+    viewPoint.y,
+    self.coreScale,
+    beforeScrollY,
+    self.coreScrollYDocument,
+    beforeTranslateX,
+    self.coreTranslateX);
+  [self invalidateCustomViewportSurfaces];
+}
+
+- (void)invalidateCustomViewportSurfaces
+{
+  if (!self.customViewportCoreEnabled) return;
+  [self.customCoreView setNeedsDisplay];
+  [self.liveInkView setNeedsDisplay];
+  [self updateTextAnnotationViews];
+  [self updatePageReferenceViews];
+}
+
 - (void)clampCustomViewportSnap:(BOOL)snap
 {
   [self clampCustomViewportSnap:snap preservingContentPoint:CGPointMake(NAN, NAN) atViewPoint:CGPointZero];
@@ -4316,10 +4386,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   [self clampCustomViewportSnap:NO];
   [self syncScrollViewFromCustomCore];
   [self updateBaseRenderDirection:deltaY];
-  [self.customCoreView setNeedsDisplay];
-  [self.liveInkView setNeedsDisplay];
-  [self updateTextAnnotationViews];
-  [self updatePageReferenceViews];
+  [self invalidateCustomViewportSurfaces];
   [self scheduleBaseRendersForce:NO];
   [self emitPageChangedIfNeededFromSource:self.viewportPinchActive ? @"customViewportPinch" : (self.viewportPanActive ? @"customViewportPan" : @"customViewport")];
   [self saveViewportAnchor];
