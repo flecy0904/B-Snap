@@ -188,6 +188,43 @@ function formatZoomPercent(value: number) {
   return `${Math.round(value * 100)}%`;
 }
 
+const floatingControlBaseStyle: React.CSSProperties = {
+  position: 'absolute',
+  bottom: 18,
+  zIndex: 80,
+  display: 'flex',
+  alignItems: 'center',
+  minHeight: 31,
+  borderRadius: 14,
+  border: '1px solid rgba(198, 204, 214, 0.82)',
+  backgroundColor: 'rgba(250, 250, 250, 0.96)',
+  boxShadow: '0 4px 12px rgba(15, 23, 42, 0.12), 0 1px 2px rgba(15, 23, 42, 0.08)',
+  backdropFilter: 'blur(10px)',
+  pointerEvents: 'auto',
+};
+
+const floatingControlButtonStyle: React.CSSProperties = {
+  width: 24,
+  height: 28,
+  display: 'inline-flex',
+  alignItems: 'center',
+  justifyContent: 'center',
+  border: 0,
+  borderRadius: 10,
+  backgroundColor: 'transparent',
+  color: '#2F3745',
+  fontSize: 15,
+  fontWeight: 800,
+  cursor: 'pointer',
+  lineHeight: 1,
+};
+
+const floatingControlDividerStyle: React.CSSProperties = {
+  width: 1,
+  height: 17,
+  backgroundColor: 'rgba(198, 204, 214, 0.9)',
+};
+
 function isPrimaryDomPointer(event: React.PointerEvent<HTMLElement>) {
   if (!event.isPrimary) return false;
   if (event.pointerType === 'mouse') return event.button === 0 || event.buttons === 1;
@@ -766,6 +803,7 @@ export function PdfPreview(props: {
     onOpenGeneratedPage: props.onOpenGeneratedPage,
   });
   const pageCount = snapshot.pageCount;
+  const pageLabel = pageCount ? `${snapshot.currentPage} / ${pageCount}` : `${props.page}`;
   const pageItems = useMemo<NotebookPage[]>(
     () => props.notebookPages?.length
       ? props.notebookPages
@@ -797,7 +835,7 @@ export function PdfPreview(props: {
       return reference.page.kind === 'pdf' && reference.page.pageNumber === page.pageNumber;
     })
   );
-  const zoomLabel = snapshot.zoomMode === 'fit' ? `Fit ${formatZoomPercent(snapshot.scale)}` : formatZoomPercent(snapshot.scale);
+  const zoomLabel = formatZoomPercent(snapshot.scale);
 
   useEffect(() => {
     if (!openReferenceId) return;
@@ -844,10 +882,6 @@ export function PdfPreview(props: {
 
   const zoomBy = useCallback((delta: number) => {
     engine.zoomBy(delta);
-  }, [engine]);
-
-  const resetZoomToFit = useCallback(() => {
-    engine.resetZoomToFit();
   }, [engine]);
 
   const drawTextAnnotation = (context: CanvasRenderingContext2D, annotation: InkTextAnnotation) => {
@@ -1420,47 +1454,6 @@ export function PdfPreview(props: {
       }}
     >
       <div
-        style={{
-          width: '100%',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '14px 16px 10px',
-          borderBottom: '1px solid #EEF2F7',
-          boxSizing: 'border-box',
-          flexShrink: 0,
-        }}
-      >
-        <div>
-          <div style={{ fontSize: 10, fontWeight: 900, letterSpacing: 0.8, color: '#8D97AA', marginBottom: 4 }}>PDF VIEW</div>
-          <div style={{ fontSize: 13, fontWeight: 800, color: '#304056' }}>{pageCount ? `${snapshot.currentPage} / ${pageCount}` : `Page ${props.page}`}</div>
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <button
-            type="button"
-            style={{ height: 34, padding: '0 14px', borderRadius: 10, border: '1px solid #DCE5F0', backgroundColor: '#FFFFFF', fontSize: 12, fontWeight: 800, color: '#31405B', cursor: 'pointer' }}
-            onClick={() => zoomBy(-WEB_PDF_ZOOM_STEP)}
-          >
-            -
-          </button>
-          <div style={{ minWidth: 78, textAlign: 'center', fontSize: 13, fontWeight: 800, color: '#304056' }}>{zoomLabel}</div>
-          <button
-            type="button"
-            style={{ height: 34, padding: '0 14px', borderRadius: 10, border: '1px solid #DCE5F0', backgroundColor: '#FFFFFF', fontSize: 12, fontWeight: 800, color: '#31405B', cursor: 'pointer' }}
-            onClick={() => zoomBy(WEB_PDF_ZOOM_STEP)}
-          >
-            +
-          </button>
-          <button
-            type="button"
-            style={{ height: 34, padding: '0 14px', borderRadius: 10, border: '1px solid #DCE5F0', backgroundColor: '#FFFFFF', fontSize: 12, fontWeight: 800, color: '#31405B', cursor: 'pointer' }}
-            onClick={resetZoomToFit}
-          >
-            Fit
-          </button>
-        </div>
-      </div>
-      <div
         ref={rootRef}
         style={{
           width: '100%',
@@ -1484,6 +1477,65 @@ export function PdfPreview(props: {
         {!snapshot.isLoading && snapshot.loadError ? (
           <div style={{ position: 'absolute', top: 18, left: 0, right: 0, color: '#6B7280', textAlign: 'center', padding: '0 24px' }}>{snapshot.loadError}</div>
         ) : null}
+      </div>
+      <div
+        aria-label="Current PDF page"
+        style={{
+          ...floatingControlBaseStyle,
+          left: 18,
+          padding: '0 12px',
+          color: '#5F636A',
+          fontSize: 14,
+          fontWeight: 700,
+          letterSpacing: 0,
+          fontVariantNumeric: 'tabular-nums',
+        }}
+      >
+        {pageLabel}
+      </div>
+      <div
+        aria-label="PDF zoom controls"
+        style={{
+          ...floatingControlBaseStyle,
+          right: 18,
+          gap: 0,
+          padding: '1px 3px',
+        }}
+      >
+        <button
+          type="button"
+          aria-label="Zoom out"
+          title="Zoom out"
+          style={floatingControlButtonStyle}
+          onClick={() => zoomBy(-WEB_PDF_ZOOM_STEP)}
+        >
+          -
+        </button>
+        <div style={floatingControlDividerStyle} />
+        <div
+          aria-label="Current zoom"
+          style={{
+            minWidth: 42,
+            padding: '0 4px',
+            textAlign: 'center',
+            color: '#4F5560',
+            fontSize: 12,
+            fontWeight: 800,
+            fontVariantNumeric: 'tabular-nums',
+          }}
+        >
+          {zoomLabel}
+        </div>
+        <div style={floatingControlDividerStyle} />
+        <button
+          type="button"
+          aria-label="Zoom in"
+          title="Zoom in"
+          style={floatingControlButtonStyle}
+          onClick={() => zoomBy(WEB_PDF_ZOOM_STEP)}
+        >
+          +
+        </button>
       </div>
     </div>
   );

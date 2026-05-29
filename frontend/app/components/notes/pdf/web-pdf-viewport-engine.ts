@@ -438,6 +438,12 @@ export class WebPdfViewportEngine {
     this.applyZoom(clampZoom(this.snapshot.scale + delta), anchor ?? this.getViewportCenterAnchor(), false);
   }
 
+  zoomByWheelEvent(event: WheelEvent) {
+    const delta = normalizeWheelDelta(event);
+    const nextScale = clampZoom((this.snapshot.scale || 1) * Math.exp(-delta.y * WEB_PDF_WHEEL_ZOOM_SENSITIVITY));
+    this.applyZoom(nextScale, this.getViewportCenterAnchor(), true);
+  }
+
   resetZoomToFit() {
     const anchor = this.resolvePageAnchor(this.getViewportCenterAnchor());
     this.manualScale = this.calculateFitScale();
@@ -826,8 +832,7 @@ export class WebPdfViewportEngine {
     event.stopPropagation();
     const delta = normalizeWheelDelta(event);
     if (event.ctrlKey || event.metaKey) {
-      const nextScale = clampZoom((this.snapshot.scale || 1) * Math.exp(-delta.y * WEB_PDF_WHEEL_ZOOM_SENSITIVITY));
-      this.applyZoom(nextScale, this.getViewportCenterAnchor(), true);
+      this.zoomByWheelEvent(event);
       return;
     }
     this.zoomGestureAnchor = null;

@@ -18,6 +18,20 @@ import type { AuthUser } from './types';
 
 const TABS: TabKey[] = ['schedule', 'notes', 'capture', 'profile'];
 
+function isEditableShortcutTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false;
+  return Boolean(target.closest('textarea,input,select,[contenteditable="true"]'));
+}
+
+function getWorkspaceHistoryShortcut(event: KeyboardEvent): 'undo' | 'redo' | null {
+  if (!event.ctrlKey && !event.metaKey) return null;
+  if (event.altKey) return null;
+  const key = event.key.toLowerCase();
+  if (key === 'y' && !event.shiftKey) return 'redo';
+  if (key !== 'z') return null;
+  return event.shiftKey ? 'redo' : 'undo';
+}
+
 export function AppShell(props: {
   authUser: AuthUser;
   onLogout: () => void;
@@ -67,6 +81,37 @@ export function AppShell(props: {
     const timer = setTimeout(() => setProfileFeedback(null), 2400);
     return () => clearTimeout(timer);
   }, [profileFeedback]);
+
+  useEffect(() => {
+    if (!isWeb || tab !== 'notes') return undefined;
+    const handleNotesHistoryShortcut = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || isEditableShortcutTarget(event.target)) return;
+      const shortcut = getWorkspaceHistoryShortcut(event);
+      if (!shortcut) return;
+      const canRun = shortcut === 'undo'
+        ? notesState.canUndoFocusedWorkspaceAction
+        : notesState.canRedoFocusedWorkspaceAction;
+      if (!canRun) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (shortcut === 'undo') {
+        notesState.undoFocusedWorkspaceAction();
+        return;
+      }
+      notesState.redoFocusedWorkspaceAction();
+    };
+    document.addEventListener('keydown', handleNotesHistoryShortcut);
+    return () => {
+      document.removeEventListener('keydown', handleNotesHistoryShortcut);
+    };
+  }, [
+    isWeb,
+    notesState.canRedoFocusedWorkspaceAction,
+    notesState.canUndoFocusedWorkspaceAction,
+    notesState.redoFocusedWorkspaceAction,
+    notesState.undoFocusedWorkspaceAction,
+    tab,
+  ]);
 
   const cycleSemesterFromProfile = () => {
     const currentIndex = scheduleState.semesterSchedules.findIndex((item) => item.id === scheduleState.semester.id);
