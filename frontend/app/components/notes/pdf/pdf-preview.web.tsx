@@ -1,14 +1,13 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { GestureResponderEvent, Image, Pressable, ScrollView, Text, useWindowDimensions, View } from 'react-native';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Image, Pressable, Text, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import Svg, { Path } from 'react-native-svg';
 import { InkPath } from '../canvas/ink-path';
-import { TextAnnotationLayer } from '../canvas/text-annotation-layer';
-import { hasMultipleTouches, shouldCaptureInkPointer, shouldUsePrimaryPointer } from '../canvas/ink-input-policy';
 import { getCaptureOriginalImageSource, getPageCaptureReferenceImageSource } from '../shared/capture-assets';
 import { cleanAiDisplayText, finalizeInkStroke, findHitInkStrokeId, getInkCenterlinePath, getInkStrokeSvgPath, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize, shouldAppendInkPoint } from '../../../ui-helpers';
 import { InkBrush, InkBrushSettings, InkImageAnnotation, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { CaptureAsset, NotebookPage, PageCaptureReference } from '../../../types';
+import { useWebPdfViewportEngine, WebPdfPageFrame } from './web-pdf-viewport-engine';
 
 function NotebookPaperBackground({ page }: { page: NotebookPage }) {
   const isSummary = page.kind === 'summary';
@@ -81,71 +80,20 @@ function AdaptiveReferenceImage(props: {
   );
 }
 
-type PdfJsViewport = { width: number; height: number };
-type PdfJsRenderTask = { promise: Promise<void>; cancel?: () => void };
-type PdfJsPage = {
-  getViewport: (options: { scale: number }) => PdfJsViewport;
-  render: (params: { canvasContext: CanvasRenderingContext2D; viewport: PdfJsViewport }) => PdfJsRenderTask;
-};
-type PdfJsDocument = {
-  numPages: number;
-  getPage: (pageNumber: number) => Promise<PdfJsPage>;
-  destroy?: () => void;
-};
-type PdfJsDocumentSource = string | { url: string; withCredentials?: boolean; disableWorker?: boolean } | { data: Uint8Array; disableWorker?: boolean };
-type PdfJsLib = {
-  version: string;
-  GlobalWorkerOptions: { workerSrc: string };
-  getDocument: (source: PdfJsDocumentSource) => { promise: Promise<PdfJsDocument>; destroy?: () => void };
-};
-type PageFrame = { width: number; height: number };
+type PageFrame = WebPdfPageFrame;
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
-const PDF_RENDER_PAGE_RADIUS = 2;
-
-function getPriorityPageNumbers(currentPage: number, pageCount: number) {
-  const pageNumbers: number[] = [];
-  for (let offset = 0; offset <= PDF_RENDER_PAGE_RADIUS; offset += 1) {
-    const candidates = offset === 0 ? [currentPage] : [currentPage - offset, currentPage + offset];
-    candidates.forEach((pageNumber) => {
-      if (pageNumber >= 1 && pageNumber <= pageCount && !pageNumbers.includes(pageNumber)) {
-        pageNumbers.push(pageNumber);
-      }
-    });
-  }
-  return pageNumbers;
-}
+const WEB_PDF_ZOOM_STEP = 0.15;
+const WEB_PDF_PAGE_GAP = 22;
 
 function getCaptureAssetSummary(asset: CaptureAsset | null | undefined) {
   if (!asset) return '';
   return cleanAiDisplayText(asset.analysisSummary || asset.summary);
 }
 
-declare global {
-  interface Window {
-    pdfjsLib?: PdfJsLib;
-  }
-}
-
-let pdfJsLoaderPromise: Promise<PdfJsLib> | null = null;
-
 function shouldLockScrollForTool(tool: InkTool, fingerDrawingEnabled: boolean | undefined) {
   return tool === 'select'
     || tool === 'text'
     || Boolean(fingerDrawingEnabled && isDrawingTool(tool));
-}
-
-function shouldCaptureToolStart(tool: InkTool, event: GestureResponderEvent, fingerDrawingEnabled: boolean | undefined) {
-  if (!shouldUsePrimaryPointer(event)) return false;
-  if (isDrawingTool(tool)) return shouldCaptureInkPointer(event, Boolean(fingerDrawingEnabled));
-  if (tool === 'erase') return shouldCaptureInkPointer(event, Boolean(fingerDrawingEnabled));
-  return tool === 'select' || tool === 'text';
-}
-
-function shouldCaptureToolMove(tool: InkTool, event: GestureResponderEvent, fingerDrawingEnabled: boolean | undefined) {
-  if (!shouldUsePrimaryPointer(event)) return false;
-  if (isDrawingTool(tool)) return shouldCaptureInkPointer(event, Boolean(fingerDrawingEnabled));
-  if (tool === 'erase') return shouldCaptureInkPointer(event, Boolean(fingerDrawingEnabled));
-  return tool === 'select';
 }
 
 function isPdfUri(uri: string | undefined) {
@@ -228,76 +176,30 @@ function SelectionOverlay(props: { rect: SelectionRect; styles: any; draft?: boo
   );
 }
 
-function loadPdfJs(): Promise<PdfJsLib> {
-  if (typeof window === 'undefined') {
-    return Promise.reject(new Error('PDF.js is only available on web.'));
-  }
-
-  if (window.pdfjsLib) {
-    return Promise.resolve(window.pdfjsLib);
-  }
-
-  if (!pdfJsLoaderPromise) {
-    pdfJsLoaderPromise = new Promise((resolve, reject) => {
-      const existing = document.querySelector('script[data-pdfjs-runtime="true"]') as HTMLScriptElement | null;
-      const handleReady = () => {
-        if (!window.pdfjsLib) {
-          reject(new Error('PDF.js runtime did not initialize.'));
-          return;
-        }
-        resolve(window.pdfjsLib);
-      };
-
-      if (existing) {
-        existing.addEventListener('load', handleReady, { once: true });
-        existing.addEventListener('error', () => reject(new Error('Failed to load PDF.js runtime.')), { once: true });
-        return;
-      }
-
-      const script = document.createElement('script');
-      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js';
-      script.async = true;
-      script.dataset.pdfjsRuntime = 'true';
-      script.onload = handleReady;
-      script.onerror = () => reject(new Error('Failed to load PDF.js runtime.'));
-      document.head.appendChild(script);
-    });
-  }
-
-  return pdfJsLoaderPromise;
+function formatZoomPercent(value: number) {
+  return `${Math.round(value * 100)}%`;
 }
 
-function dataUriToBytes(uri: string) {
-  const base64 = uri.includes(',') ? uri.slice(uri.indexOf(',') + 1) : uri;
-  const binary = window.atob(base64);
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) {
-    bytes[index] = binary.charCodeAt(index);
-  }
-  return bytes;
+function isPrimaryDomPointer(event: React.PointerEvent<HTMLElement>) {
+  if (!event.isPrimary) return false;
+  if (event.pointerType === 'mouse') return event.button === 0 || event.buttons === 1;
+  return true;
 }
 
-function createPdfDocumentSource(uri: string): PdfJsDocumentSource {
-  if (uri.startsWith('data:application/pdf')) {
-    return { data: dataUriToBytes(uri), disableWorker: true };
-  }
-  return { url: uri, withCredentials: false, disableWorker: true };
+function isStylusPointer(event: React.PointerEvent<HTMLElement>) {
+  const pointerType = String(event.pointerType);
+  return pointerType === 'pen' || pointerType === 'stylus';
 }
 
-function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string) {
-  return new Promise<T>((resolve, reject) => {
-    const timer = window.setTimeout(() => reject(new Error(message)), timeoutMs);
-    promise.then(
-      (value) => {
-        window.clearTimeout(timer);
-        resolve(value);
-      },
-      (error) => {
-        window.clearTimeout(timer);
-        reject(error);
-      },
-    );
-  });
+function shouldCaptureDomPointer(tool: InkTool, event: React.PointerEvent<HTMLElement>, fingerDrawingEnabled: boolean | undefined) {
+  if (!isPrimaryDomPointer(event)) return false;
+  if (tool === 'select' || tool === 'text') return true;
+  if (isDrawingTool(tool) || tool === 'erase') {
+    if (event.pointerType === 'mouse') return true;
+    if (isStylusPointer(event)) return true;
+    return Boolean(fingerDrawingEnabled);
+  }
+  return false;
 }
 
 function drawPath(context: CanvasRenderingContext2D, stroke: InkStroke, opacity = 1) {
@@ -329,6 +231,339 @@ function drawPath(context: CanvasRenderingContext2D, stroke: InkStroke, opacity 
     context.fill(new Path2D(path));
   }
   context.restore();
+}
+
+const MIN_TEXT_BOX_WIDTH = 96;
+const MIN_TEXT_BOX_HEIGHT = 56;
+const DEFAULT_TEXT_FONT_SIZE = 17;
+const MIN_TEXT_FONT_SIZE = 12;
+const MAX_TEXT_FONT_SIZE = 40;
+
+function clamp(value: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, value));
+}
+
+function WebPdfTextAnnotationLayer(props: {
+  annotations: InkTextAnnotation[];
+  onChangeText: (id: string, text: string) => void;
+  onMove?: (id: string, x: number, y: number) => void;
+  onResize?: (id: string, width: number, height: number) => void;
+  onChangeFontSize?: (id: string, fontSize: number) => void;
+  onRemove: (id: string) => void;
+  variant?: 'floating' | 'marker';
+}) {
+  const [activeAnnotationId, setActiveAnnotationId] = useState<string | null>(null);
+  const [draftFrame, setDraftFrame] = useState<Record<string, { x: number; y: number; width: number; height: number }>>({});
+  const textareaRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
+  const pointerDragRef = useRef<{
+    id: string;
+    mode: 'move' | 'resize';
+    pointerId: number;
+    startClientX: number;
+    startClientY: number;
+    startFrame: { x: number; y: number; width: number; height: number };
+    currentFrame: { x: number; y: number; width: number; height: number };
+  } | null>(null);
+  const variant = props.variant ?? 'floating';
+
+  useEffect(() => {
+    if (!activeAnnotationId) return;
+    if (props.annotations.some((annotation) => annotation.id === activeAnnotationId)) return;
+    setActiveAnnotationId(null);
+  }, [activeAnnotationId, props.annotations]);
+
+  useEffect(() => {
+    const emptyAnnotation = props.annotations.find((annotation) => !annotation.text.trim());
+    if (!emptyAnnotation) return undefined;
+    const timer = window.setTimeout(() => {
+      setActiveAnnotationId(emptyAnnotation.id);
+      textareaRefs.current[emptyAnnotation.id]?.focus();
+    }, 80);
+    return () => window.clearTimeout(timer);
+  }, [props.annotations]);
+
+  const getFrame = (annotation: InkTextAnnotation) => (
+    draftFrame[annotation.id] ?? {
+      x: annotation.x,
+      y: annotation.y,
+      width: annotation.width,
+      height: annotation.height ?? 88,
+    }
+  );
+
+  const activate = (id: string) => {
+    setActiveAnnotationId(id);
+    window.setTimeout(() => textareaRefs.current[id]?.focus(), 0);
+  };
+
+  const changeFontSize = (annotation: InkTextAnnotation, delta: number) => {
+    setActiveAnnotationId(annotation.id);
+    const fontSize = clamp(Math.round(annotation.fontSize ?? DEFAULT_TEXT_FONT_SIZE), MIN_TEXT_FONT_SIZE, MAX_TEXT_FONT_SIZE);
+    props.onChangeFontSize?.(annotation.id, clamp(fontSize + delta, MIN_TEXT_FONT_SIZE, MAX_TEXT_FONT_SIZE));
+  };
+
+  const startDrag = (event: React.PointerEvent<HTMLElement>, annotation: InkTextAnnotation, mode: 'move' | 'resize') => {
+    if (!event.isPrimary || (event.pointerType === 'mouse' && event.button !== 0)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setActiveAnnotationId(annotation.id);
+    pointerDragRef.current = {
+      id: annotation.id,
+      mode,
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startFrame: getFrame(annotation),
+      currentFrame: getFrame(annotation),
+    };
+  };
+
+  const moveDrag = (event: React.PointerEvent<HTMLElement>) => {
+    const drag = pointerDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const dx = event.clientX - drag.startClientX;
+    const dy = event.clientY - drag.startClientY;
+    const frame = drag.mode === 'move'
+      ? {
+        ...drag.startFrame,
+        x: drag.startFrame.x + dx,
+        y: drag.startFrame.y + dy,
+      }
+      : {
+        ...drag.startFrame,
+        width: Math.max(MIN_TEXT_BOX_WIDTH, drag.startFrame.width + dx),
+        height: Math.max(MIN_TEXT_BOX_HEIGHT, drag.startFrame.height + dy),
+      };
+    pointerDragRef.current = { ...drag, currentFrame: frame };
+    setDraftFrame((current) => ({ ...current, [drag.id]: frame }));
+  };
+
+  const finishDrag = (event: React.PointerEvent<HTMLElement>) => {
+    const drag = pointerDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const frame = drag.currentFrame;
+    if (drag.mode === 'move') props.onMove?.(drag.id, frame.x, frame.y);
+    if (drag.mode === 'resize') props.onResize?.(drag.id, frame.width, frame.height);
+    pointerDragRef.current = null;
+    setDraftFrame((current) => {
+      const next = { ...current };
+      delete next[drag.id];
+      return next;
+    });
+  };
+
+  return (
+    <div style={{ position: 'absolute', inset: 0, zIndex: 25, pointerEvents: 'none' }}>
+      {props.annotations.map((annotation) => {
+        if (variant === 'marker' && annotation.anchorRect) {
+          return (
+            <div key={annotation.id} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
+              <div
+                style={{
+                  position: 'absolute',
+                  left: annotation.anchorRect.x,
+                  top: annotation.anchorRect.y,
+                  width: annotation.anchorRect.width,
+                  height: annotation.anchorRect.height,
+                  borderRadius: 10,
+                  border: '1px solid rgba(95, 121, 255, 0.28)',
+                  backgroundColor: 'rgba(95, 121, 255, 0.08)',
+                }}
+              />
+              <div
+                style={{
+                  position: 'absolute',
+                  left: annotation.anchorRect.x + annotation.anchorRect.width - 12,
+                  top: Math.max(12, annotation.anchorRect.y - 12),
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 5,
+                  minHeight: 24,
+                  padding: '0 8px',
+                  borderRadius: 999,
+                  backgroundColor: '#5F79FF',
+                  color: '#FFFFFF',
+                  fontSize: 10,
+                  fontWeight: 900,
+                }}
+              >
+                <MaterialCommunityIcons name="note-text-outline" size={12} color="#FFFFFF" />
+                {annotation.text.trim() ? '메모' : '새 메모'}
+              </div>
+            </div>
+          );
+        }
+
+        const frame = getFrame(annotation);
+        const active = activeAnnotationId === annotation.id || !annotation.text.trim();
+        const fontSize = clamp(Math.round(annotation.fontSize ?? DEFAULT_TEXT_FONT_SIZE), MIN_TEXT_FONT_SIZE, MAX_TEXT_FONT_SIZE);
+        return (
+          <div
+            key={annotation.id}
+            style={{
+              position: 'absolute',
+              left: frame.x,
+              top: frame.y,
+              width: frame.width,
+              height: frame.height,
+              minHeight: MIN_TEXT_BOX_HEIGHT,
+              padding: active ? '42px 10px 10px' : 10,
+              borderRadius: 10,
+              border: `1px solid ${active ? '#5F79FF' : 'rgba(95, 121, 255, 0.22)'}`,
+              backgroundColor: active ? 'rgba(255,255,255,0.74)' : 'rgba(255,255,255,0.1)',
+              boxShadow: active ? '0 6px 12px rgba(95,121,255,0.16)' : 'none',
+              boxSizing: 'border-box',
+              pointerEvents: 'auto',
+            }}
+            onPointerDown={(event) => event.stopPropagation()}
+          >
+            {active ? (
+              <div
+                style={{
+                  position: 'absolute',
+                  top: 6,
+                  left: 7,
+                  right: 7,
+                  height: 30,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                }}
+              >
+                <button
+                  type="button"
+                  onPointerDown={(event) => startDrag(event, annotation, 'move')}
+                  onPointerMove={moveDrag}
+                  onPointerUp={finishDrag}
+                  onPointerCancel={() => { pointerDragRef.current = null; }}
+                  style={{
+                    minWidth: 54,
+                    height: 30,
+                    borderRadius: 999,
+                    border: '1px solid #DDE5F5',
+                    backgroundColor: '#FFFFFF',
+                    cursor: 'grab',
+                  }}
+                >
+                  <MaterialCommunityIcons name="drag-horizontal-variant" size={17} color="#4B5565" />
+                </button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <button
+                    type="button"
+                    onClick={() => changeFontSize(annotation, -1)}
+                    style={{
+                      width: 28,
+                      height: 28,
+                      borderRadius: 999,
+                      border: '1px solid #DDE5F5',
+                      backgroundColor: '#FFFFFF',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <MaterialCommunityIcons name="minus" size={14} color="#4B5565" />
+                  </button>
+                  <div style={{ minWidth: 28, height: 28, borderRadius: 999, display: 'flex', alignItems: 'center', justifyContent: 'center', backgroundColor: '#EEF3FF', color: '#4F63D7', fontSize: 11, fontWeight: 800 }}>
+                    {fontSize}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => changeFontSize(annotation, 1)}
+                    style={{
+                      width: 28,
+                      height: 28,
+                      borderRadius: 999,
+                      border: '1px solid #DDE5F5',
+                      backgroundColor: '#FFFFFF',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <MaterialCommunityIcons name="plus" size={14} color="#4B5565" />
+                  </button>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => props.onRemove(annotation.id)}
+                  style={{
+                    width: 30,
+                    height: 30,
+                    borderRadius: 999,
+                    border: '1px solid #FAD5D5',
+                    backgroundColor: '#FFFFFF',
+                    cursor: 'pointer',
+                  }}
+                >
+                  <MaterialCommunityIcons name="close" size={14} color="#EF4444" />
+                </button>
+              </div>
+            ) : null}
+            <textarea
+              ref={(node) => {
+                textareaRefs.current[annotation.id] = node;
+              }}
+              value={annotation.text}
+              onFocus={() => setActiveAnnotationId(annotation.id)}
+              onChange={(event) => props.onChangeText(annotation.id, event.currentTarget.value)}
+              placeholder="텍스트 입력"
+              style={{
+                width: '100%',
+                height: '100%',
+                minHeight: Math.max(32, frame.height - (active ? 56 : 24)),
+                resize: 'none',
+                border: 0,
+                outline: 'none',
+                backgroundColor: 'transparent',
+                color: '#111827',
+                fontSize,
+                lineHeight: `${Math.round(fontSize * 1.35)}px`,
+                fontWeight: 700,
+                boxSizing: 'border-box',
+              }}
+            />
+            {active ? (
+              <button
+                type="button"
+                onPointerDown={(event) => startDrag(event, annotation, 'resize')}
+                onPointerMove={moveDrag}
+                onPointerUp={finishDrag}
+                onPointerCancel={() => { pointerDragRef.current = null; }}
+                style={{
+                  position: 'absolute',
+                  right: -12,
+                  bottom: -12,
+                  width: 28,
+                  height: 28,
+                  borderRadius: 999,
+                  border: '1px solid #BFD0FF',
+                  backgroundColor: '#FFFFFF',
+                  cursor: 'nwse-resize',
+                }}
+              >
+                <MaterialCommunityIcons name="resize-bottom-right" size={13} color="#5F79FF" />
+              </button>
+            ) : (
+              <button
+                type="button"
+                aria-label="텍스트 메모 선택"
+                onClick={() => activate(annotation.id)}
+                style={{
+                  position: 'absolute',
+                  inset: 0,
+                  border: 0,
+                  background: 'transparent',
+                  cursor: 'text',
+                }}
+              />
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 export function PdfPreview(props: {
@@ -374,21 +609,12 @@ export function PdfPreview(props: {
   onAskAiAboutPageCaptureReference?: (referenceId: string) => void;
   styles: any;
 }) {
-  const { width, height } = useWindowDimensions();
-  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
-  const availableWidth = Math.max(320, containerSize.width || width);
-  const availableHeight = Math.max(520, containerSize.height || height);
-  const viewerWidth = Math.min(1800, Math.max(320, availableWidth - 12));
-  const viewerHeight = Math.max(520, availableHeight - 20);
-  const pageGap = 22;
-  const [pdfDocument, setPdfDocument] = useState<PdfJsDocument | null>(null);
-  const [pageFrames, setPageFrames] = useState<Record<number, PageFrame>>({});
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
   const [currentStroke, setCurrentStroke] = useState<InkStroke | null>(null);
   const [draftSelection, setDraftSelection] = useState<SelectionRect | null>(null);
   const [openReferenceId, setOpenReferenceId] = useState<string | null>(null);
   const currentStrokeRef = useRef<InkStroke | null>(null);
+  const activePointerIdRef = useRef<number | null>(null);
+  const activePointerPageRef = useRef<NotebookPage | null>(null);
   const selectionOriginRef = useRef<InkPoint | null>(null);
   const selectionMoveOriginRef = useRef<InkPoint | null>(null);
   const selectionMoveStartRectRef = useRef<SelectionRect | null>(null);
@@ -396,9 +622,7 @@ export function PdfPreview(props: {
   const selectionResizeStartRectRef = useRef<SelectionRect | null>(null);
   const draftSelectionRef = useRef<SelectionRect | null>(null);
   const textTapRef = useRef<InkPoint | null>(null);
-  const canvasRefs = useRef<Record<number, HTMLCanvasElement | null>>({});
-  const scrollingProgrammaticallyRef = useRef(false);
-  const suppressNextScrollSyncRef = useRef(false);
+  const selectionPreviewRequestRef = useRef(0);
   const inkInputLocksScroll = shouldLockScrollForTool(props.inkTool, props.fingerDrawingEnabled);
   const scrollEnabled = !inkInputLocksScroll;
 
@@ -407,7 +631,15 @@ export function PdfPreview(props: {
     if (typeof props.file === 'number') return Image.resolveAssetSource(props.file)?.uri ?? null;
     return props.file.uri ?? null;
   }, [props.file]);
-  const pageCount = pdfDocument?.numPages ?? 0;
+  const { engine, snapshot, rootRef, scrollRef, contentRef } = useWebPdfViewportEngine({
+    sourceUri: pdfUri,
+    currentPage: props.page,
+    pageGap: WEB_PDF_PAGE_GAP,
+    onDocumentLoaded: props.onDocumentLoaded,
+    onPageChanged: props.onPageChanged,
+    onOpenGeneratedPage: props.onOpenGeneratedPage,
+  });
+  const pageCount = snapshot.pageCount;
   const pageItems = useMemo<NotebookPage[]>(
     () => props.notebookPages?.length
       ? props.notebookPages
@@ -426,6 +658,7 @@ export function PdfPreview(props: {
       return reference.page.kind === 'pdf' && reference.page.pageNumber === page.pageNumber;
     })
   );
+  const zoomLabel = snapshot.zoomMode === 'fit' ? `Fit ${formatZoomPercent(snapshot.scale)}` : formatZoomPercent(snapshot.scale);
 
   useEffect(() => {
     if (!openReferenceId) return;
@@ -434,18 +667,9 @@ export function PdfPreview(props: {
     }
   }, [openReferenceId, props.pageCaptureReferences]);
 
-  const fitPageFrame = (naturalWidth?: number, naturalHeight?: number): PageFrame => {
-    const aspectRatio = naturalWidth && naturalHeight
-      ? Math.max(0.45, Math.min(3.2, naturalWidth / naturalHeight))
-      : 16 / 9;
-    const width = Math.min(1180, Math.max(320, viewerWidth - 64));
-    return { width, height: Math.round(width / aspectRatio) };
-  };
-
   const getFrameForPage = (page: NotebookPage): PageFrame => {
     const sourcePageNumber = page.pageNumber ?? page.insertAfterPage;
-    if (sourcePageNumber && pageFrames[sourcePageNumber]) return pageFrames[sourcePageNumber];
-    return fitPageFrame();
+    return engine.getFrameForSourcePage(sourcePageNumber);
   };
 
   const getPageStrokesForView = (page: NotebookPage) => {
@@ -469,29 +693,24 @@ export function PdfPreview(props: {
   };
 
   const getPdfPageStrokesForView = (pageNumber: number) => {
-    const frame = pageFrames[pageNumber];
+    const frame = snapshot.pages[pageNumber];
     const pageStrokes = props.inkStrokes.filter((stroke) => !stroke.generatedPageId && (!stroke.pageNumber || stroke.pageNumber === pageNumber));
     return frame ? pageStrokes.map((stroke) => scaleInkStrokeToPageSize(stroke, frame.width, frame.height)) : pageStrokes;
   };
 
   const getPdfPageTextAnnotationsForView = (pageNumber: number) => {
-    const frame = pageFrames[pageNumber];
+    const frame = snapshot.pages[pageNumber];
     const pageAnnotations = props.textAnnotations.filter((annotation) => !annotation.generatedPageId && annotation.pageNumber === pageNumber);
     return frame ? pageAnnotations.map((annotation) => scaleTextAnnotationToPageSize(annotation, frame.width, frame.height)) : pageAnnotations;
   };
 
-  const clampPointToPage = (page: NotebookPage, x: number, y: number, mode: 'draw' | 'annotate' = 'draw'): InkPoint | null => {
-    const frame = getFrameForPage(page);
-    if (!frame) return null;
-    return {
-      x: Math.max(0, Math.min(frame.width - (mode === 'annotate' ? 180 : 0), x)),
-      y: Math.max(0, Math.min(frame.height - (mode === 'annotate' ? 110 : 0), y)),
-      pageNumber: page.pageNumber,
-      generatedPageId: page.generatedPageId,
-      pageWidth: frame.width,
-      pageHeight: frame.height,
-    };
-  };
+  const zoomBy = useCallback((delta: number) => {
+    engine.zoomBy(delta);
+  }, [engine]);
+
+  const resetZoomToFit = useCallback(() => {
+    engine.resetZoomToFit();
+  }, [engine]);
 
   const drawTextAnnotation = (context: CanvasRenderingContext2D, annotation: InkTextAnnotation) => {
     context.save();
@@ -532,184 +751,23 @@ export function PdfPreview(props: {
     context.restore();
   };
 
-  const buildSelectionPreview = (page: NotebookPage, rect: SelectionRect | null) => {
+  const buildSelectionPreview = async (page: NotebookPage, rect: SelectionRect | null) => {
     const pageNumber = page.pageNumber;
     if (!pageNumber) return null;
-    const sourceCanvas = canvasRefs.current[pageNumber];
-    const frame = pageFrames[pageNumber];
-    if (!rect || !sourceCanvas || !frame) return null;
-    const deviceScale = sourceCanvas.width / frame.width;
-    const cropCanvas = document.createElement('canvas');
-    cropCanvas.width = Math.max(1, Math.floor(rect.width * deviceScale));
-    cropCanvas.height = Math.max(1, Math.floor(rect.height * deviceScale));
-    const context = cropCanvas.getContext('2d');
-    if (!context) return null;
-    context.drawImage(
-      sourceCanvas,
-      Math.floor(rect.x * deviceScale),
-      Math.floor(rect.y * deviceScale),
-      cropCanvas.width,
-      cropCanvas.height,
-      0,
-      0,
-      cropCanvas.width,
-      cropCanvas.height,
-    );
-    context.save();
-    context.scale(deviceScale, deviceScale);
-    context.translate(-rect.x, -rect.y);
-    getPdfPageStrokesForView(pageNumber).filter((stroke) => stroke.style === 'highlight').forEach((stroke) => drawPath(context, stroke, 0.72));
-    getPdfPageTextAnnotationsForView(pageNumber).forEach((annotation) => drawTextAnnotation(context, annotation));
-    getPdfPageStrokesForView(pageNumber).filter((stroke) => stroke.style !== 'highlight').forEach((stroke) => drawPath(context, stroke));
-    context.restore();
-    return cropCanvas.toDataURL('image/png');
-  };
-
-  useEffect(() => {
-    let cancelled = false;
-    let task: { promise: Promise<PdfJsDocument>; destroy?: () => void } | null = null;
-
-    if (!pdfUri) {
-      setPdfDocument(null);
-      setPageFrames({});
-      setLoadError('웹에서 현재 선택한 PDF를 미리보기할 수 없습니다.');
-      return;
-    }
-
-    setIsLoading(true);
-    setLoadError(null);
-
-    loadPdfJs()
-      .then((pdfjsLib) => {
-        if (cancelled) return null;
-        pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${pdfjsLib.version}/pdf.worker.min.js`;
-        task = pdfjsLib.getDocument(createPdfDocumentSource(pdfUri));
-        return withTimeout(task.promise, 12000, 'PDF document load timed out.');
-      })
-      .then((document) => {
-        if (!document || cancelled) return;
-        setPdfDocument(document);
-        props.onDocumentLoaded?.(document.numPages);
-        if (document.numPages > 0 && props.page > document.numPages) props.onPageChanged?.(document.numPages);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setPdfDocument(null);
-        setPageFrames({});
-        setIsLoading(false);
-        setLoadError('PDF를 불러오지 못했습니다. 브라우저에서 파일 접근 권한과 네트워크 상태를 확인해 주세요.');
-      });
-
-    return () => {
-      cancelled = true;
-      task?.destroy?.();
-    };
-  }, [pdfUri]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const renderTasks: PdfJsRenderTask[] = [];
-
-    if (!pdfDocument) {
-      setIsLoading(false);
-      return;
-    }
-
-    setIsLoading(true);
-
-    const renderPages = async () => {
-      const nextFrames: Record<number, PageFrame> = {};
-      for (const pageNumber of getPriorityPageNumbers(props.page, pdfDocument.numPages)) {
-        const canvas = canvasRefs.current[pageNumber];
-        if (!canvas || cancelled) continue;
-        const page = await pdfDocument.getPage(pageNumber);
-        if (cancelled) return;
-        const naturalViewport = page.getViewport({ scale: 1 });
-        const scale = Math.max(0.1, Math.min((viewerWidth - 80) / naturalViewport.width, 1.6));
-        const viewport = page.getViewport({ scale });
-        const context = canvas.getContext('2d');
-        if (!context) continue;
-
-        const deviceScale = window.devicePixelRatio || 1;
-        canvas.width = Math.floor(viewport.width * deviceScale);
-        canvas.height = Math.floor(viewport.height * deviceScale);
-        canvas.style.width = `${viewport.width}px`;
-        canvas.style.height = `${viewport.height}px`;
-        context.setTransform(deviceScale, 0, 0, deviceScale, 0, 0);
-        context.clearRect(0, 0, viewport.width, viewport.height);
-        nextFrames[pageNumber] = { width: viewport.width, height: viewport.height };
-        setPageFrames((current) => ({ ...current, [pageNumber]: nextFrames[pageNumber] }));
-
-        const renderTask = page.render({ canvasContext: context, viewport });
-        renderTasks.push(renderTask);
-        await withTimeout(renderTask.promise, 12000, 'PDF page render timed out.');
-      }
-    };
-
-    renderPages()
-      .then(() => {
-        if (!cancelled) setIsLoading(false);
-      })
-      .catch(() => {
-        renderTasks.forEach((task) => task.cancel?.());
-        if (!cancelled) {
-          setIsLoading(false);
-          setLoadError('PDF 페이지를 렌더링하지 못했습니다.');
-        }
-      });
-
-    return () => {
-      cancelled = true;
-      renderTasks.forEach((task) => task.cancel?.());
-    };
-  }, [pdfDocument, props.page, viewerWidth]);
-
-  useEffect(() => {
-    if (!pageFrames[props.page]) return;
-    if (suppressNextScrollSyncRef.current) {
-      suppressNextScrollSyncRef.current = false;
-      return;
-    }
-    scrollingProgrammaticallyRef.current = true;
-    const element = document.getElementById(`bsnap-pdf-page-${props.page}`);
-    element?.scrollIntoView({ block: 'nearest' });
-    window.setTimeout(() => {
-      scrollingProgrammaticallyRef.current = false;
-    }, 120);
-  }, [pageFrames[props.page], props.page]);
-
-  const handleScroll = (event: any) => {
-    if (scrollingProgrammaticallyRef.current || props.inkTool !== 'view') return;
-    const offsetY = event.nativeEvent?.contentOffset?.y ?? event.target?.scrollTop ?? 0;
-    let cursor = 0;
-    let bestPage = props.page;
-    let bestDistance = Number.POSITIVE_INFINITY;
-    let bestNotebookPage: NotebookPage | null = null;
-    pageItems.forEach((page) => {
-      const height = getFrameForPage(page).height;
-      const pageMid = cursor + height / 2;
-      const distance = Math.abs(pageMid - (offsetY + viewerHeight * 0.38));
-      if (distance < bestDistance) {
-        bestDistance = distance;
-        bestPage = page.pageNumber ?? bestPage;
-        bestNotebookPage = page;
-      }
-      cursor += height + pageGap;
+    return engine.capturePageRect(pageNumber, rect, (context) => {
+      getPdfPageStrokesForView(pageNumber).filter((stroke) => stroke.style === 'highlight').forEach((stroke) => drawPath(context, stroke, 0.72));
+      getPdfPageTextAnnotationsForView(pageNumber).forEach((annotation) => drawTextAnnotation(context, annotation));
+      getPdfPageStrokesForView(pageNumber).filter((stroke) => stroke.style !== 'highlight').forEach((stroke) => drawPath(context, stroke));
     });
-    const activePage = bestNotebookPage as NotebookPage | null;
-    if (activePage?.generatedPageId) props.onOpenGeneratedPage?.(activePage.generatedPageId);
-    if (bestPage !== props.page) {
-      suppressNextScrollSyncRef.current = true;
-      props.onPageChanged?.(bestPage);
-    }
   };
 
   const beginInteraction = (page: NotebookPage) => {
-    if (page.generatedPageId) props.onOpenGeneratedPage?.(page.generatedPageId);
-    if (page.pageNumber) {
-      suppressNextScrollSyncRef.current = true;
-      props.onPageChanged?.(page.pageNumber);
-    }
+    engine.activateTarget({
+      key: page.id,
+      pageNumber: page.pageNumber,
+      generatedPageId: page.generatedPageId,
+      sourcePageNumber: page.pageNumber ?? page.insertAfterPage,
+    });
   };
 
   const finishSelection = (page: NotebookPage) => {
@@ -743,7 +801,14 @@ export function PdfPreview(props: {
       }
       if (rect && rect.width > 24 && rect.height > 24) {
         props.onSelectionChange(rect);
-        props.onSelectionPreviewChange?.(buildSelectionPreview(page, rect));
+        const previewRequestId = selectionPreviewRequestRef.current + 1;
+        selectionPreviewRequestRef.current = previewRequestId;
+        props.onSelectionPreviewChange?.(null);
+        void buildSelectionPreview(page, rect).then((uri) => {
+          if (selectionPreviewRequestRef.current === previewRequestId) {
+            props.onSelectionPreviewChange?.(uri);
+          }
+        });
       }
       draftSelectionRef.current = null;
       selectionOriginRef.current = null;
@@ -771,23 +836,207 @@ export function PdfPreview(props: {
     const incomingAsset = active ? props.incomingAssetSuggestion : null;
     const incomingAssetImage = incomingAsset ? getCaptureOriginalImageSource(incomingAsset) : null;
     const incomingAssetSummary = getCaptureAssetSummary(incomingAsset);
+    const targetMeta = {
+      key: page.id,
+      pageNumber: page.pageNumber,
+      generatedPageId: page.generatedPageId,
+      sourcePageNumber: page.pageNumber ?? page.insertAfterPage,
+    };
+    const getPointerPoint = (event: React.PointerEvent<HTMLElement>, mode: 'draw' | 'annotate' = 'draw') => (
+      engine.screenToTargetPoint(page.id, event.clientX, event.clientY, mode)
+    );
+    const clearPointerInteraction = () => {
+      activePointerIdRef.current = null;
+      activePointerPageRef.current = null;
+    };
+    const resetDraftInteraction = () => {
+      currentStrokeRef.current = null;
+      draftSelectionRef.current = null;
+      selectionOriginRef.current = null;
+      selectionMoveOriginRef.current = null;
+      selectionMoveStartRectRef.current = null;
+      selectionResizeCornerRef.current = null;
+      selectionResizeStartRectRef.current = null;
+      textTapRef.current = null;
+      setDraftSelection(null);
+      setCurrentStroke(null);
+      clearPointerInteraction();
+    };
+    const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+      if (!shouldCaptureDomPointer(props.inkTool, event, props.fingerDrawingEnabled)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.currentTarget.setPointerCapture(event.pointerId);
+      activePointerIdRef.current = event.pointerId;
+      activePointerPageRef.current = page;
+      beginInteraction(page);
+      const point = getPointerPoint(event, props.inkTool === 'text' ? 'annotate' : 'draw');
+      if (!point) return;
+
+      if (isDrawingTool(props.inkTool)) {
+        const appearance = isShapeTool(props.inkTool)
+          ? resolveShapeStrokeAppearance(props.penColor, props.penWidth)
+          : resolveInkStrokeAppearance(props.inkTool, props.penColor, props.penWidth, props.brushType);
+        const stroke: InkStroke = {
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          color: appearance.color,
+          width: appearance.width,
+          style: isShapeTool(props.inkTool) ? 'shape' : props.inkTool === 'highlight' ? 'highlight' : 'pen',
+          brush: isShapeTool(props.inkTool) ? undefined : props.brushType,
+          brushSettings: isShapeTool(props.inkTool) ? undefined : props.brushSettings,
+          linePattern: props.linePattern,
+          shape: isShapeTool(props.inkTool) ? props.inkTool : undefined,
+          pageNumber: page.pageNumber,
+          generatedPageId: page.generatedPageId,
+          pageWidth: point.pageWidth,
+          pageHeight: point.pageHeight,
+          points: [point],
+        };
+        currentStrokeRef.current = stroke;
+        setCurrentStroke(stroke);
+        return;
+      }
+
+      if (props.inkTool === 'select') {
+        const currentSelection = active ? scaleSelectionRectToPageSize(props.selectionRect, frame.width, frame.height) : null;
+        const resizeCorner = getResizeCorner(currentSelection, point);
+        if (currentSelection && resizeCorner) {
+          selectionResizeCornerRef.current = resizeCorner;
+          selectionResizeStartRectRef.current = currentSelection;
+          draftSelectionRef.current = currentSelection;
+          setDraftSelection(currentSelection);
+          return;
+        }
+        if (
+          currentSelection &&
+          point.x >= currentSelection.x &&
+          point.x <= currentSelection.x + currentSelection.width &&
+          point.y >= currentSelection.y &&
+          point.y <= currentSelection.y + currentSelection.height
+        ) {
+          selectionMoveOriginRef.current = point;
+          selectionMoveStartRectRef.current = currentSelection;
+          draftSelectionRef.current = currentSelection;
+          setDraftSelection(currentSelection);
+          return;
+        }
+        props.onSelectionChange(null);
+        selectionPreviewRequestRef.current += 1;
+        props.onSelectionPreviewChange?.(null);
+        selectionOriginRef.current = point;
+        const rect = { x: point.x, y: point.y, width: 0, height: 0, pageWidth: point.pageWidth, pageHeight: point.pageHeight };
+        draftSelectionRef.current = rect;
+        setDraftSelection(rect);
+        return;
+      }
+
+      if (props.inkTool === 'text') {
+        textTapRef.current = point;
+        return;
+      }
+
+      if (props.inkTool === 'erase') {
+        const hitStrokeId = findHitInkStrokeId(pageStrokesForView, point);
+        if (hitStrokeId) props.onRemoveInkStroke(hitStrokeId);
+      }
+    };
+    const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+      if (activePointerIdRef.current !== event.pointerId) return;
+      event.preventDefault();
+      const point = getPointerPoint(event);
+      if (!point) return;
+
+      if (isDrawingTool(props.inkTool)) {
+        const stroke = currentStrokeRef.current;
+        if (!stroke) return;
+        if (stroke.style === 'shape') {
+          const nextStroke = { ...stroke, points: [stroke.points[0], point] };
+          currentStrokeRef.current = nextStroke;
+          setCurrentStroke(nextStroke);
+          return;
+        }
+        if (!shouldAppendInkPoint(stroke, point)) return;
+        const nextStroke = { ...stroke, points: [...stroke.points, point] };
+        currentStrokeRef.current = nextStroke;
+        setCurrentStroke(nextStroke);
+        return;
+      }
+
+      if (props.inkTool === 'select') {
+        const resizeCorner = selectionResizeCornerRef.current;
+        const resizeStartRect = selectionResizeStartRectRef.current;
+        if (resizeCorner && resizeStartRect) {
+          const rect = resizeRectFromCorner(resizeStartRect, resizeCorner, point);
+          draftSelectionRef.current = rect;
+          setDraftSelection(rect);
+          return;
+        }
+        const moveOrigin = selectionMoveOriginRef.current;
+        const moveStartRect = selectionMoveStartRectRef.current;
+        if (moveOrigin && moveStartRect) {
+          const rect = {
+            ...moveStartRect,
+            x: moveStartRect.x + point.x - moveOrigin.x,
+            y: moveStartRect.y + point.y - moveOrigin.y,
+            pageWidth: point.pageWidth,
+            pageHeight: point.pageHeight,
+          };
+          draftSelectionRef.current = rect;
+          setDraftSelection(rect);
+          return;
+        }
+        const origin = selectionOriginRef.current;
+        if (!origin) return;
+        const rect = {
+          x: Math.min(origin.x, point.x),
+          y: Math.min(origin.y, point.y),
+          width: Math.abs(point.x - origin.x),
+          height: Math.abs(point.y - origin.y),
+          pageWidth: point.pageWidth,
+          pageHeight: point.pageHeight,
+        };
+        draftSelectionRef.current = rect;
+        setDraftSelection(rect);
+      }
+    };
+    const handlePointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
+      if (activePointerIdRef.current !== event.pointerId) return;
+      event.preventDefault();
+      const stroke = currentStrokeRef.current;
+      if (stroke && stroke.points.length > 1) props.onCommitInkStroke(finalizeInkStroke(stroke));
+      finishSelection(activePointerPageRef.current ?? page);
+      currentStrokeRef.current = null;
+      setCurrentStroke(null);
+      clearPointerInteraction();
+    };
 
     return (
-      <View
+      <div
         key={page.id}
-        nativeID={page.pageNumber ? `bsnap-pdf-page-${page.pageNumber}` : `bsnap-page-${page.id}`}
-        style={{ width: frame.width, height: frame.height, marginBottom: pageGap, backgroundColor: '#FFFFFF', shadowColor: '#182436', shadowOpacity: 0.08, shadowRadius: 18, shadowOffset: { width: 0, height: 10 }, position: 'relative' }}
+        id={page.pageNumber ? `bsnap-pdf-page-${page.pageNumber}` : `bsnap-page-${page.id}`}
+        ref={(node) => engine.setTargetElement(targetMeta, node)}
+        style={{
+          width: frame.width,
+          height: frame.height,
+          marginBottom: WEB_PDF_PAGE_GAP,
+          backgroundColor: '#FFFFFF',
+          boxShadow: '0 10px 18px rgba(24,36,54,0.08)',
+          position: 'relative',
+          flexShrink: 0,
+        }}
       >
         {page.kind === 'pdf' && page.pageNumber ? (
           <canvas
             ref={(node) => {
-              canvasRefs.current[page.pageNumber!] = node;
+              engine.setCanvasElement(page.pageNumber!, node);
             }}
             style={{
               display: 'block',
               position: 'absolute',
               left: 0,
               top: 0,
+              width: '100%',
+              height: '100%',
               backgroundColor: '#FFFFFF',
             }}
           />
@@ -800,13 +1049,24 @@ export function PdfPreview(props: {
           {(page.generatedPageId ? currentStroke?.generatedPageId === page.generatedPageId : currentStroke?.pageNumber === page.pageNumber) && currentStroke?.style === 'highlight' ? <InkPath stroke={currentStroke} draft /> : null}
         </Svg>
 
-        <TextAnnotationLayer
+        <WebPdfTextAnnotationLayer
           annotations={pageTextAnnotationsForView}
-          styles={props.styles}
           onChangeText={props.onUpdateTextAnnotation}
-          onMove={props.onMoveTextAnnotation}
-          onResize={props.onResizeTextAnnotation}
           onChangeFontSize={props.onChangeTextAnnotationFontSize}
+          onMove={(id, x, y) => {
+            props.onMoveTextAnnotation(
+              id,
+              x / Math.max(1, frame.width) * frame.naturalWidth,
+              y / Math.max(1, frame.height) * frame.naturalHeight,
+            );
+          }}
+          onResize={(id, width, height) => {
+            props.onResizeTextAnnotation(
+              id,
+              width / Math.max(1, frame.width) * frame.naturalWidth,
+              height / Math.max(1, frame.height) * frame.naturalHeight,
+            );
+          }}
           onRemove={props.onRemoveTextAnnotation}
           variant={props.textAnnotationVariant}
         />
@@ -873,7 +1133,7 @@ export function PdfPreview(props: {
                 style={props.styles.pdfPageReferencePopoverPrimaryAction}
                 onPress={() => props.onAskAiAboutPageCaptureReference?.(activePageReference.id)}
               >
-                <Text style={props.styles.pdfPageReferencePopoverPrimaryText}>AI로 더 보기</Text>
+                <Text style={props.styles.pdfPageReferencePopoverPrimaryText}>AI로 물어보기</Text>
               </Pressable>
               {pageReferences.length > 1 ? (
                 <Pressable
@@ -897,7 +1157,7 @@ export function PdfPreview(props: {
                 <MaterialCommunityIcons name={incomingAsset.type === 'image' ? 'camera-outline' : 'file-pdf-box'} size={17} color="#4F68D2" />
               </View>
               <View style={props.styles.pdfIncomingCaptureTitleBox}>
-                <Text style={props.styles.pdfIncomingCaptureLabel}>새 {incomingAsset.type === 'image' ? '사진' : '자료'} 도착</Text>
+                <Text style={props.styles.pdfIncomingCaptureLabel}>새 {incomingAsset.type === 'image' ? '사진' : '자료'} 연결</Text>
                 <Text style={props.styles.pdfIncomingCaptureTitle} numberOfLines={1}>{incomingAsset.title}</Text>
               </View>
               <Pressable style={props.styles.pdfIncomingCaptureClose} onPress={props.onDismissIncomingAsset}>
@@ -931,168 +1191,19 @@ export function PdfPreview(props: {
           </View>
         ) : null}
 
-        <View
-          style={[props.styles.inkOverlay, { pointerEvents: props.inkTool === 'view' ? 'none' : 'auto' }]}
-          onStartShouldSetResponder={(event) => {
-            if (hasMultipleTouches(event)) return false;
-            return shouldCaptureToolStart(props.inkTool, event, props.fingerDrawingEnabled);
+        <div
+          style={{
+            position: 'absolute',
+            inset: 0,
+            zIndex: 20,
+            pointerEvents: props.inkTool === 'view' ? 'none' : 'auto',
+            touchAction: props.inkTool === 'view' ? 'auto' : 'none',
           }}
-          onMoveShouldSetResponder={(event) => {
-            if (hasMultipleTouches(event)) return false;
-            if (isDrawingTool(props.inkTool)) {
-              return shouldCaptureToolMove(props.inkTool, event, props.fingerDrawingEnabled);
-            }
-            return shouldCaptureToolMove(props.inkTool, event, props.fingerDrawingEnabled);
-          }}
-          onResponderGrant={(event) => {
-            beginInteraction(page);
-            const point = clampPointToPage(page, event.nativeEvent.locationX, event.nativeEvent.locationY, props.inkTool === 'text' ? 'annotate' : 'draw');
-            if (!point) return;
-
-            if (isDrawingTool(props.inkTool)) {
-              const appearance = isShapeTool(props.inkTool)
-                ? resolveShapeStrokeAppearance(props.penColor, props.penWidth)
-                : resolveInkStrokeAppearance(props.inkTool, props.penColor, props.penWidth, props.brushType);
-              const stroke: InkStroke = {
-                id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-                color: appearance.color,
-                width: appearance.width,
-                style: isShapeTool(props.inkTool) ? 'shape' : props.inkTool === 'highlight' ? 'highlight' : 'pen',
-                brush: isShapeTool(props.inkTool) ? undefined : props.brushType,
-                brushSettings: isShapeTool(props.inkTool) ? undefined : props.brushSettings,
-                linePattern: props.linePattern,
-                shape: isShapeTool(props.inkTool) ? props.inkTool : undefined,
-                pageNumber: page.pageNumber,
-                generatedPageId: page.generatedPageId,
-                pageWidth: point.pageWidth,
-                pageHeight: point.pageHeight,
-                points: [point],
-              };
-              currentStrokeRef.current = stroke;
-              setCurrentStroke(stroke);
-              return;
-            }
-
-            if (props.inkTool === 'select') {
-              const currentSelection = active ? scaleSelectionRectToPageSize(props.selectionRect, frame.width, frame.height) : null;
-              const resizeCorner = getResizeCorner(currentSelection, point);
-              if (currentSelection && resizeCorner) {
-                selectionResizeCornerRef.current = resizeCorner;
-                selectionResizeStartRectRef.current = currentSelection;
-                draftSelectionRef.current = currentSelection;
-                setDraftSelection(currentSelection);
-                return;
-              }
-              if (
-                currentSelection &&
-                point.x >= currentSelection.x &&
-                point.x <= currentSelection.x + currentSelection.width &&
-                point.y >= currentSelection.y &&
-                point.y <= currentSelection.y + currentSelection.height
-              ) {
-                selectionMoveOriginRef.current = point;
-                selectionMoveStartRectRef.current = currentSelection;
-                draftSelectionRef.current = currentSelection;
-                setDraftSelection(currentSelection);
-                return;
-              }
-              props.onSelectionChange(null);
-              props.onSelectionPreviewChange?.(null);
-              selectionOriginRef.current = point;
-              const rect = { x: point.x, y: point.y, width: 0, height: 0, pageWidth: point.pageWidth, pageHeight: point.pageHeight };
-              draftSelectionRef.current = rect;
-              setDraftSelection(rect);
-              return;
-            }
-
-            if (props.inkTool === 'text') {
-              textTapRef.current = point;
-              return;
-            }
-
-            if (props.inkTool === 'erase') {
-              const hitStrokeId = findHitInkStrokeId(pageStrokesForView, point);
-              if (hitStrokeId) props.onRemoveInkStroke(hitStrokeId);
-            }
-          }}
-          onResponderMove={(event) => {
-            const point = clampPointToPage(page, event.nativeEvent.locationX, event.nativeEvent.locationY);
-            if (!point) return;
-
-            if (isDrawingTool(props.inkTool)) {
-              const stroke = currentStrokeRef.current;
-              if (!stroke) return;
-              if (stroke.style === 'shape') {
-                const nextStroke = { ...stroke, points: [stroke.points[0], point] };
-                currentStrokeRef.current = nextStroke;
-                setCurrentStroke(nextStroke);
-                return;
-              }
-              if (!shouldAppendInkPoint(stroke, point)) return;
-              const nextStroke = { ...stroke, points: [...stroke.points, point] };
-              currentStrokeRef.current = nextStroke;
-              setCurrentStroke(nextStroke);
-              return;
-            }
-
-            if (props.inkTool === 'select') {
-              const resizeCorner = selectionResizeCornerRef.current;
-              const resizeStartRect = selectionResizeStartRectRef.current;
-              if (resizeCorner && resizeStartRect) {
-                const rect = resizeRectFromCorner(resizeStartRect, resizeCorner, point);
-                draftSelectionRef.current = rect;
-                setDraftSelection(rect);
-                return;
-              }
-              const moveOrigin = selectionMoveOriginRef.current;
-              const moveStartRect = selectionMoveStartRectRef.current;
-              if (moveOrigin && moveStartRect) {
-                const rect = {
-                  ...moveStartRect,
-                  x: moveStartRect.x + point.x - moveOrigin.x,
-                  y: moveStartRect.y + point.y - moveOrigin.y,
-                  pageWidth: point.pageWidth,
-                  pageHeight: point.pageHeight,
-                };
-                draftSelectionRef.current = rect;
-                setDraftSelection(rect);
-                return;
-              }
-              const origin = selectionOriginRef.current;
-              if (!origin) return;
-              const rect = {
-                x: Math.min(origin.x, point.x),
-                y: Math.min(origin.y, point.y),
-                width: Math.abs(point.x - origin.x),
-                height: Math.abs(point.y - origin.y),
-                pageWidth: point.pageWidth,
-                pageHeight: point.pageHeight,
-              };
-              draftSelectionRef.current = rect;
-              setDraftSelection(rect);
-            }
-          }}
-          onResponderRelease={() => {
-            const stroke = currentStrokeRef.current;
-            if (stroke && stroke.points.length > 1) props.onCommitInkStroke(finalizeInkStroke(stroke));
-            finishSelection(page);
-            currentStrokeRef.current = null;
-            setCurrentStroke(null);
-          }}
-          onResponderTerminate={() => {
-            const stroke = currentStrokeRef.current;
-            if (stroke && stroke.points.length > 1) props.onCommitInkStroke(finalizeInkStroke(stroke));
-            currentStrokeRef.current = null;
-            draftSelectionRef.current = null;
-            selectionOriginRef.current = null;
-            selectionMoveOriginRef.current = null;
-            selectionMoveStartRectRef.current = null;
-            selectionResizeCornerRef.current = null;
-            selectionResizeStartRectRef.current = null;
-            textTapRef.current = null;
-            setDraftSelection(null);
-            setCurrentStroke(null);
-          }}
+          onPointerDown={handlePointerDown}
+          onPointerMove={handlePointerMove}
+          onPointerUp={handlePointerUp}
+          onPointerCancel={resetDraftInteraction}
+          onLostPointerCapture={clearPointerInteraction}
         >
           <Svg width="100%" height="100%" pointerEvents="none">
             {pageStrokesForView.filter((stroke) => stroke.style !== 'highlight').map((stroke) => <InkPath key={stroke.id} stroke={stroke} />)}
@@ -1100,36 +1211,99 @@ export function PdfPreview(props: {
           </Svg>
           {!draftSelectionStyle && selectionRectStyle ? <SelectionOverlay rect={selectionRectStyle} styles={props.styles} /> : null}
           {draftSelectionStyle && draftSelectionStyle.mode !== 'lasso' ? <SelectionOverlay rect={draftSelectionStyle} styles={props.styles} draft /> : null}
-        </View>
-      </View>
+        </div>
+      </div>
     );
   };
 
   return (
-    <View
-      style={props.styles.pdfViewerCard}
-      onLayout={(event) => {
-        const nextWidth = Math.floor(event.nativeEvent.layout.width);
-        const nextHeight = Math.floor(event.nativeEvent.layout.height);
-        if (nextWidth !== containerSize.width || nextHeight !== containerSize.height) {
-          setContainerSize({ width: nextWidth, height: nextHeight });
-        }
+    <div
+      ref={rootRef}
+      style={{
+        flex: 1,
+        width: '100%',
+        minHeight: 0,
+        overflow: 'hidden',
+        backgroundColor: '#EFF2F8',
+        position: 'relative',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'stretch',
       }}
     >
-      <ScrollView
-        style={{ width: '100%', maxHeight: viewerHeight }}
-        contentContainerStyle={{ alignItems: 'center', paddingTop: 18, paddingBottom: 36 }}
-        scrollEnabled={scrollEnabled}
-        scrollEventThrottle={16}
-        onScroll={handleScroll}
-        showsVerticalScrollIndicator
+      <div
+        style={{
+          width: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '14px 16px 10px',
+          borderBottom: '1px solid #EEF2F7',
+          boxSizing: 'border-box',
+          flexShrink: 0,
+        }}
       >
-        {pageItems.map(renderPage)}
-        {isLoading ? <Text style={{ color: '#6B7280', fontWeight: '700', marginTop: 12 }}>PDF 페이지를 렌더링하는 중...</Text> : null}
-        {!isLoading && loadError ? (
-          <Text style={{ color: '#6B7280', textAlign: 'center', paddingHorizontal: 24 }}>{loadError}</Text>
+        <div>
+          <div style={{ fontSize: 10, fontWeight: 900, letterSpacing: 0.8, color: '#8D97AA', marginBottom: 4 }}>PDF VIEW</div>
+          <div style={{ fontSize: 13, fontWeight: 800, color: '#304056' }}>{pageCount ? `${snapshot.currentPage} / ${pageCount}` : `Page ${props.page}`}</div>
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <button
+            type="button"
+            style={{ height: 34, padding: '0 14px', borderRadius: 10, border: '1px solid #DCE5F0', backgroundColor: '#FFFFFF', fontSize: 12, fontWeight: 800, color: '#31405B', cursor: 'pointer' }}
+            onClick={() => zoomBy(-WEB_PDF_ZOOM_STEP)}
+          >
+            -
+          </button>
+          <div style={{ minWidth: 78, textAlign: 'center', fontSize: 13, fontWeight: 800, color: '#304056' }}>{zoomLabel}</div>
+          <button
+            type="button"
+            style={{ height: 34, padding: '0 14px', borderRadius: 10, border: '1px solid #DCE5F0', backgroundColor: '#FFFFFF', fontSize: 12, fontWeight: 800, color: '#31405B', cursor: 'pointer' }}
+            onClick={() => zoomBy(WEB_PDF_ZOOM_STEP)}
+          >
+            +
+          </button>
+          <button
+            type="button"
+            style={{ height: 34, padding: '0 14px', borderRadius: 10, border: '1px solid #DCE5F0', backgroundColor: '#FFFFFF', fontSize: 12, fontWeight: 800, color: '#31405B', cursor: 'pointer' }}
+            onClick={resetZoomToFit}
+          >
+            Fit
+          </button>
+        </div>
+      </div>
+      <div
+        ref={scrollRef}
+        style={{
+          width: '100%',
+          flex: 1,
+          minHeight: 0,
+          overflowX: 'auto',
+          overflowY: scrollEnabled ? 'auto' : 'hidden',
+          overscrollBehavior: 'contain',
+          touchAction: props.inkTool === 'view' ? 'pan-x pan-y' : 'none',
+          boxSizing: 'border-box',
+        }}
+      >
+        <div
+          ref={contentRef}
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            paddingTop: 18,
+            paddingBottom: 36,
+            minWidth: Math.max(snapshot.viewportWidth, snapshot.contentWidth, ...pageItems.map((page) => getFrameForPage(page).width)),
+            boxSizing: 'border-box',
+          }}
+        >
+          {pageItems.map(renderPage)}
+        {snapshot.isLoading ? <div style={{ color: '#6B7280', fontWeight: 700, marginTop: 12 }}>PDF 페이지를 렌더링하는 중...</div> : null}
+        {!snapshot.isLoading && snapshot.loadError ? (
+          <div style={{ color: '#6B7280', textAlign: 'center', padding: '0 24px' }}>{snapshot.loadError}</div>
         ) : null}
-      </ScrollView>
-    </View>
+        </div>
+      </div>
+    </div>
   );
 }
