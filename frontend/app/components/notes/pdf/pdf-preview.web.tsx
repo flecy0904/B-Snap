@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Image, Pressable, Text, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import Svg, { Path } from 'react-native-svg';
-import { InkPath } from '../canvas/ink-path';
 import { getCaptureOriginalImageSource, getPageCaptureReferenceImageSource } from '../shared/capture-assets';
 import { cleanAiDisplayText, finalizeInkStroke, findHitInkStrokeId, getInkCenterlinePath, getInkStrokeSvgPath, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize, shouldAppendInkPoint } from '../../../ui-helpers';
 import { InkBrush, InkBrushSettings, InkImageAnnotation, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
@@ -90,19 +89,12 @@ function getCaptureAssetSummary(asset: CaptureAsset | null | undefined) {
   return cleanAiDisplayText(asset.analysisSummary || asset.summary);
 }
 
-function shouldLockScrollForTool(tool: InkTool, fingerDrawingEnabled: boolean | undefined) {
-  return tool === 'select'
-    || tool === 'text'
-    || Boolean(fingerDrawingEnabled && isDrawingTool(tool));
-}
-
 function isPdfUri(uri: string | undefined) {
   return !!uri && /\.pdf(?:$|[?#])/i.test(uri);
 }
 
-function getResizeCorner(rect: SelectionRect | null, point: InkPoint): ResizeCorner | null {
+function getResizeCorner(rect: SelectionRect | null, point: InkPoint, threshold = 24): ResizeCorner | null {
   if (!rect) return null;
-  const threshold = 24;
   const corners: Array<{ corner: ResizeCorner; x: number; y: number }> = [
     { corner: 'nw', x: rect.x, y: rect.y },
     { corner: 'ne', x: rect.x + rect.width, y: rect.y },
@@ -137,13 +129,17 @@ function getLassoPath(points: InkPoint[]) {
     .join(' ');
 }
 
-function SelectionOverlay(props: { rect: SelectionRect; styles: any; draft?: boolean }) {
+function percent(value: number, total: number) {
+  return `${(value / Math.max(1, total)) * 100}%`;
+}
+
+function SelectionOverlay(props: { rect: SelectionRect; styles: any; pageWidth: number; pageHeight: number; draft?: boolean }) {
   const handleOffset = -7;
   const lassoPath = props.rect.path && props.rect.path.length > 2 ? getLassoPath(props.rect.path) : '';
   if (props.rect.mode === 'lasso') {
     if (!lassoPath) return null;
     return (
-      <Svg width="100%" height="100%" pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0 }}>
+      <Svg width="100%" height="100%" viewBox={`0 0 ${props.pageWidth} ${props.pageHeight}`} preserveAspectRatio="none" pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0 }}>
         <Path
           d={`${lassoPath} Z`}
           fill="rgba(78, 141, 255, 0.06)"
@@ -159,15 +155,27 @@ function SelectionOverlay(props: { rect: SelectionRect; styles: any; draft?: boo
   }
 
   return (
-    <View style={[props.styles.selectionOverlayRect, props.draft && props.styles.selectionOverlayDraft, { left: props.rect.x, top: props.rect.y, width: props.rect.width, height: props.rect.height, pointerEvents: 'none' }]}>
+    <View
+      style={[
+        props.styles.selectionOverlayRect,
+        props.draft && props.styles.selectionOverlayDraft,
+        {
+          left: percent(props.rect.x, props.pageWidth),
+          top: percent(props.rect.y, props.pageHeight),
+          width: percent(props.rect.width, props.pageWidth),
+          height: percent(props.rect.height, props.pageHeight),
+          pointerEvents: 'none',
+        },
+      ]}
+    >
       {(['nw', 'ne', 'sw', 'se'] as const).map((corner) => (
         <View
           key={corner}
           style={[
             props.styles.selectionResizeHandle,
             {
-              left: corner === 'nw' || corner === 'sw' ? handleOffset : props.rect.width + handleOffset,
-              top: corner === 'nw' || corner === 'ne' ? handleOffset : props.rect.height + handleOffset,
+              left: corner === 'nw' || corner === 'sw' ? handleOffset : `calc(100% + ${handleOffset}px)`,
+              top: corner === 'nw' || corner === 'ne' ? handleOffset : `calc(100% + ${handleOffset}px)`,
             },
           ]}
         />
@@ -233,6 +241,99 @@ function drawPath(context: CanvasRenderingContext2D, stroke: InkStroke, opacity 
   context.restore();
 }
 
+function scaleInkStrokeToViewportPageSize(stroke: InkStroke, pageWidth: number, pageHeight: number): InkStroke {
+  const scaledStroke = scaleInkStrokeToPageSize(stroke, pageWidth, pageHeight);
+  if (scaledStroke === stroke) return stroke;
+  return {
+    ...scaledStroke,
+    width: stroke.width,
+  };
+}
+
+function scaleInkStrokeToLogicalHitTestSize(stroke: InkStroke, pageWidth: number, pageHeight: number, pageScale: number): InkStroke {
+  const scaledStroke = scaleInkStrokeToPageSize(stroke, pageWidth, pageHeight);
+  return {
+    ...scaledStroke,
+    width: Math.max(1, stroke.width / Math.max(0.001, pageScale)),
+  };
+}
+
+function getSelectionRectFromPoints(points: InkPoint[]): SelectionRect | null {
+  if (points.length < 2) return null;
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  const minX = Math.min(...xs);
+  const minY = Math.min(...ys);
+  const maxX = Math.max(...xs);
+  const maxY = Math.max(...ys);
+  const reference = points[0];
+  return {
+    x: Math.max(0, minX),
+    y: Math.max(0, minY),
+    width: Math.max(1, maxX - minX),
+    height: Math.max(1, maxY - minY),
+    mode: 'lasso',
+    path: points,
+    pageWidth: reference.pageWidth,
+    pageHeight: reference.pageHeight,
+  };
+}
+
+function getSelectionRectFromDrag(origin: InkPoint, point: InkPoint, mode: InkSelectionMode = 'rect'): SelectionRect {
+  return {
+    x: Math.min(origin.x, point.x),
+    y: Math.min(origin.y, point.y),
+    width: Math.abs(point.x - origin.x),
+    height: Math.abs(point.y - origin.y),
+    mode,
+    pageWidth: point.pageWidth,
+    pageHeight: point.pageHeight,
+  };
+}
+
+function WebPdfInkCanvasLayer(props: {
+  pageWidth: number;
+  pageHeight: number;
+  strokes: InkStroke[];
+  currentStroke: InkStroke | null;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const deviceScale = window.devicePixelRatio || 1;
+    const width = Math.max(1, Math.floor(props.pageWidth * deviceScale));
+    const height = Math.max(1, Math.floor(props.pageHeight * deviceScale));
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
+    const context = canvas.getContext('2d');
+    if (!context) return;
+    context.setTransform(deviceScale, 0, 0, deviceScale, 0, 0);
+    context.clearRect(0, 0, props.pageWidth, props.pageHeight);
+    props.strokes.filter((stroke) => stroke.style === 'highlight').forEach((stroke) => drawPath(context, stroke, 0.72));
+    if (props.currentStroke?.style === 'highlight') drawPath(context, props.currentStroke, 0.72);
+    props.strokes.filter((stroke) => stroke.style !== 'highlight').forEach((stroke) => drawPath(context, stroke));
+    if (props.currentStroke && props.currentStroke.style !== 'highlight') drawPath(context, props.currentStroke);
+  }, [props.currentStroke, props.pageHeight, props.pageWidth, props.strokes]);
+
+  return (
+    <canvas
+      ref={canvasRef}
+      style={{
+        position: 'absolute',
+        inset: 0,
+        width: '100%',
+        height: '100%',
+        zIndex: 12,
+        pointerEvents: 'none',
+      }}
+    />
+  );
+}
+
 const MIN_TEXT_BOX_WIDTH = 96;
 const MIN_TEXT_BOX_HEIGHT = 56;
 const DEFAULT_TEXT_FONT_SIZE = 17;
@@ -245,6 +346,8 @@ function clamp(value: number, min: number, max: number) {
 
 function WebPdfTextAnnotationLayer(props: {
   annotations: InkTextAnnotation[];
+  pageWidth: number;
+  pageHeight: number;
   onChangeText: (id: string, text: string) => void;
   onMove?: (id: string, x: number, y: number) => void;
   onResize?: (id: string, width: number, height: number) => void;
@@ -261,9 +364,14 @@ function WebPdfTextAnnotationLayer(props: {
     pointerId: number;
     startClientX: number;
     startClientY: number;
+    scaleX: number;
+    scaleY: number;
+    sourcePageWidth: number;
+    sourcePageHeight: number;
     startFrame: { x: number; y: number; width: number; height: number };
     currentFrame: { x: number; y: number; width: number; height: number };
   } | null>(null);
+  const layerRef = useRef<HTMLDivElement | null>(null);
   const variant = props.variant ?? 'floating';
 
   useEffect(() => {
@@ -302,20 +410,27 @@ function WebPdfTextAnnotationLayer(props: {
     props.onChangeFontSize?.(annotation.id, clamp(fontSize + delta, MIN_TEXT_FONT_SIZE, MAX_TEXT_FONT_SIZE));
   };
 
-  const startDrag = (event: React.PointerEvent<HTMLElement>, annotation: InkTextAnnotation, mode: 'move' | 'resize') => {
+  const startDrag = (event: React.PointerEvent<HTMLElement>, annotation: InkTextAnnotation, renderAnnotation: InkTextAnnotation, mode: 'move' | 'resize') => {
     if (!event.isPrimary || (event.pointerType === 'mouse' && event.button !== 0)) return;
     event.preventDefault();
     event.stopPropagation();
     event.currentTarget.setPointerCapture(event.pointerId);
     setActiveAnnotationId(annotation.id);
+    const layerRect = layerRef.current?.getBoundingClientRect();
+    const scaleX = layerRect ? layerRect.width / Math.max(1, props.pageWidth) : 1;
+    const scaleY = layerRect ? layerRect.height / Math.max(1, props.pageHeight) : 1;
     pointerDragRef.current = {
       id: annotation.id,
       mode,
       pointerId: event.pointerId,
       startClientX: event.clientX,
       startClientY: event.clientY,
-      startFrame: getFrame(annotation),
-      currentFrame: getFrame(annotation),
+      scaleX,
+      scaleY,
+      sourcePageWidth: annotation.pageWidth ?? props.pageWidth,
+      sourcePageHeight: annotation.pageHeight ?? props.pageHeight,
+      startFrame: getFrame(renderAnnotation),
+      currentFrame: getFrame(renderAnnotation),
     };
   };
 
@@ -324,8 +439,8 @@ function WebPdfTextAnnotationLayer(props: {
     if (!drag || drag.pointerId !== event.pointerId) return;
     event.preventDefault();
     event.stopPropagation();
-    const dx = event.clientX - drag.startClientX;
-    const dy = event.clientY - drag.startClientY;
+    const dx = (event.clientX - drag.startClientX) / Math.max(0.001, drag.scaleX);
+    const dy = (event.clientY - drag.startClientY) / Math.max(0.001, drag.scaleY);
     const frame = drag.mode === 'move'
       ? {
         ...drag.startFrame,
@@ -347,8 +462,20 @@ function WebPdfTextAnnotationLayer(props: {
     event.preventDefault();
     event.stopPropagation();
     const frame = drag.currentFrame;
-    if (drag.mode === 'move') props.onMove?.(drag.id, frame.x, frame.y);
-    if (drag.mode === 'resize') props.onResize?.(drag.id, frame.width, frame.height);
+    if (drag.mode === 'move') {
+      props.onMove?.(
+        drag.id,
+        frame.x / Math.max(1, props.pageWidth) * drag.sourcePageWidth,
+        frame.y / Math.max(1, props.pageHeight) * drag.sourcePageHeight,
+      );
+    }
+    if (drag.mode === 'resize') {
+      props.onResize?.(
+        drag.id,
+        frame.width / Math.max(1, props.pageWidth) * drag.sourcePageWidth,
+        frame.height / Math.max(1, props.pageHeight) * drag.sourcePageHeight,
+      );
+    }
     pointerDragRef.current = null;
     setDraftFrame((current) => {
       const next = { ...current };
@@ -358,18 +485,19 @@ function WebPdfTextAnnotationLayer(props: {
   };
 
   return (
-    <div style={{ position: 'absolute', inset: 0, zIndex: 25, pointerEvents: 'none' }}>
+    <div ref={layerRef} style={{ position: 'absolute', inset: 0, zIndex: 25, pointerEvents: 'none' }}>
       {props.annotations.map((annotation) => {
-        if (variant === 'marker' && annotation.anchorRect) {
+        const renderAnnotation = scaleTextAnnotationToPageSize(annotation, props.pageWidth, props.pageHeight);
+        if (variant === 'marker' && renderAnnotation.anchorRect) {
           return (
             <div key={annotation.id} style={{ position: 'absolute', inset: 0, pointerEvents: 'none' }}>
               <div
                 style={{
                   position: 'absolute',
-                  left: annotation.anchorRect.x,
-                  top: annotation.anchorRect.y,
-                  width: annotation.anchorRect.width,
-                  height: annotation.anchorRect.height,
+                  left: percent(renderAnnotation.anchorRect.x, props.pageWidth),
+                  top: percent(renderAnnotation.anchorRect.y, props.pageHeight),
+                  width: percent(renderAnnotation.anchorRect.width, props.pageWidth),
+                  height: percent(renderAnnotation.anchorRect.height, props.pageHeight),
                   borderRadius: 10,
                   border: '1px solid rgba(95, 121, 255, 0.28)',
                   backgroundColor: 'rgba(95, 121, 255, 0.08)',
@@ -378,8 +506,9 @@ function WebPdfTextAnnotationLayer(props: {
               <div
                 style={{
                   position: 'absolute',
-                  left: annotation.anchorRect.x + annotation.anchorRect.width - 12,
-                  top: Math.max(12, annotation.anchorRect.y - 12),
+                  left: percent(renderAnnotation.anchorRect.x + renderAnnotation.anchorRect.width, props.pageWidth),
+                  top: percent(Math.max(12, renderAnnotation.anchorRect.y - 12), props.pageHeight),
+                  transform: 'translateX(-12px)',
                   display: 'flex',
                   alignItems: 'center',
                   gap: 5,
@@ -399,7 +528,7 @@ function WebPdfTextAnnotationLayer(props: {
           );
         }
 
-        const frame = getFrame(annotation);
+        const frame = getFrame(renderAnnotation);
         const active = activeAnnotationId === annotation.id || !annotation.text.trim();
         const fontSize = clamp(Math.round(annotation.fontSize ?? DEFAULT_TEXT_FONT_SIZE), MIN_TEXT_FONT_SIZE, MAX_TEXT_FONT_SIZE);
         return (
@@ -407,10 +536,10 @@ function WebPdfTextAnnotationLayer(props: {
             key={annotation.id}
             style={{
               position: 'absolute',
-              left: frame.x,
-              top: frame.y,
-              width: frame.width,
-              height: frame.height,
+              left: percent(frame.x, props.pageWidth),
+              top: percent(frame.y, props.pageHeight),
+              width: percent(frame.width, props.pageWidth),
+              height: percent(frame.height, props.pageHeight),
               minHeight: MIN_TEXT_BOX_HEIGHT,
               padding: active ? '42px 10px 10px' : 10,
               borderRadius: 10,
@@ -437,7 +566,7 @@ function WebPdfTextAnnotationLayer(props: {
               >
                 <button
                   type="button"
-                  onPointerDown={(event) => startDrag(event, annotation, 'move')}
+                  onPointerDown={(event) => startDrag(event, annotation, renderAnnotation, 'move')}
                   onPointerMove={moveDrag}
                   onPointerUp={finishDrag}
                   onPointerCancel={() => { pointerDragRef.current = null; }}
@@ -527,7 +656,7 @@ function WebPdfTextAnnotationLayer(props: {
             {active ? (
               <button
                 type="button"
-                onPointerDown={(event) => startDrag(event, annotation, 'resize')}
+                onPointerDown={(event) => startDrag(event, annotation, renderAnnotation, 'resize')}
                 onPointerMove={moveDrag}
                 onPointerUp={finishDrag}
                 onPointerCancel={() => { pointerDragRef.current = null; }}
@@ -589,7 +718,6 @@ export function PdfPreview(props: {
   onRemoveTextAnnotation: (id: string) => void;
   onMoveTextAnnotation: (id: string, x: number, y: number) => void;
   onResizeTextAnnotation: (id: string, width: number, height: number) => void;
-  onChangeTextAnnotationFontSize: (id: string, fontSize: number) => void;
   onEraseInkAtPoint?: (point: InkPoint, radius: number, snapshot?: boolean) => boolean;
   onSelectionChange: (rect: SelectionRect | null) => void;
   onMoveSelection?: (dx: number, dy: number) => void;
@@ -611,6 +739,7 @@ export function PdfPreview(props: {
 }) {
   const [currentStroke, setCurrentStroke] = useState<InkStroke | null>(null);
   const [draftSelection, setDraftSelection] = useState<SelectionRect | null>(null);
+  const [draftSelectionPageKey, setDraftSelectionPageKey] = useState<string | null>(null);
   const [openReferenceId, setOpenReferenceId] = useState<string | null>(null);
   const currentStrokeRef = useRef<InkStroke | null>(null);
   const activePointerIdRef = useRef<number | null>(null);
@@ -623,15 +752,12 @@ export function PdfPreview(props: {
   const draftSelectionRef = useRef<SelectionRect | null>(null);
   const textTapRef = useRef<InkPoint | null>(null);
   const selectionPreviewRequestRef = useRef(0);
-  const inkInputLocksScroll = shouldLockScrollForTool(props.inkTool, props.fingerDrawingEnabled);
-  const scrollEnabled = !inkInputLocksScroll;
-
   const pdfUri = useMemo(() => {
     if (typeof props.file === 'string') return props.file;
     if (typeof props.file === 'number') return Image.resolveAssetSource(props.file)?.uri ?? null;
     return props.file.uri ?? null;
   }, [props.file]);
-  const { engine, snapshot, rootRef, scrollRef, contentRef } = useWebPdfViewportEngine({
+  const { engine, snapshot, rootRef } = useWebPdfViewportEngine({
     sourceUri: pdfUri,
     currentPage: props.page,
     pageGap: WEB_PDF_PAGE_GAP,
@@ -652,6 +778,19 @@ export function PdfPreview(props: {
         })),
     [pageCount, props.notebookPages, props.page],
   );
+  const pageTargets = useMemo(
+    () => pageItems.map((page) => ({
+      key: page.id,
+      pageNumber: page.pageNumber,
+      generatedPageId: page.generatedPageId,
+      sourcePageNumber: page.pageNumber ?? page.insertAfterPage,
+    })),
+    [pageItems],
+  );
+
+  useEffect(() => {
+    engine.setPageTargets(pageTargets);
+  }, [engine, pageTargets]);
   const getPageCaptureReferences = (page: NotebookPage) => (
     (props.pageCaptureReferences ?? []).filter((reference) => {
       if (page.generatedPageId) return reference.page.kind === 'generated' && reference.page.pageId === page.generatedPageId;
@@ -669,39 +808,38 @@ export function PdfPreview(props: {
 
   const getFrameForPage = (page: NotebookPage): PageFrame => {
     const sourcePageNumber = page.pageNumber ?? page.insertAfterPage;
-    return engine.getFrameForSourcePage(sourcePageNumber);
+    return engine.getFrameForTarget(page.id, sourcePageNumber);
   };
 
-  const getPageStrokesForView = (page: NotebookPage) => {
-    const frame = getFrameForPage(page);
-    const pageStrokes = props.inkStrokes.filter((stroke) => (
+  const getRawPageStrokes = (page: NotebookPage) => (
+    props.inkStrokes.filter((stroke) => (
       page.generatedPageId
         ? stroke.generatedPageId === page.generatedPageId
         : !stroke.generatedPageId && (!stroke.pageNumber || stroke.pageNumber === page.pageNumber)
-    ));
-    return pageStrokes.map((stroke) => scaleInkStrokeToPageSize(stroke, frame.width, frame.height));
+    ))
+  );
+
+  const getPageStrokesForRender = (page: NotebookPage) => {
+    const frame = getFrameForPage(page);
+    return getRawPageStrokes(page).map((stroke) => scaleInkStrokeToViewportPageSize(stroke, frame.width, frame.height));
   };
 
-  const getPageTextAnnotationsForView = (page: NotebookPage) => {
-    const frame = getFrameForPage(page);
-    const pageAnnotations = props.textAnnotations.filter((annotation) => (
+  const getPageTextAnnotationsForRender = (page: NotebookPage) => {
+    return props.textAnnotations.filter((annotation) => (
       page.generatedPageId
         ? annotation.generatedPageId === page.generatedPageId
         : !annotation.generatedPageId && annotation.pageNumber === page.pageNumber
     ));
-    return pageAnnotations.map((annotation) => scaleTextAnnotationToPageSize(annotation, frame.width, frame.height));
   };
 
-  const getPdfPageStrokesForView = (pageNumber: number) => {
-    const frame = snapshot.pages[pageNumber];
+  const getPdfPageStrokesForCapture = (pageNumber: number, pageWidth: number, pageHeight: number) => {
     const pageStrokes = props.inkStrokes.filter((stroke) => !stroke.generatedPageId && (!stroke.pageNumber || stroke.pageNumber === pageNumber));
-    return frame ? pageStrokes.map((stroke) => scaleInkStrokeToPageSize(stroke, frame.width, frame.height)) : pageStrokes;
+    return pageStrokes.map((stroke) => scaleInkStrokeToPageSize(stroke, pageWidth, pageHeight));
   };
 
-  const getPdfPageTextAnnotationsForView = (pageNumber: number) => {
-    const frame = snapshot.pages[pageNumber];
+  const getPdfPageTextAnnotationsForCapture = (pageNumber: number, pageWidth: number, pageHeight: number) => {
     const pageAnnotations = props.textAnnotations.filter((annotation) => !annotation.generatedPageId && annotation.pageNumber === pageNumber);
-    return frame ? pageAnnotations.map((annotation) => scaleTextAnnotationToPageSize(annotation, frame.width, frame.height)) : pageAnnotations;
+    return pageAnnotations.map((annotation) => scaleTextAnnotationToPageSize(annotation, pageWidth, pageHeight));
   };
 
   const zoomBy = useCallback((delta: number) => {
@@ -754,10 +892,13 @@ export function PdfPreview(props: {
   const buildSelectionPreview = async (page: NotebookPage, rect: SelectionRect | null) => {
     const pageNumber = page.pageNumber;
     if (!pageNumber) return null;
+    const capturePageWidth = rect?.pageWidth ?? snapshot.pages[pageNumber]?.naturalWidth ?? snapshot.pages[pageNumber]?.width ?? 1;
+    const capturePageHeight = rect?.pageHeight ?? snapshot.pages[pageNumber]?.naturalHeight ?? snapshot.pages[pageNumber]?.height ?? 1;
     return engine.capturePageRect(pageNumber, rect, (context) => {
-      getPdfPageStrokesForView(pageNumber).filter((stroke) => stroke.style === 'highlight').forEach((stroke) => drawPath(context, stroke, 0.72));
-      getPdfPageTextAnnotationsForView(pageNumber).forEach((annotation) => drawTextAnnotation(context, annotation));
-      getPdfPageStrokesForView(pageNumber).filter((stroke) => stroke.style !== 'highlight').forEach((stroke) => drawPath(context, stroke));
+      const captureStrokes = getPdfPageStrokesForCapture(pageNumber, capturePageWidth, capturePageHeight);
+      captureStrokes.filter((stroke) => stroke.style === 'highlight').forEach((stroke) => drawPath(context, stroke, 0.72));
+      getPdfPageTextAnnotationsForCapture(pageNumber, capturePageWidth, capturePageHeight).forEach((annotation) => drawTextAnnotation(context, annotation));
+      captureStrokes.filter((stroke) => stroke.style !== 'highlight').forEach((stroke) => drawPath(context, stroke));
     });
   };
 
@@ -770,6 +911,12 @@ export function PdfPreview(props: {
     });
   };
 
+  const clearDraftSelection = () => {
+    draftSelectionRef.current = null;
+    setDraftSelection(null);
+    setDraftSelectionPageKey(null);
+  };
+
   const finishSelection = (page: NotebookPage) => {
     if (props.inkTool === 'select') {
       const rect = draftSelectionRef.current;
@@ -779,24 +926,28 @@ export function PdfPreview(props: {
       const moveStartRect = selectionMoveStartRectRef.current;
       if (rect && resizeCorner && resizeStartRect) {
         props.onResizeSelection?.(rect);
+        props.onSelectionPreviewChange?.(null);
+        selectionPreviewRequestRef.current += 1;
         selectionResizeCornerRef.current = null;
         selectionResizeStartRectRef.current = null;
         selectionMoveOriginRef.current = null;
         selectionMoveStartRectRef.current = null;
-        draftSelectionRef.current = null;
+        clearDraftSelection();
         selectionOriginRef.current = null;
-        setDraftSelection(null);
         return;
       }
       if (rect && moveOrigin && moveStartRect) {
         const dx = rect.x - moveStartRect.x;
         const dy = rect.y - moveStartRect.y;
         if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) props.onMoveSelection?.(dx, dy);
+        if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
+          props.onSelectionPreviewChange?.(null);
+          selectionPreviewRequestRef.current += 1;
+        }
         selectionMoveOriginRef.current = null;
         selectionMoveStartRectRef.current = null;
-        draftSelectionRef.current = null;
+        clearDraftSelection();
         selectionOriginRef.current = null;
-        setDraftSelection(null);
         return;
       }
       if (rect && rect.width > 24 && rect.height > 24) {
@@ -810,9 +961,8 @@ export function PdfPreview(props: {
           }
         });
       }
-      draftSelectionRef.current = null;
+      clearDraftSelection();
       selectionOriginRef.current = null;
-      setDraftSelection(null);
     }
     if (props.inkTool === 'text' && textTapRef.current) {
       props.onAddTextAnnotation(textTapRef.current);
@@ -822,11 +972,16 @@ export function PdfPreview(props: {
 
   const renderPage = (page: NotebookPage) => {
     const frame = getFrameForPage(page);
-    const pageStrokesForView = getPageStrokesForView(page);
-    const pageTextAnnotationsForView = getPageTextAnnotationsForView(page);
+    const pageStrokesForRender = getPageStrokesForRender(page);
+    const pageTextAnnotationsForRender = getPageTextAnnotationsForRender(page);
     const active = page.generatedPageId ? page.generatedPageId === props.activeGeneratedPageId : page.pageNumber === props.page;
     const selectionRectStyle = active ? scaleSelectionRectToPageSize(props.selectionRect, frame.width, frame.height) : null;
-    const draftSelectionStyle = (page.generatedPageId ? currentStroke?.generatedPageId === page.generatedPageId : currentStroke?.pageNumber === page.pageNumber) ? draftSelection : null;
+    const draftSelectionStyle = draftSelectionPageKey === page.id
+      ? scaleSelectionRectToPageSize(draftSelection, frame.width, frame.height)
+      : null;
+    const currentStrokeForRender = currentStroke && (page.generatedPageId ? currentStroke.generatedPageId === page.generatedPageId : currentStroke.pageNumber === page.pageNumber)
+      ? scaleInkStrokeToViewportPageSize(currentStroke, frame.width, frame.height)
+      : null;
     const pageReferences = getPageCaptureReferences(page);
     const activePageReference = pageReferences.find((reference) => reference.id === openReferenceId) ?? null;
     const activeReferenceIndex = activePageReference ? pageReferences.findIndex((reference) => reference.id === activePageReference.id) : -1;
@@ -851,14 +1006,13 @@ export function PdfPreview(props: {
     };
     const resetDraftInteraction = () => {
       currentStrokeRef.current = null;
-      draftSelectionRef.current = null;
+      clearDraftSelection();
       selectionOriginRef.current = null;
       selectionMoveOriginRef.current = null;
       selectionMoveStartRectRef.current = null;
       selectionResizeCornerRef.current = null;
       selectionResizeStartRectRef.current = null;
       textTapRef.current = null;
-      setDraftSelection(null);
       setCurrentStroke(null);
       clearPointerInteraction();
     };
@@ -898,13 +1052,14 @@ export function PdfPreview(props: {
       }
 
       if (props.inkTool === 'select') {
-        const currentSelection = active ? scaleSelectionRectToPageSize(props.selectionRect, frame.width, frame.height) : null;
-        const resizeCorner = getResizeCorner(currentSelection, point);
+        const currentSelection = active ? props.selectionRect : null;
+        const resizeCorner = getResizeCorner(currentSelection, point, 24 / Math.max(0.001, frame.scale));
         if (currentSelection && resizeCorner) {
           selectionResizeCornerRef.current = resizeCorner;
           selectionResizeStartRectRef.current = currentSelection;
           draftSelectionRef.current = currentSelection;
           setDraftSelection(currentSelection);
+          setDraftSelectionPageKey(page.id);
           return;
         }
         if (
@@ -918,15 +1073,18 @@ export function PdfPreview(props: {
           selectionMoveStartRectRef.current = currentSelection;
           draftSelectionRef.current = currentSelection;
           setDraftSelection(currentSelection);
+          setDraftSelectionPageKey(page.id);
           return;
         }
         props.onSelectionChange(null);
         selectionPreviewRequestRef.current += 1;
         props.onSelectionPreviewChange?.(null);
         selectionOriginRef.current = point;
-        const rect = { x: point.x, y: point.y, width: 0, height: 0, pageWidth: point.pageWidth, pageHeight: point.pageHeight };
+        const selectionMode = props.selectionMode ?? 'rect';
+        const rect = { x: point.x, y: point.y, width: 0, height: 0, mode: selectionMode, path: selectionMode === 'lasso' ? [point] : undefined, pageWidth: point.pageWidth, pageHeight: point.pageHeight };
         draftSelectionRef.current = rect;
         setDraftSelection(rect);
+        setDraftSelectionPageKey(page.id);
         return;
       }
 
@@ -936,7 +1094,8 @@ export function PdfPreview(props: {
       }
 
       if (props.inkTool === 'erase') {
-        const hitStrokeId = findHitInkStrokeId(pageStrokesForView, point);
+        const hitTestStrokes = getRawPageStrokes(page).map((stroke) => scaleInkStrokeToLogicalHitTestSize(stroke, point.pageWidth, point.pageHeight, frame.scale));
+        const hitStrokeId = findHitInkStrokeId(hitTestStrokes, point, 18 / Math.max(0.001, frame.scale));
         if (hitStrokeId) props.onRemoveInkStroke(hitStrokeId);
       }
     };
@@ -974,10 +1133,19 @@ export function PdfPreview(props: {
         const moveOrigin = selectionMoveOriginRef.current;
         const moveStartRect = selectionMoveStartRectRef.current;
         if (moveOrigin && moveStartRect) {
+          const dx = point.x - moveOrigin.x;
+          const dy = point.y - moveOrigin.y;
           const rect = {
             ...moveStartRect,
-            x: moveStartRect.x + point.x - moveOrigin.x,
-            y: moveStartRect.y + point.y - moveOrigin.y,
+            x: moveStartRect.x + dx,
+            y: moveStartRect.y + dy,
+            path: moveStartRect.path?.map((pathPoint) => ({
+              ...pathPoint,
+              x: pathPoint.x + dx,
+              y: pathPoint.y + dy,
+              pageWidth: point.pageWidth,
+              pageHeight: point.pageHeight,
+            })),
             pageWidth: point.pageWidth,
             pageHeight: point.pageHeight,
           };
@@ -987,14 +1155,17 @@ export function PdfPreview(props: {
         }
         const origin = selectionOriginRef.current;
         if (!origin) return;
-        const rect = {
-          x: Math.min(origin.x, point.x),
-          y: Math.min(origin.y, point.y),
-          width: Math.abs(point.x - origin.x),
-          height: Math.abs(point.y - origin.y),
-          pageWidth: point.pageWidth,
-          pageHeight: point.pageHeight,
-        };
+        const selectionMode = props.selectionMode ?? 'rect';
+        const rect = selectionMode === 'lasso'
+          ? (() => {
+              const currentPath = draftSelectionRef.current?.path ?? [origin];
+              const lastPoint = currentPath[currentPath.length - 1];
+              const nextPath = !lastPoint || Math.hypot(lastPoint.x - point.x, lastPoint.y - point.y) > 5 / Math.max(0.001, frame.scale)
+                ? [...currentPath, point]
+                : currentPath;
+              return getSelectionRectFromPoints(nextPath) ?? getSelectionRectFromDrag(origin, point, 'lasso');
+            })()
+          : getSelectionRectFromDrag(origin, point, 'rect');
         draftSelectionRef.current = rect;
         setDraftSelection(rect);
       }
@@ -1018,53 +1189,75 @@ export function PdfPreview(props: {
         style={{
           width: frame.width,
           height: frame.height,
-          marginBottom: WEB_PDF_PAGE_GAP,
+          left: frame.x - snapshot.panX,
+          top: frame.y - snapshot.panY,
           backgroundColor: '#FFFFFF',
           boxShadow: '0 10px 18px rgba(24,36,54,0.08)',
-          position: 'relative',
-          flexShrink: 0,
+          position: 'absolute',
+          overflowAnchor: 'none',
+          overflow: 'hidden',
         }}
       >
         {page.kind === 'pdf' && page.pageNumber ? (
-          <canvas
-            ref={(node) => {
-              engine.setCanvasElement(page.pageNumber!, node);
-            }}
-            style={{
-              display: 'block',
-              position: 'absolute',
-              left: 0,
-              top: 0,
-              width: '100%',
-              height: '100%',
-              backgroundColor: '#FFFFFF',
-            }}
-          />
+          <>
+            <canvas
+              ref={(node) => {
+                engine.setCanvasElement(page.pageNumber!, node);
+              }}
+              style={{
+                display: 'block',
+                position: 'absolute',
+                left: 0,
+                top: 0,
+                width: '100%',
+                height: '100%',
+                backgroundColor: '#FFFFFF',
+              }}
+            />
+            <canvas
+              ref={(node) => {
+                engine.setHiResCanvasElement(page.pageNumber!, node);
+              }}
+              style={{
+                display: 'none',
+                position: 'absolute',
+                left: 0,
+                top: 0,
+                width: 0,
+                height: 0,
+                pointerEvents: 'none',
+              }}
+            />
+          </>
         ) : (
           <NotebookPaperBackground page={page} />
         )}
 
-        <Svg width="100%" height="100%" pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0 }}>
-          {pageStrokesForView.filter((stroke) => stroke.style === 'highlight').map((stroke) => <InkPath key={stroke.id} stroke={stroke} />)}
-          {(page.generatedPageId ? currentStroke?.generatedPageId === page.generatedPageId : currentStroke?.pageNumber === page.pageNumber) && currentStroke?.style === 'highlight' ? <InkPath stroke={currentStroke} draft /> : null}
-        </Svg>
+        <WebPdfInkCanvasLayer
+          pageWidth={frame.width}
+          pageHeight={frame.height}
+          strokes={pageStrokesForRender}
+          currentStroke={currentStrokeForRender}
+        />
 
         <WebPdfTextAnnotationLayer
-          annotations={pageTextAnnotationsForView}
+          annotations={pageTextAnnotationsForRender}
+          pageWidth={frame.width}
+          pageHeight={frame.height}
           onChangeText={props.onUpdateTextAnnotation}
           onChangeFontSize={props.onChangeTextAnnotationFontSize}
           onMove={(id, x, y) => {
             props.onMoveTextAnnotation(
               id,
-              x / Math.max(1, frame.width) * frame.naturalWidth,
-              y / Math.max(1, frame.height) * frame.naturalHeight,
+              x,
+              y,
             );
           }}
           onResize={(id, width, height) => {
             props.onResizeTextAnnotation(
               id,
-              width / Math.max(1, frame.width) * frame.naturalWidth,
-              height / Math.max(1, frame.height) * frame.naturalHeight,
+              width,
+              height,
             );
           }}
           onRemove={props.onRemoveTextAnnotation}
@@ -1205,12 +1398,8 @@ export function PdfPreview(props: {
           onPointerCancel={resetDraftInteraction}
           onLostPointerCapture={clearPointerInteraction}
         >
-          <Svg width="100%" height="100%" pointerEvents="none">
-            {pageStrokesForView.filter((stroke) => stroke.style !== 'highlight').map((stroke) => <InkPath key={stroke.id} stroke={stroke} />)}
-            {(page.generatedPageId ? currentStroke?.generatedPageId === page.generatedPageId : currentStroke?.pageNumber === page.pageNumber) && currentStroke?.style !== 'highlight' && currentStroke ? <InkPath stroke={currentStroke} draft /> : null}
-          </Svg>
-          {!draftSelectionStyle && selectionRectStyle ? <SelectionOverlay rect={selectionRectStyle} styles={props.styles} /> : null}
-          {draftSelectionStyle && draftSelectionStyle.mode !== 'lasso' ? <SelectionOverlay rect={draftSelectionStyle} styles={props.styles} draft /> : null}
+          {!draftSelectionStyle && selectionRectStyle ? <SelectionOverlay rect={selectionRectStyle} styles={props.styles} pageWidth={frame.width} pageHeight={frame.height} /> : null}
+          {draftSelectionStyle ? <SelectionOverlay rect={draftSelectionStyle} styles={props.styles} pageWidth={frame.width} pageHeight={frame.height} draft /> : null}
         </div>
       </div>
     );
@@ -1218,7 +1407,6 @@ export function PdfPreview(props: {
 
   return (
     <div
-      ref={rootRef}
       style={{
         flex: 1,
         width: '100%',
@@ -1273,36 +1461,29 @@ export function PdfPreview(props: {
         </div>
       </div>
       <div
-        ref={scrollRef}
+        ref={rootRef}
         style={{
           width: '100%',
           flex: 1,
           minHeight: 0,
-          overflowX: 'auto',
-          overflowY: scrollEnabled ? 'auto' : 'hidden',
+          overflow: 'hidden',
           overscrollBehavior: 'contain',
-          touchAction: props.inkTool === 'view' ? 'pan-x pan-y' : 'none',
+          overflowAnchor: 'none',
+          touchAction: 'none',
           boxSizing: 'border-box',
+          position: 'relative',
+          cursor: props.inkTool === 'view' ? 'default' : 'crosshair',
         }}
       >
-        <div
-          ref={contentRef}
-          style={{
-            display: 'flex',
-            flexDirection: 'column',
-            alignItems: 'center',
-            paddingTop: 18,
-            paddingBottom: 36,
-            minWidth: Math.max(snapshot.viewportWidth, snapshot.contentWidth, ...pageItems.map((page) => getFrameForPage(page).width)),
-            boxSizing: 'border-box',
-          }}
-        >
-          {pageItems.map(renderPage)}
-        {snapshot.isLoading ? <div style={{ color: '#6B7280', fontWeight: 700, marginTop: 12 }}>PDF 페이지를 렌더링하는 중...</div> : null}
-        {!snapshot.isLoading && snapshot.loadError ? (
-          <div style={{ color: '#6B7280', textAlign: 'center', padding: '0 24px' }}>{snapshot.loadError}</div>
+        {pageItems.map(renderPage)}
+        {snapshot.isLoading ? (
+          <div style={{ position: 'absolute', top: 18, left: 0, right: 0, textAlign: 'center', color: '#6B7280', fontWeight: 700 }}>
+            PDF 페이지를 렌더링하는 중...
+          </div>
         ) : null}
-        </div>
+        {!snapshot.isLoading && snapshot.loadError ? (
+          <div style={{ position: 'absolute', top: 18, left: 0, right: 0, color: '#6B7280', textAlign: 'center', padding: '0 24px' }}>{snapshot.loadError}</div>
+        ) : null}
       </div>
     </div>
   );
