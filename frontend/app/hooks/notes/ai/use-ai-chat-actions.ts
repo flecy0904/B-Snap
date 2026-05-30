@@ -18,6 +18,7 @@ import { buildAiChatTitle } from './ai-chat-title';
 import { getAiBackendErrorMessage } from './ai-errors';
 
 type SetState<T> = Dispatch<SetStateAction<T>>;
+type AiQuestionSource = 'general' | 'selection' | 'photo' | 'class-insight' | 'chat' | 'canvas-mini';
 type CanvasAction = 'auto' | 'chat_only' | 'canvas_edit' | 'canvas_create';
 
 function getCanvasAction(question: string, source: 'chat' | 'canvas-mini' = 'chat'): CanvasAction {
@@ -70,6 +71,7 @@ export function useAiChatActions(params: {
   currentDocumentHasBackendPages: boolean;
   selectionRect: SelectionRect | null;
   selectionPreviewUri: string | null;
+  selectionAttachmentEnabled: boolean;
   currentPageNumber: number | null;
   activeAiChatSessionId: number | null;
   aiChatReadOnly: boolean;
@@ -352,16 +354,19 @@ export function useAiChatActions(params: {
     const explicitSelectionImageUri = Object.prototype.hasOwnProperty.call(override ?? {}, 'selectionImageUri')
       ? override?.selectionImageUri ?? null
       : undefined;
+    const attachedSelectionPreviewUri = params.selectionAttachmentEnabled ? params.selectionPreviewUri : null;
     const selectionPreviewUri = explicitSelectionImageUri !== undefined
       ? explicitSelectionImageUri
       : override?.source === 'canvas-mini'
         ? null
-        : params.selectionPreviewUri;
+        : attachedSelectionPreviewUri;
     const selectionRect = override?.source === 'canvas-mini' && !selectionPreviewUri
       ? null
-      : params.selectionRect;
+      : params.selectionAttachmentEnabled
+        ? params.selectionRect
+        : null;
     const hasSelection = Boolean(selectionRect || selectionPreviewUri);
-    const shouldHideSelectionAttachment = Boolean(selectionRect || params.selectionPreviewUri);
+    const shouldHideSelectionAttachment = Boolean(selectionRect || attachedSelectionPreviewUri);
     const rawQuestion = override?.question?.trim() ?? params.aiQuestion.trim();
     if (override?.source === 'canvas-mini' && !rawQuestion) return false;
 
@@ -449,7 +454,7 @@ export function useAiChatActions(params: {
       });
       const userMessageWithAttachment = {
         ...response.user_message,
-        selection_image_url: shouldHideSelectionAttachment ? null : selectionPreviewUri,
+        selection_image_url: selectionPreviewUri,
       };
       params.setLastChatSessionByDocument((current) => ({
         ...current,
@@ -523,10 +528,12 @@ export function useAiChatActions(params: {
   const requestAiAnswerForQuestion = async (question: string, options?: {
     selectionImageUri?: string | null;
     pageNumber?: number | null;
+    source?: AiQuestionSource;
   }) => requestAiAnswerInternal({
     question,
     selectionImageUri: options?.selectionImageUri ?? null,
     pageNumber: options?.pageNumber ?? params.currentPageNumber,
+    source: options?.source === 'canvas-mini' ? 'canvas-mini' : 'chat',
   });
 
   return {

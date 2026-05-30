@@ -182,6 +182,7 @@ export interface GeneratedWorkspacePage {
   previewImage?: number;
   fileUrl?: string;
   thumbnailUrl?: string;
+  processedUrl?: string;
 }
 
 export type TimetableDay = 'MON' | 'TUE' | 'WED' | 'THU' | 'FRI';

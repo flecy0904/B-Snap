@@ -192,6 +192,7 @@ export function useCaptureAssetActions(params: CaptureAssetActionsParams) {
     }
 
     const insertAfterPage = params.currentPdfPageByDocument[params.studyDocumentId] ?? 1;
+    const croppedImageUrl = derivePreprocessedCropUrl(asset.processedUrl) ?? asset.thumbnailUrl;
     const generatedPageId = `generated-page-${asset.id}-${Date.now()}`;
     const generatedPage: GeneratedWorkspacePage = {
       id: generatedPageId,
@@ -205,7 +206,8 @@ export function useCaptureAssetActions(params: CaptureAssetActionsParams) {
       previewImageKey: asset.previewImageKey,
       previewImage: asset.previewImage,
       fileUrl: asset.fileUrl,
-      thumbnailUrl: asset.thumbnailUrl,
+      thumbnailUrl: croppedImageUrl ?? asset.thumbnailUrl,
+      processedUrl: asset.processedUrl,
       ...buildGeneratedSummary(asset, params.availableSubjects),
     };
 

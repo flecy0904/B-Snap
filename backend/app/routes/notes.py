@@ -1,3 +1,7 @@
+import logging
+from pathlib import Path
+from urllib.parse import unquote, urlparse
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from psycopg import Connection
 
@@ -20,6 +24,7 @@ from backend.app.services.pdf_text_extractor import extract_pdf_text_pages, extr
 
 
 router = APIRouter(tags=["notes"])
+logger = logging.getLogger("uvicorn.error")
 
 
 def get_note_for_user(note_id: int, user_id: int, connection: Connection):
@@ -48,6 +53,43 @@ def _list_pages_for_note(connection: Connection, note_id: int) -> list[dict]:
         """,
         (note_id,),
     )
+
+
+def _upload_relative_path(url: str | None) -> str | None:
+    if not url:
+        return None
+
+    path = urlparse(url).path
+    if not path.startswith("/uploads/"):
+        return None
+    return unquote(path.removeprefix("/uploads/"))
+
+
+def _delete_upload_file(settings: Settings, relative_path: str | None) -> None:
+    if not relative_path:
+        return
+
+    upload_root = settings.upload_path.resolve()
+    target = (upload_root / relative_path).resolve()
+    if upload_root not in target.parents:
+        return
+
+    try:
+        target.unlink(missing_ok=True)
+    except OSError as exc:
+        logger.warning("failed to delete upload file %s: %s", target, exc)
+
+
+def _cleanup_note_upload_files(note: dict, settings: Settings) -> None:
+    file_relative_path = _upload_relative_path(note.get("file_url"))
+    thumbnail_relative_path = _upload_relative_path(note.get("thumbnail_url"))
+
+    _delete_upload_file(settings, file_relative_path)
+    _delete_upload_file(settings, thumbnail_relative_path)
+
+    if file_relative_path and file_relative_path.lower().endswith(".pdf"):
+        thumbnail_name = f"{Path(file_relative_path).stem}.png"
+        _delete_upload_file(settings, f"pdf-thumbnails/{thumbnail_name}")
 
 
 @router.post("/notes", response_model=NoteRead)
@@ -145,10 +187,12 @@ def update_note(
 def delete_note(
     note_id: int,
     connection: Connection = Depends(get_db_connection),
+    settings: Settings = Depends(get_settings),
     current_user: dict = Depends(get_current_user),
 ):
-    get_note_for_user(note_id, current_user["id"], connection)
+    note = get_note_for_user(note_id, current_user["id"], connection)
     execute_commit(connection, "DELETE FROM notes WHERE id = %s AND user_id = %s", (note_id, current_user["id"]))
+    _cleanup_note_upload_files(note, settings)
 
 
 @router.post("/notes/{note_id}/pages", response_model=NotePageRead)

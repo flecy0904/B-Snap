@@ -7,7 +7,7 @@ import { TextAnnotationLayer } from '../canvas/text-annotation-layer';
 import { hasMultipleTouches, shouldCaptureInkPointer, shouldUsePrimaryPointer } from '../canvas/ink-input-policy';
 import { getCaptureOriginalImageSource, getPageCaptureReferenceImageSource } from '../shared/capture-assets';
 import { cleanAiDisplayText, finalizeInkStroke, findHitInkStrokeId, getInkCenterlinePath, getInkStrokeSvgPath, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize, shouldAppendInkPoint } from '../../../ui-helpers';
-import { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
+import { InkBrush, InkBrushSettings, InkImageAnnotation, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { CaptureAsset, NotebookPage, PageCaptureReference } from '../../../types';
 
 function NotebookPaperBackground({ page }: { page: NotebookPage }) {
@@ -344,6 +344,7 @@ export function PdfPreview(props: {
   brushSettings?: InkBrushSettings;
   inkStrokes: InkStroke[];
   textAnnotations: InkTextAnnotation[];
+  imageAnnotations?: InkImageAnnotation[];
   textAnnotationVariant?: 'floating' | 'marker';
   selectionRect: SelectionRect | null;
   onCommitInkStroke: (stroke: InkStroke) => void;
@@ -353,6 +354,7 @@ export function PdfPreview(props: {
   onRemoveTextAnnotation: (id: string) => void;
   onMoveTextAnnotation: (id: string, x: number, y: number) => void;
   onResizeTextAnnotation: (id: string, width: number, height: number) => void;
+  onChangeTextAnnotationFontSize: (id: string, fontSize: number) => void;
   onEraseInkAtPoint?: (point: InkPoint, radius: number, snapshot?: boolean) => boolean;
   onSelectionChange: (rect: SelectionRect | null) => void;
   onMoveSelection?: (dx: number, dy: number) => void;
@@ -804,6 +806,7 @@ export function PdfPreview(props: {
           onChangeText={props.onUpdateTextAnnotation}
           onMove={props.onMoveTextAnnotation}
           onResize={props.onResizeTextAnnotation}
+          onChangeFontSize={props.onChangeTextAnnotationFontSize}
           onRemove={props.onRemoveTextAnnotation}
           variant={props.textAnnotationVariant}
         />

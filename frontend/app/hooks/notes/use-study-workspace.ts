@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Keyboard } from 'react-native';
 import {
   getBackendClassInsight,
@@ -8,7 +8,6 @@ import {
   listBackendChatSessions,
   listBackendFolders,
   listBackendNotes,
-  updateBackendNote,
   type BackendClassInsight,
   type BackendChatSession,
   type BackendChatMessage,
@@ -27,13 +26,11 @@ import { useAiChatActions } from './ai/use-ai-chat-actions';
 import { useAiChatDerivedState } from './ai/use-ai-chat-derived-state';
 import { useAiCanvasNotes } from './ai-canvas/use-ai-canvas-notes';
 import { buildClassInsightContext } from './class-insight';
-import { addUniqueId, removeId, upsertStudyDocument } from './document/collection-helpers';
 import { getStudyDocumentBackendNoteId } from './document/backend-sync';
 import { useStudyDocumentActions } from './document/use-study-document-actions';
 import { useDocumentPageActions } from './document/use-document-page-actions';
 import { normalizeDocumentFile } from './document/document-file-utils';
 import { useBackendNotePageSync } from './document/use-backend-note-page-sync';
-import { confirmDeleteAction } from './ui/confirm-delete-action';
 import { useInkActions, type WorkspaceEditSnapshot } from './ink/use-ink-actions';
 import { isInkStrokeOnPage } from './ink/ink-helpers';
 import { useCaptureAssetActions } from './capture/use-capture-asset-actions';
@@ -41,8 +38,13 @@ import { usePageCaptureReferenceActions } from './capture/use-page-capture-refer
 import { useIncomingAssetSubscription } from './workspace/use-incoming-asset-subscription';
 import { useStudyWorkspaceDerivedState } from './workspace/use-study-workspace-derived-state';
 import { useStudyWorkspacePersistence } from './workspace/use-study-workspace-persistence';
+import { usePencilInteractionFeedback } from './workspace/use-pencil-interaction-feedback';
+import { useWorkspaceFeedback, useWorkspaceSaveStatus } from './workspace/use-workspace-feedback';
+import { useWorkspaceDocumentIntents } from './workspace/use-workspace-document-intents';
+import { useWorkspaceCaptureIntents } from './workspace/use-workspace-capture-intents';
+import { useWorkspaceAiIntents } from './workspace/use-workspace-ai-intents';
 import { isSameDocumentPage, isShapeTool } from '../../ui-helpers';
-import type { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../ui-types';
+import type { InkBrush, InkBrushSettings, InkEraserMode, InkImageAnnotation, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../ui-types';
 import type { AiAnswer, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../types';
 
 export type WorkspaceFocusTarget = 'document' | 'aiCanvas';
@@ -62,12 +64,14 @@ export function useStudyWorkspace(props: {
   const [noteDetailTab, setNoteDetailTab] = useState<'original' | 'summary'>('original');
   const [noteWorkspaceMode, setNoteWorkspaceMode] = useState<NoteWorkspaceMode>('note');
   const [studyDocumentId, setStudyDocumentId] = useState<number | null>(null);
-  const [inkTool, setInkTool] = useState<InkTool>('view');
+  const [inkTool, setInkTool] = useState<InkTool>('pen');
   const [fingerDrawingEnabled, setFingerDrawingEnabled] = useState(false);
   const [penColor, setPenColor] = useState<string>(DEFAULT_PEN_COLOR);
   const [penWidth, setPenWidth] = useState(3);
   const [brushType, setBrushType] = useState<InkBrush>('ballpoint');
   const [linePattern, setLinePattern] = useState<InkLinePattern>('solid');
+  const [eraserMode, setEraserMode] = useState<InkEraserMode>('partial');
+  const [eraserWidth, setEraserWidth] = useState(12);
   const [selectionMode, setSelectionMode] = useState<InkSelectionMode>('rect');
   const [brushSettings, setBrushSettings] = useState<InkBrushSettings>({
     stability: 18,
@@ -80,6 +84,7 @@ export function useStudyWorkspace(props: {
   const [inkHistoryByDocument, setInkHistoryByDocument] = useState<Record<number, WorkspaceEditSnapshot[]>>({});
   const [redoInkHistoryByDocument, setRedoInkHistoryByDocument] = useState<Record<number, WorkspaceEditSnapshot[]>>({});
   const [textAnnotationsByDocument, setTextAnnotationsByDocument] = useState<Record<number, InkTextAnnotation[]>>({});
+  const [imageAnnotationsByDocument, setImageAnnotationsByDocument] = useState<Record<number, InkImageAnnotation[]>>({});
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
   const [aiPanelMode, setAiPanelMode] = useState<'floating' | 'sidebar'>('floating');
   const [appRightSidebarPanel, setAppRightSidebarPanel] = useState<AppRightSidebarPanel>('chat');
@@ -102,17 +107,19 @@ export function useStudyWorkspace(props: {
   const [currentPdfPageByDocument, setCurrentPdfPageByDocument] = useState<Record<number, number>>({});
   const [activePageByDocument, setActivePageByDocument] = useState<Record<number, DocumentPageView>>({});
   const [bookmarksByDocument, setBookmarksByDocument] = useState<Record<number, BookmarkedPage[]>>({});
-  const [workspaceFeedback, setWorkspaceFeedback] = useState<string | null>(null);
+  const { workspaceFeedback, setWorkspaceFeedback } = useWorkspaceFeedback();
   const [incomingBannerQueue, setIncomingBannerQueue] = useState<CaptureAsset[]>([]);
   const [aiAnswer, setAiAnswer] = useState<AiAnswer | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const [selectionPreviewByDocument, setSelectionPreviewByDocument] = useState<Record<number, string | null>>({});
+  const [selectionPreviewAttachedByDocument, setSelectionPreviewAttachedByDocument] = useState<Record<number, boolean>>({});
   const [chatSessionByDocument, setChatSessionByDocument] = useState<Record<number, number>>({});
   const [viewingAiChatSessionId, setViewingAiChatSessionId] = useState<number | null>(null);
   const [lastChatSessionByDocument, setLastChatSessionByDocument] = useState<Record<number, number>>({});
   const [chatSessionsByDocument, setChatSessionsByDocument] = useState<Record<number, BackendChatSession[]>>({});
   const [classInsightByDocument, setClassInsightByDocument] = useState<Record<number, BackendClassInsight | null>>({});
+  const classInsightFetchKeyRef = useRef<Record<number, string>>({});
   const [allChatSessions, setAllChatSessions] = useState<BackendChatSession[]>([]);
   const [aiChatScope, setAiChatScope] = useState<'note' | 'all'>('note');
   const [aiChatSearchQuery, setAiChatSearchQuery] = useState('');
@@ -156,6 +163,7 @@ export function useStudyWorkspace(props: {
     currentPageBookmarked,
     inkStrokes,
     textAnnotations,
+    imageAnnotations,
     inboxPendingCount,
     inboxHint,
     filteredNotes,
@@ -181,6 +189,7 @@ export function useStudyWorkspace(props: {
     bookmarksByDocument,
     inkByDocument,
     textAnnotationsByDocument,
+    imageAnnotationsByDocument,
     selectionByDocument,
     incomingAssetSuggestion,
   });
@@ -208,6 +217,7 @@ export function useStudyWorkspace(props: {
     setGeneratedPagesByDocument(snapshot.generatedPagesByDocument);
     setInkByDocument(snapshot.inkByDocument);
     setTextAnnotationsByDocument(snapshot.textAnnotationsByDocument);
+    setImageAnnotationsByDocument(snapshot.imageAnnotationsByDocument ?? {});
     setCurrentPdfPageByDocument(snapshot.currentPdfPageByDocument);
     setActivePageByDocument(snapshot.activePageByDocument);
     setBookmarksByDocument(snapshot.bookmarksByDocument ?? {});
@@ -225,6 +235,7 @@ export function useStudyWorkspace(props: {
     generatedPagesByDocument,
     inkByDocument,
     textAnnotationsByDocument,
+    imageAnnotationsByDocument,
     currentPdfPageByDocument,
     activePageByDocument,
     bookmarksByDocument,
@@ -240,6 +251,7 @@ export function useStudyWorkspace(props: {
     deletedNoteIds,
     deletedStudyDocumentIds,
     generatedPagesByDocument,
+    imageAnnotationsByDocument,
     inkByDocument,
     lastChatSessionByDocument,
     pageCaptureReferencesByDocument,
@@ -267,15 +279,18 @@ export function useStudyWorkspace(props: {
     userStudyDocuments,
     inkByDocument,
     textAnnotationsByDocument,
+    imageAnnotationsByDocument,
     setUserStudyDocuments,
     setInkByDocument,
     setTextAnnotationsByDocument,
+    setImageAnnotationsByDocument,
     setWorkspaceFeedback,
   });
   const {
     activeAiChatSessionId,
     aiChatReadOnly,
     aiMessages,
+    rawSelectionPreviewUri,
     selectionPreviewUri,
     noteAiChatSessions: aiChatSessions,
     visibleAiChatSessions,
@@ -287,6 +302,7 @@ export function useStudyWorkspace(props: {
     viewingAiChatSessionId,
     aiMessagesBySession,
     selectionPreviewByDocument,
+    selectionPreviewAttachedByDocument,
     chatSessionsByDocument,
     allChatSessions,
     aiChatScope,
@@ -307,12 +323,12 @@ export function useStudyWorkspace(props: {
     onRecordWorkspaceAction: () => recordWorkspaceActionTarget('aiCanvas'),
   });
   const currentClassInsight = studyDocumentId ? classInsightByDocument[studyDocumentId] ?? null : null;
+  const currentBackendNoteId = getStudyDocumentBackendNoteId(studyDocument);
 
-  useEffect(() => {
-    if (!workspaceFeedback) return;
-    const timer = setTimeout(() => setWorkspaceFeedback(null), 2200);
-    return () => clearTimeout(timer);
-  }, [workspaceFeedback]);
+  usePencilInteractionFeedback({
+    enabled: noteWorkspaceMode === 'note' && Boolean(studyDocumentId),
+    onFeedback: setWorkspaceFeedback,
+  });
 
   useEffect(() => {
     if (!activeIncomingBanner) return;
@@ -334,12 +350,17 @@ export function useStudyWorkspace(props: {
   });
 
   useEffect(() => {
-    if (!workspaceHydrated || !isBackendApiEnabled() || !studyDocumentId || !currentDocumentHasBackendPages) return;
-    if (Object.prototype.hasOwnProperty.call(classInsightByDocument, studyDocumentId)) return;
+    if (!workspaceHydrated || !isBackendApiEnabled() || !studyDocumentId || !currentDocumentHasBackendPages || !currentBackendNoteId) return;
+
+    const fetchKey = `${studyDocumentId}:${currentBackendNoteId}`;
+    const cachedInsight = classInsightByDocument[studyDocumentId];
+    if (cachedInsight?.note_id === currentBackendNoteId) return;
+    if (classInsightFetchKeyRef.current[studyDocumentId] === fetchKey) return;
+    classInsightFetchKeyRef.current[studyDocumentId] = fetchKey;
 
     let mounted = true;
 
-    getBackendClassInsight(studyDocumentId, 12)
+    getBackendClassInsight(currentBackendNoteId, 12)
       .then((insight) => {
         if (mounted) setClassInsightByDocument((current) => ({ ...current, [studyDocumentId]: insight }));
       })
@@ -350,7 +371,7 @@ export function useStudyWorkspace(props: {
     return () => {
       mounted = false;
     };
-  }, [classInsightByDocument, currentDocumentHasBackendPages, studyDocumentId, workspaceHydrated]);
+  }, [classInsightByDocument, currentBackendNoteId, currentDocumentHasBackendPages, studyDocumentId, workspaceHydrated]);
 
   useEffect(() => {
     if (!workspaceHydrated || !isBackendApiEnabled()) return;
@@ -497,44 +518,33 @@ export function useStudyWorkspace(props: {
       mounted = false;
     };
   }, [aiPanelOpen, currentDocumentHasBackendPages, studyDocument, studyDocumentId, workspaceHydrated]);
-
-
-  const openSubject = (id: number) => {
-    props.onOpenNotesTab();
-    setSubjectId(id);
-    setNoteId(null);
-    setStudyDocumentId(null);
-    setNoteDetailTab('original');
-  };
-
-  const openNote = (id: number) => {
-    const selected = visibleNotes.find((value) => value.id === id);
-    if (!selected) return;
-
-    props.onOpenNotesTab();
-    setSubjectId(selected.subjectId);
-    setNoteId(id);
-    setNoteDetailTab('original');
-  };
-
-  const requestDeleteNote = (id: number) => {
-    const target = visibleNotes.find((value) => value.id === id);
-    if (!target) return;
-
-    confirmDeleteAction({
-      title: 'Photo 삭제',
-      message: `"${target.title}" Photo를 삭제할까요? 삭제 후에는 현재 기기 목록에서 보이지 않습니다.`,
-      confirmText: '삭제',
-      onConfirm: () => {
-        setDeletedNoteIds((current) => addUniqueId(current, id));
-        if (noteId === id) {
-          setNoteId(null);
-          setNoteDetailTab('original');
-        }
-        setWorkspaceFeedback('Photo를 삭제했어요.');
-      },
-    });
-  };
+  const {
+    openSubject,
+    openNote,
+    requestDeleteNote,
+    restoreNote,
+    renameStudyDocument,
+    changeNoteWorkspaceMode,
+    resetToSubjectList,
+  } = useWorkspaceDocumentIntents({
+    visibleNotes,
+    deletedNotes,
+    allStudyDocuments,
+    deletedStudyDocuments,
+    noteId,
+    onOpenNotesTab: props.onOpenNotesTab,
+    setSubjectId,
+    setNoteId,
+    setQuery,
+    setNoteDetailTab,
+    setNoteWorkspaceMode,
+    setStudyDocumentId,
+    setInkTool,
+    setAiPanelOpen,
+    setDeletedNoteIds,
+    setUserStudyDocuments,
+    setWorkspaceFeedback,
+  });
 
   const {
     openStudyDocument,
@@ -592,76 +602,12 @@ export function useStudyWorkspace(props: {
     setWorkspaceFeedback,
   });
 
-  const restoreNote = (id: number) => {
-    const target = deletedNotes.find((value) => value.id === id);
-    if (!target) return;
-
-    setDeletedNoteIds((current) => removeId(current, id));
-    setNoteWorkspaceMode('photo');
-    setSubjectId(target.subjectId);
-    setWorkspaceFeedback('Photo를 복구했어요.');
-  };
-
-  const renameStudyDocument = (id: number, title: string) => {
-    const nextTitle = title.trim();
-    if (!nextTitle) {
-      setWorkspaceFeedback('제목을 입력해주세요.');
-      return false;
-    }
-
-    const target = allStudyDocuments.find((value) => value.id === id) ?? deletedStudyDocuments.find((value) => value.id === id);
-    if (!target) return false;
-    const backendNoteId = getStudyDocumentBackendNoteId(target);
-    const isBackendDocument = isBackendApiEnabled() && Boolean(backendNoteId);
-
-    if (isBackendDocument) {
-      void updateBackendNote({ noteId: backendNoteId!, title: nextTitle })
-        .then((updated) => {
-          setUserStudyDocuments((current) => upsertStudyDocument(current, {
-            ...target,
-            backendNoteId: updated.id,
-            title: updated.title,
-            preview: updated.summary ?? target.preview,
-            updatedAt: 'DB 저장됨',
-            backendSyncStatus: 'synced',
-          }));
-          setWorkspaceFeedback('문서를 저장했어요.');
-        })
-        .catch(() => {
-          setWorkspaceFeedback('제목 설정 중 오류가 발생했어요.');
-        });
-      return true;
-    }
-
-    setUserStudyDocuments((current) => upsertStudyDocument(current, {
-      ...target,
-      title: nextTitle,
-      updatedAt: '방금 전',
-    }));
-    setWorkspaceFeedback('노트 제목을 수정했어요.');
-    return true;
-  };
-
-  const changeNoteWorkspaceMode = (next: NoteWorkspaceMode) => {
-    setNoteWorkspaceMode(next);
-    setNoteId(null);
-    setStudyDocumentId(null);
-    setInkTool('view');
-    setAiPanelOpen(false);
-  };
-
-  const resetToSubjectList = () => {
-    setNoteId(null);
-    setSubjectId(null);
-    setQuery('');
-    setNoteDetailTab('original');
-  };
-
   const changeInkTool = (tool: InkTool) => {
     if (tool === 'select' && inkTool === 'select') {
       setInkTool('view');
       if (studyDocumentId) {
         setSelectionByDocument((current) => ({ ...current, [studyDocumentId]: null }));
+        setSelectionPreviewAttachedByDocument((current) => ({ ...current, [studyDocumentId]: false }));
       }
       return;
     }
@@ -696,6 +642,7 @@ export function useStudyWorkspace(props: {
     setInkTool(tool);
     if (tool !== 'select' && tool !== 'text' && studyDocumentId) {
       setSelectionByDocument((current) => ({ ...current, [studyDocumentId]: null }));
+      setSelectionPreviewAttachedByDocument((current) => ({ ...current, [studyDocumentId]: false }));
     }
   };
 
@@ -721,12 +668,23 @@ export function useStudyWorkspace(props: {
     setInkTool((current) => (current !== 'pen' && current !== 'highlight' && !isShapeTool(current) ? 'pen' : current));
   };
 
+  const changeEraserMode = (mode: InkEraserMode) => {
+    setEraserMode(mode);
+    setInkTool('erase');
+  };
+
+  const changeEraserWidth = (width: number) => {
+    setEraserWidth(Math.max(6, Math.min(36, Math.round(width))));
+    setInkTool('erase');
+  };
+
   const changeSelectionMode = (mode: InkSelectionMode) => {
     setSelectionMode(mode);
     setInkTool('select');
     if (studyDocumentId) {
       setSelectionByDocument((current) => ({ ...current, [studyDocumentId]: null }));
       setSelectionPreviewByDocument((current) => ({ ...current, [studyDocumentId]: null }));
+      setSelectionPreviewAttachedByDocument((current) => ({ ...current, [studyDocumentId]: false }));
     }
   };
 
@@ -742,6 +700,7 @@ export function useStudyWorkspace(props: {
   const changeSelection = (rect: SelectionRect | null) => {
     if (!studyDocumentId) return;
     setSelectionByDocument((current) => ({ ...current, [studyDocumentId]: rect }));
+    setSelectionPreviewAttachedByDocument((current) => ({ ...current, [studyDocumentId]: false }));
     if (!rect) {
       setSelectionPreviewByDocument((current) => ({ ...current, [studyDocumentId]: null }));
     }
@@ -795,6 +754,7 @@ export function useStudyWorkspace(props: {
     if (!studyDocumentId) return;
     setSelectionByDocument((current) => ({ ...current, [studyDocumentId]: null }));
     setSelectionPreviewByDocument((current) => ({ ...current, [studyDocumentId]: null }));
+    setSelectionPreviewAttachedByDocument((current) => ({ ...current, [studyDocumentId]: false }));
   }, [studyDocumentId]);
 
   const {
@@ -811,6 +771,7 @@ export function useStudyWorkspace(props: {
     currentDocumentHasBackendPages,
     selectionRect,
     selectionPreviewUri,
+    selectionAttachmentEnabled: Boolean(studyDocumentId && selectionPreviewAttachedByDocument[studyDocumentId]),
     currentPageNumber: currentDocumentPage?.kind === 'pdf' ? currentDocumentPage.pageNumber : null,
     activeAiChatSessionId,
     aiChatReadOnly,
@@ -845,22 +806,108 @@ export function useStudyWorkspace(props: {
     }),
   });
 
-  const askAiAboutSelection = () => {
-    if (!selectionRect && !selectionPreviewUri) {
-      setWorkspaceFeedback('AI에게 물어볼 부분을 선택해 주세요.');
-      return;
-    }
+  const {
+    toggleAiPanel,
+    askAiAboutSelection,
+  } = useWorkspaceAiIntents({
+    selectionRect,
+    selectionPreviewUri: rawSelectionPreviewUri,
+    setAiPanelOpen,
+    setAiPanelMode,
+    setAppChatMode,
+    setAppRightSidebarPanel,
+    setAiQuestion,
+    setViewingAiChatSessionId,
+    setWorkspaceFeedback,
+    attachSelectionPreviewToAi: (selectionPreviewUri?: string | null) => {
+      if (!studyDocumentId) return;
+      if (selectionPreviewUri !== undefined) {
+        setSelectionPreviewByDocument((current) => ({ ...current, [studyDocumentId]: selectionPreviewUri }));
+      }
+      setSelectionPreviewAttachedByDocument((current) => ({ ...current, [studyDocumentId]: true }));
+    },
+  });
 
-    setViewingAiChatSessionId(null);
-    setAiPanelOpen(true);
-    setAiPanelMode('floating');
-    setAppChatMode('floating');
-    setAppRightSidebarPanel(null);
-    setAiQuestion((current) => current.trim() || '이 선택 영역을 설명해줘');
-    setWorkspaceFeedback(selectionPreviewUri
-      ? '선택하신 부분을 질문란에 첨부했어요.'
-      : '선택한 부분을 준비 중이에요. 잠시 후 다시 시도해 주세요.');
-  };
+  const addCaptureImageAnnotation = useCallback((annotation: Partial<InkImageAnnotation> & Pick<InkImageAnnotation, 'uri'>) => {
+    if (!studyDocumentId || !annotation.uri) return;
+    const generatedPageId = annotation.generatedPageId ?? (currentDocumentPage?.kind === 'generated' ? currentDocumentPage.pageId : undefined);
+    const pageNumber = generatedPageId ? 1 : annotation.pageNumber ?? (currentDocumentPage?.kind === 'pdf' ? currentDocumentPage.pageNumber : currentPdfPage);
+    const anchoredSelection = selectionRect && (
+      generatedPageId
+        ? selectionRect.generatedPageId === generatedPageId
+        : !selectionRect.generatedPageId && (selectionRect.pageNumber ?? pageNumber) === pageNumber
+    )
+      ? selectionRect
+      : null;
+    const pageWidth = annotation.pageWidth ?? anchoredSelection?.pageWidth;
+    const pageHeight = annotation.pageHeight ?? anchoredSelection?.pageHeight;
+    const defaultWidth = pageWidth ? Math.min(280, Math.max(120, pageWidth * 0.38)) : 260;
+    const defaultHeight = Math.max(90, defaultWidth * 0.68);
+    const width = Math.max(48, annotation.width ?? anchoredSelection?.width ?? defaultWidth);
+    const height = Math.max(48, annotation.height ?? anchoredSelection?.height ?? defaultHeight);
+    const x = Math.max(0, Math.min(pageWidth ? Math.max(0, pageWidth - width) : Number.POSITIVE_INFINITY, annotation.x ?? anchoredSelection?.x ?? 42));
+    const y = Math.max(0, Math.min(pageHeight ? Math.max(0, pageHeight - height) : Number.POSITIVE_INFINITY, annotation.y ?? anchoredSelection?.y ?? 42));
+    const snapshot: WorkspaceEditSnapshot = {
+      inkStrokes: inkByDocument[studyDocumentId] ?? [],
+      textAnnotations: textAnnotationsByDocument[studyDocumentId] ?? [],
+      imageAnnotations: imageAnnotationsByDocument[studyDocumentId] ?? [],
+      selectionRect: selectionRect ?? null,
+      generatedPages: generatedPagesByDocument[studyDocumentId],
+      activePage: activePageByDocument[studyDocumentId],
+    };
+    setInkHistoryByDocument((current) => ({
+      ...current,
+      [studyDocumentId]: [...(current[studyDocumentId] ?? []).slice(-39), snapshot],
+    }));
+    setRedoInkHistoryByDocument((current) => ({
+      ...current,
+      [studyDocumentId]: [],
+    }));
+    setRedoInkByDocument((current) => ({
+      ...current,
+      [studyDocumentId]: [],
+    }));
+    setImageAnnotationsByDocument((current) => ({
+      ...current,
+      [studyDocumentId]: [
+        ...(current[studyDocumentId] ?? []),
+        {
+          id: annotation.id ?? `image-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+          uri: annotation.uri,
+          assetId: annotation.assetId,
+          pageNumber,
+          generatedPageId,
+          x,
+          y,
+          width,
+          height,
+          rotation: annotation.rotation ?? 0,
+          opacity: annotation.opacity ?? 1,
+          pageWidth,
+          pageHeight,
+          zIndex: annotation.zIndex,
+        },
+      ],
+    }));
+    if (anchoredSelection) {
+      setSelectionByDocument((current) => ({ ...current, [studyDocumentId]: null }));
+      setSelectionPreviewByDocument((current) => ({ ...current, [studyDocumentId]: null }));
+    }
+    if (!generatedPageId) markBackendPageDirty(studyDocumentId, pageNumber);
+    setWorkspaceFeedback('현재 페이지에 이미지를 배치했습니다.');
+  }, [
+    activePageByDocument,
+    currentDocumentPage,
+    currentPdfPage,
+    generatedPagesByDocument,
+    imageAnnotationsByDocument,
+    inkByDocument,
+    markBackendPageDirty,
+    selectionRect,
+    setWorkspaceFeedback,
+    studyDocumentId,
+    textAnnotationsByDocument,
+  ]);
 
   const {
     linkCaptureAssetToPage,
@@ -896,7 +943,6 @@ export function useStudyWorkspace(props: {
     openStudyDocument,
     requestAiAnswerForQuestion,
   });
-
   const requestAiCanvasCommand = useCallback(async (command: string, options?: { selectionImageUri?: string | null }) => (
     requestAiAnswer({
       question: command,
@@ -905,76 +951,41 @@ export function useStudyWorkspace(props: {
     })
   ), [requestAiAnswer]);
 
-  const acceptIncomingAsset = () => {
-    if (!incomingAssetSuggestion) return;
-    void linkCaptureAssetToCurrentPage(incomingAssetSuggestion);
-  };
-
-  const archiveIncomingAsset = () => {
-    if (!incomingAssetSuggestion) return;
-    updateAssetStatus(incomingAssetSuggestion.id, 'archived');
-    setWorkspaceFeedback('자료를 보관함으로 넘겼습니다.');
-    setIncomingAssetSuggestion(null);
-  };
-
-  const dismissIncomingAsset = () => {
-    if (!incomingAssetSuggestion) return;
-    updateAssetStatus(incomingAssetSuggestion.id, 'dismissed');
-    setWorkspaceFeedback('이번 제안은 숨겼습니다.');
-    setIncomingAssetSuggestion(null);
-  };
-
-  const insertInboxAsset = (assetId: string) => {
-    const asset = captureInbox.find((value) => value.id === assetId) ?? findCaptureAssetById(assetId);
-    if (!asset) return;
-    void linkCaptureAssetToCurrentPage(asset);
-  };
-
-  const removeInboxAsset = (assetId: string) => {
-    const asset = captureInbox.find((value) => value.id === assetId);
-    if (!asset) return;
-    updateAssetStatus(asset.id, 'dismissed');
-    if (incomingAssetSuggestion?.id === asset.id) {
-      setIncomingAssetSuggestion(null);
-    }
-    setWorkspaceFeedback('inbox에서 자료를 삭제했습니다.');
-  };
-
-  const removeWorkspaceAttachment = (attachmentId: string) => {
-    if (!studyDocumentId) return;
-    const target = (attachmentsByDocument[studyDocumentId] ?? []).find((attachment) => attachment.id === attachmentId);
-    if (!target) return;
-    const linkedGeneratedPage = target.generatedPageId
-      ? (generatedPagesByDocument[studyDocumentId] ?? []).find((page) => page.id === target.generatedPageId) ?? null
-      : null;
-
-    setAttachmentsByDocument((current) => ({
-      ...current,
-      [studyDocumentId]: (current[studyDocumentId] ?? []).filter((attachment) => attachment.id !== attachmentId),
-    }));
-    if (target.generatedPageId) {
-      setGeneratedPagesByDocument((current) => ({
-        ...current,
-        [studyDocumentId]: (current[studyDocumentId] ?? []).filter((page) => page.id !== target.generatedPageId),
-      }));
-      setBookmarksByDocument((current) => ({
-        ...current,
-        [studyDocumentId]: (current[studyDocumentId] ?? []).filter((bookmark) => bookmark.page.kind !== 'generated' || bookmark.page.pageId !== target.generatedPageId),
-      }));
-    }
-    if (linkedGeneratedPage && activePageByDocument[studyDocumentId]?.kind === 'generated' && activePageByDocument[studyDocumentId]?.pageId === linkedGeneratedPage.id) {
-      setActivePageByDocument((current) => ({
-        ...current,
-        [studyDocumentId]: { kind: 'pdf', pageNumber: linkedGeneratedPage.insertAfterPage },
-      }));
-      setCurrentPdfPageByDocument((current) => ({
-        ...current,
-        [studyDocumentId]: linkedGeneratedPage.insertAfterPage,
-      }));
-    }
-    updateAssetStatus(target.assetId, 'archived');
-    setWorkspaceFeedback('추가한 정리 페이지를 삭제했습니다.');
-  };
+  const {
+    acceptIncomingAsset,
+    archiveIncomingAsset,
+    dismissIncomingAsset,
+    insertInboxAsset,
+    removeInboxAsset,
+    removeWorkspaceAttachment,
+    openWorkspaceAttachment,
+    dismissIncomingBanner,
+    openIncomingBanner,
+  } = useWorkspaceCaptureIntents({
+    studyDocumentId,
+    incomingAssetSuggestion,
+    incomingBannerQueue,
+    captureInbox,
+    attachmentsByDocument,
+    generatedPagesByDocument,
+    activePageByDocument,
+    onOpenNotesTab: props.onOpenNotesTab,
+    updateAssetStatus,
+    findCaptureAssetById,
+    linkCaptureAssetToCurrentPage,
+    setSubjectId,
+    setNoteId,
+    setNoteWorkspaceMode,
+    setStudyDocumentId,
+    setIncomingAssetSuggestion,
+    setIncomingBannerQueue,
+    setWorkspaceFeedback,
+    setAttachmentsByDocument,
+    setGeneratedPagesByDocument,
+    setBookmarksByDocument,
+    setActivePageByDocument,
+    setCurrentPdfPageByDocument,
+  });
 
   const {
     pushWorkspaceHistorySnapshot,
@@ -984,11 +995,14 @@ export function useStudyWorkspace(props: {
     redoInk,
     commitInkStroke: commitInkStrokeBase,
     removeInkStroke: removeInkStrokeBase,
+    replaceInkStrokes: replaceInkStrokesBase,
     addTextAnnotation: addTextAnnotationBase,
+    addImageAnnotation: addImageAnnotationBase,
     updateTextAnnotation: updateTextAnnotationBase,
     removeTextAnnotation: removeTextAnnotationBase,
     moveTextAnnotation: moveTextAnnotationBase,
     resizeTextAnnotation: resizeTextAnnotationBase,
+    changeTextAnnotationFontSize: changeTextAnnotationFontSizeBase,
     eraseInkAtPoint: eraseInkAtPointBase,
     deleteSelectedStrokes: deleteSelectedStrokesBase,
     changeSelectedStrokesColor: changeSelectedStrokesColorBase,
@@ -1005,6 +1019,7 @@ export function useStudyWorkspace(props: {
     selectionByDocument,
     inkByDocument,
     textAnnotationsByDocument,
+    imageAnnotationsByDocument,
     generatedPagesByDocument,
     activePageByDocument,
     inkHistoryByDocument,
@@ -1014,6 +1029,7 @@ export function useStudyWorkspace(props: {
     setInkHistoryByDocument,
     setRedoInkHistoryByDocument,
     setTextAnnotationsByDocument,
+    setImageAnnotationsByDocument,
     setGeneratedPagesByDocument,
     setActivePageByDocument,
     setSelectionByDocument,
@@ -1035,10 +1051,18 @@ export function useStudyWorkspace(props: {
     recordDocumentAction();
     removeInkStrokeBase(strokeId);
   }, [recordDocumentAction, removeInkStrokeBase]);
+  const replaceInkStrokes = useCallback((removedStrokeIds: string[], addedStrokes: InkStroke[]) => {
+    recordDocumentAction();
+    replaceInkStrokesBase(removedStrokeIds, addedStrokes);
+  }, [recordDocumentAction, replaceInkStrokesBase]);
   const addTextAnnotation = useCallback((point: InkPoint) => {
     recordDocumentAction();
     addTextAnnotationBase(point);
   }, [addTextAnnotationBase, recordDocumentAction]);
+  const addImageAnnotation = useCallback((annotation: Partial<InkImageAnnotation> & Pick<InkImageAnnotation, 'uri'>) => {
+    recordDocumentAction();
+    addImageAnnotationBase(annotation);
+  }, [addImageAnnotationBase, recordDocumentAction]);
   const updateTextAnnotation = useCallback((annotationId: string, text: string) => {
     recordDocumentAction();
     updateTextAnnotationBase(annotationId, text);
@@ -1055,6 +1079,10 @@ export function useStudyWorkspace(props: {
     recordDocumentAction();
     resizeTextAnnotationBase(annotationId, width, height);
   }, [recordDocumentAction, resizeTextAnnotationBase]);
+  const changeTextAnnotationFontSize = useCallback((annotationId: string, fontSize: number) => {
+    recordDocumentAction();
+    changeTextAnnotationFontSizeBase(annotationId, fontSize);
+  }, [changeTextAnnotationFontSizeBase, recordDocumentAction]);
   const eraseInkAtPoint = useCallback((point: InkPoint, radius: number, snapshot?: boolean) => {
     const changed = eraseInkAtPointBase(point, radius, snapshot);
     if (changed) recordDocumentAction();
@@ -1084,33 +1112,6 @@ export function useStudyWorkspace(props: {
     recordDocumentAction();
     nudgeSelectedStrokesBase(dx, dy);
   }, [nudgeSelectedStrokesBase, recordDocumentAction]);
-
-  const openWorkspaceAttachment = (attachmentId: string) => {
-    if (!studyDocumentId) return;
-    const target = (attachmentsByDocument[studyDocumentId] ?? []).find((attachment) => attachment.id === attachmentId);
-    if (!target?.generatedPageId) return;
-    setActivePageByDocument((current) => ({
-      ...current,
-      [studyDocumentId]: { kind: 'generated', pageId: target.generatedPageId! },
-    }));
-  };
-
-  const dismissIncomingBanner = () => {
-    setIncomingBannerQueue((current) => current.slice(1));
-  };
-
-  const openIncomingBanner = () => {
-    const asset = incomingBannerQueue[0];
-    if (!asset) return;
-
-    props.onOpenNotesTab();
-    setSubjectId(asset.subjectId);
-    setNoteWorkspaceMode(asset.type === 'image' ? 'photo' : 'note');
-    setNoteId(null);
-    setStudyDocumentId(null);
-    setWorkspaceFeedback(asset.type === 'image' ? 'Photo 라이브러리에서 사진을 확인할 수 있어요.' : 'PDF 자료를 inbox에서 확인할 수 있습니다.');
-    setIncomingBannerQueue((current) => current.slice(1));
-  };
 
   const {
     insertAiAnswerPage,
@@ -1162,17 +1163,13 @@ export function useStudyWorkspace(props: {
     clearCurrentSelection,
     pushWorkspaceHistorySnapshot,
   });
-  const pageSaveFeedback = failedPageSaveCount ? `필기 저장 실패 ${failedPageSaveCount}건 · 자동 재시도 중` : null;
-  const effectiveWorkspaceFeedback = workspaceFeedback ?? pageSaveFeedback;
-  const documentSaveStatus = failedPageSaveCount
-    ? `저장 실패 ${failedPageSaveCount} · 재시도 중`
-    : savingPageCount
-      ? `저장 중 ${savingPageCount}`
-      : pendingPageSaveCount
-        ? `저장 대기 ${pendingPageSaveCount}`
-        : workspaceHydrated
-          ? '저장됨'
-          : '저장 준비 중';
+  const { effectiveWorkspaceFeedback, documentSaveStatus } = useWorkspaceSaveStatus({
+    workspaceFeedback,
+    failedPageSaveCount,
+    pendingPageSaveCount,
+    savingPageCount,
+    workspaceHydrated,
+  });
 
   const documentInkHistory = studyDocumentId ? inkHistoryByDocument[studyDocumentId] ?? [] : [];
   const documentRedoHistory = studyDocumentId ? redoInkHistoryByDocument[studyDocumentId] ?? [] : [];
@@ -1272,12 +1269,16 @@ export function useStudyWorkspace(props: {
     penWidth,
     brushType,
     linePattern,
+    eraserMode,
+    eraserWidth,
     selectionMode,
     brushSettings,
     inkStrokes,
     textAnnotations,
+    imageAnnotations,
     inkByDocument,
     textAnnotationsByDocument,
+    imageAnnotationsByDocument,
     aiPanelOpen,
     aiPanelMode,
     appRightSidebarPanel,
@@ -1355,13 +1356,11 @@ export function useStudyWorkspace(props: {
     changePenWidth,
     changeBrushType,
     changeLinePattern,
+    changeEraserMode,
+    changeEraserWidth,
     changeSelectionMode,
     changeBrushSettings,
-    toggleAiPanel: () => setAiPanelOpen((current) => {
-      const next = !current;
-      if (next) setViewingAiChatSessionId(null);
-      return next;
-    }),
+    toggleAiPanel,
     setAiPanelMode,
     setAppRightSidebarWidth,
     setFocusedWorkspaceTarget,
@@ -1397,12 +1396,15 @@ export function useStudyWorkspace(props: {
     resetToSubjectList,
     backToNoteList,
     addTextAnnotation,
+    addImageAnnotation,
     updateTextAnnotation,
     removeTextAnnotation,
     moveTextAnnotation,
     resizeTextAnnotation,
+    changeTextAnnotationFontSize,
     eraseInkAtPoint,
     removeInkStroke,
+    replaceInkStrokes,
     deleteSelectedStrokes,
     changeSelectedStrokesColor,
     duplicateSelectedStrokes,

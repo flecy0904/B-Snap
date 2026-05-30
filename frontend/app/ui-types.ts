@@ -3,6 +3,7 @@ export type InkTool = 'view' | 'pen' | 'highlight' | 'erase' | 'select' | 'text'
 export type InkBrush = 'ballpoint' | 'fountain' | 'pencil' | 'marker' | 'highlighter';
 export type InkLinePattern = 'solid' | 'dotted' | 'dashed';
 export type InkSelectionMode = 'rect' | 'lasso';
+export type InkEraserMode = 'partial' | 'stroke';
 export type InkBrushSettings = {
   stability: number;
   sharpness: number;
@@ -33,7 +34,32 @@ export type InkTextAnnotation = {
   y: number;
   width: number;
   height?: number;
+  fontSize?: number;
+  color?: string;
   text: string;
   anchorRect?: SelectionRect | null;
 } & InkPageSize;
-export type SelectionRect = { x: number; y: number; width: number; height: number; mode?: InkSelectionMode; path?: InkPoint[] } & InkPageSize;
+export type InkImageAnnotation = {
+  id: string;
+  uri: string;
+  pageNumber: number;
+  generatedPageId?: string;
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  rotation?: number;
+  opacity?: number;
+  assetId?: string;
+  zIndex?: number;
+} & InkPageSize;
+export type SelectionRect = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+  mode?: InkSelectionMode;
+  path?: InkPoint[];
+  pageNumber?: number;
+  generatedPageId?: string;
+} & InkPageSize;

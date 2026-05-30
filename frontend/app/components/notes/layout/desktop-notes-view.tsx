@@ -29,7 +29,13 @@ import {
   Subject,
   WorkspaceAttachment,
 } from '../../../types';
-import { InkBrush, InkBrushSettings, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
+import { InkBrush, InkBrushSettings, InkEraserMode, InkImageAnnotation, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
+
+function getDocumentTabIcon(type: StudyDocumentEntry['type']): React.ComponentProps<typeof MaterialCommunityIcons>['name'] {
+  if (type === 'image') return 'image-outline';
+  if (type === 'blank') return 'note-edit-outline';
+  return 'file-pdf-box';
+}
 
 const APP_RIGHT_SIDEBAR_MIN_WIDTH = 320;
 const APP_RIGHT_SIDEBAR_MAX_WIDTH = 560;
@@ -115,12 +121,16 @@ export type DesktopNotesViewProps = {
   penWidth: number;
   brushType: InkBrush;
   linePattern: InkLinePattern;
+  eraserMode: InkEraserMode;
+  eraserWidth: number;
   selectionMode: InkSelectionMode;
   brushSettings: InkBrushSettings;
   inkStrokes: InkStroke[];
   textAnnotations: InkTextAnnotation[];
+  imageAnnotations: InkImageAnnotation[];
   inkByDocument: Record<number, InkStroke[]>;
   textAnnotationsByDocument: Record<number, InkTextAnnotation[]>;
+  imageAnnotationsByDocument: Record<number, InkImageAnnotation[]>;
   aiPanelOpen: boolean;
   aiPanelMode: 'floating' | 'sidebar';
   appRightSidebarPanel: AppRightSidebarPanel;
@@ -178,6 +188,8 @@ export type DesktopNotesViewProps = {
   onChangePenWidth: (width: number) => void;
   onChangeBrushType: (brush: InkBrush) => void;
   onChangeLinePattern: (pattern: InkLinePattern) => void;
+  onChangeEraserMode: (mode: InkEraserMode) => void;
+  onChangeEraserWidth: (width: number) => void;
   onChangeSelectionMode: (mode: InkSelectionMode) => void;
   onChangeBrushSettings: (settings: Partial<InkBrushSettings>) => void;
   onToggleAiPanel: () => void;
@@ -201,7 +213,7 @@ export type DesktopNotesViewProps = {
   onStartNewAiChatSession: () => void;
   onCreateAiChatSession: () => void;
   onRequestAiAnswer: () => void;
-  onAskAiAboutSelection: () => void;
+  onAskAiAboutSelection: (selectionPreviewUri?: string | null) => void;
   onRequestAiCanvasCommand: (command: string, options?: { selectionImageUri?: string | null }) => Promise<boolean>;
   onInsertAiAnswerPage: () => void;
   onSelectionChange: (rect: SelectionRect | null) => void;
@@ -219,12 +231,15 @@ export type DesktopNotesViewProps = {
   nudgeSelectedStrokes: (dx: number, dy: number) => void;
   onCommitInkStroke: (stroke: InkStroke) => void;
   onRemoveInkStroke: (strokeId: string) => void;
+  onReplaceInkStrokes: (removedStrokeIds: string[], addedStrokes: InkStroke[]) => void;
   onAddTextAnnotation: (point: InkPoint) => void;
+  onAddImageAnnotation: (annotation: Partial<InkImageAnnotation> & Pick<InkImageAnnotation, 'uri'>) => void;
   onUpdateTextAnnotation: (id: string, text: string) => void;
   onRemoveTextAnnotation: (id: string) => void;
   onMoveTextAnnotation: (id: string, x: number, y: number) => void;
   onResizeTextAnnotation: (id: string, width: number, height: number) => void;
-  onEraseInkAtPoint: (point: InkPoint, radius: number, snapshot?: boolean) => boolean;
+  onChangeTextAnnotationFontSize: (id: string, fontSize: number) => void;
+  onEraseInkAtPoint: (point: InkPoint, radius: number, snapshot?: boolean, mode?: InkEraserMode) => boolean;
   onAcceptIncomingAsset: () => void;
   onArchiveIncomingAsset: () => void;
   onDismissIncomingAsset: () => void;
@@ -277,7 +292,11 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
   const [pageListOpen, setPageListOpen] = React.useState(false);
   const [renameOpen, setRenameOpen] = React.useState(false);
   const [renameDraft, setRenameDraft] = React.useState('');
+  const [openDocumentTabIds, setOpenDocumentTabIds] = React.useState<number[]>([]);
   const [focusMode, setFocusMode] = React.useState(false);
+  const focusRestorePageRef = React.useRef<number | null>(null);
+  const lastViewerPdfPageRef = React.useRef<number | null>(props.currentPdfPage);
+  const suppressPageChangeUntilRef = React.useRef(0);
   const isNativeWideApp = props.isWeb === false;
   const showAppRightSidebar = isNativeWideApp && props.appRightSidebarPanel !== null;
   const showFloatingChat = !focusMode && (
@@ -309,15 +328,92 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
   }, [props.studyDocument?.id]);
 
   React.useEffect(() => {
+    if (!props.studyDocument) return;
+    setOpenDocumentTabIds((current) => (
+      current.includes(props.studyDocument!.id)
+        ? current
+        : [...current, props.studyDocument!.id]
+    ));
+  }, [props.studyDocument]);
+
+  React.useEffect(() => {
+    setOpenDocumentTabIds((current) => current.filter((id) => props.allStudyDocuments.some((document) => document.id === id)));
+  }, [props.allStudyDocuments]);
+
+  React.useEffect(() => {
     if (!isNativeWideApp || !props.studyDocument || props.appChatMode !== 'sidebar' || props.appRightSidebarPanel !== 'chat' || props.aiPanelOpen) return;
     props.onOpenAppChatSidebar();
   }, [isNativeWideApp, props.appChatMode, props.appRightSidebarPanel, props.aiPanelOpen, props.onOpenAppChatSidebar, props.studyDocument]);
 
-  const toggleFocusMode = () => {
-    setFocusMode((current) => !current);
-    setRenameOpen(false);
+  React.useEffect(() => {
+    lastViewerPdfPageRef.current = props.currentPdfPage;
+  }, [props.studyDocument?.id]);
+
+  React.useEffect(() => {
+    const preservedPage = focusRestorePageRef.current;
+    if (
+      preservedPage != null
+      && Date.now() < suppressPageChangeUntilRef.current
+      && props.currentPdfPage !== preservedPage
+    ) {
+      return;
+    }
+    if (props.currentPdfPage > 0) lastViewerPdfPageRef.current = props.currentPdfPage;
+  }, [props.currentPdfPage]);
+
+  const getCurrentPdfPageToPreserve = React.useCallback(() => (
+    lastViewerPdfPageRef.current
+      ?? (props.currentDocumentPage?.kind === 'pdf'
+        ? props.currentDocumentPage.pageNumber
+        : props.currentPdfPage)
+  ), [props.currentDocumentPage, props.currentPdfPage]);
+
+  const toggleFocusMode = React.useCallback(() => {
+    const pageToPreserve = getCurrentPdfPageToPreserve();
+    focusRestorePageRef.current = pageToPreserve;
+    suppressPageChangeUntilRef.current = Date.now() + 1400;
+    props.onSetCurrentPdfPage(pageToPreserve);
     setPageListOpen(false);
-  };
+    setRenameOpen(false);
+    setFocusMode((current) => !current);
+  }, [getCurrentPdfPageToPreserve, props.onSetCurrentPdfPage]);
+
+  const setCurrentPdfPageFromViewer = React.useCallback((pageNumber: number) => {
+    const preservedPage = focusRestorePageRef.current;
+    if (preservedPage != null && Date.now() < suppressPageChangeUntilRef.current && pageNumber !== preservedPage) {
+      return;
+    }
+    lastViewerPdfPageRef.current = pageNumber;
+    if (Date.now() >= suppressPageChangeUntilRef.current) {
+      focusRestorePageRef.current = null;
+    }
+    props.onSetCurrentPdfPage(pageNumber);
+  }, [props.onSetCurrentPdfPage]);
+
+  const openDocumentTabs = React.useMemo(() => {
+    const tabDocuments = openDocumentTabIds
+      .map((id) => props.allStudyDocuments.find((document) => document.id === id) ?? null)
+      .filter((document): document is StudyDocumentEntry => document !== null);
+    if (props.studyDocument && !tabDocuments.some((document) => document.id === props.studyDocument!.id)) {
+      return [...tabDocuments, props.studyDocument];
+    }
+    return tabDocuments;
+  }, [openDocumentTabIds, props.allStudyDocuments, props.studyDocument]);
+
+  const closeDocumentTab = React.useCallback((documentId: number) => {
+    const targetIndex = openDocumentTabs.findIndex((document) => document.id === documentId);
+    const fallbackDocument = openDocumentTabs[targetIndex - 1] ?? openDocumentTabs[targetIndex + 1] ?? null;
+    setOpenDocumentTabIds((current) => current.filter((id) => id !== documentId));
+    if (props.studyDocument?.id === documentId) {
+      props.onOpenStudyDocument(fallbackDocument?.id ?? null);
+    }
+  }, [openDocumentTabs, props]);
+
+  const preservingFocusPage = focusRestorePageRef.current != null && Date.now() < suppressPageChangeUntilRef.current;
+  const effectiveCurrentPdfPage = preservingFocusPage ? focusRestorePageRef.current! : props.currentPdfPage;
+  const effectiveCurrentDocumentPage = preservingFocusPage && props.currentDocumentPage?.kind === 'pdf'
+    ? { ...props.currentDocumentPage, pageNumber: effectiveCurrentPdfPage }
+    : props.currentDocumentPage;
 
   const startRename = () => {
     if (!props.studyDocument) return;
@@ -406,12 +502,16 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           penWidth: props.penWidth,
           brushType: props.brushType,
           linePattern: props.linePattern,
+          eraserMode: props.eraserMode,
+          eraserWidth: props.eraserWidth,
           selectionMode: props.selectionMode,
           brushSettings: props.brushSettings,
           inkStrokes: props.inkStrokes,
           textAnnotations: props.textAnnotations,
+          imageAnnotations: props.imageAnnotations,
           inkByDocument: props.inkByDocument,
           textAnnotationsByDocument: props.textAnnotationsByDocument,
+          imageAnnotationsByDocument: props.imageAnnotationsByDocument,
           currentPageLabel: workspace.currentPageLabel,
           hasWorkspaceDockContent: workspace.hasWorkspaceDockContent,
           showWorkspaceDock: workspace.showWorkspaceDock,
@@ -440,8 +540,8 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           sort: props.sort,
           currentDocumentPages: props.currentDocumentPages,
           notebookPages: props.notebookPages,
-          currentPdfPage: props.currentPdfPage,
-          currentDocumentPage: props.currentDocumentPage,
+          currentPdfPage: effectiveCurrentPdfPage,
+          currentDocumentPage: effectiveCurrentDocumentPage,
           currentDocumentPageIndex: props.currentDocumentPageIndex,
           totalDocumentPageCount: props.totalDocumentPageCount,
           generatedWorkspacePages: props.generatedWorkspacePages,
@@ -484,6 +584,8 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           onChangePenWidth: props.onChangePenWidth,
           onChangeBrushType: props.onChangeBrushType,
           onChangeLinePattern: props.onChangeLinePattern,
+          onChangeEraserMode: props.onChangeEraserMode,
+          onChangeEraserWidth: props.onChangeEraserWidth,
           onChangeSelectionMode: props.onChangeSelectionMode,
           onChangeBrushSettings: props.onChangeBrushSettings,
           onUndoInk: props.onUndoInk,
@@ -525,11 +627,14 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           onPreviewPageReference: workspace.previewPageReference,
           onCommitInkStroke: props.onCommitInkStroke,
           onRemoveInkStroke: props.onRemoveInkStroke,
+          onReplaceInkStrokes: props.onReplaceInkStrokes,
           onAddTextAnnotation: props.onAddTextAnnotation,
+          onAddImageAnnotation: props.onAddImageAnnotation,
           onUpdateTextAnnotation: props.onUpdateTextAnnotation,
           onRemoveTextAnnotation: props.onRemoveTextAnnotation,
           onMoveTextAnnotation: props.onMoveTextAnnotation,
           onResizeTextAnnotation: props.onResizeTextAnnotation,
+          onChangeTextAnnotationFontSize: props.onChangeTextAnnotationFontSize,
           onEraseInkAtPoint: props.onEraseInkAtPoint,
           onSelectionChange: props.onSelectionChange,
           onSelectionPreviewChange: props.onSelectionPreviewChange,
@@ -541,47 +646,71 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           resizeSelectedStrokes: props.resizeSelectedStrokes,
           resizeSelectedStrokesToRect: props.resizeSelectedStrokesToRect,
           nudgeSelectedStrokes: props.nudgeSelectedStrokes,
-          onSetCurrentPdfPage: props.onSetCurrentPdfPage,
+          onSetCurrentPdfPage: setCurrentPdfPageFromViewer,
           onUpdateStudyDocumentPageCount: props.onUpdateStudyDocumentPageCount,
         }}
       >
         <View style={props.styles.fill}>
-          {focusMode ? (
-            <View style={props.styles.notebookFocusBar}>
-              <Pressable style={props.styles.notebookFocusBackButton} onPress={() => props.onOpenStudyDocument(null)}>
-                <MaterialCommunityIcons name="chevron-left" size={24} color="#151A22" />
+          {!focusMode ? (
+            <View style={props.styles.notebookBrowserBar}>
+              <Pressable style={props.styles.notebookBrowserHomeButton} onPress={() => props.onOpenStudyDocument(null)}>
+                <MaterialCommunityIcons name="home-outline" size={20} color="#D8E4FF" />
               </Pressable>
-              <Text style={props.styles.notebookFocusTitle} numberOfLines={1}>{props.studyDocument.title}</Text>
-              <View style={props.styles.notebookSaveStatusPill}>
-                <MaterialCommunityIcons name="cloud-check-outline" size={14} color="#5D6A7C" />
-                <Text style={props.styles.notebookSaveStatusText} numberOfLines={1}>{props.documentSaveStatus}</Text>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                keyboardShouldPersistTaps="handled"
+                style={props.styles.notebookBrowserTabsScroller}
+                contentContainerStyle={props.styles.notebookBrowserTabsContent}
+              >
+                {openDocumentTabs.map((document) => {
+                  const active = document.id === props.studyDocument?.id;
+                  return (
+                    <Pressable
+                      key={document.id}
+                      style={[props.styles.notebookBrowserTab, active && props.styles.notebookBrowserTabActive]}
+                      onPress={() => props.onOpenStudyDocument(document.id)}
+                    >
+                      <MaterialCommunityIcons name={getDocumentTabIcon(document.type)} size={17} color={active ? '#FFFFFF' : '#BFD0EC'} />
+                      <Text style={[props.styles.notebookBrowserTabText, active && props.styles.notebookBrowserTabTextActive]} numberOfLines={1}>
+                        {document.title}
+                      </Text>
+                      {active ? (
+                        <Pressable
+                          style={props.styles.notebookBrowserTabClose}
+                          hitSlop={6}
+                          onPress={(event) => {
+                            event.stopPropagation();
+                            closeDocumentTab(document.id);
+                          }}
+                        >
+                          <MaterialCommunityIcons name="close" size={15} color="#D8E4FF" />
+                        </Pressable>
+                      ) : null}
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+              <Pressable style={props.styles.notebookBrowserAddButton} onPress={props.onUploadPdf}>
+                <MaterialCommunityIcons name="plus" size={19} color="#D8E4FF" />
+              </Pressable>
+              <View style={props.styles.notebookBrowserActions}>
+                <View style={props.styles.notebookBrowserSaveStatus}>
+                  <MaterialCommunityIcons name="cloud-check-outline" size={14} color="#D8E4FF" />
+                  <Text style={props.styles.notebookBrowserSaveStatusText} numberOfLines={1}>{props.documentSaveStatus}</Text>
+                </View>
+                <Pressable style={props.styles.notebookBrowserIconButton} onPress={toggleFocusMode}>
+                  <MaterialCommunityIcons name="fullscreen" size={18} color="#D8E4FF" />
+                </Pressable>
+                <Pressable style={props.styles.notebookBrowserIconButton} onPress={startRename}>
+                  <MaterialCommunityIcons name="pencil-outline" size={18} color="#D8E4FF" />
+                </Pressable>
+                <Pressable style={[props.styles.notebookBrowserIconButton, props.styles.notebookBrowserDangerButton]} onPress={() => props.onDeleteStudyDocument(props.studyDocument!.id)}>
+                  <MaterialCommunityIcons name="trash-can-outline" size={18} color="#FCA5A5" />
+                </Pressable>
               </View>
-              <Pressable style={[props.styles.notebookFocusBackButton, props.styles.inkToolButtonActive]} onPress={toggleFocusMode}>
-                <MaterialCommunityIcons name="fullscreen-exit" size={18} color="#4F68D2" />
-              </Pressable>
             </View>
-          ) : (
-          <View style={props.styles.notebookTitleBar}>
-            <Pressable style={props.styles.notebookTitleButton} onPress={() => props.onOpenStudyDocument(null)}>
-              <MaterialCommunityIcons name="chevron-left" size={24} color="#151A22" />
-            </Pressable>
-            <Text style={props.styles.notebookTitleText} numberOfLines={1}>
-              {props.studyDocument.title}
-            </Text>
-            <View style={props.styles.notebookTitleActions}>
-              <View style={props.styles.notebookSaveStatusPill}>
-                <MaterialCommunityIcons name="cloud-check-outline" size={14} color="#5D6A7C" />
-                <Text style={props.styles.notebookSaveStatusText} numberOfLines={1}>{props.documentSaveStatus}</Text>
-              </View>
-              <Pressable style={props.styles.notebookTitleButton} onPress={startRename}>
-                <MaterialCommunityIcons name="pencil-outline" size={18} color="#4F68D2" />
-              </Pressable>
-              <Pressable style={[props.styles.notebookTitleButton, props.styles.notebookTitleButtonDanger]} onPress={() => props.onDeleteStudyDocument(props.studyDocument!.id)}>
-                <MaterialCommunityIcons name="trash-can-outline" size={18} color="#C04B4B" />
-              </Pressable>
-            </View>
-          </View>
-          )}
+          ) : null}
           {renameOpen && !focusMode ? (
             <View style={props.styles.documentRenamePanel}>
               <TextInput

@@ -71,8 +71,12 @@ export async function persistPickedPdfAsset(picked: DocumentPicker.DocumentPicke
   await FileSystem.makeDirectoryAsync(LOCAL_PDF_DIR, { intermediates: true });
   const safeName = sanitizePdfFileName(picked.name);
   const targetUri = `${LOCAL_PDF_DIR}${Date.now()}-${safeName}`;
-  await FileSystem.copyAsync({ from: picked.uri, to: targetUri });
-  return targetUri;
+  try {
+    await FileSystem.copyAsync({ from: picked.uri, to: targetUri });
+    return targetUri;
+  } catch {
+    return picked.uri;
+  }
 }
 
 export async function readPdfPageCount(picked: DocumentPicker.DocumentPickerAsset, pdfUri: string) {

@@ -77,6 +77,7 @@ class PdfPageRendererModule(private val reactContext: ReactApplicationContext) :
     val text: String,
     val pageNumber: Int?,
     val generatedPageId: String?,
+    val fontSize: Float,
     val pageWidth: Float,
     val pageHeight: Float
   )
@@ -199,6 +200,7 @@ class PdfPageRendererModule(private val reactContext: ReactApplicationContext) :
     targetWidth: Int,
     inkStrokes: ReadableArray?,
     textAnnotations: ReadableArray?,
+    imageAnnotations: ReadableArray?,
     promise: Promise
   ) {
     if (fileUri.isBlank()) {
@@ -394,6 +396,7 @@ class PdfPageRendererModule(private val reactContext: ReactApplicationContext) :
         text = map.getString("text") ?: "",
         pageNumber = if (map.hasKey("pageNumber") && !map.isNull("pageNumber")) map.getInt("pageNumber") else null,
         generatedPageId = if (map.hasKey("generatedPageId") && !map.isNull("generatedPageId")) map.getString("generatedPageId") else null,
+        fontSize = if (map.hasKey("fontSize") && !map.isNull("fontSize")) map.getDouble("fontSize").toFloat() else 17f,
         pageWidth = max(1f, pageWidth),
         pageHeight = max(1f, pageHeight)
       ))
@@ -492,7 +495,7 @@ class PdfPageRendererModule(private val reactContext: ReactApplicationContext) :
       canvas.drawRoundRect(rect, 8f, 8f, borderPaint)
 
       val scale = strokeToBitmapScale(annotation.pageWidth, annotation.pageHeight, cropToBitmap, page)
-      textPaint.textSize = max(10f, 14f * scale)
+      textPaint.textSize = max(10f, annotation.fontSize * scale)
       val padding = max(6f, 8f * scale)
       val lineHeight = textPaint.textSize * 1.28f
       val maxTextWidth = max(1f, rect.width() - padding * 2)

@@ -8,7 +8,7 @@ import {
   uploadBackendPdfNote,
   BackendApiError,
 } from '../../../services/backend-api';
-import type { InkStroke, InkTextAnnotation } from '../../../ui-types';
+import type { InkImageAnnotation, InkStroke, InkTextAnnotation } from '../../../ui-types';
 import type { StudyDocumentEntry, Subject } from '../../../types';
 import { getStudyDocumentBackendNoteId } from './backend-sync';
 import { isPdfAssetUrl } from './document-file-utils';
@@ -31,9 +31,11 @@ type UseBackendNotePageSyncParams = {
   userStudyDocuments: StudyDocumentEntry[];
   inkByDocument: Record<number, InkStroke[]>;
   textAnnotationsByDocument: Record<number, InkTextAnnotation[]>;
+  imageAnnotationsByDocument: Record<number, InkImageAnnotation[]>;
   setUserStudyDocuments: Dispatch<SetStateAction<StudyDocumentEntry[]>>;
   setInkByDocument: Dispatch<SetStateAction<Record<number, InkStroke[]>>>;
   setTextAnnotationsByDocument: Dispatch<SetStateAction<Record<number, InkTextAnnotation[]>>>;
+  setImageAnnotationsByDocument: Dispatch<SetStateAction<Record<number, InkImageAnnotation[]>>>;
   setWorkspaceFeedback: Dispatch<SetStateAction<string | null>>;
 };
 
@@ -49,9 +51,11 @@ export function useBackendNotePageSync({
   userStudyDocuments,
   inkByDocument,
   textAnnotationsByDocument,
+  imageAnnotationsByDocument,
   setUserStudyDocuments,
   setInkByDocument,
   setTextAnnotationsByDocument,
+  setImageAnnotationsByDocument,
   setWorkspaceFeedback,
 }: UseBackendNotePageSyncParams) {
   const [backendPageIdsByDocument, setBackendPageIdsByDocument] = useState<Record<number, Record<number, number>>>({});
@@ -68,6 +72,7 @@ export function useBackendNotePageSync({
     const pageIdsByNumber: Record<number, number> = {};
     const documentInk: InkStroke[] = [];
     const documentTextAnnotations: InkTextAnnotation[] = [];
+    const documentImageAnnotations: InkImageAnnotation[] = [];
     const savedPageContentByKey: Record<string, string> = {};
     let hasStoredPageContent = false;
     const firstPageImageUrl = pages[0]?.image_url ?? null;
@@ -91,13 +96,20 @@ export function useBackendNotePageSync({
         generatedPageId: undefined,
         pageNumber: page.page_number,
       }));
+      const normalizedImageAnnotations = storedPage.imageAnnotations.map((annotation) => ({
+        ...annotation,
+        generatedPageId: undefined,
+        pageNumber: page.page_number,
+      }));
 
       savedPageContentByKey[getPageSaveKey(documentId, page.page_number)] = serializeNotePageContent({
         inkStrokes: normalizedInkStrokes,
         textAnnotations: normalizedTextAnnotations,
+        imageAnnotations: normalizedImageAnnotations,
       });
       documentInk.push(...normalizedInkStrokes);
       documentTextAnnotations.push(...normalizedTextAnnotations);
+      documentImageAnnotations.push(...normalizedImageAnnotations);
     });
 
     setBackendPageIdsByDocument((current) => ({
@@ -130,8 +142,9 @@ export function useBackendNotePageSync({
     if (hasStoredPageContent) {
       setInkByDocument((current) => ({ ...current, [documentId]: documentInk }));
       setTextAnnotationsByDocument((current) => ({ ...current, [documentId]: documentTextAnnotations }));
+      setImageAnnotationsByDocument((current) => ({ ...current, [documentId]: documentImageAnnotations }));
     }
-  }, [setInkByDocument, setTextAnnotationsByDocument, setUserStudyDocuments]);
+  }, [setImageAnnotationsByDocument, setInkByDocument, setTextAnnotationsByDocument, setUserStudyDocuments]);
 
   const markBackendPageDirty = useCallback((documentId: number, pageNumber: number) => {
     dirtyPageKeysRef.current.add(getPageSaveKey(documentId, pageNumber));
@@ -183,12 +196,15 @@ export function useBackendNotePageSync({
 
         const documentInk = inkByDocument[documentId] ?? [];
         const documentTextAnnotations = textAnnotationsByDocument[documentId] ?? [];
+        const documentImageAnnotations = imageAnnotationsByDocument[documentId] ?? [];
         const pageInkStrokes = documentInk.filter((stroke) => !stroke.generatedPageId && (stroke.pageNumber ?? 1) === pageNumber);
         const pageTextAnnotations = documentTextAnnotations.filter((annotation) => !annotation.generatedPageId && annotation.pageNumber === pageNumber);
+        const pageImageAnnotations = documentImageAnnotations.filter((annotation) => !annotation.generatedPageId && annotation.pageNumber === pageNumber);
 
         const content = serializeNotePageContent({
           inkStrokes: pageInkStrokes,
           textAnnotations: pageTextAnnotations,
+          imageAnnotations: pageImageAnnotations,
         });
         const savedContent = lastSavedPageContentRef.current[key];
         if (savedContent === undefined && content === EMPTY_PAGE_CONTENT) {
@@ -234,7 +250,7 @@ export function useBackendNotePageSync({
     }, 700);
 
     return () => clearTimeout(timer);
-  }, [backendPageIdsByDocument, inkByDocument, textAnnotationsByDocument, workspaceHydrated]);
+  }, [backendPageIdsByDocument, imageAnnotationsByDocument, inkByDocument, textAnnotationsByDocument, workspaceHydrated]);
 
   useEffect(() => {
     if (!workspaceHydrated || !isBackendApiEnabled()) return;

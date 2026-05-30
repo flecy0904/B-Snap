@@ -212,6 +212,7 @@ RCT_EXPORT_METHOD(renderSelectionPreview:(NSString *)fileUri
                   targetWidth:(nonnull NSNumber *)targetWidth
                   inkStrokes:(NSArray *)inkStrokes
                   textAnnotations:(NSArray *)textAnnotations
+                  imageAnnotations:(NSArray *)imageAnnotations
                   resolver:(RCTPromiseResolveBlock)resolve
                   rejecter:(RCTPromiseRejectBlock)reject)
 {
@@ -292,8 +293,21 @@ RCT_EXPORT_METHOD(renderSelectionPreview:(NSString *)fileUri
     [page drawWithBox:displayBox toContext:context];
     CGContextRestoreGState(context);
 
-    [self drawInkStrokes:inkStrokes pageNumber:requestedPageNumber context:context];
-    [self drawTextAnnotations:textAnnotations pageNumber:requestedPageNumber context:context];
+    [self drawImageAnnotations:imageAnnotations
+                     pageNumber:requestedPageNumber
+               logicalPageWidth:logicalPageWidth
+              logicalPageHeight:logicalPageHeight
+                        context:context];
+    [self drawInkStrokes:inkStrokes
+              pageNumber:requestedPageNumber
+        logicalPageWidth:logicalPageWidth
+       logicalPageHeight:logicalPageHeight
+                 context:context];
+    [self drawTextAnnotations:textAnnotations
+                   pageNumber:requestedPageNumber
+             logicalPageWidth:logicalPageWidth
+            logicalPageHeight:logicalPageHeight
+                      context:context];
     CGContextRestoreGState(context);
   }];
 
@@ -358,7 +372,109 @@ RCT_EXPORT_METHOD(renderSelectionPreview:(NSString *)fileUri
   }
 }
 
-- (void)drawInkStrokes:(NSArray *)inkStrokes pageNumber:(NSInteger)pageNumber context:(CGContextRef)context
+- (CGFloat)safeDouble:(id)value fallback:(CGFloat)fallback
+{
+  if ([value respondsToSelector:@selector(doubleValue)]) return MAX(1.0, [value doubleValue]);
+  return MAX(1.0, fallback);
+}
+
+- (CGPoint)mapLogicalPoint:(NSDictionary *)point
+                sourcePage:(NSDictionary *)source
+          logicalPageWidth:(CGFloat)logicalPageWidth
+         logicalPageHeight:(CGFloat)logicalPageHeight
+{
+  CGFloat sourcePageWidth = [self safeDouble:point[@"pageWidth"] fallback:[self safeDouble:source[@"pageWidth"] fallback:logicalPageWidth]];
+  CGFloat sourcePageHeight = [self safeDouble:point[@"pageHeight"] fallback:[self safeDouble:source[@"pageHeight"] fallback:logicalPageHeight]];
+  return CGPointMake(
+    [point[@"x"] doubleValue] / sourcePageWidth * logicalPageWidth,
+    [point[@"y"] doubleValue] / sourcePageHeight * logicalPageHeight
+  );
+}
+
+- (CGFloat)logicalScaleForSource:(NSDictionary *)source
+                logicalPageWidth:(CGFloat)logicalPageWidth
+               logicalPageHeight:(CGFloat)logicalPageHeight
+{
+  CGFloat sourcePageWidth = [self safeDouble:source[@"pageWidth"] fallback:logicalPageWidth];
+  CGFloat sourcePageHeight = [self safeDouble:source[@"pageHeight"] fallback:logicalPageHeight];
+  return ((logicalPageWidth / sourcePageWidth) + (logicalPageHeight / sourcePageHeight)) * 0.5;
+}
+
+- (nullable UIImage *)decodeImageAnnotationUri:(NSString *)uri
+{
+  if (uri.length == 0) return nil;
+  if ([uri hasPrefix:@"file://"]) {
+    NSURL *url = [NSURL URLWithString:uri];
+    return url.path.length ? [UIImage imageWithContentsOfFile:url.path] : nil;
+  }
+  if ([uri hasPrefix:@"data:image/"]) {
+    NSRange comma = [uri rangeOfString:@","];
+    if (comma.location == NSNotFound) return nil;
+    NSString *payload = [uri substringFromIndex:comma.location + 1];
+    NSData *data = [[NSData alloc] initWithBase64EncodedString:payload options:NSDataBase64DecodingIgnoreUnknownCharacters];
+    return data.length ? [UIImage imageWithData:data] : nil;
+  }
+  if ([uri hasPrefix:@"http://"] || [uri hasPrefix:@"https://"]) {
+    NSURL *url = [NSURL URLWithString:uri];
+    if (url == nil) return nil;
+    NSData *data = [NSData dataWithContentsOfURL:url];
+    return data.length ? [UIImage imageWithData:data] : nil;
+  }
+  return [UIImage imageWithContentsOfFile:uri];
+}
+
+- (void)drawImageAnnotations:(NSArray *)imageAnnotations
+                  pageNumber:(NSInteger)pageNumber
+            logicalPageWidth:(CGFloat)logicalPageWidth
+           logicalPageHeight:(CGFloat)logicalPageHeight
+                     context:(CGContextRef)context
+{
+  if (![imageAnnotations isKindOfClass:NSArray.class]) return;
+  NSArray<NSDictionary *> *sortedAnnotations = [imageAnnotations sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *left, NSDictionary *right) {
+    NSInteger leftZ = left[@"zIndex"] != nil ? [left[@"zIndex"] integerValue] : 0;
+    NSInteger rightZ = right[@"zIndex"] != nil ? [right[@"zIndex"] integerValue] : 0;
+    if (leftZ == rightZ) return NSOrderedSame;
+    return leftZ < rightZ ? NSOrderedAscending : NSOrderedDescending;
+  }];
+
+  for (NSDictionary *annotation in sortedAnnotations) {
+    if (![annotation isKindOfClass:NSDictionary.class]) continue;
+    NSNumber *annotationPageNumber = annotation[@"pageNumber"];
+    if (annotationPageNumber == nil || annotationPageNumber.integerValue != pageNumber) continue;
+    NSString *uri = [annotation[@"uri"] isKindOfClass:NSString.class] ? annotation[@"uri"] : @"";
+    UIImage *image = [self decodeImageAnnotationUri:uri];
+    if (image == nil) continue;
+
+    CGFloat sourcePageWidth = [self safeDouble:annotation[@"pageWidth"] fallback:logicalPageWidth];
+    CGFloat sourcePageHeight = [self safeDouble:annotation[@"pageHeight"] fallback:logicalPageHeight];
+    CGFloat scaleX = logicalPageWidth / sourcePageWidth;
+    CGFloat scaleY = logicalPageHeight / sourcePageHeight;
+    CGRect frame = CGRectMake(
+      [annotation[@"x"] doubleValue] * scaleX,
+      [annotation[@"y"] doubleValue] * scaleY,
+      MAX(1.0, [annotation[@"width"] doubleValue] * scaleX),
+      MAX(1.0, [annotation[@"height"] doubleValue] * scaleY)
+    );
+    CGFloat opacity = annotation[@"opacity"] != nil ? MIN(1.0, MAX(0.05, [annotation[@"opacity"] doubleValue])) : 1.0;
+    CGFloat rotation = annotation[@"rotation"] != nil ? [annotation[@"rotation"] doubleValue] : 0.0;
+
+    CGContextSaveGState(context);
+    if (fabs(rotation) > 0.01) {
+      CGPoint center = CGPointMake(CGRectGetMidX(frame), CGRectGetMidY(frame));
+      CGContextTranslateCTM(context, center.x, center.y);
+      CGContextRotateCTM(context, rotation * M_PI / 180.0);
+      frame = CGRectMake(-frame.size.width * 0.5, -frame.size.height * 0.5, frame.size.width, frame.size.height);
+    }
+    [image drawInRect:frame blendMode:kCGBlendModeNormal alpha:opacity];
+    CGContextRestoreGState(context);
+  }
+}
+
+- (void)drawInkStrokes:(NSArray *)inkStrokes
+            pageNumber:(NSInteger)pageNumber
+      logicalPageWidth:(CGFloat)logicalPageWidth
+     logicalPageHeight:(CGFloat)logicalPageHeight
+               context:(CGContextRef)context
 {
   if (![inkStrokes isKindOfClass:NSArray.class]) return;
   for (NSDictionary *stroke in inkStrokes) {
@@ -370,7 +486,7 @@ RCT_EXPORT_METHOD(renderSelectionPreview:(NSString *)fileUri
 
     UIColor *color = [self colorFromHex:stroke[@"color"] ?: @"#111827"];
     NSString *style = [stroke[@"style"] isKindOfClass:NSString.class] ? stroke[@"style"] : @"pen";
-    CGFloat width = MAX(1.0, [stroke[@"width"] doubleValue]);
+    CGFloat width = MAX(1.0, [stroke[@"width"] doubleValue] * [self logicalScaleForSource:stroke logicalPageWidth:logicalPageWidth logicalPageHeight:logicalPageHeight]);
     CGContextSaveGState(context);
     CGContextSetStrokeColorWithColor(context, [color colorWithAlphaComponent:[style isEqualToString:@"highlight"] ? 0.36 : 1.0].CGColor);
     CGContextSetLineWidth(context, width);
@@ -390,10 +506,12 @@ RCT_EXPORT_METHOD(renderSelectionPreview:(NSString *)fileUri
       NSDictionary *start = points.firstObject;
       NSDictionary *end = points.lastObject;
       NSString *shape = [stroke[@"shape"] isKindOfClass:NSString.class] ? stroke[@"shape"] : @"line";
-      CGFloat x1 = [start[@"x"] doubleValue];
-      CGFloat y1 = [start[@"y"] doubleValue];
-      CGFloat x2 = [end[@"x"] doubleValue];
-      CGFloat y2 = [end[@"y"] doubleValue];
+      CGPoint mappedStart = [self mapLogicalPoint:start sourcePage:stroke logicalPageWidth:logicalPageWidth logicalPageHeight:logicalPageHeight];
+      CGPoint mappedEnd = [self mapLogicalPoint:end sourcePage:stroke logicalPageWidth:logicalPageWidth logicalPageHeight:logicalPageHeight];
+      CGFloat x1 = mappedStart.x;
+      CGFloat y1 = mappedStart.y;
+      CGFloat x2 = mappedEnd.x;
+      CGFloat y2 = mappedEnd.y;
       CGRect shapeRect = CGRectMake(MIN(x1, x2), MIN(y1, y2), fabs(x2 - x1), fabs(y2 - y1));
       if ([shape isEqualToString:@"rect"]) {
         CGContextStrokeRect(context, shapeRect);
@@ -411,16 +529,19 @@ RCT_EXPORT_METHOD(renderSelectionPreview:(NSString *)fileUri
 
     for (NSInteger index = 0; index < points.count; index += 1) {
       NSDictionary *point = points[index];
-      CGFloat x = [point[@"x"] doubleValue];
-      CGFloat y = [point[@"y"] doubleValue];
-      if (index == 0) CGContextMoveToPoint(context, x, y); else CGContextAddLineToPoint(context, x, y);
+      CGPoint mapped = [self mapLogicalPoint:point sourcePage:stroke logicalPageWidth:logicalPageWidth logicalPageHeight:logicalPageHeight];
+      if (index == 0) CGContextMoveToPoint(context, mapped.x, mapped.y); else CGContextAddLineToPoint(context, mapped.x, mapped.y);
     }
     CGContextStrokePath(context);
     CGContextRestoreGState(context);
   }
 }
 
-- (void)drawTextAnnotations:(NSArray *)textAnnotations pageNumber:(NSInteger)pageNumber context:(CGContextRef)context
+- (void)drawTextAnnotations:(NSArray *)textAnnotations
+                 pageNumber:(NSInteger)pageNumber
+           logicalPageWidth:(CGFloat)logicalPageWidth
+          logicalPageHeight:(CGFloat)logicalPageHeight
+                    context:(CGContextRef)context
 {
   if (![textAnnotations isKindOfClass:NSArray.class]) return;
   for (NSDictionary *annotation in textAnnotations) {
@@ -430,14 +551,32 @@ RCT_EXPORT_METHOD(renderSelectionPreview:(NSString *)fileUri
     NSString *text = [annotation[@"text"] isKindOfClass:NSString.class] ? annotation[@"text"] : @"";
     if (text.length == 0) continue;
     NSNumber *heightValue = annotation[@"height"];
+    NSNumber *fontSizeValue = annotation[@"fontSize"];
+    CGFloat sourcePageWidth = [self safeDouble:annotation[@"pageWidth"] fallback:logicalPageWidth];
+    CGFloat sourcePageHeight = [self safeDouble:annotation[@"pageHeight"] fallback:logicalPageHeight];
+    CGFloat scaleX = logicalPageWidth / sourcePageWidth;
+    CGFloat scaleY = logicalPageHeight / sourcePageHeight;
     CGFloat annotationHeight = heightValue != nil ? heightValue.doubleValue : 88.0;
-    CGRect frame = CGRectMake([annotation[@"x"] doubleValue], [annotation[@"y"] doubleValue], MAX(1.0, [annotation[@"width"] doubleValue]), MAX(32.0, annotationHeight));
+    CGFloat scale = (scaleX + scaleY) * 0.5;
+    CGFloat fontSize = (fontSizeValue != nil ? MAX(12.0, MIN(40.0, fontSizeValue.doubleValue)) : 17.0) * scale;
+    CGRect frame = CGRectMake(
+      [annotation[@"x"] doubleValue] * scaleX,
+      [annotation[@"y"] doubleValue] * scaleY,
+      MAX(1.0, [annotation[@"width"] doubleValue] * scaleX),
+      MAX(32.0, annotationHeight * scaleY)
+    );
     UIColor *color = [self colorFromHex:annotation[@"color"] ?: @"#111827"];
+    [[UIColor colorWithWhite:1.0 alpha:0.92] setFill];
+    UIBezierPath *backgroundPath = [UIBezierPath bezierPathWithRoundedRect:frame cornerRadius:5.0 * scale];
+    [backgroundPath fill];
+    [[UIColor colorWithRed:0.78 green:0.82 blue:0.90 alpha:0.82] setStroke];
+    backgroundPath.lineWidth = MAX(0.7, 1.0 * scale);
+    [backgroundPath stroke];
     NSDictionary *attrs = @{
-      NSFontAttributeName: [UIFont systemFontOfSize:14 weight:UIFontWeightSemibold],
+      NSFontAttributeName: [UIFont systemFontOfSize:MAX(8.0, fontSize) weight:UIFontWeightSemibold],
       NSForegroundColorAttributeName: color,
     };
-    [text drawInRect:CGRectInset(frame, 8, 6) withAttributes:attrs];
+    [text drawInRect:CGRectInset(frame, 8 * scale, 6 * scale) withAttributes:attrs];
   }
 }
 

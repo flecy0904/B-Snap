@@ -180,7 +180,7 @@ export function useStudyDocumentActions(params: StudyDocumentActionsParams) {
       else delete next[id];
       return next;
     });
-    params.setInkTool('view');
+    params.setInkTool('pen');
     params.setActivePageByDocument((current) => ({
       ...current,
       [id]: current[id] ?? { kind: 'pdf', pageNumber: params.currentPdfPageByDocument[id] ?? 1 },
@@ -194,7 +194,7 @@ export function useStudyDocumentActions(params: StudyDocumentActionsParams) {
     params.setNoteId(null);
     params.setStudyDocumentId(document.id);
     params.setNoteWorkspaceMode('note');
-    params.setInkTool('view');
+    params.setInkTool('pen');
     params.setAiPanelOpen(false);
     if (feedback) params.setWorkspaceFeedback(feedback);
     params.setCurrentPdfPageByDocument((current) => ({
@@ -313,11 +313,20 @@ export function useStudyDocumentActions(params: StudyDocumentActionsParams) {
     if (!targetSubjectId) return;
 
     try {
-      const result = await DocumentPicker.getDocumentAsync({
-        type: 'application/pdf',
-        multiple: false,
-        copyToCacheDirectory: true,
-      });
+      let result: DocumentPicker.DocumentPickerResult;
+      try {
+        result = await DocumentPicker.getDocumentAsync({
+          type: 'application/pdf',
+          multiple: false,
+          copyToCacheDirectory: true,
+        });
+      } catch {
+        result = await DocumentPicker.getDocumentAsync({
+          type: 'application/pdf',
+          multiple: false,
+          copyToCacheDirectory: false,
+        });
+      }
 
       if (result.canceled || !result.assets.length) {
         params.setWorkspaceFeedback('PDF 업로드를 취소했어요.');
@@ -355,7 +364,7 @@ export function useStudyDocumentActions(params: StudyDocumentActionsParams) {
         void params.syncPdfDocumentToBackend(localDocument, targetSubject);
       }
     } catch {
-      params.setWorkspaceFeedback('PDF를 불러오지 못했어요.');
+      params.setWorkspaceFeedback('PDF 파일을 가져오지 못했습니다. Google Drive 파일이면 한 번 더 선택하거나 기기에 저장 후 열어주세요.');
     }
   };
 
