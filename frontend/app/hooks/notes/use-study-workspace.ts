@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Keyboard } from 'react-native';
+import { Keyboard, Platform } from 'react-native';
 import {
   getBackendClassInsight,
   isBackendApiEnabled,
@@ -85,7 +85,7 @@ export function useStudyWorkspace(props: {
   const [textAnnotationsByDocument, setTextAnnotationsByDocument] = useState<Record<number, InkTextAnnotation[]>>({});
   const [imageAnnotationsByDocument, setImageAnnotationsByDocument] = useState<Record<number, InkImageAnnotation[]>>({});
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
-  const [aiPanelMode, setAiPanelMode] = useState<'floating' | 'sidebar'>('floating');
+  const [aiPanelMode, setAiPanelMode] = useState<'floating' | 'sidebar'>('sidebar');
   const [appRightSidebarPanel, setAppRightSidebarPanel] = useState<AppRightSidebarPanel>('chat');
   const [appChatMode, setAppChatMode] = useState<AppChatMode>('sidebar');
   const [appRightSidebarWidth, setAppRightSidebarWidth] = useState(380);
@@ -222,7 +222,7 @@ export function useStudyWorkspace(props: {
     setActivePageByDocument(snapshot.activePageByDocument);
     setBookmarksByDocument(snapshot.bookmarksByDocument ?? {});
     setLastChatSessionByDocument(snapshot.lastChatSessionByDocument ?? {});
-    setAiPanelMode(snapshot.aiPanelMode === 'sidebar' ? 'sidebar' : 'floating');
+    setAiPanelMode(snapshot.aiPanelMode === 'floating' ? 'floating' : 'sidebar');
   }, []);
   const persistedWorkspaceState = useMemo<PersistedStudyWorkspaceState>(() => ({
     version: 1,
@@ -823,12 +823,21 @@ export function useStudyWorkspace(props: {
     selectionRect,
     selectionPreviewUri: rawSelectionPreviewUri,
     setAiPanelOpen,
-    setAiPanelMode,
-    setAppChatMode,
-    setAppRightSidebarPanel,
     setAiQuestion,
     setViewingAiChatSessionId,
     setWorkspaceFeedback,
+    openAiChatForSelection: () => {
+      setAiPanelOpen(true);
+      if (Platform.OS !== 'web' && props.wide) {
+        if (appChatMode === 'sidebar') {
+          setAiPanelMode('sidebar');
+          setAppRightSidebarPanel('chat');
+        } else {
+          setAiPanelMode('floating');
+          setAppRightSidebarPanel(null);
+        }
+      }
+    },
     attachSelectionPreviewToAi: (selectionPreviewUri?: string | null) => {
       if (!studyDocumentId) return;
       if (selectionPreviewUri !== undefined) {

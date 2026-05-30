@@ -612,6 +612,56 @@ export function FloatingToolPalette() {
         </View>
       </View>
 
+      {canvasContext.selectionRect ? (
+        <View style={workspaceContext.styles.fixedSelectionShelf}>
+          <View style={workspaceContext.styles.selectionActionHeader}>
+            <View>
+              <Text style={workspaceContext.styles.selectionActionTitle}>선택 영역</Text>
+              <Text style={workspaceContext.styles.selectionActionMeta}>
+                {canvasContext.selectionRect.mode === 'lasso' ? '올가미 선택' : '네모 선택'}
+              </Text>
+            </View>
+            <Pressable style={workspaceContext.styles.fixedInkWidthNudge} onPress={canvasContext.clearCurrentSelection}>
+              <MaterialCommunityIcons name="close" size={16} color="#64748B" />
+            </Pressable>
+          </View>
+          <View style={workspaceContext.styles.selectionActionRow}>
+            <Pressable
+              style={[workspaceContext.styles.selectionActionButton, workspaceContext.styles.selectionActionPrimary]}
+              onPress={() => workspaceContext.onAskAiAboutSelection()}
+            >
+              <MaterialCommunityIcons name="star-four-points" size={15} color="#FFFFFF" />
+              <Text style={workspaceContext.styles.selectionActionPrimaryText}>AI</Text>
+            </Pressable>
+            <Pressable style={workspaceContext.styles.selectionActionButton} onPress={canvasContext.copySelectionImage}>
+              <MaterialCommunityIcons name="content-copy" size={15} color="#455062" />
+              <Text style={workspaceContext.styles.selectionActionButtonText}>복사</Text>
+            </Pressable>
+            <Pressable style={workspaceContext.styles.selectionActionButton} onPress={canvasContext.duplicateSelectedStrokes}>
+              <MaterialCommunityIcons name="content-duplicate" size={15} color="#455062" />
+              <Text style={workspaceContext.styles.selectionActionButtonText}>복제</Text>
+            </Pressable>
+            <Pressable
+              style={[workspaceContext.styles.selectionActionButton, workspaceContext.styles.selectionActionDanger]}
+              onPress={canvasContext.deleteSelectedStrokes}
+            >
+              <MaterialCommunityIcons name="delete-outline" size={15} color="#DC2626" />
+              <Text style={workspaceContext.styles.selectionActionDangerText}>삭제</Text>
+            </Pressable>
+          </View>
+          <View style={workspaceContext.styles.selectionActionColors}>
+            {PEN_COLORS.slice(0, 5).map((color) => (
+              <Pressable
+                key={color}
+                style={workspaceContext.styles.fixedInkColorButton}
+                onPress={() => canvasContext.changeSelectedStrokesColor(color)}
+              >
+                <View style={[workspaceContext.styles.fixedInkColorDot, { backgroundColor: color }]} />
+              </Pressable>
+            ))}
+          </View>
+        </View>
+      ) : null}
     </View>
   );
 }
