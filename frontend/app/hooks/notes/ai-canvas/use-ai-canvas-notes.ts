@@ -232,7 +232,7 @@ export function useAiCanvasNotes({
 
   const createCanvasNote = useCallback(async () => {
     if (!enabled || !noteId) {
-      setError('백엔드에 저장된 노트에서만 사용할 수 있습니다.');
+      setError('AI 캔버스를 사용하려면 먼저 노트를 서버에 업로드해 주세요.');
       return null;
     }
     if (!canCreateNote) {
@@ -261,9 +261,9 @@ export function useAiCanvasNotes({
     try {
       const created = await createCanvasNote();
       if (!created) return;
-      onFeedback('AI Canvas Note를 만들었습니다.');
+      onFeedback('AI Canvas Note를 만들었어요.');
     } catch {
-      setError('AI Canvas Note를 만들지 못했습니다.');
+      setError('AI Canvas Note를 만드는 중 문제가 발생했어요.');
     } finally {
       setSaving(false);
     }
@@ -281,9 +281,9 @@ export function useAiCanvasNotes({
       });
       setNotes((current) => current.map((note) => (note.id === updated.id ? updated : note)));
       applyActiveNote(updated);
-      onFeedback('AI Canvas Note를 저장했습니다.');
+      onFeedback('AI Canvas Note를 저장했어요.');
     } catch {
-      setError('AI Canvas Note를 저장하지 못했습니다.');
+      setError('AI Canvas Note를 저장하는 중 문제가 발생했어요.');
     } finally {
       setSaving(false);
     }
@@ -311,10 +311,10 @@ export function useAiCanvasNotes({
       if (updated.id === activeNote?.id) {
         applyActiveNote(updated);
       }
-      onFeedback('AI Canvas Note 이름을 변경했습니다.');
+      onFeedback('AI Canvas Note 이름을 변경했어요.');
       return true;
     } catch {
-      setError('AI Canvas Note 이름을 변경하지 못했습니다.');
+      setError('AI Canvas Note 이름을 변경하는 중 문제가 발생했어요.');
       return false;
     } finally {
       setSaving(false);
@@ -341,9 +341,9 @@ export function useAiCanvasNotes({
           applyActiveNote(null);
         }
       }
-      onFeedback('AI Canvas Note를 삭제했습니다.');
+      onFeedback('AI Canvas Note를 삭제했어요.');
     } catch {
-      setError('AI Canvas Note를 삭제하지 못했습니다.');
+      setError('AI Canvas Note를 삭제하는 중 문제가 발생했어요.');
     } finally {
       setSaving(false);
     }
@@ -366,7 +366,7 @@ export function useAiCanvasNotes({
           setNotes((current) => current.map((note) => (note.id === updated.id ? updated : note)));
         })
         .catch(() => {
-          setError('AI Canvas Note 자동 저장에 실패했습니다.');
+          setError('AI Canvas Note 자동 저장 중 문제가 발생했어요.');
         })
         .finally(() => {
           setSaving(false);
@@ -378,7 +378,7 @@ export function useAiCanvasNotes({
 
   const ensureNoteForChatEdit = useCallback(async () => {
     if (!enabled || !noteId) {
-      setError('백엔드에 저장된 노트에서만 Canvas를 수정할 수 있습니다.');
+      setError('Canvas를 수정하려면 먼저 해당 노트를 서버에 업로드해 주세요.');
       return null;
     }
     if (activeNote) return { note: activeNote, needsTitle: false };
@@ -404,7 +404,7 @@ export function useAiCanvasNotes({
       return current.map((note) => (note.id === canvasNote.id ? canvasNote : note));
     });
     setError(null);
-    onFeedback(action === 'canvas_create' ? 'AI Chat에서 Canvas를 만들었습니다.' : 'AI Chat이 Canvas를 수정했습니다.');
+    onFeedback(action === 'canvas_create' ? 'AI Chat에서 Canvas를 만들었어요.' : 'AI Chat이 Canvas를 수정했어요.');
   }, [finishDirectEditBatch, markdownDraft, onFeedback, onRecordWorkspaceAction]);
 
   const undoCanvasEdit = useCallback(() => {

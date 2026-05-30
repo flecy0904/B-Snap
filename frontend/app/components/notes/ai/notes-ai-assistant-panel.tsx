@@ -213,7 +213,7 @@ export function NotesAiAssistantPanel() {
   const saveEditingSession = async () => {
     if (!editingSessionId) return;
     if (!editingTitle.trim()) {
-      setEditingTitleError('채팅방 이름을 입력해 주세요.');
+      setEditingTitleError('채팅 이름을 입력해 주세요.');
       return;
     }
     const saved = await workspace.onRenameAiChatSession(editingSessionId, editingTitle);
@@ -445,7 +445,7 @@ export function NotesAiAssistantPanel() {
           }) : (
             <View style={workspace.styles.aiEmptyConversation}>
               <Text style={workspace.styles.aiEmptyConversationTitle}>무엇을 도와드릴까요?</Text>
-              <Text style={workspace.styles.aiEmptyConversationBody}>선택한 영역이나 현재 페이지에 대해 질문해보세요.</Text>
+              <Text style={workspace.styles.aiEmptyConversationBody}>궁금한 부분에 대해 질문해 보세요.</Text>
             </View>
           )}
           {workspace.aiLoading ? (
@@ -459,7 +459,7 @@ export function NotesAiAssistantPanel() {
           {workspace.aiChatReadOnly ? (
             <View style={workspace.styles.aiReadOnlyNotice}>
               <MaterialCommunityIcons name="lock-outline" size={14} color="#5B6472" />
-              <Text style={workspace.styles.aiReadOnlyNoticeText}>보고 있는 노트와 연결된 대화방이 아니라서 읽기만 가능합니다.</Text>
+              <Text style={workspace.styles.aiReadOnlyNoticeText}>현재 대화는 다른 노트의 대화라서 읽기만 가능해요.</Text>
               <Pressable style={workspace.styles.aiReadOnlyReturnButton} onPress={returnToCurrentNoteSession}>
                 <Text style={workspace.styles.aiReadOnlyReturnText}>돌아가기</Text>
               </Pressable>
@@ -525,7 +525,7 @@ export function NotesAiAssistantPanel() {
               value={workspace.aiQuestion}
               onChangeText={workspace.onChangeAiQuestion}
               onFocus={() => workspace.onFocusWorkspaceTarget?.(null)}
-              placeholder={workspace.selectionRect || workspace.selectionPreviewUri ? '선택 영역에 대해 물어보세요' : '메시지 입력'}
+              placeholder={workspace.selectionRect || workspace.selectionPreviewUri ? '이 부분이 궁금하신가요?' : '메시지 입력'}
               placeholderTextColor="#8F96A3"
               multiline
               editable={!workspace.aiChatReadOnly && !workspace.aiLoading}
@@ -550,14 +550,14 @@ export function NotesAiAssistantPanel() {
       {editingSessionId !== null ? (
         <Pressable style={workspace.styles.aiPanelDialogOverlay} onPress={cancelEditingSession}>
           <Pressable style={workspace.styles.aiRenameModalCard} onPress={(event) => event.stopPropagation()}>
-            <Text style={workspace.styles.aiRenameModalTitle}>채팅방 이름 바꾸기</Text>
+            <Text style={workspace.styles.aiRenameModalTitle}>채팅 이름 변경</Text>
             <TextInput
               value={editingTitle}
               onChangeText={(value) => {
                 setEditingTitle(value);
                 if (editingTitleError && value.trim()) setEditingTitleError(null);
               }}
-              placeholder="채팅방 이름"
+              placeholder="채팅 이름"
               placeholderTextColor="#8F96A3"
               style={[workspace.styles.aiRenameModalInput, editingTitleError && workspace.styles.aiRenameModalInputError]}
               returnKeyType="done"
@@ -583,9 +583,9 @@ export function NotesAiAssistantPanel() {
       {deleteTarget !== null ? (
         <Pressable style={workspace.styles.aiPanelDialogOverlay} onPress={() => setDeleteTarget(null)}>
           <Pressable style={workspace.styles.aiRenameModalCard} onPress={(event) => event.stopPropagation()}>
-            <Text style={workspace.styles.aiRenameModalTitle}>채팅방 삭제</Text>
+            <Text style={workspace.styles.aiRenameModalTitle}>채팅 삭제</Text>
             <Text style={workspace.styles.aiRenameModalBody}>
-              "{deleteTarget?.title ?? ''}" 채팅방을 삭제할까요?
+              "{deleteTarget?.title ?? ''}" 채팅을 삭제할까요?
             </Text>
             <View style={workspace.styles.aiRenameModalActions}>
               <Pressable style={workspace.styles.aiRenameModalCancelButton} onPress={() => setDeleteTarget(null)} disabled={workspace.aiLoading}>

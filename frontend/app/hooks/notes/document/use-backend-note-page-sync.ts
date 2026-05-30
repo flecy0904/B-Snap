@@ -166,7 +166,7 @@ export function useBackendNotePageSync({
         applyLoadedBackendPages(studyDocumentId, pages);
       } catch {
         if (mounted) {
-          setWorkspaceFeedback('노트 페이지를 불러오지 못했습니다. backend 연결을 확인해주세요.');
+          setWorkspaceFeedback('노트 페이지를 불러오지 못했습니다. 서버 연결을 확인해주세요.');
         }
       } finally {
         delete backendPageLoadsInFlightRef.current[studyDocumentId];
@@ -407,15 +407,15 @@ export function useBackendNotePageSync({
           )));
         })
         .catch(() => {
-          setWorkspaceFeedback('PDF 텍스트 추출에 실패했습니다.');
+          setWorkspaceFeedback('PDF에서 텍스트 추출에 실패했어요.');
         });
 
-      setWorkspaceFeedback(`${Math.max(document.pageCount, result.note.page_count ?? result.upload.page_count)}페이지 PDF를 백엔드에 저장했습니다.`);
+      setWorkspaceFeedback(`${Math.max(document.pageCount, result.note.page_count ?? result.upload.page_count)}페이지 PDF를 서버에 저장했어요.`);
     } catch (error) {
       const syncError = error instanceof BackendApiError && error.detail
         ? error.detail
         : '백엔드 저장에 실패했습니다.';
-      setWorkspaceFeedback(`${syncError} PDF는 이 기기에 유지됩니다.`);
+      setWorkspaceFeedback(`${syncError} PDF는 이 기기에 유지할게요.`);
       setUserStudyDocuments((current) => current.map((item) => (
         item.id === document.id
           ? {

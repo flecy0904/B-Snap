@@ -142,7 +142,7 @@ export function NotesAiCanvasPanel() {
             <TextInput
               value={miniCommand}
               onChangeText={setMiniCommand}
-              placeholder="AI에게 수정 요청"
+              placeholder="AI에게 도움 받기"
               placeholderTextColor="#8F96A3"
               style={workspace.styles.aiCanvasMiniInput}
               multiline
@@ -302,7 +302,7 @@ export function NotesAiCanvasPanel() {
                 value={canvas.markdownDraft}
                 onChangeText={canvas.setMarkdownDraft}
                 onFocus={() => workspace.onFocusWorkspaceTarget('aiCanvas')}
-                placeholder="Markdown으로 정리 내용을 작성하세요."
+                placeholder="Markdown 형식으로 내용을 정리해 보세요."
                 placeholderTextColor="#A2AAB8"
                 multiline
                 scrollEnabled
@@ -326,7 +326,7 @@ export function NotesAiCanvasPanel() {
       {renameOpen ? (
         <Pressable style={workspace.styles.aiPanelDialogOverlay} onPress={cancelRename}>
           <Pressable style={workspace.styles.aiRenameModalCard} onPress={(event) => event.stopPropagation()}>
-            <Text style={workspace.styles.aiRenameModalTitle}>Canvas 이름 바꾸기</Text>
+            <Text style={workspace.styles.aiRenameModalTitle}>Canvac 이름 변경</Text>
             <TextInput
               value={renameDraft}
               onChangeText={(value) => {

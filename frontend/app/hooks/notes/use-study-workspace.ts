@@ -132,7 +132,7 @@ export function useStudyWorkspace(props: {
         setAllChatSessions(sessions);
       })
       .catch((error) => {
-        setAiError(getAiBackendErrorMessage(error, 'AI 채팅 내역을 불러오지 못했습니다.'));
+        setAiError(getAiBackendErrorMessage(error, '서버에서 AI와의 대화 내역을 불러오지 못했어요. 네트워크 연결 상태를 확인 후 다시 시도해 주세요.'));
       });
   }, []);
 
@@ -446,7 +446,7 @@ export function useStudyWorkspace(props: {
         setDeletedStudyDocumentIds((current) => current.filter((id) => !backendDocumentIds.has(id)));
       } catch {
         if (mounted) {
-          setWorkspaceFeedback('백엔드 노트 목록을 불러오지 못했습니다.');
+          setWorkspaceFeedback('노트 목록을 불러오지 못했어요,.');
         }
       }
     };
@@ -507,7 +507,7 @@ export function useStudyWorkspace(props: {
         }
       } catch (error) {
         if (mounted) {
-          setAiError(getAiBackendErrorMessage(error, 'AI 채팅 내역을 불러오지 못했습니다.'));
+          setAiError(getAiBackendErrorMessage(error, '서버에서 AI와의 대화 내역을 불러오지 못했어요. 네트워크 연결 상태를 확인 후 다시 시도해 주세요.'));
         }
       }
     };
@@ -714,15 +714,15 @@ export function useStudyWorkspace(props: {
   const copySelectionImage = useCallback(() => {
     Keyboard.dismiss();
     if (!studyDocumentId || !selectionRect) {
-      setWorkspaceFeedback('복사할 선택 영역을 먼저 선택해 주세요.');
+      setWorkspaceFeedback('복사할 영역을 먼저 선택해 주세요.');
       return;
     }
     if (!selectionPreviewUri) {
-      setWorkspaceFeedback('선택 영역 미리보기를 준비 중입니다. 잠시 후 다시 복사해 주세요.');
+      setWorkspaceFeedback('선택한 영역을 준비 중입니다. 잠시 후 다시 시도해 주세요.');
       return;
     }
     setCopiedSelectionImageByDocument((current) => ({ ...current, [studyDocumentId]: selectionPreviewUri }));
-    setWorkspaceFeedback('선택 영역을 복사했습니다. Canvas 입력창에 붙여넣어 첨부할 수 있습니다.');
+    setWorkspaceFeedback('선택한 영역을 복사했어요.');
   }, [selectionPreviewUri, selectionRect, studyDocumentId]);
 
   const {

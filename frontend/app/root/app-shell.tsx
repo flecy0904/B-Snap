@@ -90,13 +90,13 @@ export function AppShell(props: {
       setProfileFeedback(`${targetSubject?.name ?? '현재'} 과목 노트 화면으로 이동했습니다.`);
       return;
     }
-    setProfileFeedback('이 학기에 표시할 과목이 없습니다.');
+    setProfileFeedback('이번 학기에 추가된 과목이 없어요.');
   };
 
   const toggleNotificationsFromProfile = () => {
     setNotificationsEnabled((current) => {
       const next = !current;
-      setProfileFeedback(next ? '업로드 알림을 켰습니다.' : '업로드 알림을 껐습니다.');
+      setProfileFeedback(next ? '업로드 알림 on' : '업로드 알림 off');
       return next;
     });
   };
@@ -116,9 +116,9 @@ export function AppShell(props: {
         title: 'B-SNAP backup summary',
         message: JSON.stringify(backupPayload, null, 2),
       });
-      setProfileFeedback('학습 요약 백업을 공유 시트로 내보냈습니다.');
+      setProfileFeedback('학습 요약본을 공유 시트로 내보낼게요.');
     } catch {
-      setProfileFeedback('이 기기에서는 백업 공유를 열지 못했습니다.');
+      setProfileFeedback('공유된 학습 요약을 열지 못했어요.');
     }
   };
 
@@ -129,10 +129,10 @@ export function AppShell(props: {
   const resetLocalDataFromProfile = () => {
     void notesState.resetLocalWorkspaceData()
       .then(() => {
-        setProfileFeedback('로컬에 저장된 노트 작업 데이터를 초기화했습니다.');
+        setProfileFeedback('노트를 초기화 했어요.');
       })
       .catch(() => {
-        setProfileFeedback('로컬 데이터 초기화 중 문제가 발생했습니다.');
+        setProfileFeedback('기기에 저장된 데이터를 초기화 하는 중에 문제가 발생했어요.');
       });
   };
 
@@ -390,7 +390,6 @@ export function AppShell(props: {
                   onCaptureId={scheduleState.setCaptureId}
                   onCaptureFromCamera={captureState.captureFromCamera}
                   onPickFromLibrary={captureState.pickImageFromLibrary}
-                  onPickPdf={captureState.pickPdfDocument}
                   onRetryUpload={captureState.retryLastFailedAction}
                   styles={S}
                   isWeb={isWeb}
@@ -610,7 +609,6 @@ export function AppShell(props: {
                   onTogglePicker={() => setCapturePickerOpen((value) => !value)}
                   onCaptureFromCamera={captureState.captureFromCamera}
                   onPickFromLibrary={captureState.pickImageFromLibrary}
-                  onPickPdf={captureState.pickPdfDocument}
                   onRetryUpload={captureState.retryLastFailedAction}
                   styles={S}
                 />

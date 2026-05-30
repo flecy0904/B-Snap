@@ -24,10 +24,10 @@ export function LoginScreen(props: {
     if (err instanceof BackendApiError) {
       if (err.detail) return err.detail;
       if (err.message === 'Backend server is unreachable.') {
-        return `백엔드 서버에 연결할 수 없습니다. 현재 주소: ${backendUrl}`;
+        return `서버에 연결할 수 없습니다. 현재 주소: ${backendUrl}`;
       }
       if (err.message === 'Backend request timed out.') {
-        return `백엔드 응답 시간이 초과됐습니다. 현재 주소를 확인해주세요: ${backendUrl}`;
+        return `서버와의 응답 시간이 초과됐습니다. 현재 주소를 확인해주세요: ${backendUrl}`;
       }
       if (err.message === 'Backend URL is not configured.') {
         return '백엔드 주소가 설정되지 않았습니다.';
@@ -91,8 +91,7 @@ export function LoginScreen(props: {
               {isWeb ? (
                 <View style={S.webLoginIntro}>
                   <Text style={S.webLoginEyebrow}>B-SNAP WEB</Text>
-                  <Text style={S.webLoginHeadline}>수업 자료와 노트를 브라우저에서 바로 정리하세요.</Text>
-                  <Text style={S.webLoginBody}>시간표, 캡처, PDF 정리, AI 요약 흐름을 데스크톱 작업공간처럼 구성한 웹 프리뷰입니다.</Text>
+                  <Text style={S.webLoginHeadline}>모든 강의자료를 나만의 노트로, B-SNAP.</Text>
                   <View style={S.webLoginFeatureList}>
                     {['과목별 작업공간', 'PDF + 판서 정리 흐름', '실시간 캡처 inbox'].map((item) => (
                       <View key={item} style={S.webLoginFeatureRow}>
@@ -108,7 +107,6 @@ export function LoginScreen(props: {
                   <Image source={require('../../assets/icon.png')} style={S.loginLogoImage} resizeMode="contain" />
                 </View>
                 <Text style={S.loginTitle}>B-SNAP</Text>
-                <Text style={S.loginSubtitle}>계정별로 자료와 필기를 분리해서 저장합니다.</Text>
 
                 <View style={S.loginToggleRow}>
                   <Pressable onPress={() => setMode('login')} style={[S.loginToggleButton, mode === 'login' && S.loginToggleButtonActive]}>
@@ -143,7 +141,7 @@ export function LoginScreen(props: {
                     autoCorrect={false}
                     textContentType="username"
                     autoComplete="username"
-                    placeholder="아이디"
+                    placeholder="ID"
                     placeholderTextColor="#9FA7B5"
                     returnKeyType="next"
                     style={S.loginInput}
@@ -158,13 +156,13 @@ export function LoginScreen(props: {
                     autoCapitalize="none"
                     autoCorrect={false}
                     textContentType="password"
-                    placeholder="비밀번호"
+                    placeholder="Password"
                     placeholderTextColor="#9FA7B5"
                     returnKeyType="done"
                     onSubmitEditing={submit}
                     style={S.loginInput}
                   />
-                  <Text style={S.loginFieldHelp}>8자 이상, 영문과 숫자 조합을 권장합니다.</Text>
+                  <Text style={S.loginFieldHelp}>개인정보 보호를 위해 8자 이상, 영문과 숫자 조합을 권장합니다.</Text>
                 </View>
 
                 {error ? <Text style={S.loginError}>{error}</Text> : null}
@@ -173,7 +171,6 @@ export function LoginScreen(props: {
                   <Text style={S.loginButtonText}>{loading ? '처리 중...' : mode === 'register' ? '회원가입' : '로그인'}</Text>
                 </Pressable>
 
-                <Text style={S.loginHint}>계정별로 업로드, 필기, AI 채팅 데이터가 분리됩니다.</Text>
                 <Text style={S.loginHint}>Backend: {backendUrl}</Text>
               </View>
             </View>

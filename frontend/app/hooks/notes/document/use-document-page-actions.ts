@@ -267,7 +267,7 @@ export function useDocumentPageActions(params: {
       ...current,
       [params.studyDocumentId!]: { kind: 'generated', pageId: generatedPageId },
     }));
-    params.setWorkspaceFeedback('AI 응답을 정리 페이지로 추가했습니다.');
+    params.setWorkspaceFeedback('AI 답변을 페이지에 추가했어요.');
   };
 
   const createMemoPage = (insertAfterPageOverride?: number) => {
@@ -308,11 +308,11 @@ export function useDocumentPageActions(params: {
             }));
           })
           .catch(() => {
-            params.setWorkspaceFeedback('새 페이지 저장에 실패했습니다. backend 연결을 확인해주세요.');
+            params.setWorkspaceFeedback('새 페이지 저장에 실패했습니다. 서버 연결을 확인해주세요.');
           });
       }
       params.setInkTool('pen');
-      params.setWorkspaceFeedback(`${nextPage}페이지를 추가했습니다.`);
+      params.setWorkspaceFeedback(`${nextPage}페이지를 추가했어요.`);
       return;
     }
 
@@ -345,7 +345,7 @@ export function useDocumentPageActions(params: {
       [params.studyDocumentId!]: { kind: 'generated', pageId: generatedPageId },
     }));
     params.setInkTool('pen');
-    params.setWorkspaceFeedback(`${insertAfterPage}페이지 뒤에 메모 페이지를 추가했습니다.`);
+    params.setWorkspaceFeedback(`${insertAfterPage}페이지 뒤에 메모를 추가했어요.`);
   };
 
   const openGeneratedPage = (pageId: string) => {
@@ -389,7 +389,7 @@ export function useDocumentPageActions(params: {
         [params.studyDocumentId!]: target.insertAfterPage,
       }));
     }
-    params.setWorkspaceFeedback('메모 페이지를 삭제했습니다.');
+    params.setWorkspaceFeedback('메모를 삭제했어요.');
   };
 
   const duplicateGeneratedPage = (pageId: string) => {
@@ -442,7 +442,7 @@ export function useDocumentPageActions(params: {
       ...current,
       [params.studyDocumentId!]: { kind: 'generated', pageId: nextPageId },
     }));
-    params.setWorkspaceFeedback('페이지를 복제했습니다.');
+    params.setWorkspaceFeedback('페이지를 복제 했어요.');
   };
 
   const moveGeneratedPage = (pageId: string, delta: -1 | 1) => {
@@ -468,13 +468,13 @@ export function useDocumentPageActions(params: {
       ),
     }));
     params.clearCurrentSelection();
-    params.setWorkspaceFeedback(delta < 0 ? '페이지를 위로 이동했습니다.' : '페이지를 아래로 이동했습니다.');
+    params.setWorkspaceFeedback(delta < 0 ? '페이지를 위로 이동했어요.' : '페이지를 아래로 이동했어요.');
   };
 
   const duplicatePdfPage = (pageNumber = params.currentPdfPage) => {
     if (!params.studyDocumentId || !params.studyDocument) return;
     if (!isBackendApiEnabled() || !params.currentDocumentHasBackendPages) {
-      params.setWorkspaceFeedback('백엔드에 저장된 PDF만 페이지 복제를 지원합니다.');
+      params.setWorkspaceFeedback('서버에 PDF가 없어요.');
       return;
     }
     const backendNoteId = getBackendNoteId();
@@ -484,21 +484,21 @@ export function useDocumentPageActions(params: {
       .then((pages) => {
         params.pushWorkspaceHistorySnapshot();
         duplicatePdfPageLocally(pageNumber);
-        applyBackendPageList(pages, pageNumber + 1, 'PDF 페이지를 복제했습니다.');
+        applyBackendPageList(pages, pageNumber + 1, 'PDF 페이지를 복제 했어요.');
       })
       .catch(() => {
-        params.setWorkspaceFeedback('PDF 페이지 복제 저장에 실패했습니다. 새로고침 후 다시 시도해주세요.');
+        params.setWorkspaceFeedback('페이지 복제 중 문제가 생겼어요. 다시 시도해주세요.');
       });
   };
 
   const removePdfPage = (pageNumber = params.currentPdfPage) => {
     if (!params.studyDocumentId || !params.studyDocument) return;
     if (params.studyDocument.pageCount <= 1) {
-      params.setWorkspaceFeedback('마지막 페이지는 삭제할 수 없습니다.');
+      params.setWorkspaceFeedback('마지막 페이지는 삭제할 수 없어요.');
       return;
     }
     if (!isBackendApiEnabled() || !params.currentDocumentHasBackendPages) {
-      params.setWorkspaceFeedback('백엔드에 저장된 PDF만 페이지 삭제를 지원합니다.');
+      params.setWorkspaceFeedback('서버에 있는 PDF만 삭제가 가능해요.');
       return;
     }
     const backendNoteId = getBackendNoteId();
@@ -512,7 +512,7 @@ export function useDocumentPageActions(params: {
         applyBackendPageList(pages, nextActivePage, 'PDF 페이지를 삭제했습니다.');
       })
       .catch(() => {
-        params.setWorkspaceFeedback('PDF 페이지 삭제 저장에 실패했습니다. 새로고침 후 다시 시도해주세요.');
+        params.setWorkspaceFeedback('페이지 삭제 중 문젝가 발생했어요. 다시 시도해주세요.');
       });
   };
 
@@ -521,7 +521,7 @@ export function useDocumentPageActions(params: {
     const nextPageNumber = pageNumber + delta;
     if (nextPageNumber < 1 || nextPageNumber > params.studyDocument.pageCount) return;
     if (!isBackendApiEnabled() || !params.currentDocumentHasBackendPages) {
-      params.setWorkspaceFeedback('백엔드에 저장된 PDF만 페이지 이동을 지원합니다.');
+      params.setWorkspaceFeedback('서버의 PDF와 연결에 실패했어요. 다시 시도해주세요.');
       return;
     }
     const backendNoteId = getBackendNoteId();
@@ -531,10 +531,10 @@ export function useDocumentPageActions(params: {
       .then((pages) => {
         params.pushWorkspaceHistorySnapshot();
         swapPdfPagesLocally(pageNumber, delta);
-        applyBackendPageList(pages, nextPageNumber, delta < 0 ? 'PDF 페이지를 위로 이동했습니다.' : 'PDF 페이지를 아래로 이동했습니다.');
+        applyBackendPageList(pages, nextPageNumber, delta < 0 ? 'PDF 페이지를 위로 이동했어요.' : 'PDF 페이지를 아래로 이동했어요.');
       })
       .catch(() => {
-        params.setWorkspaceFeedback('PDF 페이지 이동 저장에 실패했습니다. 새로고침 후 다시 시도해주세요.');
+        params.setWorkspaceFeedback('PDF 페이지를 이동하는 중에 문제가 발생했어요. 다시 시도해주세요.');
       });
   };
 
@@ -568,7 +568,7 @@ export function useDocumentPageActions(params: {
             }));
           })
           .catch(() => {
-            params.setWorkspaceFeedback('페이지 저장 준비에 실패했습니다. backend 연결을 확인해주세요.');
+            params.setWorkspaceFeedback('서버와 연결이 끊어져 저장에 실패했어요.');
           });
       }
     }
@@ -634,7 +634,7 @@ export function useDocumentPageActions(params: {
       };
     });
 
-    params.setWorkspaceFeedback(params.currentPageBookmarked ? '중요 페이지에서 해제했습니다.' : '중요 페이지로 저장했습니다.');
+    params.setWorkspaceFeedback(params.currentPageBookmarked ? '중요 페이지에서 해제 할게요.' : '중요 페이지로 저장할게요.');
   };
 
   const openBookmarkedPage = (bookmarkId: string) => {
@@ -662,7 +662,7 @@ export function useDocumentPageActions(params: {
       ...current,
       [params.studyDocumentId!]: (current[params.studyDocumentId!] ?? []).filter((bookmark) => bookmark.id !== bookmarkId),
     }));
-    params.setWorkspaceFeedback('중요 페이지를 삭제했습니다.');
+    params.setWorkspaceFeedback('중요 페이지를 삭제했어요.');
   };
 
   const exportCurrentDocumentSummary = async () => {
@@ -693,9 +693,9 @@ export function useDocumentPageActions(params: {
           generatedPageLines,
         ].join('\n'),
       });
-      params.setWorkspaceFeedback('문서 요약을 공유 시트로 내보냈습니다.');
+      params.setWorkspaceFeedback('문서의 요약본을 공유 시트로 내보냈어요.');
     } catch {
-      params.setWorkspaceFeedback('이 기기에서는 내보내기를 열지 못했습니다.');
+      params.setWorkspaceFeedback('공유창을 열 수 없습니다. 기기 설정을 확인한 뒤 다시 시도해 주세요.');
     }
   };
 

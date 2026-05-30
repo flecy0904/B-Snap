@@ -11,10 +11,9 @@ function getSyncStatusText(status: SyncBridgeStatus) {
   return '로컬 저장 모드';
 }
 
-function getPendingActionText(action: 'camera' | 'library' | 'pdf' | null) {
+function getPendingActionText(action: 'camera' | 'library' | null) {
   if (action === 'camera') return '카메라 업로드 중';
   if (action === 'library') return '사진첩 업로드 중';
-  if (action === 'pdf') return 'PDF 업로드 중';
   return null;
 }
 
@@ -25,13 +24,12 @@ export function MobileCapture(props: {
   pickerOpen: boolean;
   onCaptureId: (id: number) => void;
   onTogglePicker: () => void;
-  pendingAction: 'camera' | 'library' | 'pdf' | null;
+  pendingAction: 'camera' | 'library' | null;
   syncStatus: SyncBridgeStatus;
   captureFeedback: string | null;
   captureError: string | null;
   onCaptureFromCamera: () => Promise<void>;
   onPickFromLibrary: () => Promise<void>;
-  onPickPdf: () => Promise<void>;
   onRetryUpload: () => Promise<void>;
   styles: any;
 }) {
@@ -42,14 +40,6 @@ export function MobileCapture(props: {
   return (
     <ScrollView style={props.styles.main} contentContainerStyle={props.styles.mobilePage}>
       <Text style={props.styles.pageTitle}>촬영</Text>
-      <View style={props.styles.currentClassCard}>
-        <View style={props.styles.currentClassBadge}>
-          <Text style={props.styles.currentClassBadgeIcon}>◔</Text>
-          <Text style={props.styles.currentClassBadgeText}>현재 수업</Text>
-        </View>
-        <Text style={props.styles.currentClassTitle}>{current.name}</Text>
-        <Text style={props.styles.currentClassText}>수업 시간 기준으로 자동 선택되었어요</Text>
-      </View>
 
       <Text style={props.styles.fieldLabel}>과목 선택</Text>
       <Pressable style={[props.styles.selectBox, props.pickerOpen && props.styles.selectBoxOpen]} onPress={props.onTogglePicker}>
@@ -76,9 +66,6 @@ export function MobileCapture(props: {
         </Pressable>
         <Pressable style={[props.styles.secondaryButton, busy && props.styles.disabledButton]} onPress={props.onPickFromLibrary} disabled={busy}>
           <Text style={props.styles.secondaryButtonText}>{props.pendingAction === 'library' ? '사진 업로드 중...' : '⌲ 사진첩에서 불러오기'}</Text>
-        </Pressable>
-        <Pressable style={[props.styles.tertiaryButton, busy && props.styles.disabledButton]} onPress={props.onPickPdf} disabled={busy}>
-          <Text style={props.styles.tertiaryButtonText}>{props.pendingAction === 'pdf' ? 'PDF 업로드 중...' : 'PDF 가져오기'}</Text>
         </Pressable>
       </View>
 
@@ -115,12 +102,11 @@ export function MobileCapture(props: {
         </View>
       ) : (
         <View style={props.styles.captureEmptyCard}>
-          <Text style={props.styles.captureEmptyTitle}>아직 업로드된 자료가 없습니다</Text>
-          <Text style={props.styles.captureEmptyBody}>사진을 찍거나 사진첩, PDF 가져오기를 사용하면 최근 업로드 기록이 여기에 쌓입니다.</Text>
+          <Text style={props.styles.captureEmptyTitle}>아직 자료가 없어요. 첫 자료를 추가해 보세요</Text>
         </View>
       )}
 
-      <Text style={props.styles.captureHint}>최근 촬영한 노트는 각 과목 페이지에서 확인할 수 있어요</Text>
+      <Text style={props.styles.captureHint}>촬영한 이미지는 각 과목의 페이지에서 확인할 수 있어요.</Text>
     </ScrollView>
   );
 }
@@ -131,13 +117,12 @@ export function DesktopCapture(props: {
   subjects: Subject[];
   recentUploads: CaptureAsset[];
   onCaptureId: (id: number) => void;
-  pendingAction: 'camera' | 'library' | 'pdf' | null;
+  pendingAction: 'camera' | 'library' | null;
   syncStatus: SyncBridgeStatus;
   captureFeedback: string | null;
   captureError: string | null;
   onCaptureFromCamera: () => Promise<void>;
   onPickFromLibrary: () => Promise<void>;
-  onPickPdf: () => Promise<void>;
   onRetryUpload: () => Promise<void>;
   styles: any;
   isWeb?: boolean;
@@ -155,7 +140,7 @@ export function DesktopCapture(props: {
             <View style={props.styles.webPageHeaderMeta}>
               <Text style={props.styles.webPageEyebrow}>CAPTURE HUB</Text>
               <Text style={props.styles.webPageTitle}>자료 캡처</Text>
-              <Text style={props.styles.webPageBody}>사진, PDF, 외부 자료를 과목별로 정리해 노트 작업공간에 바로 연결합니다.</Text>
+              <Text style={props.styles.webPageBody}>사진과 외부 이미지를 과목별로 정리해 노트 작업공간에 바로 연결합니다.</Text>
             </View>
             <View style={props.styles.webHeaderBadgeRow}>
               <View style={props.styles.webHeaderBadge}>
@@ -168,15 +153,6 @@ export function DesktopCapture(props: {
         )}
       </View>
       <View style={[props.styles.desktopCaptureForm, props.compact && props.styles.desktopCaptureFormCompact, props.isWeb && props.styles.webCaptureGrid]}>
-        <View style={[props.styles.currentClassCard, props.compact && props.styles.currentClassCardCompact]}>
-          <View style={props.styles.currentClassBadge}>
-            <Text style={props.styles.currentClassBadgeIcon}>◔</Text>
-            <Text style={props.styles.currentClassBadgeText}>현재 수업</Text>
-          </View>
-          <Text style={props.styles.currentClassTitle}>{current.name}</Text>
-          <Text style={props.styles.currentClassText}>시간표와 연결되는 촬영 흐름에 맞춰 과목이 선택되어 있습니다.</Text>
-        </View>
-
         <Text style={props.styles.fieldLabel}>과목 선택</Text>
         <Pressable style={[props.styles.selectBox, pickerOpen && props.styles.selectBoxOpen]} onPress={() => setPickerOpen((value) => !value)}>
           <Text style={props.styles.selectText}>{current.name}</Text>
@@ -209,9 +185,6 @@ export function DesktopCapture(props: {
           </Pressable>
           <Pressable style={[props.styles.secondaryButton, busy && props.styles.disabledButton]} onPress={props.onPickFromLibrary} disabled={busy}>
             <Text style={props.styles.secondaryButtonText}>{props.pendingAction === 'library' ? '사진 업로드 중...' : '⌲ 사진첩에서 불러오기'}</Text>
-          </Pressable>
-          <Pressable style={[props.styles.tertiaryButton, busy && props.styles.disabledButton]} onPress={props.onPickPdf} disabled={busy}>
-            <Text style={props.styles.tertiaryButtonText}>{props.pendingAction === 'pdf' ? 'PDF 업로드 중...' : 'PDF 가져오기'}</Text>
           </Pressable>
         </View>
         <View style={props.styles.captureStatusCard}>
@@ -247,11 +220,10 @@ export function DesktopCapture(props: {
           </View>
         ) : (
           <View style={props.styles.captureEmptyCard}>
-            <Text style={props.styles.captureEmptyTitle}>아직 업로드된 자료가 없습니다</Text>
-            <Text style={props.styles.captureEmptyBody}>카메라, 사진첩, PDF 가져오기 중 하나를 실행하면 최근 업로드 기록이 여기에 표시됩니다.</Text>
+            <Text style={props.styles.captureEmptyTitle}>아직 자료가 없어요. 첫 자료를 추가해 보세요</Text>
           </View>
         )}
-        <Text style={props.styles.captureHint}>최근 촬영한 노트는 각 과목 페이지에서 확인할 수 있어요</Text>
+        <Text style={props.styles.captureHint}>촬영한 이미지는 각 과목의 페이지에서 확인할 수 있어요.</Text>
       </View>
     </ScrollView>
   );

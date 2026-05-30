@@ -79,7 +79,7 @@ export function useCaptureAssetActions(params: CaptureAssetActionsParams) {
     if (asset.type !== 'image') return false;
     const imageUrl = resolveAssetUri(asset);
     if (!imageUrl) {
-      params.setWorkspaceFeedback('이미지 파일 URL을 찾지 못했습니다.');
+      params.setWorkspaceFeedback('이미지 파일 URL을 찾지 못했어요.');
       return false;
     }
 
@@ -123,14 +123,14 @@ export function useCaptureAssetActions(params: CaptureAssetActionsParams) {
           remoteFileUrl: imageUrl,
           backendSyncStatus: 'synced',
         };
-        params.openCreatedStudyDocument(document, '이미지를 새 노트 페이지로 저장했습니다.');
+        params.openCreatedStudyDocument(document, '이미지를 노트에 추가했어요.');
         updateAssetStatus(asset.id, 'accepted');
         return true;
       } catch (error) {
         params.setWorkspaceFeedback(
           error instanceof BackendApiError && error.detail
             ? error.detail
-            : '이미지 노트 저장에 실패했습니다.',
+            : '이미지를 노트에 추가하는 중에 문제가 발생했어요.',
         );
         return false;
       }
@@ -148,7 +148,7 @@ export function useCaptureAssetActions(params: CaptureAssetActionsParams) {
       localFileUri: imageUrl,
       backendSyncStatus: 'local',
     };
-    params.openCreatedStudyDocument(document, '이미지를 새 노트로 만들었습니다.');
+    params.openCreatedStudyDocument(document, '이미지를 새 노트로 만들었어요.');
     updateAssetStatus(asset.id, 'accepted');
     return true;
   };
@@ -177,7 +177,7 @@ export function useCaptureAssetActions(params: CaptureAssetActionsParams) {
         },
       }));
     } catch {
-      params.setWorkspaceFeedback('이미지 페이지 저장에 실패했습니다. backend 연결을 확인해주세요.');
+      params.setWorkspaceFeedback('이미지를 페이지로 저장하는 중 문제가 발생했어요.');
     }
   };
 
@@ -224,7 +224,7 @@ export function useCaptureAssetActions(params: CaptureAssetActionsParams) {
       [params.studyDocumentId!]: { kind: 'generated', pageId: generatedPageId },
     }));
     updateAssetStatus(asset.id, 'accepted');
-    params.setWorkspaceFeedback(asset.type === 'image' ? '이미지를 백엔드 페이지로 저장하고 정리본을 생성하고 있습니다.' : '다음 페이지 정리본을 생성하고 있습니다.');
+    params.setWorkspaceFeedback(asset.type === 'image' ? '이미지를 저장하고 정리본을 만들고 있어요. 조금만 기다려주세요.' : '다음 페이지의 정리본을 만들고 있어요. 조금만 기다려주세요.');
 
     setTimeout(() => {
       params.setGeneratedPagesByDocument((current) => ({
@@ -233,7 +233,7 @@ export function useCaptureAssetActions(params: CaptureAssetActionsParams) {
           value.id === generatedPageId ? { ...value, status: 'ready' } : value,
         ),
       }));
-      params.setWorkspaceFeedback('다음 페이지 정리본이 준비됐습니다.');
+      params.setWorkspaceFeedback('정리본이 준비됐어요!');
     }, 1600);
   };
 
@@ -276,7 +276,7 @@ export function useCaptureAssetActions(params: CaptureAssetActionsParams) {
 
       return next;
     });
-    params.setWorkspaceFeedback('Photo 라이브러리에서 원본 사진을 삭제했습니다.');
+    params.setWorkspaceFeedback('Photo 라이브러리에서 이미지를 삭제했어요.');
   };
 
   return {
