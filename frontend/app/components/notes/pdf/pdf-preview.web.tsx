@@ -184,6 +184,24 @@ function SelectionOverlay(props: { rect: SelectionRect; styles: any; pageWidth: 
   );
 }
 
+function SelectionLassoOverlay(props: { points: InkPoint[]; pageWidth: number; pageHeight: number }) {
+  if (props.points.length < 2) return null;
+  return (
+    <Svg width="100%" height="100%" viewBox={`0 0 ${props.pageWidth} ${props.pageHeight}`} preserveAspectRatio="none" pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0 }}>
+      <Path
+        d={getLassoPath(props.points)}
+        fill="none"
+        stroke="#2563EB"
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        strokeDasharray="7 5"
+        opacity={0.9}
+      />
+    </Svg>
+  );
+}
+
 function formatZoomPercent(value: number) {
   return `${Math.round(value * 100)}%`;
 }
@@ -1154,6 +1172,8 @@ export function PdfPreview(props: {
     const draftSelectionStyle = draftSelectionPageKey === page.id
       ? scaleSelectionRectToPageSize(draftSelection, frame.width, frame.height)
       : null;
+    const draftLassoPoints = draftSelectionStyle?.mode === 'lasso' ? draftSelectionStyle.path ?? [] : [];
+    const draftRectStyle = draftSelectionStyle?.mode === 'lasso' ? null : draftSelectionStyle;
     const currentStrokeForRender = currentStroke && (page.generatedPageId ? currentStroke.generatedPageId === page.generatedPageId : currentStroke.pageNumber === page.pageNumber)
       ? scaleInkStrokeToViewportPageSize(currentStroke, frame.width, frame.height)
       : null;
@@ -1574,7 +1594,8 @@ export function PdfPreview(props: {
           onLostPointerCapture={clearPointerInteraction}
         >
           {!draftSelectionStyle && selectionRectStyle ? <SelectionOverlay rect={selectionRectStyle} styles={props.styles} pageWidth={frame.width} pageHeight={frame.height} /> : null}
-          {draftSelectionStyle ? <SelectionOverlay rect={draftSelectionStyle} styles={props.styles} pageWidth={frame.width} pageHeight={frame.height} draft /> : null}
+          {draftLassoPoints.length > 1 ? <SelectionLassoOverlay points={draftLassoPoints} pageWidth={frame.width} pageHeight={frame.height} /> : null}
+          {draftRectStyle ? <SelectionOverlay rect={draftRectStyle} styles={props.styles} pageWidth={frame.width} pageHeight={frame.height} draft /> : null}
         </div>
       </div>
     );

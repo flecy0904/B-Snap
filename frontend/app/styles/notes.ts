@@ -458,7 +458,7 @@ export const notesStyles = {
   inkActionButtonDisabled: { opacity: 0.45 },
   fixedInkToolbarWrap: { flexShrink: 0, maxWidth: '100%' as const, flexDirection: 'row' as const, alignItems: 'center' as const, justifyContent: 'flex-end' as const, marginLeft: 4, zIndex: 62, elevation: 62, overflow: 'visible' as const },
   fixedInkDismissLayer: { position: 'absolute' as const, top: -260, bottom: -2200, left: -2200, right: -2200, zIndex: 61, elevation: 61 },
-  fixedInkToolbar: { minHeight: 40, maxWidth: '100%' as const, borderRadius: 16, backgroundColor: 'transparent', borderWidth: 0, overflow: 'visible' as const },
+  fixedInkToolbar: { position: 'relative' as const, zIndex: 62, elevation: 62, minHeight: 40, maxWidth: '100%' as const, borderRadius: 16, backgroundColor: 'transparent', borderWidth: 0, overflow: 'visible' as const },
   fixedInkToolbarContent: { minHeight: 40, flexDirection: 'row' as const, alignItems: 'center' as const, gap: 3, paddingHorizontal: 0, paddingVertical: 0 },
   fixedInkToolAnchor: { position: 'relative' as const, zIndex: 63, elevation: 63 },
   fixedInkToolButton: { width: 32, height: 32, borderRadius: 11, alignItems: 'center' as const, justifyContent: 'center' as const, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E8EEF7' },
