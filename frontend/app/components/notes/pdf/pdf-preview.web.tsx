@@ -82,7 +82,7 @@ function AdaptiveReferenceImage(props: {
 type PageFrame = WebPdfPageFrame;
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
 const WEB_PDF_ZOOM_STEP = 0.15;
-const WEB_PDF_PAGE_GAP = 22;
+const WEB_PDF_PAGE_GAP = 10;
 
 function getCaptureAssetSummary(asset: CaptureAsset | null | undefined) {
   if (!asset) return '';
@@ -223,6 +223,30 @@ const floatingControlDividerStyle: React.CSSProperties = {
   width: 1,
   height: 17,
   backgroundColor: 'rgba(198, 204, 214, 0.9)',
+};
+
+const scrollbarTrackBaseStyle: React.CSSProperties = {
+  position: 'absolute',
+  zIndex: 75,
+  borderRadius: 999,
+  backgroundColor: 'transparent',
+  pointerEvents: 'auto',
+};
+
+const scrollbarThumbBaseStyle: React.CSSProperties = {
+  position: 'absolute',
+  borderRadius: 999,
+  backgroundColor: 'rgba(54, 63, 78, 0.48)',
+  boxShadow: '0 1px 2px rgba(15, 23, 42, 0.16)',
+};
+
+type ScrollbarDragState = {
+  axis: 'x' | 'y';
+  pointerId: number;
+  trackStart: number;
+  trackLength: number;
+  thumbLength: number;
+  pointerOffset: number;
 };
 
 function isPrimaryDomPointer(event: React.PointerEvent<HTMLElement>) {
@@ -789,6 +813,10 @@ export function PdfPreview(props: {
   const draftSelectionRef = useRef<SelectionRect | null>(null);
   const textTapRef = useRef<InkPoint | null>(null);
   const selectionPreviewRequestRef = useRef(0);
+  const scrollbarDragRef = useRef<ScrollbarDragState | null>(null);
+  const verticalScrollbarTrackRef = useRef<HTMLDivElement | null>(null);
+  const horizontalScrollbarTrackRef = useRef<HTMLDivElement | null>(null);
+  const [scrollbarTrackSizes, setScrollbarTrackSizes] = useState({ vertical: 0, horizontal: 0 });
   const pdfUri = useMemo(() => {
     if (typeof props.file === 'string') return props.file;
     if (typeof props.file === 'number') return Image.resolveAssetSource(props.file)?.uri ?? null;
@@ -883,6 +911,119 @@ export function PdfPreview(props: {
   const zoomBy = useCallback((delta: number) => {
     engine.zoomBy(delta);
   }, [engine]);
+
+  const verticalScrollRange = Math.max(0, snapshot.contentHeight - snapshot.viewportHeight);
+  const horizontalScrollRange = Math.max(0, snapshot.contentWidth - snapshot.viewportWidth);
+  const showHorizontalScrollbar = horizontalScrollRange > 1;
+  const getScrollbarMetrics = useCallback((axis: 'x' | 'y', trackLength: number) => {
+    const viewportLength = axis === 'y' ? snapshot.viewportHeight : snapshot.viewportWidth;
+    const contentLength = axis === 'y' ? snapshot.contentHeight : snapshot.contentWidth;
+    const pan = axis === 'y' ? snapshot.panY : snapshot.panX;
+    const range = Math.max(0, contentLength - viewportLength);
+    if (trackLength <= 0 || contentLength <= 0 || viewportLength <= 0 || range <= 0) {
+      return { range, thumbLength: trackLength, thumbStart: 0, thumbTravel: 0 };
+    }
+    const thumbLength = Math.min(trackLength, Math.max(36, (viewportLength / contentLength) * trackLength));
+    const thumbTravel = Math.max(0, trackLength - thumbLength);
+    const clampedPan = Math.min(Math.max(pan, 0), range);
+    const thumbStart = thumbTravel > 0 ? (clampedPan / range) * thumbTravel : 0;
+    return { range, thumbLength, thumbStart, thumbTravel };
+  }, [
+    snapshot.contentHeight,
+    snapshot.contentWidth,
+    snapshot.panX,
+    snapshot.panY,
+    snapshot.viewportHeight,
+    snapshot.viewportWidth,
+  ]);
+  const panFromScrollbarPointer = useCallback((axis: 'x' | 'y', clientPosition: number, drag: ScrollbarDragState) => {
+    const metrics = getScrollbarMetrics(axis, drag.trackLength);
+    if (metrics.range <= 0 || metrics.thumbTravel <= 0) return;
+    const thumbStart = Math.max(0, Math.min(metrics.thumbTravel, clientPosition - drag.trackStart - drag.pointerOffset));
+    const nextPan = (thumbStart / metrics.thumbTravel) * metrics.range;
+    if (axis === 'y') {
+      engine.panTo(snapshot.panX, nextPan);
+    } else {
+      engine.panTo(nextPan, snapshot.panY);
+    }
+  }, [engine, getScrollbarMetrics, snapshot.panX, snapshot.panY]);
+  const startScrollbarDrag = useCallback((event: React.PointerEvent<HTMLDivElement>, axis: 'x' | 'y') => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const track = event.currentTarget.parentElement;
+    if (!track) return;
+    const rect = track.getBoundingClientRect();
+    const trackStart = axis === 'y' ? rect.top : rect.left;
+    const trackLength = axis === 'y' ? rect.height : rect.width;
+    const metrics = getScrollbarMetrics(axis, trackLength);
+    const clientPosition = axis === 'y' ? event.clientY : event.clientX;
+    scrollbarDragRef.current = {
+      axis,
+      pointerId: event.pointerId,
+      trackStart,
+      trackLength,
+      thumbLength: metrics.thumbLength,
+      pointerOffset: clientPosition - trackStart - metrics.thumbStart,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }, [getScrollbarMetrics]);
+  const handleScrollbarTrackPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>, axis: 'x' | 'y') => {
+    if (event.button !== 0 || event.target !== event.currentTarget) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = event.currentTarget.getBoundingClientRect();
+    const trackStart = axis === 'y' ? rect.top : rect.left;
+    const trackLength = axis === 'y' ? rect.height : rect.width;
+    const metrics = getScrollbarMetrics(axis, trackLength);
+    if (metrics.range <= 0 || metrics.thumbTravel <= 0) return;
+    const clientPosition = axis === 'y' ? event.clientY : event.clientX;
+    const drag = {
+      axis,
+      pointerId: event.pointerId,
+      trackStart,
+      trackLength,
+      thumbLength: metrics.thumbLength,
+      pointerOffset: metrics.thumbLength / 2,
+    };
+    panFromScrollbarPointer(axis, clientPosition, drag);
+  }, [getScrollbarMetrics, panFromScrollbarPointer]);
+  const handleScrollbarPointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = scrollbarDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    panFromScrollbarPointer(drag.axis, drag.axis === 'y' ? event.clientY : event.clientX, drag);
+  }, [panFromScrollbarPointer]);
+  const finishScrollbarDrag = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = scrollbarDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    scrollbarDragRef.current = null;
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+  }, []);
+
+  useEffect(() => {
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const updateTrackSizes = () => {
+      const vertical = verticalScrollbarTrackRef.current?.getBoundingClientRect().height ?? 0;
+      const horizontal = horizontalScrollbarTrackRef.current?.getBoundingClientRect().width ?? 0;
+      setScrollbarTrackSizes((current) => (
+        Math.abs(current.vertical - vertical) < 0.5 && Math.abs(current.horizontal - horizontal) < 0.5
+          ? current
+          : { vertical, horizontal }
+      ));
+    };
+    const observer = new ResizeObserver(updateTrackSizes);
+    if (verticalScrollbarTrackRef.current) observer.observe(verticalScrollbarTrackRef.current);
+    if (horizontalScrollbarTrackRef.current) observer.observe(horizontalScrollbarTrackRef.current);
+    updateTrackSizes();
+    return () => observer.disconnect();
+  }, [showHorizontalScrollbar]);
+
+  const verticalScrollbarMetrics = getScrollbarMetrics('y', scrollbarTrackSizes.vertical || Math.max(0, snapshot.viewportHeight - (showHorizontalScrollbar ? 28 : 16)));
+  const horizontalScrollbarMetrics = getScrollbarMetrics('x', scrollbarTrackSizes.horizontal || Math.max(0, snapshot.viewportWidth - 32));
 
   const drawTextAnnotation = (context: CanvasRenderingContext2D, annotation: InkTextAnnotation) => {
     context.save();
@@ -1478,6 +1619,75 @@ export function PdfPreview(props: {
           <div style={{ position: 'absolute', top: 18, left: 0, right: 0, color: '#6B7280', textAlign: 'center', padding: '0 24px' }}>{snapshot.loadError}</div>
         ) : null}
       </div>
+      <div
+        ref={verticalScrollbarTrackRef}
+        aria-label="PDF vertical scrollbar"
+        role="scrollbar"
+        aria-orientation="vertical"
+        aria-valuemin={0}
+        aria-valuemax={Math.round(verticalScrollRange)}
+        aria-valuenow={Math.round(snapshot.panY)}
+        style={{
+          ...scrollbarTrackBaseStyle,
+          top: 8,
+          right: 5,
+          bottom: showHorizontalScrollbar ? 22 : 8,
+          width: 10,
+        }}
+        onPointerDown={(event) => handleScrollbarTrackPointerDown(event, 'y')}
+      >
+        <div
+          style={{
+            ...scrollbarThumbBaseStyle,
+            top: verticalScrollbarMetrics.thumbStart,
+            right: 1,
+            width: 8,
+            height: verticalScrollbarMetrics.thumbLength,
+            opacity: verticalScrollRange > 0 ? 1 : 0.52,
+            cursor: 'default',
+          }}
+          onPointerDown={(event) => startScrollbarDrag(event, 'y')}
+          onPointerMove={handleScrollbarPointerMove}
+          onPointerUp={finishScrollbarDrag}
+          onPointerCancel={finishScrollbarDrag}
+          onLostPointerCapture={finishScrollbarDrag}
+        />
+      </div>
+      {showHorizontalScrollbar ? (
+        <div
+          ref={horizontalScrollbarTrackRef}
+          aria-label="PDF horizontal scrollbar"
+          role="scrollbar"
+          aria-orientation="horizontal"
+          aria-valuemin={0}
+          aria-valuemax={Math.round(horizontalScrollRange)}
+          aria-valuenow={Math.round(snapshot.panX)}
+          style={{
+            ...scrollbarTrackBaseStyle,
+            left: 8,
+            right: 24,
+            bottom: 6,
+            height: 10,
+          }}
+          onPointerDown={(event) => handleScrollbarTrackPointerDown(event, 'x')}
+        >
+          <div
+            style={{
+              ...scrollbarThumbBaseStyle,
+              left: horizontalScrollbarMetrics.thumbStart,
+              top: 1,
+              width: horizontalScrollbarMetrics.thumbLength,
+              height: 8,
+              cursor: 'default',
+            }}
+            onPointerDown={(event) => startScrollbarDrag(event, 'x')}
+            onPointerMove={handleScrollbarPointerMove}
+            onPointerUp={finishScrollbarDrag}
+            onPointerCancel={finishScrollbarDrag}
+            onLostPointerCapture={finishScrollbarDrag}
+          />
+        </div>
+      ) : null}
       <div
         aria-label="Current PDF page"
         style={{

@@ -381,7 +381,8 @@ export const notesStyles = {
   desktopDocumentDetailBodyFocus: { paddingHorizontal: 0, paddingBottom: 0, backgroundColor: '#F3F6FB' },
   desktopDocumentWorkspacePane: { flex: 1, width: '100%', minWidth: 0, alignItems: 'center' as const },
   desktopDocumentSidebarContentRow: { flex: 1, width: '100%', minHeight: 0, flexDirection: 'row' as const, alignItems: 'stretch' as const, gap: 0 },
-  desktopDocumentSidebarContentRowGapped: { gap: 10, paddingRight: 10 },
+  desktopDocumentSidebarContentRowGapped: { gap: 0, paddingRight: 0 },
+  desktopDocumentSidebarContentRowWebPanels: { gap: 0, paddingRight: 0 },
   desktopDocumentSidebarContentRowFocus: { gap: 0 },
   desktopDocumentViewerPane: { flex: 1, minWidth: 0, alignItems: 'stretch' as const, position: 'relative' as const },
   desktopDocumentViewerPaneFocus: { alignItems: 'stretch' as const },
@@ -410,6 +411,7 @@ export const notesStyles = {
 
   inkToolbarWrap: { position: 'relative' as const, width: '100%', minHeight: 50, zIndex: 30, elevation: 30, alignItems: 'stretch' as const },
   inkToolbar: { width: '100%' as const, minHeight: 50, alignSelf: 'stretch' as const, flexDirection: 'row' as const, alignItems: 'center' as const, justifyContent: 'flex-start' as const, gap: 7, backgroundColor: '#FFFFFF', borderBottomWidth: 1, borderBottomColor: '#DDE5F0', paddingLeft: 10, paddingRight: 10, paddingVertical: 5, overflow: 'visible' as const },
+  inkToolbarWebAttached: { borderBottomWidth: 0 },
   documentPageNavigator: { flexShrink: 0, flexDirection: 'row' as const, alignItems: 'center' as const, gap: 4, marginRight: 0 },
   documentPageNavButton: { width: 34, height: 34, borderRadius: 10, backgroundColor: '#F7F9FE', borderWidth: 1, borderColor: '#E4EAF8', alignItems: 'center' as const, justifyContent: 'center' as const },
   documentPageLabel: { fontSize: 12, fontWeight: '800' as const, color: '#556070' },

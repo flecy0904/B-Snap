@@ -99,7 +99,8 @@ const WEB_PDF_PAGE_NOTIFY_MS = 80;
 const WEB_PDF_WHEEL_ZOOM_SENSITIVITY = 0.0016;
 const WEB_PDF_ZOOM_GESTURE_IDLE_MS = 180;
 const WEB_PDF_HORIZONTAL_PADDING = 40;
-const WEB_PDF_VERTICAL_PADDING = 18;
+const WEB_PDF_TOP_PADDING = 0;
+const WEB_PDF_BOTTOM_PADDING = 18;
 const WEB_PDF_FALLBACK_WIDTH = 820;
 const WEB_PDF_FALLBACK_HEIGHT = 1060;
 const WEB_PDF_WORKER_SRC = '/pdf.worker.min.js';
@@ -474,11 +475,31 @@ export class WebPdfViewportEngine {
     this.scheduleSnapshot();
   }
 
+  panTo(x: number, y: number) {
+    if (!this.snapshot.pageCount) return;
+    const previousPanY = this.snapshot.panY;
+    const nextPanX = this.clampPanX(x);
+    const nextPanY = this.clampPanY(y);
+    if (Math.abs(nextPanX - this.snapshot.panX) < 0.1 && Math.abs(nextPanY - this.snapshot.panY) < 0.1) return;
+    const deltaY = nextPanY - previousPanY;
+    if (Math.abs(deltaY) > 0.5) this.panDirection = deltaY > 0 ? 1 : -1;
+    this.snapshot = {
+      ...this.snapshot,
+      panX: nextPanX,
+      panY: nextPanY,
+    };
+    this.updateVisibility();
+    this.updateCurrentPageFromPan();
+    this.scheduleVisibleRenders(0);
+    this.scheduleHiResOverlayRender(WEB_PDF_HI_RES_RENDER_IDLE_MS);
+    this.scheduleSnapshot();
+  }
+
   panToPage(pageNumber: number, notifyPageChanged = true) {
     const frame = this.snapshot.pages[pageNumber];
     if (!frame) return false;
     const panX = this.clampPanX(frame.x + frame.width / 2 - this.snapshot.viewportWidth / 2);
-    const panY = this.clampPanY(frame.y - WEB_PDF_VERTICAL_PADDING);
+    const panY = this.clampPanY(frame.y - WEB_PDF_TOP_PADDING);
     this.snapshot = {
       ...this.snapshot,
       currentPage: pageNumber,
@@ -739,13 +760,15 @@ export class WebPdfViewportEngine {
       };
     });
     const maxPageWidth = measuredPages.reduce((max, page) => Math.max(max, page.width), 0);
-    const contentWidth = Math.max(this.snapshot.viewportWidth, maxPageWidth + WEB_PDF_HORIZONTAL_PADDING * 2, WEB_PDF_FALLBACK_WIDTH);
-    let nextY = WEB_PDF_VERTICAL_PADDING;
+    const viewportContentWidth = this.snapshot.viewportWidth > 0 ? this.snapshot.viewportWidth : WEB_PDF_FALLBACK_WIDTH;
+    const contentWidth = Math.max(viewportContentWidth, maxPageWidth);
+    const scaledPageGap = Math.round(this.pageGap * scale);
+    let nextY = WEB_PDF_TOP_PADDING;
     const pages: Record<number, WebPdfPageFrame> = {};
     this.targetFrames.clear();
     this.layoutFrames = [];
     measuredPages.forEach((page) => {
-      const x = Math.max(WEB_PDF_HORIZONTAL_PADDING, Math.round((contentWidth - page.width) / 2));
+      const x = Math.max(0, Math.round((contentWidth - page.width) / 2));
       const frame: WebPdfPageFrame = {
         pageNumber: page.sourcePageNumber,
         naturalWidth: page.naturalWidth,
@@ -762,9 +785,9 @@ export class WebPdfViewportEngine {
       if (page.target.pageNumber) {
         pages[page.target.pageNumber] = { ...frame, pageNumber: page.target.pageNumber };
       }
-      nextY += page.height + this.pageGap;
+      nextY += page.height + scaledPageGap;
     });
-    const contentHeight = Math.max(this.snapshot.viewportHeight, nextY + WEB_PDF_VERTICAL_PADDING - this.pageGap);
+    const contentHeight = Math.max(this.snapshot.viewportHeight, nextY + WEB_PDF_BOTTOM_PADDING - scaledPageGap);
     let panX = this.snapshot.panX;
     let panY = this.snapshot.panY;
     if (anchor) {
@@ -1239,14 +1262,15 @@ export class WebPdfViewportEngine {
   private getFallbackFrame(): WebPdfPageFrame {
     const firstPage = this.snapshot.pages[1];
     if (firstPage) return firstPage;
-    const width = Math.max(320, Math.min(900, (this.snapshot.viewportWidth || WEB_PDF_FALLBACK_WIDTH) - WEB_PDF_HORIZONTAL_PADDING * 2));
+    const viewportWidth = this.snapshot.viewportWidth || WEB_PDF_FALLBACK_WIDTH;
+    const width = Math.max(320, Math.min(900, viewportWidth - WEB_PDF_HORIZONTAL_PADDING * 2));
     const height = Math.round(width * (WEB_PDF_FALLBACK_HEIGHT / WEB_PDF_FALLBACK_WIDTH));
     return {
       pageNumber: 1,
       naturalWidth: WEB_PDF_FALLBACK_WIDTH,
       naturalHeight: WEB_PDF_FALLBACK_HEIGHT,
-      x: WEB_PDF_HORIZONTAL_PADDING,
-      y: WEB_PDF_VERTICAL_PADDING,
+      x: Math.max(0, Math.round((viewportWidth - width) / 2)),
+      y: WEB_PDF_TOP_PADDING,
       width,
       height,
       scale: width / WEB_PDF_FALLBACK_WIDTH,
