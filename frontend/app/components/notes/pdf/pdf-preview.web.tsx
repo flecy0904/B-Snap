@@ -797,6 +797,7 @@ export function PdfPreview(props: {
   onRemoveTextAnnotation: (id: string) => void;
   onMoveTextAnnotation: (id: string, x: number, y: number) => void;
   onResizeTextAnnotation: (id: string, width: number, height: number) => void;
+  onChangeTextAnnotationFontSize: (id: string, fontSize: number) => void;
   onEraseInkAtPoint?: (point: InkPoint, radius: number, snapshot?: boolean) => boolean;
   onSelectionChange: (rect: SelectionRect | null) => void;
   onMoveSelection?: (dx: number, dy: number) => void;
