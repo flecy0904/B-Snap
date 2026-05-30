@@ -32,7 +32,6 @@ import { useDocumentPageActions } from './document/use-document-page-actions';
 import { normalizeDocumentFile } from './document/document-file-utils';
 import { useBackendNotePageSync } from './document/use-backend-note-page-sync';
 import { useInkActions, type WorkspaceEditSnapshot } from './ink/use-ink-actions';
-import { isInkStrokeOnPage } from './ink/ink-helpers';
 import { useCaptureAssetActions } from './capture/use-capture-asset-actions';
 import { usePageCaptureReferenceActions } from './capture/use-page-capture-references';
 import { useIncomingAssetSubscription } from './workspace/use-incoming-asset-subscription';
@@ -93,6 +92,7 @@ export function useStudyWorkspace(props: {
   const [focusedWorkspaceTarget, setFocusedWorkspaceTarget] = useState<WorkspaceFocusTarget | null>(null);
   const [workspaceActionHistory, setWorkspaceActionHistory] = useState<WorkspaceFocusTarget[]>([]);
   const [workspaceRedoActionHistory, setWorkspaceRedoActionHistory] = useState<WorkspaceFocusTarget[]>([]);
+  const previousStudyDocumentIdRef = useRef<number | null>(null);
   const [selectionByDocument, setSelectionByDocument] = useState<Record<number, SelectionRect | null>>({});
   const [copiedSelectionImageByDocument, setCopiedSelectionImageByDocument] = useState<Record<number, string | null>>({});
   const [aiQuestion, setAiQuestion] = useState('');
@@ -262,6 +262,16 @@ export function useStudyWorkspace(props: {
     state: persistedWorkspaceState,
     onHydrate: hydrateWorkspaceState,
   });
+  useEffect(() => {
+    if (previousStudyDocumentIdRef.current === studyDocumentId) return;
+    previousStudyDocumentIdRef.current = studyDocumentId;
+    setInkHistoryByDocument({});
+    setRedoInkHistoryByDocument({});
+    setRedoInkByDocument({});
+    setWorkspaceActionHistory([]);
+    setWorkspaceRedoActionHistory([]);
+    setFocusedWorkspaceTarget(null);
+  }, [studyDocumentId]);
   const studyDocumentBackendNoteId = getStudyDocumentBackendNoteId(studyDocument);
   const {
     backendPageIdsByDocument,
@@ -1173,26 +1183,8 @@ export function useStudyWorkspace(props: {
 
   const documentInkHistory = studyDocumentId ? inkHistoryByDocument[studyDocumentId] ?? [] : [];
   const documentRedoHistory = studyDocumentId ? redoInkHistoryByDocument[studyDocumentId] ?? [] : [];
-  const documentPageStrokes = useMemo(() => {
-    if (!studyDocumentId) return [];
-    return (inkByDocument[studyDocumentId] ?? []).filter((stroke) => isInkStrokeOnPage({
-      stroke,
-      currentDocumentPage,
-      currentPdfPage,
-      studyDocumentType: studyDocument?.type,
-    }));
-  }, [currentDocumentPage, currentPdfPage, inkByDocument, studyDocument?.type, studyDocumentId]);
-  const documentRedoPageStrokes = useMemo(() => {
-    if (!studyDocumentId) return [];
-    return (redoInkByDocument[studyDocumentId] ?? []).filter((stroke) => isInkStrokeOnPage({
-      stroke,
-      currentDocumentPage,
-      currentPdfPage,
-      studyDocumentType: studyDocument?.type,
-    }));
-  }, [currentDocumentPage, currentPdfPage, redoInkByDocument, studyDocument?.type, studyDocumentId]);
-  const canUndoDocumentAction = documentInkHistory.length > 0 || documentPageStrokes.length > 0;
-  const canRedoDocumentAction = documentRedoHistory.length > 0 || documentRedoPageStrokes.length > 0;
+  const canUndoDocumentAction = documentInkHistory.length > 0;
+  const canRedoDocumentAction = documentRedoHistory.length > 0;
   const canUndoWorkspaceTarget = (target: WorkspaceFocusTarget) => (target === 'document' ? canUndoDocumentAction : aiCanvas.canUndo);
   const canRedoWorkspaceTarget = (target: WorkspaceFocusTarget) => (target === 'document' ? canRedoDocumentAction : aiCanvas.canRedo);
   const lastUndoWorkspaceTarget = [...workspaceActionHistory].reverse().find(canUndoWorkspaceTarget)
