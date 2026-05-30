@@ -463,6 +463,8 @@ export const notesStyles = {
   fixedInkToolAnchor: { position: 'relative' as const, zIndex: 63, elevation: 63 },
   fixedInkToolButton: { width: 32, height: 32, borderRadius: 11, alignItems: 'center' as const, justifyContent: 'center' as const, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E8EEF7' },
   fixedInkToolButtonActive: { backgroundColor: '#EAF0FF', borderColor: '#BFD0FF' },
+  fixedInkToolTooltip: { position: 'absolute' as const, top: 38, left: -24, minWidth: 80, height: 24, borderRadius: 5, paddingHorizontal: 8, alignItems: 'center' as const, justifyContent: 'center' as const, backgroundColor: '#334155', zIndex: 130, elevation: 130 },
+  fixedInkToolTooltipText: { fontFamily: 'Malgun Gothic, 맑은 고딕, sans-serif', fontSize: 11, lineHeight: 14, fontWeight: '800' as const, color: '#FFFFFF' },
   fixedInkToolColorBadge: { position: 'absolute' as const, right: 5, bottom: 5, width: 9, height: 9, borderRadius: 99, borderWidth: 1, borderColor: '#FFFFFF' },
   fixedInkToolbarDivider: { width: 1, height: 28, backgroundColor: '#E1E7F0', marginHorizontal: 1 },
   fixedInkWidthStrip: { height: 40, flexDirection: 'row' as const, alignItems: 'center' as const, gap: 4, paddingHorizontal: 2 },
