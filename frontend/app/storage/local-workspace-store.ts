@@ -80,7 +80,7 @@ export function buildEmptyStudyWorkspaceState(): PersistedStudyWorkspaceState {
     activePageByDocument: {},
     bookmarksByDocument: {},
     lastChatSessionByDocument: {},
-    aiPanelMode: 'floating',
+    aiPanelMode: 'sidebar',
   };
 }
 
