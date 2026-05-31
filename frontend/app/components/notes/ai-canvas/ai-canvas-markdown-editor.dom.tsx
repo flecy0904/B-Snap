@@ -36,6 +36,10 @@ type AiCanvasMarkdownEditorProps = {
   pendingOperations?: CanvasOperationRequest | null;
   onChangeDocument: (change: AiCanvasEditorChange) => Promise<void>;
   onFocusEditor: () => Promise<void>;
+  canUndoShortcut?: boolean;
+  canRedoShortcut?: boolean;
+  onUndoShortcut?: () => void;
+  onRedoShortcut?: () => void;
   onApplyOperationsResult?: (requestId: number, applied: boolean) => Promise<void>;
   dom?: import('expo/dom').DOMProps;
 };
@@ -284,6 +288,15 @@ function isEmptyAiCanvasDocument(documentJson: AiCanvasDocumentJson) {
   return stringifyAiCanvasDocument(documentJson) === stringifyAiCanvasDocument(EMPTY_AI_CANVAS_DOCUMENT);
 }
 
+function getEditorHistoryShortcut(event: KeyboardEvent): 'undo' | 'redo' | null {
+  if (!event.ctrlKey && !event.metaKey) return null;
+  if (event.altKey) return null;
+  const key = event.key.toLowerCase();
+  if (key === 'y' && !event.shiftKey) return 'redo';
+  if (key !== 'z') return null;
+  return event.shiftKey ? 'redo' : 'undo';
+}
+
 export default function AiCanvasMarkdownEditor({
   documentJson,
   fallbackMarkdown,
@@ -292,6 +305,10 @@ export default function AiCanvasMarkdownEditor({
   pendingOperations,
   onChangeDocument,
   onFocusEditor,
+  canUndoShortcut,
+  canRedoShortcut,
+  onUndoShortcut,
+  onRedoShortcut,
   onApplyOperationsResult,
 }: AiCanvasMarkdownEditorProps) {
   const applyingExternalUpdateRef = React.useRef(false);
@@ -300,6 +317,12 @@ export default function AiCanvasMarkdownEditor({
   const appliedOperationRequestIdRef = React.useRef<number | null>(null);
   const onChangeDocumentRef = React.useRef(onChangeDocument);
   const onApplyOperationsResultRef = React.useRef(onApplyOperationsResult);
+  const shortcutRef = React.useRef({
+    canUndoShortcut,
+    canRedoShortcut,
+    onUndoShortcut,
+    onRedoShortcut,
+  });
   const editorExtensions = React.useMemo(() => createEditorExtensions(), []);
   const [editorEmpty, setEditorEmpty] = React.useState(isMeaningfullyEmptyMarkdown(fallbackMarkdown ?? ''));
 
@@ -310,6 +333,15 @@ export default function AiCanvasMarkdownEditor({
   React.useEffect(() => {
     onApplyOperationsResultRef.current = onApplyOperationsResult;
   }, [onApplyOperationsResult]);
+
+  React.useEffect(() => {
+    shortcutRef.current = {
+      canUndoShortcut,
+      canRedoShortcut,
+      onUndoShortcut,
+      onRedoShortcut,
+    };
+  }, [canRedoShortcut, canUndoShortcut, onRedoShortcut, onUndoShortcut]);
 
   const initialDocument = React.useMemo(() => normalizeAiCanvasDocumentJson(documentJson ?? EMPTY_AI_CANVAS_DOCUMENT), []);
   const initialUsesMarkdown = isEmptyAiCanvasDocument(initialDocument) && !isMeaningfullyEmptyMarkdown(fallbackMarkdown);
@@ -327,6 +359,18 @@ export default function AiCanvasMarkdownEditor({
         focus: () => {
           void onFocusEditor();
           return false;
+        },
+        keydown: (_view, event) => {
+          const shortcut = getEditorHistoryShortcut(event);
+          if (!shortcut) return false;
+          const shortcutState = shortcutRef.current;
+          const canRun = shortcut === 'undo' ? shortcutState.canUndoShortcut : shortcutState.canRedoShortcut;
+          const runShortcut = shortcut === 'undo' ? shortcutState.onUndoShortcut : shortcutState.onRedoShortcut;
+          if (!canRun || !runShortcut) return false;
+          event.preventDefault();
+          event.stopPropagation();
+          runShortcut();
+          return true;
         },
       },
     },

@@ -565,6 +565,16 @@ export function NotesAiCanvasPanel() {
                 onFocusEditor={async () => {
                   workspace.onFocusWorkspaceTarget('aiCanvas');
                 }}
+                canUndoShortcut={canvas.canUndo}
+                canRedoShortcut={canvas.canRedo}
+                onUndoShortcut={() => {
+                  workspace.onFocusWorkspaceTarget('aiCanvas');
+                  canvas.undoCanvasEdit();
+                }}
+                onRedoShortcut={() => {
+                  workspace.onFocusWorkspaceTarget('aiCanvas');
+                  canvas.redoCanvasEdit();
+                }}
                 onApplyOperationsResult={async (requestId, applied) => {
                   canvas.completeCanvasOperations(requestId, applied);
                 }}
