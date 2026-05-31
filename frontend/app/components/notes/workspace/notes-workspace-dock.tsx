@@ -247,7 +247,7 @@ export function NotesWorkspaceDock() {
               </Pressable>
               <Pressable style={globalContext.styles.workspaceDockRowMeta} onPress={() => globalContext.onPreviewPageReference(reference.id)}>
                 <Text style={globalContext.styles.workspaceDockRowTitle} numberOfLines={1}>{reference.pageLabel} · {reference.title}</Text>
-                <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>{reference.type === 'image' ? '원본 사진은 Photo에 보관 · 오른쪽 자료 카드에서 확인' : 'PDF 자료 연결 위치'}</Text>
+                <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>{reference.type === 'image' ? '사진은 Photo에 보관 · 오른쪽 자료 카드에서 확인' : 'PDF 자료 연결 위치'}</Text>
               </Pressable>
               <View style={globalContext.styles.workspaceDockRowButtons}>
                 <Pressable style={globalContext.styles.workspaceDockInlineAction} onPress={() => globalContext.onOpenPageCaptureReference(reference.id)}>
@@ -267,7 +267,7 @@ export function NotesWorkspaceDock() {
               </View>
             </View>
           )) : (
-            <Text style={globalContext.styles.workspaceDockRowBody}>사진을 찍으면 현재 페이지에 연결 위치가 기록되고, 오른쪽 자료 카드에 원본 사진과 AI 설명이 뜹니다.</Text>
+            <Text style={globalContext.styles.workspaceDockRowBody}>사진을 찍으면 현재 페이지에 연결 위치가 기록되고, 오른쪽 자료 카드에 사진과 AI 설명이 뜹니다.</Text>
           )}
         </View>
         {otherPageReferences.length ? (

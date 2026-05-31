@@ -19,6 +19,7 @@ import { buildAiChatTitle } from './ai-chat-title';
 import { getAiBackendErrorMessage } from './ai-errors';
 
 type SetState<T> = Dispatch<SetStateAction<T>>;
+type AiQuestionSource = 'general' | 'selection' | 'photo' | 'class-insight' | 'chat' | 'canvas-mini';
 type CanvasAction = 'auto' | 'chat_only' | 'canvas_edit' | 'canvas_create';
 
 function getCanvasAction(question: string, source: 'chat' | 'canvas-mini' = 'chat'): CanvasAction {
@@ -102,6 +103,7 @@ export function useAiChatActions(params: {
   currentDocumentHasBackendPages: boolean;
   selectionRect: SelectionRect | null;
   selectionPreviewUri: string | null;
+  selectionAttachmentEnabled: boolean;
   currentPageNumber: number | null;
   activeAiChatSessionId: number | null;
   aiChatReadOnly: boolean;
@@ -150,7 +152,7 @@ export function useAiChatActions(params: {
       });
       return `data:image/png;base64,${base64}`;
     } catch {
-      params.setAiError('선택 이미지를 첨부하지 못했습니다. 텍스트 질문만으로 답변을 요청합니다.');
+      params.setAiError('선택하신 이미지를 첨부하지 못했어요.');
       return null;
     }
   };
@@ -209,7 +211,7 @@ export function useAiChatActions(params: {
         createdAt: lastAssistant.created_at,
       } : null);
     } catch (error) {
-      params.setAiError(getAiBackendErrorMessage(error, 'AI 채팅 내역을 불러오지 못했습니다.'));
+      params.setAiError(getAiBackendErrorMessage(error, '서버에서 AI와의 대화 내역을 불러오지 못했어요. 네트워크 연결 상태를 확인 후 다시 시도해 주세요.'));
     } finally {
       params.setAiLoading(false);
     }
@@ -218,11 +220,11 @@ export function useAiChatActions(params: {
   const renameAiChatSession = async (sessionId: number, title: string) => {
     const nextTitle = title.trim();
     if (!nextTitle) {
-      params.setAiError('채팅방 이름을 입력해주세요.');
+      params.setAiError('채팅방의 이름을 입력해주세요.');
       return false;
     }
     if (!isBackendApiEnabled()) {
-      params.setAiError('backend 연결을 확인해주세요.');
+      params.setAiError('서버 연결을 확인해주세요.');
       return false;
     }
 
@@ -240,7 +242,7 @@ export function useAiChatActions(params: {
       });
       return true;
     } catch {
-      params.setAiError('채팅방 이름을 변경하지 못했습니다.');
+      params.setAiError('채팅방의 이름을 변경하는 중에문제가 생겼어요.');
       return false;
     } finally {
       params.setAiLoading(false);
@@ -249,7 +251,7 @@ export function useAiChatActions(params: {
 
   const removeAiChatSession = async (sessionId: number) => {
     if (!isBackendApiEnabled()) {
-      params.setAiError('backend 연결을 확인해주세요.');
+      params.setAiError('서버 연결을 확인해주세요.');
       return;
     }
 
@@ -306,7 +308,7 @@ export function useAiChatActions(params: {
         }
       }
     } catch {
-      params.setAiError('채팅방을 삭제하지 못했습니다.');
+      params.setAiError('채팅을 삭제하는 중에 문제가 생겼어요.');
     } finally {
       params.setAiLoading(false);
     }
@@ -316,28 +318,28 @@ export function useAiChatActions(params: {
     if (!params.studyDocumentId) {
       params.setAiAnswer(null);
       params.setAiQuestion('');
-      params.setAiError('AI 채팅을 시작할 노트를 먼저 선택해 주세요.');
+      params.setAiError('AI와 대화를 시작할 노트를 먼저 선택해 주세요.');
       return;
     }
 
     if (!isBackendApiEnabled()) {
       params.setAiAnswer(null);
       params.setAiQuestion('');
-      params.setAiError('백엔드 서버에 연결할 수 없습니다. 백엔드가 실행 중인지 확인해 주세요.');
+      params.setAiError('서버에 연결할 수 없어요. 서버 연결 상태를 확인해주세요.');
       return;
     }
 
     if (!params.currentDocumentHasBackendPages) {
       params.setAiAnswer(null);
       params.setAiQuestion('');
-      params.setAiError('AI 채팅은 백엔드에 저장된 노트에서 사용할 수 있습니다. 새 빈 노트나 PDF 업로드로 만든 노트에서 다시 시도해 주세요.');
+      params.setAiError('서버에 노트가 없어요. AI와 대화를 시작하려면 서버에 노트를 먼저 업로드 해주세요.');
       return;
     }
     const backendNoteId = getCurrentBackendNoteId();
     if (!backendNoteId) {
       params.setAiAnswer(null);
       params.setAiQuestion('');
-      params.setAiError('AI 채팅은 백엔드 동기화가 끝난 노트에서 사용할 수 있습니다.');
+      params.setAiError('서버와 동기화 중이에요. 잠시 후 다시 시도해 주세요.');
       return;
     }
 
@@ -386,23 +388,26 @@ export function useAiChatActions(params: {
   }) => {
     if (!params.studyDocumentId) return false;
     if (params.aiChatReadOnly) {
-      params.setAiError('보고 있는 노트와 연결된 대화방이 아니라서 읽기만 가능합니다.');
+      params.setAiError('현재 대화는 다른 노트의 대화라서 읽기만 가능해요.');
       return false;
     }
 
     const explicitSelectionImageUri = Object.prototype.hasOwnProperty.call(override ?? {}, 'selectionImageUri')
       ? override?.selectionImageUri ?? null
       : undefined;
+    const attachedSelectionPreviewUri = params.selectionAttachmentEnabled ? params.selectionPreviewUri : null;
     const selectionPreviewUri = explicitSelectionImageUri !== undefined
       ? explicitSelectionImageUri
       : override?.source === 'canvas-mini'
         ? null
-        : params.selectionPreviewUri;
+        : attachedSelectionPreviewUri;
     const selectionRect = override?.source === 'canvas-mini' && !selectionPreviewUri
       ? null
-      : params.selectionRect;
+      : params.selectionAttachmentEnabled
+        ? params.selectionRect
+        : null;
     const hasSelection = Boolean(selectionRect || selectionPreviewUri);
-    const shouldHideSelectionAttachment = Boolean(selectionRect || params.selectionPreviewUri);
+    const shouldHideSelectionAttachment = Boolean(selectionRect || attachedSelectionPreviewUri);
     const rawQuestion = override?.question?.trim() ?? params.aiQuestion.trim();
     if (override?.source === 'canvas-mini' && !rawQuestion) return false;
 
@@ -431,19 +436,19 @@ export function useAiChatActions(params: {
     try {
       if (!isBackendApiEnabled()) {
         params.setAiAnswer(null);
-        params.setAiError('백엔드 서버에 연결할 수 없습니다. 백엔드가 실행 중인지 확인해 주세요.');
+        params.setAiError('서버에 연결할 수 없어요. 서버 연결 상태를 확인해주세요.');
         return false;
       }
 
       if (!params.currentDocumentHasBackendPages) {
         params.setAiAnswer(null);
-        params.setAiError('AI 채팅은 백엔드에 저장된 노트에서 사용할 수 있습니다. 새 빈 노트나 PDF 업로드로 만든 노트에서 다시 시도해 주세요.');
+        params.setAiError('서버에 노트가 없어요. AI와 대화를 시작하려면 서버에 노트를 먼저 업로드 해주세요.');
         return false;
       }
       const backendNoteId = getCurrentBackendNoteId();
       if (!backendNoteId) {
         params.setAiAnswer(null);
-        params.setAiError('AI 채팅은 백엔드 동기화가 끝난 노트에서 사용할 수 있습니다.');
+        params.setAiError('서버와 동기화 중이에요. 잠시 후 다시 시도해 주세요.');
         return false;
       }
 
@@ -504,7 +509,7 @@ export function useAiChatActions(params: {
       });
       const userMessageWithAttachment = {
         ...response.user_message,
-        selection_image_url: shouldHideSelectionAttachment ? null : selectionPreviewUri,
+        selection_image_url: selectionPreviewUri,
       };
       params.setLastChatSessionByDocument((current) => ({
         ...current,
@@ -553,7 +558,7 @@ export function useAiChatActions(params: {
           operations: response.canvas_edit.operations,
         });
       } else if (canvasAction === 'canvas_edit' || canvasAction === 'canvas_create') {
-        params.setAiError('Canvas 수정 응답을 받지 못했습니다. 백엔드 서버를 다시 실행해 주세요.');
+        params.setAiError('Canvas 수정 중 서버와 연결 상태가 좋지 않아 문제가 발생했어요. 잠시 후 다시 시도해 주세요.');
       }
       return true;
     } catch (error) {
@@ -582,10 +587,12 @@ export function useAiChatActions(params: {
   const requestAiAnswerForQuestion = async (question: string, options?: {
     selectionImageUri?: string | null;
     pageNumber?: number | null;
+    source?: AiQuestionSource;
   }) => requestAiAnswerInternal({
     question,
     selectionImageUri: options?.selectionImageUri ?? null,
     pageNumber: options?.pageNumber ?? params.currentPageNumber,
+    source: options?.source === 'canvas-mini' ? 'canvas-mini' : 'chat',
   });
 
   return {

@@ -108,6 +108,8 @@ export function useDesktopNotesWorkspaceViewModel(params: DesktopNotesWorkspaceV
   const activeGeneratedCropPreviewUri = derivePreprocessedCropUrl(activeGeneratedAttachment?.processedUrl);
   const activeGeneratedPreviewImage =
     (activeGeneratedCropPreviewUri ? { uri: activeGeneratedCropPreviewUri } : null) ??
+    (params.activeGeneratedPage?.thumbnailUrl ? { uri: params.activeGeneratedPage.thumbnailUrl } : null) ??
+    (params.activeGeneratedPage?.processedUrl ? { uri: params.activeGeneratedPage.processedUrl } : null) ??
     (activeGeneratedAttachment?.thumbnailUrl ? { uri: activeGeneratedAttachment.thumbnailUrl } : null) ??
     (activeGeneratedAttachment?.processedUrl ? { uri: activeGeneratedAttachment.processedUrl } : null) ??
     (activeGeneratedAttachment?.type === 'image' && activeGeneratedAttachment.fileUrl ? { uri: activeGeneratedAttachment.fileUrl } : null) ??

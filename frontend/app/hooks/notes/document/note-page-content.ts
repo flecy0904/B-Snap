@@ -1,21 +1,24 @@
-import type { InkStroke, InkTextAnnotation } from '../../../ui-types';
+import type { InkImageAnnotation, InkStroke, InkTextAnnotation } from '../../../ui-types';
 
 export type StoredNotePageContent = {
   kind: 'bsnap-page-state';
   version: 1;
   inkStrokes: InkStroke[];
   textAnnotations: InkTextAnnotation[];
+  imageAnnotations: InkImageAnnotation[];
 };
 
 export function serializeNotePageContent(params: {
   inkStrokes: InkStroke[];
   textAnnotations: InkTextAnnotation[];
+  imageAnnotations?: InkImageAnnotation[];
 }) {
   return JSON.stringify({
     kind: 'bsnap-page-state',
     version: 1,
     inkStrokes: params.inkStrokes,
     textAnnotations: params.textAnnotations,
+    imageAnnotations: params.imageAnnotations ?? [],
   } satisfies StoredNotePageContent);
 }
 
@@ -30,6 +33,7 @@ export function parseNotePageContent(content: string | null): StoredNotePageCont
       version: 1,
       inkStrokes: Array.isArray(parsed.inkStrokes) ? parsed.inkStrokes : [],
       textAnnotations: Array.isArray(parsed.textAnnotations) ? parsed.textAnnotations : [],
+      imageAnnotations: Array.isArray(parsed.imageAnnotations) ? parsed.imageAnnotations : [],
     };
   } catch {
     return null;

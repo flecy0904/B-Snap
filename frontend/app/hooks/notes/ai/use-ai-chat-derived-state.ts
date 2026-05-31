@@ -8,6 +8,7 @@ export function useAiChatDerivedState(params: {
   viewingAiChatSessionId: number | null;
   aiMessagesBySession: Record<number, BackendChatMessage[]>;
   selectionPreviewByDocument: Record<number, string | null>;
+  selectionPreviewAttachedByDocument: Record<number, boolean>;
   chatSessionsByDocument: Record<number, BackendChatSession[]>;
   allChatSessions: BackendChatSession[];
   aiChatScope: 'note' | 'all';
@@ -28,8 +29,11 @@ export function useAiChatDerivedState(params: {
     && params.currentBackendNoteId
     && activeAiChatSession.note_id !== params.currentBackendNoteId,
   );
-  const selectionPreviewUri = params.studyDocumentId
+  const rawSelectionPreviewUri = params.studyDocumentId
     ? params.selectionPreviewByDocument[params.studyDocumentId] ?? null
+    : null;
+  const selectionPreviewUri = params.studyDocumentId && params.selectionPreviewAttachedByDocument[params.studyDocumentId]
+    ? rawSelectionPreviewUri
     : null;
   const noteAiChatSessions = params.studyDocumentId
     ? params.chatSessionsByDocument[params.studyDocumentId] ?? []
@@ -52,6 +56,7 @@ export function useAiChatDerivedState(params: {
     activeAiChatSession,
     aiChatReadOnly,
     aiMessages,
+    rawSelectionPreviewUri,
     selectionPreviewUri,
     noteAiChatSessions,
     visibleAiChatSessions,

@@ -1,7 +1,7 @@
 import { useMemo } from 'react';
 import { subjects as fallbackSubjects } from '../../../app-defaults';
 import { isSameDocumentPage } from '../../../ui-helpers';
-import type { InkStroke, InkTextAnnotation, SelectionRect } from '../../../ui-types';
+import type { InkImageAnnotation, InkStroke, InkTextAnnotation, SelectionRect } from '../../../ui-types';
 import type {
   BookmarkedPage,
   CaptureAsset,
@@ -33,6 +33,7 @@ export function useStudyWorkspaceDerivedState(params: {
   bookmarksByDocument: Record<number, BookmarkedPage[]>;
   inkByDocument: Record<number, InkStroke[]>;
   textAnnotationsByDocument: Record<number, InkTextAnnotation[]>;
+  imageAnnotationsByDocument: Record<number, InkImageAnnotation[]>;
   selectionByDocument: Record<number, SelectionRect | null>;
   incomingAssetSuggestion: CaptureAsset | null;
 }) {
@@ -139,6 +140,14 @@ export function useStudyWorkspaceDerivedState(params: {
     const currentAnnotationPage = currentPdfPage;
     return documentAnnotations.filter((annotation) => !annotation.generatedPageId && annotation.pageNumber === currentAnnotationPage);
   }, [currentDocumentPage, currentPdfPage, params.studyDocumentId, params.textAnnotationsByDocument]);
+  const imageAnnotations = useMemo(() => {
+    if (!params.studyDocumentId) return [];
+    const documentAnnotations = params.imageAnnotationsByDocument[params.studyDocumentId] ?? [];
+    if (currentDocumentPage?.kind === 'generated') {
+      return documentAnnotations.filter((annotation) => annotation.generatedPageId === currentDocumentPage.pageId);
+    }
+    return documentAnnotations.filter((annotation) => !annotation.generatedPageId && annotation.pageNumber === currentPdfPage);
+  }, [currentDocumentPage, currentPdfPage, params.imageAnnotationsByDocument, params.studyDocumentId]);
   const inboxPendingCount = useMemo(
     () => captureInbox.filter((asset) => asset.status === 'uploaded' || asset.status === 'archived').length,
     [captureInbox],
@@ -195,6 +204,7 @@ export function useStudyWorkspaceDerivedState(params: {
     currentPageBookmarked,
     inkStrokes,
     textAnnotations,
+    imageAnnotations,
     inboxPendingCount,
     inboxHint,
     filteredNotes,

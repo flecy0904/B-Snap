@@ -43,6 +43,9 @@ export const NotesDocumentViewer = React.memo(function NotesDocumentViewer() {
     const documentTextAnnotations = documentContext.studyDocument?.id
       ? (canvasContext.textAnnotationsByDocument[documentContext.studyDocument.id] ?? []).filter((annotation) => !annotation.generatedPageId || documentContext.notebookPages.some((page) => page.generatedPageId === annotation.generatedPageId))
       : canvasContext.textAnnotations;
+    const documentImageAnnotations = documentContext.studyDocument?.id
+      ? (canvasContext.imageAnnotationsByDocument[documentContext.studyDocument.id] ?? []).filter((annotation) => !annotation.generatedPageId || documentContext.notebookPages.some((page) => page.generatedPageId === annotation.generatedPageId))
+      : canvasContext.imageAnnotations;
 
     return (
       <PdfPreview
@@ -54,10 +57,13 @@ export const NotesDocumentViewer = React.memo(function NotesDocumentViewer() {
         penWidth={canvasContext.penWidth}
         brushType={canvasContext.brushType}
         linePattern={canvasContext.linePattern}
+        eraserMode={canvasContext.eraserMode}
+        eraserWidth={canvasContext.eraserWidth}
         selectionMode={canvasContext.selectionMode}
         brushSettings={canvasContext.brushSettings}
         inkStrokes={documentInkStrokes}
         textAnnotations={documentTextAnnotations}
+        imageAnnotations={documentImageAnnotations}
         notebookPages={documentContext.notebookPages}
         activeGeneratedPageId={documentContext.currentDocumentPage?.kind === 'generated' ? documentContext.currentDocumentPage.pageId : null}
         pageCaptureReferences={globalContext.pageCaptureReferences}
@@ -70,15 +76,22 @@ export const NotesDocumentViewer = React.memo(function NotesDocumentViewer() {
         selectionRect={canvasContext.selectionRect}
         onCommitInkStroke={canvasContext.commitInkStroke}
         onRemoveInkStroke={canvasContext.removeInkStroke}
+        onReplaceInkStrokes={canvasContext.replaceInkStrokes}
         onAddTextAnnotation={canvasContext.addTextAnnotation}
         onUpdateTextAnnotation={canvasContext.updateTextAnnotation}
         onRemoveTextAnnotation={canvasContext.removeTextAnnotation}
         onMoveTextAnnotation={canvasContext.moveTextAnnotation}
         onResizeTextAnnotation={canvasContext.resizeTextAnnotation}
+        onChangeTextAnnotationFontSize={canvasContext.changeTextAnnotationFontSize}
         onEraseInkAtPoint={canvasContext.eraseInkAtPoint}
         onSelectionChange={canvasContext.setSelectionRect}
         onMoveSelection={canvasContext.nudgeSelectedStrokes}
         onResizeSelection={canvasContext.resizeSelectedStrokesToRect}
+        onAskAiAboutSelection={globalContext.onAskAiAboutSelection}
+        onDuplicateSelection={canvasContext.duplicateSelectedStrokes}
+        onDeleteSelection={canvasContext.deleteSelectedStrokes}
+        onChangeSelectedStrokesColor={canvasContext.changeSelectedStrokesColor}
+        onChangeInkTool={canvasContext.setInkTool}
         onSelectionPreviewChange={canvasContext.setSelectionPreviewUri}
         onPageChanged={documentContext.onSetCurrentPdfPage}
         onOpenGeneratedPage={documentContext.onOpenGeneratedPage}
@@ -112,7 +125,7 @@ export const NotesDocumentViewer = React.memo(function NotesDocumentViewer() {
             <View style={globalContext.styles.generatedPageLayout}>
               <View style={globalContext.styles.generatedPageImageColumn}>
                 {globalContext.activeGeneratedPreviewImage ? (
-                  <Image source={globalContext.activeGeneratedPreviewImage} style={globalContext.styles.generatedPageImage} resizeMode="cover" />
+                  <Image source={globalContext.activeGeneratedPreviewImage} style={globalContext.styles.generatedPageImage} resizeMode="contain" />
                 ) : (
                   <View style={globalContext.styles.generatedPageImageFallback}>
                     <MaterialCommunityIcons name="image-outline" size={32} color="#6D7BD9" />

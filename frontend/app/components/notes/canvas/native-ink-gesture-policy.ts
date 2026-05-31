@@ -74,5 +74,5 @@ export function shouldActivateNativeInkGesture(
   if ((pointerCount ?? 1) > 1) return false;
   if (tool === 'select') return isNativeStylusEvent(event);
   if (isNativeStylusOnlyTool(tool)) return Boolean(fingerDrawingEnabled) || isNativeStylusEvent(event);
-  return tool === 'text';
+  return tool === 'text' && isNativeStylusEvent(event);
 }

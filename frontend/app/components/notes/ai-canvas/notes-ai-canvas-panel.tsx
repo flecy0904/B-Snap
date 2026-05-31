@@ -10,6 +10,12 @@ const AI_CANVAS_MINI_PROMPTS = ['마무리 다듬기', '수준 조정', '길이 
 
 type RecommendationMode = 'polish' | 'level' | 'length' | null;
 
+type WebCanvasResizeState = {
+  pointerId: number | null;
+  startClientX: number;
+  startWidth: number;
+};
+
 const AI_CANVAS_RECOMMENDATION_COMMANDS = {
   polish: '마무리 다듬기',
   easier: '수준 조정 - 쉽게',
@@ -35,7 +41,12 @@ export function NotesAiCanvasPanel() {
   const [recommendationMode, setRecommendationMode] = React.useState<RecommendationMode>(null);
   const [canvasRequestBusy, setCanvasRequestBusy] = React.useState(false);
   const [nativeEditorMode, setNativeEditorMode] = React.useState<'view' | 'edit'>('view');
+  const [webCanvasResizeActive, setWebCanvasResizeActive] = React.useState(false);
+  const webCanvasWidthRef = React.useRef(workspace.webAiCanvasPanelWidth);
+  const webCanvasResizeDraggingRef = React.useRef(false);
+  const webCanvasResizeRef = React.useRef<WebCanvasResizeState | null>(null);
   const isAppAiCanvasSidebar = Boolean(workspace.isAppAiCanvasSidebarPanel);
+  const isWebAiCanvasPanel = Platform.OS === 'web' && !isAppAiCanvasSidebar;
   const isNativeApp = Platform.OS !== 'web';
   const canvasEditModeEnabled = !isNativeApp || nativeEditorMode === 'edit';
   const canvasControlsLocked = canvasRequestBusy || workspace.aiCanvasRequestBusy;
@@ -45,6 +56,11 @@ export function NotesAiCanvasPanel() {
   const recommendationEnabled = canvasCanModify && Boolean(canvas.activeNote) && hasUsefulAiCanvasMarkdown(canvas.markdownDraft) && !recommendationBusy;
   const miniCommandReady = Boolean(miniCommand.trim());
   const canvasManagementDisabled = canvasControlsLocked || canvas.loading || canvas.saving;
+  const resizeWebAiCanvasPanel = workspace.onResizeWebAiCanvasPanel;
+
+  React.useEffect(() => {
+    webCanvasWidthRef.current = workspace.webAiCanvasPanelWidth;
+  }, [workspace.webAiCanvasPanelWidth]);
 
   React.useEffect(() => {
     if (!canvasControlsLocked) return;
@@ -99,6 +115,58 @@ export function NotesAiCanvasPanel() {
     setNoteListOpen(false);
     setNoteActionMenuId(null);
   };
+  const finishWebCanvasResize = React.useCallback((clientX: number) => {
+    const resize = webCanvasResizeRef.current;
+    if (!resize) return;
+    const next = resize.startWidth - (clientX - resize.startClientX);
+    webCanvasResizeRef.current = null;
+    webCanvasResizeDraggingRef.current = false;
+    resizeWebAiCanvasPanel(next);
+    setWebCanvasResizeActive(false);
+  }, [resizeWebAiCanvasPanel]);
+
+  const handleWebCanvasResizePointerMove = React.useCallback((event: PointerEvent) => {
+    const resize = webCanvasResizeRef.current;
+    if (!resize || (resize.pointerId !== null && event.pointerId !== resize.pointerId)) return;
+    resizeWebAiCanvasPanel(resize.startWidth - (event.clientX - resize.startClientX));
+  }, [resizeWebAiCanvasPanel]);
+
+  const handleWebCanvasResizePointerUp = React.useCallback((event: PointerEvent) => {
+    const resize = webCanvasResizeRef.current;
+    if (!resize || (resize.pointerId !== null && event.pointerId !== resize.pointerId)) return;
+    finishWebCanvasResize(event.clientX);
+  }, [finishWebCanvasResize]);
+
+  React.useEffect(() => {
+    if (!isWebAiCanvasPanel) return undefined;
+    window.addEventListener('pointermove', handleWebCanvasResizePointerMove);
+    window.addEventListener('pointerup', handleWebCanvasResizePointerUp);
+    window.addEventListener('pointercancel', handleWebCanvasResizePointerUp);
+    return () => {
+      window.removeEventListener('pointermove', handleWebCanvasResizePointerMove);
+      window.removeEventListener('pointerup', handleWebCanvasResizePointerUp);
+      window.removeEventListener('pointercancel', handleWebCanvasResizePointerUp);
+      webCanvasResizeRef.current = null;
+      webCanvasResizeDraggingRef.current = false;
+    };
+  }, [handleWebCanvasResizePointerMove, handleWebCanvasResizePointerUp, isWebAiCanvasPanel]);
+
+  const handleWebCanvasResizePointerDown = React.useCallback((event: any) => {
+    if (!isWebAiCanvasPanel) return;
+    const nativeEvent = event?.nativeEvent ?? event;
+    if (typeof nativeEvent.button === 'number' && nativeEvent.button !== 0) return;
+    closeMenus();
+    webCanvasResizeRef.current = {
+      pointerId: typeof nativeEvent.pointerId === 'number' ? nativeEvent.pointerId : null,
+      startClientX: nativeEvent.clientX,
+      startWidth: webCanvasWidthRef.current,
+    };
+    webCanvasResizeDraggingRef.current = true;
+    setWebCanvasResizeActive(true);
+    nativeEvent.preventDefault?.();
+    nativeEvent.stopPropagation?.();
+  }, [isWebAiCanvasPanel]);
+
   const confirmDelete = async () => {
     if (canvasManagementDisabled) return;
     setDeleteConfirmOpen(false);
@@ -384,9 +452,35 @@ export function NotesAiCanvasPanel() {
   };
 
   return (
-    <View style={[workspace.styles.aiCanvasPanel, isAppAiCanvasSidebar && workspace.styles.appRightSidebarAiCanvasPanel]}>
+    <View
+      style={[
+        workspace.styles.aiCanvasPanel,
+        isWebAiCanvasPanel && workspace.styles.aiCanvasWebAttachedPanel,
+        isWebAiCanvasPanel && { width: workspace.webAiCanvasPanelWidth },
+        isAppAiCanvasSidebar && workspace.styles.appRightSidebarAiCanvasPanel,
+      ]}
+    >
       {noteListOpen ? (
         <Pressable style={workspace.styles.aiCanvasMenuDismissLayer} onPress={closeMenus} />
+      ) : null}
+      {isWebAiCanvasPanel ? (
+        <View
+          style={[workspace.styles.aiPanelSidebarResizeHandle, workspace.styles.aiPanelSidebarResizeHandleLeft]}
+          {...({
+            onPointerDown: handleWebCanvasResizePointerDown,
+            onMouseEnter: () => setWebCanvasResizeActive(true),
+            onMouseLeave: () => {
+              if (!webCanvasResizeDraggingRef.current) setWebCanvasResizeActive(false);
+            },
+          } as any)}
+        >
+          <View
+            style={[
+              workspace.styles.aiPanelResizeRail,
+              webCanvasResizeActive && workspace.styles.aiPanelResizeRailActive,
+            ]}
+          />
+        </View>
       ) : null}
       <View style={workspace.styles.aiCanvasHeader}>
         <View style={workspace.styles.aiCanvasHeaderTitleWrap}>

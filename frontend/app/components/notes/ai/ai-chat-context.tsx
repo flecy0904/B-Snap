@@ -78,6 +78,7 @@ export function AiChatProvider({ children }: { children: React.ReactNode }) {
     currentDocumentHasBackendPages,
     selectionRect: null,
     selectionPreviewUri: null,
+    selectionAttachmentEnabled: false,
     currentPageNumber: null,
     activeAiChatSessionId,
     aiChatReadOnly: false,

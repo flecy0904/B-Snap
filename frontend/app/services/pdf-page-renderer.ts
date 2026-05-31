@@ -1,6 +1,6 @@
 import { NativeModules, Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
-import type { InkStroke, InkTextAnnotation, SelectionRect } from '../ui-types';
+import type { InkImageAnnotation, InkStroke, InkTextAnnotation, SelectionRect } from '../ui-types';
 
 type NativePdfPageRenderer = {
   renderPage: (fileUri: string, pageNumber: number, targetWidth: number) => Promise<RenderedPdfPage>;
@@ -11,6 +11,7 @@ type NativePdfPageRenderer = {
     targetWidth: number,
     inkStrokes: InkStroke[],
     textAnnotations: InkTextAnnotation[],
+    imageAnnotations?: InkImageAnnotation[],
   ) => Promise<RenderedPdfPage>;
 };
 
@@ -98,6 +99,7 @@ export async function renderPdfSelectionPreview(params: {
   targetWidth: number;
   inkStrokes?: InkStroke[];
   textAnnotations?: InkTextAnnotation[];
+  imageAnnotations?: InkImageAnnotation[];
 }) {
   if (Platform.OS !== 'android' && Platform.OS !== 'ios') {
     throw new Error('Native PDF selection rendering is only enabled on iOS and Android.');
@@ -120,5 +122,6 @@ export async function renderPdfSelectionPreview(params: {
     Math.max(1, Math.round(params.targetWidth)),
     params.inkStrokes ?? [],
     params.textAnnotations ?? [],
+    params.imageAnnotations ?? [],
   );
 }

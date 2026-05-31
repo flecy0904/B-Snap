@@ -196,8 +196,11 @@ class PdfViewportView(context: Context) : View(context) {
   private var penWidth = 3f
   private var brushType = "ballpoint"
   private var linePattern = "solid"
+  private var eraserMode = "partial"
+  private var eraserWidth = 6f
   private var inkStrokes: MutableList<InkStroke> = mutableListOf()
   private var activeStroke: InkStroke? = null
+  private var eraserOriginalStrokeIds: Set<String>? = null
   private var lastTouchX = 0f
   private var lastTouchY = 0f
   private var lastPanX = 0f
@@ -341,18 +344,29 @@ class PdfViewportView(context: Context) : View(context) {
     linePattern = value ?: "solid"
   }
 
+  fun setEraserMode(value: String?) {
+    eraserMode = if (value == "stroke") "stroke" else "partial"
+  }
+
+  fun setEraserWidth(value: Float) {
+    eraserWidth = value.coerceIn(3f, 24f)
+  }
+
   fun setInkStrokes(strokes: ReadableArray?) {
     inkStrokes = parseInkStrokes(strokes).toMutableList()
+    eraserOriginalStrokeIds = null
     invalidate()
   }
 
   override fun onSizeChanged(w: Int, h: Int, oldw: Int, oldh: Int) {
     super.onSizeChanged(w, h, oldw, oldh)
     Log.d(logTag, "onSizeChanged ${w}x$h old=${oldw}x$oldh")
-    val anchor = if (oldw > 0 && oldh > 0) captureViewportAnchor() else null
+    if (w <= 0 || h <= 0) return
+    val anchor = captureViewportAnchor()
     rebuildPageLayouts()
-    if (oldw == 0 || oldh == 0) {
+    if (!hasAppliedInitialPage) {
       scrollToPage(requestedPage, notify = false)
+      hasAppliedInitialPage = true
     } else {
       restoreViewportAnchor(anchor)
     }
@@ -748,21 +762,26 @@ class PdfViewportView(context: Context) : View(context) {
 
   private fun shouldStartInk(event: MotionEvent): Boolean {
     if (inkTool == "view") return false
-    if (inkTool == "erase") return true
-    val drawingTool = inkTool == "pen" || inkTool == "highlight" || inkTool == "line" || inkTool == "arrow" || inkTool == "rect" || inkTool == "ellipse"
-    if (!drawingTool) return false
     val toolType = event.getToolType(0)
     val stylus = toolType == MotionEvent.TOOL_TYPE_STYLUS || toolType == MotionEvent.TOOL_TYPE_ERASER
+    if (inkTool == "erase") return fingerDrawingEnabled || stylus
+    val drawingTool = inkTool == "pen" || inkTool == "highlight" || inkTool == "line" || inkTool == "arrow" || inkTool == "rect" || inkTool == "ellipse"
+    if (!drawingTool) return false
     return fingerDrawingEnabled || stylus
   }
 
   private fun beginInk(x: Float, y: Float) {
     val hit = screenToPagePoint(x, y) ?: return
     if (inkTool == "erase") {
-      findHitStroke(hit.first, hit.second)?.let { strokeId ->
-        inkStrokes.removeAll { it.id == strokeId }
-        emitRemoveInkStroke(strokeId)
-        invalidate()
+      if (eraserMode == "stroke") {
+        findHitStroke(hit.first, hit.second)?.let { strokeId ->
+          inkStrokes.removeAll { it.id == strokeId }
+          emitRemoveInkStroke(strokeId)
+          invalidate()
+        }
+      } else {
+        beginPartialErase()
+        erasePartialAt(hit.first, hit.second)
       }
       return
     }
@@ -789,9 +808,14 @@ class PdfViewportView(context: Context) : View(context) {
   private fun moveInk(x: Float, y: Float) {
     if (inkTool == "erase") {
       val hit = screenToPagePoint(x, y) ?: return
-      findHitStroke(hit.first, hit.second)?.let { strokeId ->
-        inkStrokes.removeAll { it.id == strokeId }
-        emitRemoveInkStroke(strokeId)
+      if (eraserMode == "stroke") {
+        findHitStroke(hit.first, hit.second)?.let { strokeId ->
+          inkStrokes.removeAll { it.id == strokeId }
+          emitRemoveInkStroke(strokeId)
+        }
+      } else {
+        beginPartialErase()
+        erasePartialAt(hit.first, hit.second)
       }
       invalidate()
       return
@@ -811,6 +835,11 @@ class PdfViewportView(context: Context) : View(context) {
   }
 
   private fun endInk(commit: Boolean) {
+    if (inkTool == "erase" && eraserMode != "stroke") {
+      endPartialErase(commit)
+      invalidate()
+      return
+    }
     val stroke = activeStroke
     activeStroke = null
     if (commit && stroke != null && stroke.points.size > 1) {
@@ -818,6 +847,122 @@ class PdfViewportView(context: Context) : View(context) {
       emitCommitInkStroke(stroke)
     }
     invalidate()
+  }
+
+  private fun beginPartialErase() {
+    if (eraserOriginalStrokeIds == null) {
+      eraserOriginalStrokeIds = inkStrokes.map { it.id }.toSet()
+    }
+  }
+
+  private fun endPartialErase(commit: Boolean) {
+    val originalIds = eraserOriginalStrokeIds ?: return
+    eraserOriginalStrokeIds = null
+    if (!commit) return
+    val currentIds = inkStrokes.map { it.id }.toSet()
+    val removedIds = originalIds.filter { !currentIds.contains(it) }
+    val addedStrokes = inkStrokes.filter { !originalIds.contains(it.id) }
+    if (removedIds.isNotEmpty() || addedStrokes.isNotEmpty()) {
+      emitReplaceInkStrokes(removedIds, addedStrokes)
+    }
+  }
+
+  private fun erasePartialAt(page: NativePage, point: InkPoint) {
+    val radius = eraserWidth + max(1f, penWidth) * 0.35f
+    var changed = false
+    val next = mutableListOf<InkStroke>()
+    inkStrokes.forEach { stroke ->
+      if (!strokeBelongsToPage(stroke, page)) {
+        next.add(stroke)
+        return@forEach
+      }
+      if (stroke.style == "shape") {
+        if (isStrokeHit(stroke, point, radius)) changed = true else next.add(stroke)
+        return@forEach
+      }
+      val split = splitStrokeByEraser(stroke, point, radius)
+      if (split == null) {
+        next.add(stroke)
+      } else {
+        changed = true
+        next.addAll(split)
+      }
+    }
+    if (changed) {
+      inkStrokes = next
+      invalidate()
+    }
+  }
+
+  private fun splitStrokeByEraser(stroke: InkStroke, point: InkPoint, radius: Float): List<InkStroke>? {
+    if (stroke.points.isEmpty()) return null
+    val hitRadius = radius + max(1f, stroke.width) * 0.45f
+    if (!isStrokeHit(stroke, point, hitRadius)) return null
+
+    var changed = false
+    val chunks = mutableListOf<MutableList<InkPoint>>()
+    var currentChunk = mutableListOf<InkPoint>()
+    stroke.points.forEachIndexed { index, strokePoint ->
+      if (index == 0) {
+        if (hypot((strokePoint.x - point.x).toDouble(), (strokePoint.y - point.y).toDouble()) > hitRadius) {
+          currentChunk.add(strokePoint)
+        } else {
+          changed = true
+        }
+        return@forEachIndexed
+      }
+      val previous = stroke.points[index - 1]
+      val segmentLength = hypot((strokePoint.x - previous.x).toDouble(), (strokePoint.y - previous.y).toDouble()).toFloat()
+      val sampleCount = max(1, ceil((segmentLength / max(2.5f, radius / 2f)).toDouble()).toInt())
+      for (sampleIndex in 1..sampleCount) {
+        val sample = if (sampleIndex == sampleCount) strokePoint else interpolatePoint(previous, strokePoint, sampleIndex.toFloat() / sampleCount)
+        if (hypot((sample.x - point.x).toDouble(), (sample.y - point.y).toDouble()) <= hitRadius) {
+          changed = true
+          if (shouldKeepChunk(stroke, currentChunk)) chunks.add(currentChunk)
+          currentChunk = mutableListOf()
+        } else {
+          appendChunkPoint(currentChunk, sample)
+        }
+      }
+    }
+    if (shouldKeepChunk(stroke, currentChunk)) chunks.add(currentChunk)
+    if (!changed) return null
+    val timestamp = System.currentTimeMillis()
+    return chunks.mapIndexed { index, chunk ->
+      stroke.copy(id = "${stroke.id}-erase-$timestamp-$index", points = chunk)
+    }
+  }
+
+  private fun strokeBelongsToPage(stroke: InkStroke, page: NativePage): Boolean =
+    if (page.generatedPageId != null) stroke.generatedPageId == page.generatedPageId
+    else page.pageNumber != null && stroke.pageNumber == page.pageNumber
+
+  private fun isStrokeHit(stroke: InkStroke, point: InkPoint, radius: Float): Boolean {
+    if (stroke.points.any { hypot((it.x - point.x).toDouble(), (it.y - point.y).toDouble()) <= radius }) return true
+    return stroke.points.zipWithNext().any { (start, end) -> distanceToSegment(point, start, end) <= radius }
+  }
+
+  private fun interpolatePoint(start: InkPoint, end: InkPoint, ratio: Float): InkPoint =
+    InkPoint(
+      x = start.x + (end.x - start.x) * ratio,
+      y = start.y + (end.y - start.y) * ratio,
+      pageWidth = end.pageWidth,
+      pageHeight = end.pageHeight,
+    )
+
+  private fun appendChunkPoint(chunk: MutableList<InkPoint>, point: InkPoint) {
+    val previous = chunk.lastOrNull()
+    if (previous != null && hypot((previous.x - point.x).toDouble(), (previous.y - point.y).toDouble()) < 0.65) return
+    chunk.add(point)
+  }
+
+  private fun shouldKeepChunk(stroke: InkStroke, points: List<InkPoint>): Boolean {
+    if (points.size <= 1) return false
+    var length = 0.0
+    points.zipWithNext().forEach { (start, end) ->
+      length += hypot((end.x - start.x).toDouble(), (end.y - start.y).toDouble())
+    }
+    return length >= max(3f, stroke.width * 0.45f)
   }
 
   private fun findHitStroke(page: NativePage, point: InkPoint): String? {
@@ -1443,6 +1588,18 @@ class PdfViewportView(context: Context) : View(context) {
   private fun emitRemoveInkStroke(strokeId: String) {
     val event = Arguments.createMap().apply { putString("strokeId", strokeId) }
     emit("topRemoveInkStroke", event)
+  }
+
+  private fun emitReplaceInkStrokes(removedStrokeIds: List<String>, addedStrokes: List<InkStroke>) {
+    val removed = Arguments.createArray()
+    removedStrokeIds.forEach { removed.pushString(it) }
+    val added = Arguments.createArray()
+    addedStrokes.forEach { added.pushMap(strokeToMap(it)) }
+    val event = Arguments.createMap().apply {
+      putArray("removedStrokeIds", removed)
+      putArray("addedStrokes", added)
+    }
+    emit("topReplaceInkStrokes", event)
   }
 
   private fun emit(eventName: String, event: com.facebook.react.bridge.WritableMap) {

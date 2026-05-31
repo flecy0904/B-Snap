@@ -18,6 +18,20 @@ import type { AuthUser } from './types';
 
 const TABS: TabKey[] = ['schedule', 'notes', 'capture', 'profile'];
 
+function isEditableShortcutTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false;
+  return Boolean(target.closest('textarea,input,select,[contenteditable="true"]'));
+}
+
+function getWorkspaceHistoryShortcut(event: KeyboardEvent): 'undo' | 'redo' | null {
+  if (!event.ctrlKey && !event.metaKey) return null;
+  if (event.altKey) return null;
+  const key = event.key.toLowerCase();
+  if (key === 'y' && !event.shiftKey) return 'redo';
+  if (key !== 'z') return null;
+  return event.shiftKey ? 'redo' : 'undo';
+}
+
 export function AppShell(props: {
   authUser: AuthUser;
   onLogout: () => void;
@@ -68,6 +82,37 @@ export function AppShell(props: {
     return () => clearTimeout(timer);
   }, [profileFeedback]);
 
+  useEffect(() => {
+    if (!isWeb || tab !== 'notes') return undefined;
+    const handleNotesHistoryShortcut = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || isEditableShortcutTarget(event.target)) return;
+      const shortcut = getWorkspaceHistoryShortcut(event);
+      if (!shortcut) return;
+      const canRun = shortcut === 'undo'
+        ? notesState.canUndoFocusedWorkspaceAction
+        : notesState.canRedoFocusedWorkspaceAction;
+      if (!canRun) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (shortcut === 'undo') {
+        notesState.undoFocusedWorkspaceAction();
+        return;
+      }
+      notesState.redoFocusedWorkspaceAction();
+    };
+    document.addEventListener('keydown', handleNotesHistoryShortcut);
+    return () => {
+      document.removeEventListener('keydown', handleNotesHistoryShortcut);
+    };
+  }, [
+    isWeb,
+    notesState.canRedoFocusedWorkspaceAction,
+    notesState.canUndoFocusedWorkspaceAction,
+    notesState.redoFocusedWorkspaceAction,
+    notesState.undoFocusedWorkspaceAction,
+    tab,
+  ]);
+
   const cycleSemesterFromProfile = () => {
     const currentIndex = scheduleState.semesterSchedules.findIndex((item) => item.id === scheduleState.semester.id);
     const nextSemester = scheduleState.semesterSchedules[(currentIndex + 1) % scheduleState.semesterSchedules.length];
@@ -90,13 +135,13 @@ export function AppShell(props: {
       setProfileFeedback(`${targetSubject?.name ?? '현재'} 과목 노트 화면으로 이동했습니다.`);
       return;
     }
-    setProfileFeedback('이 학기에 표시할 과목이 없습니다.');
+    setProfileFeedback('이번 학기에 추가된 과목이 없어요.');
   };
 
   const toggleNotificationsFromProfile = () => {
     setNotificationsEnabled((current) => {
       const next = !current;
-      setProfileFeedback(next ? '업로드 알림을 켰습니다.' : '업로드 알림을 껐습니다.');
+      setProfileFeedback(next ? '업로드 알림 on' : '업로드 알림 off');
       return next;
     });
   };
@@ -116,9 +161,9 @@ export function AppShell(props: {
         title: 'B-SNAP backup summary',
         message: JSON.stringify(backupPayload, null, 2),
       });
-      setProfileFeedback('학습 요약 백업을 공유 시트로 내보냈습니다.');
+      setProfileFeedback('학습 요약본을 공유 시트로 내보낼게요.');
     } catch {
-      setProfileFeedback('이 기기에서는 백업 공유를 열지 못했습니다.');
+      setProfileFeedback('공유된 학습 요약을 열지 못했어요.');
     }
   };
 
@@ -129,10 +174,10 @@ export function AppShell(props: {
   const resetLocalDataFromProfile = () => {
     void notesState.resetLocalWorkspaceData()
       .then(() => {
-        setProfileFeedback('로컬에 저장된 노트 작업 데이터를 초기화했습니다.');
+        setProfileFeedback('노트를 초기화 했어요.');
       })
       .catch(() => {
-        setProfileFeedback('로컬 데이터 초기화 중 문제가 발생했습니다.');
+        setProfileFeedback('기기에 저장된 데이터를 초기화 하는 중에 문제가 발생했어요.');
       });
   };
 
@@ -210,12 +255,16 @@ export function AppShell(props: {
                   penWidth={notesState.penWidth}
                   brushType={notesState.brushType}
                   linePattern={notesState.linePattern}
+                  eraserMode={notesState.eraserMode}
+                  eraserWidth={notesState.eraserWidth}
                   selectionMode={notesState.selectionMode}
                   brushSettings={notesState.brushSettings}
                   inkStrokes={notesState.inkStrokes}
                   textAnnotations={notesState.textAnnotations}
+                  imageAnnotations={notesState.imageAnnotations}
                   inkByDocument={notesState.inkByDocument}
                   textAnnotationsByDocument={notesState.textAnnotationsByDocument}
+                  imageAnnotationsByDocument={notesState.imageAnnotationsByDocument}
                   aiPanelOpen={notesState.aiPanelOpen}
                   aiPanelMode={notesState.aiPanelMode}
                   appRightSidebarPanel={notesState.appRightSidebarPanel}
@@ -272,6 +321,8 @@ export function AppShell(props: {
                   onChangePenWidth={notesState.changePenWidth}
                   onChangeBrushType={notesState.changeBrushType}
                   onChangeLinePattern={notesState.changeLinePattern}
+                  onChangeEraserMode={notesState.changeEraserMode}
+                  onChangeEraserWidth={notesState.changeEraserWidth}
                   onChangeSelectionMode={notesState.changeSelectionMode}
                   onChangeBrushSettings={notesState.changeBrushSettings}
                   onToggleAiPanel={notesState.toggleAiPanel}
@@ -307,6 +358,7 @@ export function AppShell(props: {
                   onClearInk={notesState.clearInk}
                   onCommitInkStroke={notesState.commitInkStroke}
                   onRemoveInkStroke={notesState.removeInkStroke}
+                  onReplaceInkStrokes={notesState.replaceInkStrokes}
                   onMoveSelection={notesState.nudgeSelectedStrokes}
                   deleteSelectedStrokes={notesState.deleteSelectedStrokes}
                   changeSelectedStrokesColor={notesState.changeSelectedStrokesColor}
@@ -315,10 +367,12 @@ export function AppShell(props: {
                   resizeSelectedStrokesToRect={notesState.resizeSelectedStrokesToRect}
                   nudgeSelectedStrokes={notesState.nudgeSelectedStrokes}
                   onAddTextAnnotation={notesState.addTextAnnotation}
+                  onAddImageAnnotation={notesState.addImageAnnotation}
                   onUpdateTextAnnotation={notesState.updateTextAnnotation}
                   onRemoveTextAnnotation={notesState.removeTextAnnotation}
                   onMoveTextAnnotation={notesState.moveTextAnnotation}
                   onResizeTextAnnotation={notesState.resizeTextAnnotation}
+                  onChangeTextAnnotationFontSize={notesState.changeTextAnnotationFontSize}
                   onEraseInkAtPoint={notesState.eraseInkAtPoint}
                   onAcceptIncomingAsset={notesState.acceptIncomingAsset}
                   onArchiveIncomingAsset={notesState.archiveIncomingAsset}
@@ -382,7 +436,6 @@ export function AppShell(props: {
                   onCaptureId={scheduleState.setCaptureId}
                   onCaptureFromCamera={captureState.captureFromCamera}
                   onPickFromLibrary={captureState.pickImageFromLibrary}
-                  onPickPdf={captureState.pickPdfDocument}
                   onRetryUpload={captureState.retryLastFailedAction}
                   styles={S}
                   isWeb={isWeb}
@@ -462,11 +515,15 @@ export function AppShell(props: {
                   penWidth={notesState.penWidth}
                   brushType={notesState.brushType}
                   linePattern={notesState.linePattern}
+                  eraserMode={notesState.eraserMode}
+                  eraserWidth={notesState.eraserWidth}
                   selectionMode={notesState.selectionMode}
                   inkStrokes={notesState.inkStrokes}
                   textAnnotations={notesState.textAnnotations}
+                  imageAnnotations={notesState.imageAnnotations}
                   inkByDocument={notesState.inkByDocument}
                   textAnnotationsByDocument={notesState.textAnnotationsByDocument}
+                  imageAnnotationsByDocument={notesState.imageAnnotationsByDocument}
                   currentPdfPage={notesState.currentPdfPage}
                   currentDocumentPages={notesState.currentDocumentPages}
                   notebookPages={notesState.notebookPages}
@@ -509,6 +566,8 @@ export function AppShell(props: {
                   onChangePenWidth={notesState.changePenWidth}
                   onChangeBrushType={notesState.changeBrushType}
                   onChangeLinePattern={notesState.changeLinePattern}
+                  onChangeEraserMode={notesState.changeEraserMode}
+                  onChangeEraserWidth={notesState.changeEraserWidth}
                   onChangeSelectionMode={notesState.changeSelectionMode}
                   onToggleAiPanel={notesState.toggleAiPanel}
                   onChangeAiQuestion={notesState.setAiQuestion}
@@ -531,13 +590,16 @@ export function AppShell(props: {
                   onClearInk={notesState.clearInk}
                   onCommitInkStroke={notesState.commitInkStroke}
                   onRemoveInkStroke={notesState.removeInkStroke}
+                  onReplaceInkStrokes={notesState.replaceInkStrokes}
                   deleteSelectedStrokes={notesState.deleteSelectedStrokes}
                   changeSelectedStrokesColor={notesState.changeSelectedStrokesColor}
                   onAddTextAnnotation={notesState.addTextAnnotation}
+                  onAddImageAnnotation={notesState.addImageAnnotation}
                   onUpdateTextAnnotation={notesState.updateTextAnnotation}
                   onRemoveTextAnnotation={notesState.removeTextAnnotation}
                   onMoveTextAnnotation={notesState.moveTextAnnotation}
                   onResizeTextAnnotation={notesState.resizeTextAnnotation}
+                  onChangeTextAnnotationFontSize={notesState.changeTextAnnotationFontSize}
                   onEraseInkAtPoint={notesState.eraseInkAtPoint}
                   onAcceptIncomingAsset={notesState.acceptIncomingAsset}
                   onArchiveIncomingAsset={notesState.archiveIncomingAsset}
@@ -593,7 +655,6 @@ export function AppShell(props: {
                   onTogglePicker={() => setCapturePickerOpen((value) => !value)}
                   onCaptureFromCamera={captureState.captureFromCamera}
                   onPickFromLibrary={captureState.pickImageFromLibrary}
-                  onPickPdf={captureState.pickPdfDocument}
                   onRetryUpload={captureState.retryLastFailedAction}
                   styles={S}
                 />

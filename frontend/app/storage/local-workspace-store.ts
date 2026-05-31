@@ -1,6 +1,6 @@
 import * as SQLite from 'expo-sqlite';
 import type { BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, PageCaptureReference, SemesterSchedule, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../types';
-import type { InkStroke, InkTextAnnotation } from '../ui-types';
+import type { InkImageAnnotation, InkStroke, InkTextAnnotation } from '../ui-types';
 
 const DATABASE_NAME = 'bsnap-local-workspace.db';
 const TABLE_NAME = 'kv_store';
@@ -19,6 +19,7 @@ export type PersistedStudyWorkspaceState = {
   generatedPagesByDocument: Record<number, GeneratedWorkspacePage[]>;
   inkByDocument: Record<number, InkStroke[]>;
   textAnnotationsByDocument: Record<number, InkTextAnnotation[]>;
+  imageAnnotationsByDocument: Record<number, InkImageAnnotation[]>;
   currentPdfPageByDocument: Record<number, number>;
   activePageByDocument: Record<number, DocumentPageView>;
   bookmarksByDocument: Record<number, BookmarkedPage[]>;
@@ -74,11 +75,12 @@ export function buildEmptyStudyWorkspaceState(): PersistedStudyWorkspaceState {
     generatedPagesByDocument: {},
     inkByDocument: {},
     textAnnotationsByDocument: {},
+    imageAnnotationsByDocument: {},
     currentPdfPageByDocument: {},
     activePageByDocument: {},
     bookmarksByDocument: {},
     lastChatSessionByDocument: {},
-    aiPanelMode: 'floating',
+    aiPanelMode: 'sidebar',
   };
 }
 

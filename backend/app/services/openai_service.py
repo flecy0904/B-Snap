@@ -440,6 +440,7 @@ def generate_capture_image_analysis(
     filename: str,
 ) -> dict[str, Any]:
     mock_response = json.dumps({
+        "title": "수업 자료 사진",
         "summary": "수업 중 촬영한 원본 사진입니다. 슬라이드나 판서 내용을 PDF 페이지와 연결해 복습 자료로 활용할 수 있습니다.",
         "keywords": ["수업사진", "판서", "복습자료"],
         "confidence": 0.35,
@@ -467,6 +468,10 @@ def generate_capture_image_analysis(
 
     parsed = _parse_json_object(raw) or json.loads(mock_response)
 
+    title = str(parsed.get("title") or "").replace("\n", " ").strip()
+    if not title:
+        title = json.loads(mock_response)["title"]
+    title = " ".join(title.split())[:40]
     summary = str(parsed.get("summary") or "").strip() or json.loads(mock_response)["summary"]
     keywords = parsed.get("keywords")
     if not isinstance(keywords, list):
@@ -480,6 +485,7 @@ def generate_capture_image_analysis(
 
     return {
         "status": "ready",
+        "title": title,
         "summary": summary[:500],
         "keywords": normalized_keywords,
         "confidence": confidence_value,

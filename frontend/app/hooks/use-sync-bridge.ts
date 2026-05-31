@@ -27,7 +27,7 @@ export function createCaptureAsset(props: {
 }): CaptureAsset {
   const suffix = assetSequence;
   assetSequence += 1;
-  const defaultTitle = props.type === 'image' ? `${props.subjectName} 판서 스냅 ${suffix}` : `${props.subjectName} 보조 PDF ${suffix}`;
+  const defaultTitle = props.type === 'image' ? `${props.subjectName} 수업 사진 ${suffix}` : `${props.subjectName} 보조 PDF ${suffix}`;
   const analysisSummary =
     props.type === 'image'
       ? `${props.subjectName} 수업 중 촬영한 원본 사진입니다. 백엔드 전처리 이미지는 AI 인식용으로만 활용하고, 앱에는 원본 사진과 페이지 연결 설명을 보여줍니다.`
@@ -44,7 +44,7 @@ export function createCaptureAsset(props: {
     subjectId: props.subjectId,
     type: props.type,
     status: 'uploaded' as const,
-    title: props.fileName || defaultTitle,
+    title: props.type === 'image' ? defaultTitle : props.fileName || defaultTitle,
     summary:
       props.type === 'image'
         ? `${props.source === 'camera' ? '카메라' : '사진첩'}에서 가져온 이미지입니다. 현재 PDF 페이지에 자료 카드로 연결하거나 보관함에 저장할 수 있습니다.`

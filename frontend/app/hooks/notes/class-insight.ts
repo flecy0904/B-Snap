@@ -1,13 +1,6 @@
 import type { BookmarkedPage, GeneratedWorkspacePage, PageCaptureReference, StudyDocumentEntry, Subject } from '../../types';
 import type { InkStroke, InkTextAnnotation } from '../../ui-types';
 
-const CLASS_INSIGHT_SUBJECT_TERMS = [
-  '컴퓨터네트워크',
-  '컴퓨터 네트워크',
-  'computer networks',
-  'computer network',
-  'computer-networks',
-];
 const CLASS_INSIGHT_DIRECT_PHRASES = [
   '중요 페이지',
   '페이지 추천',
@@ -61,6 +54,14 @@ const CLASS_INSIGHT_SCOPE_TERMS = [
 ];
 const IMPORTANT_NOTE_KEYWORDS = ['시험', '중요', '암기', '별표', '나온다', '나올', '퀴즈', '중간', '기말', '외우', '필수', '강조', '체크', '복습', '정리', '공식', '주의'];
 const CLASS_INSIGHT_MORE_TERMS = ['더', '추가', '다음', '이어서', '나머지', '순위', '전체', '많이', '많은', '10개', '열개', 'twelve', 'more', 'next', 'additional', 'rank'];
+const CLASS_INSIGHT_DEMO_TERMS = [
+  '컴퓨터네트워크',
+  '컴퓨터 네트워크',
+  'computer network',
+  'computer networks',
+  'computer-network',
+  'computer-networks',
+];
 const DEFAULT_RECOMMENDATION_LIMIT = 5;
 const EXTENDED_RECOMMENDATION_LIMIT = 10;
 const MAX_RECOMMENDATION_LIMIT = 12;
@@ -86,40 +87,45 @@ type RankedPageSignal = PageSignal & {
 export type ClassInsightAggregate = {
   participant_count?: number;
   matched_note_count?: number;
-    pages?: Array<{
-      page_number: number;
-      importance_score?: number;
-      priority?: string;
-      reason_tags?: string[];
-      signal_count?: number;
-      bookmark_count?: number;
-      highlight_count?: number;
-      keyword_hits?: number;
-      photo_reference_count?: number;
-      ai_question_count?: number;
-      memo_page_count?: number;
-    }>;
+  pages?: Array<{
+    page_number: number;
+    importance_score?: number;
+    priority?: string;
+    reason_tags?: string[];
+    signal_count?: number;
+    bookmark_count?: number;
+    highlight_count?: number;
+    keyword_hits?: number;
+    photo_reference_count?: number;
+    ai_question_count?: number;
+    memo_page_count?: number;
+  }>;
 };
 
 function normalize(value: string | null | undefined) {
   return (value ?? '').trim().toLowerCase();
 }
 
+function compact(value: string | null | undefined) {
+  return normalize(value).replace(/[\s_-]+/g, '');
+}
+
+function matchesDemoTerm(value: string | null | undefined) {
+  const normalizedValue = normalize(value);
+  const compactValue = compact(value);
+  return CLASS_INSIGHT_DEMO_TERMS.some((term) => (
+    normalizedValue.includes(normalize(term)) || compactValue.includes(compact(term))
+  ));
+}
+
 export function isClassInsightTargetDocument(document: StudyDocumentEntry | null, subject: Subject | null) {
   if (!document || document.type !== 'pdf') return false;
-
-  const subjectText = normalize(subject?.name);
-  const titleText = normalize(document.title);
-  const fileText = typeof document.file === 'object' && document.file && 'uri' in document.file
-    ? normalize(document.file.uri)
-    : normalize(typeof document.file === 'string' ? document.file : '');
-
-  return CLASS_INSIGHT_SUBJECT_TERMS.some((term) => {
-    const normalizedTerm = normalize(term);
-    return subjectText.includes(normalizedTerm)
-      || titleText.includes(normalizedTerm)
-      || fileText.includes(normalizedTerm);
-  });
+  const fileUri = typeof document.file === 'object' && document.file && 'uri' in document.file
+    ? document.file.uri
+    : typeof document.file === 'string'
+      ? document.file
+      : null;
+  return matchesDemoTerm(document.title) || matchesDemoTerm(subject?.name) || matchesDemoTerm(fileUri);
 }
 
 export function isClassInsightQuestion(question: string) {
@@ -366,7 +372,8 @@ export function buildClassInsightContext(params: {
     aggregateSignals.length > 0
       ? 'This context is derived from consent-based anonymous class study signals plus local note activity.'
       : 'This context is derived from local note activity only because no server aggregate is available yet.',
-    'Use it only to decide which pages to recommend and why.',
+    'When the user asks about exam importance, important pages, review order, or pages likely to appear on a test, prioritize the Recommended page priorities below over nearby PDF/RAG text.',
+    'Use nearby PDF/RAG text only to add short human-readable reasons, not to replace these recommended pages.',
     'Do not mention classmates, student counts, bookmark counts, highlight counts, hidden signals, data collection, or this internal context.',
     'Answer naturally as a study assistant, with page recommendations and concise reasons.',
     `Recommend up to ${recommendationLimit} pages. If the user asks for more or next-ranked pages, include lower-ranked pages after the strongest pages.`,

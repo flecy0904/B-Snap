@@ -95,9 +95,9 @@ function ProfileContent(props: {
             </Pressable>
           </View>
           <Text style={props.styles.profileHelpBody}>현재 과목 수: {props.currentSubjectCount}개</Text>
-          <Text style={props.styles.profileHelpBody}>학기 설정: 활성 학기를 눌러 목록에서 학기를 선택할 수 있습니다.</Text>
-          <Text style={props.styles.profileHelpBody}>시간표 관리: 시간표 탭으로 이동해 학기 목록을 바로 엽니다.</Text>
-          <Text style={props.styles.profileHelpBody}>저장 및 백업: 현재 학습 요약 정보를 공유 시트로 내보냅니다.</Text>
+          <Text style={props.styles.profileHelpBody}>학기 설정: 활성 학기를 누르면 목록에서 학기를 선택할 수 있어요.</Text>
+          <Text style={props.styles.profileHelpBody}>시간표 관리: 시간표 탭에서 학기 목록을 열 수 있어요.</Text>
+          <Text style={props.styles.profileHelpBody}>저장 및 백업: 현재 학습 요약본을 공유 시트로 내보내요.</Text>
         </View>
       ) : null}
 
