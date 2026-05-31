@@ -1,10 +1,16 @@
 import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { ActivityIndicator, Image, Pressable, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Image, Platform, Pressable, Text, TextInput, View } from 'react-native';
 
 import { useDesktopNotesWorkspaceContext } from '../workspace/notes-workspace-context';
 
 const AI_CANVAS_MINI_PROMPTS = ['마무리 다듬기', '수준 조정', '길이 조절'];
+
+type WebCanvasResizeState = {
+  pointerId: number | null;
+  startClientX: number;
+  startWidth: number;
+};
 
 export function NotesAiCanvasPanel() {
   const workspace = useDesktopNotesWorkspaceContext();
@@ -20,8 +26,18 @@ export function NotesAiCanvasPanel() {
   const [miniCommand, setMiniCommand] = React.useState('');
   const [miniSelectionImageUri, setMiniSelectionImageUri] = React.useState<string | null>(null);
   const [miniComposerOpen, setMiniComposerOpen] = React.useState(false);
+  const [webCanvasResizeActive, setWebCanvasResizeActive] = React.useState(false);
+  const webCanvasWidthRef = React.useRef(workspace.webAiCanvasPanelWidth);
+  const webCanvasResizeDraggingRef = React.useRef(false);
+  const webCanvasResizeRef = React.useRef<WebCanvasResizeState | null>(null);
   const isAppAiCanvasSidebar = Boolean(workspace.isAppAiCanvasSidebarPanel);
+  const isWebAiCanvasPanel = Platform.OS === 'web' && !isAppAiCanvasSidebar;
   const miniCommandReady = Boolean(miniCommand.trim());
+  const resizeWebAiCanvasPanel = workspace.onResizeWebAiCanvasPanel;
+
+  React.useEffect(() => {
+    webCanvasWidthRef.current = workspace.webAiCanvasPanelWidth;
+  }, [workspace.webAiCanvasPanelWidth]);
 
   const noteActionMenuNote = React.useMemo(
     () => canvas.notes.find((note) => note.id === noteActionMenuId) ?? null,
@@ -63,6 +79,58 @@ export function NotesAiCanvasPanel() {
     setNoteListOpen(false);
     setNoteActionMenuId(null);
   };
+  const finishWebCanvasResize = React.useCallback((clientX: number) => {
+    const resize = webCanvasResizeRef.current;
+    if (!resize) return;
+    const next = resize.startWidth - (clientX - resize.startClientX);
+    webCanvasResizeRef.current = null;
+    webCanvasResizeDraggingRef.current = false;
+    resizeWebAiCanvasPanel(next);
+    setWebCanvasResizeActive(false);
+  }, [resizeWebAiCanvasPanel]);
+
+  const handleWebCanvasResizePointerMove = React.useCallback((event: PointerEvent) => {
+    const resize = webCanvasResizeRef.current;
+    if (!resize || (resize.pointerId !== null && event.pointerId !== resize.pointerId)) return;
+    resizeWebAiCanvasPanel(resize.startWidth - (event.clientX - resize.startClientX));
+  }, [resizeWebAiCanvasPanel]);
+
+  const handleWebCanvasResizePointerUp = React.useCallback((event: PointerEvent) => {
+    const resize = webCanvasResizeRef.current;
+    if (!resize || (resize.pointerId !== null && event.pointerId !== resize.pointerId)) return;
+    finishWebCanvasResize(event.clientX);
+  }, [finishWebCanvasResize]);
+
+  React.useEffect(() => {
+    if (!isWebAiCanvasPanel) return undefined;
+    window.addEventListener('pointermove', handleWebCanvasResizePointerMove);
+    window.addEventListener('pointerup', handleWebCanvasResizePointerUp);
+    window.addEventListener('pointercancel', handleWebCanvasResizePointerUp);
+    return () => {
+      window.removeEventListener('pointermove', handleWebCanvasResizePointerMove);
+      window.removeEventListener('pointerup', handleWebCanvasResizePointerUp);
+      window.removeEventListener('pointercancel', handleWebCanvasResizePointerUp);
+      webCanvasResizeRef.current = null;
+      webCanvasResizeDraggingRef.current = false;
+    };
+  }, [handleWebCanvasResizePointerMove, handleWebCanvasResizePointerUp, isWebAiCanvasPanel]);
+
+  const handleWebCanvasResizePointerDown = React.useCallback((event: any) => {
+    if (!isWebAiCanvasPanel) return;
+    const nativeEvent = event?.nativeEvent ?? event;
+    if (typeof nativeEvent.button === 'number' && nativeEvent.button !== 0) return;
+    closeMenus();
+    webCanvasResizeRef.current = {
+      pointerId: typeof nativeEvent.pointerId === 'number' ? nativeEvent.pointerId : null,
+      startClientX: nativeEvent.clientX,
+      startWidth: webCanvasWidthRef.current,
+    };
+    webCanvasResizeDraggingRef.current = true;
+    setWebCanvasResizeActive(true);
+    nativeEvent.preventDefault?.();
+    nativeEvent.stopPropagation?.();
+  }, [isWebAiCanvasPanel]);
+
   const confirmDelete = async () => {
     setDeleteConfirmOpen(false);
     await canvas.deleteNote(pendingDeleteNoteId ?? undefined);
@@ -239,9 +307,35 @@ export function NotesAiCanvasPanel() {
   };
 
   return (
-    <View style={[workspace.styles.aiCanvasPanel, isAppAiCanvasSidebar && workspace.styles.appRightSidebarAiCanvasPanel]}>
+    <View
+      style={[
+        workspace.styles.aiCanvasPanel,
+        isWebAiCanvasPanel && workspace.styles.aiCanvasWebAttachedPanel,
+        isWebAiCanvasPanel && { width: workspace.webAiCanvasPanelWidth },
+        isAppAiCanvasSidebar && workspace.styles.appRightSidebarAiCanvasPanel,
+      ]}
+    >
       {noteListOpen ? (
         <Pressable style={workspace.styles.aiCanvasMenuDismissLayer} onPress={closeMenus} />
+      ) : null}
+      {isWebAiCanvasPanel ? (
+        <View
+          style={[workspace.styles.aiPanelSidebarResizeHandle, workspace.styles.aiPanelSidebarResizeHandleLeft]}
+          {...({
+            onPointerDown: handleWebCanvasResizePointerDown,
+            onMouseEnter: () => setWebCanvasResizeActive(true),
+            onMouseLeave: () => {
+              if (!webCanvasResizeDraggingRef.current) setWebCanvasResizeActive(false);
+            },
+          } as any)}
+        >
+          <View
+            style={[
+              workspace.styles.aiPanelResizeRail,
+              webCanvasResizeActive && workspace.styles.aiPanelResizeRailActive,
+            ]}
+          />
+        </View>
       ) : null}
       <View style={workspace.styles.aiCanvasHeader}>
         <View style={workspace.styles.aiCanvasHeaderTitleWrap}>

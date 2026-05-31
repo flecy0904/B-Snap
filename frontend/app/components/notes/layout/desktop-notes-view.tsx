@@ -39,6 +39,12 @@ function getDocumentTabIcon(type: StudyDocumentEntry['type']): React.ComponentPr
 
 const APP_RIGHT_SIDEBAR_MIN_WIDTH = 320;
 const APP_RIGHT_SIDEBAR_MAX_WIDTH = 560;
+const WEB_CHAT_SIDEBAR_MIN_WIDTH = 300;
+const WEB_CHAT_SIDEBAR_DEFAULT_WIDTH = 340;
+const WEB_AI_CANVAS_MIN_WIDTH = 320;
+const WEB_AI_CANVAS_DEFAULT_WIDTH = 360;
+const WEB_PDF_VIEWER_MIN_WIDTH = 520;
+const WEB_DOCUMENT_PANEL_GAP = 10;
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
@@ -302,8 +308,15 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
   const showFloatingChat = !focusMode && (
     isNativeWideApp
       ? props.appChatMode === 'floating' && props.aiPanelOpen
-      : props.aiPanelMode === 'floating'
+      : props.aiPanelMode === 'floating' && props.aiPanelOpen
   );
+  const showWebChatSidebarPanel = !focusMode && !isNativeWideApp && props.aiPanelOpen && props.aiPanelMode === 'sidebar';
+  const showWebAiCanvasPanel = !focusMode && !isNativeWideApp && props.aiCanvas.isOpen;
+  const [webDocumentRowWidth, setWebDocumentRowWidth] = React.useState(0);
+  const [webPanelWidths, setWebPanelWidths] = React.useState({
+    chat: WEB_CHAT_SIDEBAR_DEFAULT_WIDTH,
+    canvas: WEB_AI_CANVAS_DEFAULT_WIDTH,
+  });
   const { normalizedQuestion, aiResponse, aiResponseSections } = buildAiResponse(props.aiQuestion, props.selectionRect, true);
   const workspace = useDesktopNotesWorkspaceViewModel({
     incomingAssetSuggestion: props.incomingAssetSuggestion,
@@ -319,6 +332,90 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
     studyDocument: props.studyDocument,
     textAnnotations: props.textAnnotations,
   });
+  const getWebPanelGapCount = React.useCallback((chatOpen = showWebChatSidebarPanel, canvasOpen = showWebAiCanvasPanel) => {
+    if (chatOpen && canvasOpen) return 2;
+    if (chatOpen || canvasOpen) return 1;
+    return 0;
+  }, [showWebAiCanvasPanel, showWebChatSidebarPanel]);
+  const getEffectiveWebPdfMinWidth = React.useCallback((rowWidth: number, chatOpen = showWebChatSidebarPanel, canvasOpen = showWebAiCanvasPanel) => {
+    if (rowWidth <= 0) return WEB_PDF_VIEWER_MIN_WIDTH;
+    const minPanelWidth = (chatOpen ? WEB_CHAT_SIDEBAR_MIN_WIDTH : 0) + (canvasOpen ? WEB_AI_CANVAS_MIN_WIDTH : 0);
+    const gapWidth = getWebPanelGapCount(chatOpen, canvasOpen) * WEB_DOCUMENT_PANEL_GAP;
+    const availableForPdf = rowWidth - minPanelWidth - gapWidth;
+    if (availableForPdf < 320) return Math.max(0, availableForPdf);
+    return Math.min(WEB_PDF_VIEWER_MIN_WIDTH, availableForPdf);
+  }, [getWebPanelGapCount, showWebAiCanvasPanel, showWebChatSidebarPanel]);
+  const normalizeWebPanelWidths = React.useCallback((
+    next: { chat: number; canvas: number },
+    priority: 'chat' | 'canvas' | null = null,
+    rowWidth = webDocumentRowWidth,
+    chatOpen = showWebChatSidebarPanel,
+    canvasOpen = showWebAiCanvasPanel,
+  ) => {
+    let chat = Math.max(WEB_CHAT_SIDEBAR_MIN_WIDTH, next.chat);
+    let canvas = Math.max(WEB_AI_CANVAS_MIN_WIDTH, next.canvas);
+    if (rowWidth <= 0) return { chat, canvas };
+
+    const gapWidth = getWebPanelGapCount(chatOpen, canvasOpen) * WEB_DOCUMENT_PANEL_GAP;
+    const pdfMinWidth = getEffectiveWebPdfMinWidth(rowWidth, chatOpen, canvasOpen);
+    const sidePanelBudget = Math.max(0, rowWidth - pdfMinWidth - gapWidth);
+
+    if (chatOpen && canvasOpen) {
+      const maxChat = Math.max(WEB_CHAT_SIDEBAR_MIN_WIDTH, sidePanelBudget - WEB_AI_CANVAS_MIN_WIDTH);
+      const maxCanvas = Math.max(WEB_AI_CANVAS_MIN_WIDTH, sidePanelBudget - WEB_CHAT_SIDEBAR_MIN_WIDTH);
+      if (priority === 'chat') {
+        chat = clamp(chat, WEB_CHAT_SIDEBAR_MIN_WIDTH, maxChat);
+        canvas = clamp(Math.min(canvas, sidePanelBudget - chat), WEB_AI_CANVAS_MIN_WIDTH, maxCanvas);
+      } else if (priority === 'canvas') {
+        canvas = clamp(canvas, WEB_AI_CANVAS_MIN_WIDTH, maxCanvas);
+        chat = clamp(Math.min(chat, sidePanelBudget - canvas), WEB_CHAT_SIDEBAR_MIN_WIDTH, maxChat);
+      } else {
+        chat = clamp(chat, WEB_CHAT_SIDEBAR_MIN_WIDTH, maxChat);
+        canvas = clamp(canvas, WEB_AI_CANVAS_MIN_WIDTH, maxCanvas);
+        if (chat + canvas > sidePanelBudget) {
+          const overflow = chat + canvas - sidePanelBudget;
+          const chatShrinkRoom = Math.max(0, chat - WEB_CHAT_SIDEBAR_MIN_WIDTH);
+          const canvasShrinkRoom = Math.max(0, canvas - WEB_AI_CANVAS_MIN_WIDTH);
+          const totalShrinkRoom = chatShrinkRoom + canvasShrinkRoom;
+          if (totalShrinkRoom > 0) {
+            chat -= Math.min(chatShrinkRoom, overflow * (chatShrinkRoom / totalShrinkRoom));
+            canvas -= Math.min(canvasShrinkRoom, overflow * (canvasShrinkRoom / totalShrinkRoom));
+          }
+        }
+      }
+      return { chat: Math.round(chat), canvas: Math.round(canvas) };
+    }
+
+    if (chatOpen) {
+      chat = clamp(chat, WEB_CHAT_SIDEBAR_MIN_WIDTH, Math.max(WEB_CHAT_SIDEBAR_MIN_WIDTH, sidePanelBudget));
+    }
+    if (canvasOpen) {
+      canvas = clamp(canvas, WEB_AI_CANVAS_MIN_WIDTH, Math.max(WEB_AI_CANVAS_MIN_WIDTH, sidePanelBudget));
+    }
+    return { chat: Math.round(chat), canvas: Math.round(canvas) };
+  }, [getEffectiveWebPdfMinWidth, getWebPanelGapCount, showWebAiCanvasPanel, showWebChatSidebarPanel, webDocumentRowWidth]);
+  const resizeWebChatSidebar = React.useCallback((width: number) => {
+    setWebPanelWidths((current) => {
+      const next = normalizeWebPanelWidths({ ...current, chat: width }, 'chat');
+      return next.chat === current.chat && next.canvas === current.canvas ? current : next;
+    });
+  }, [normalizeWebPanelWidths]);
+  const resizeWebAiCanvasPanel = React.useCallback((width: number) => {
+    setWebPanelWidths((current) => {
+      const next = normalizeWebPanelWidths({ ...current, canvas: width }, 'canvas');
+      return next.chat === current.chat && next.canvas === current.canvas ? current : next;
+    });
+  }, [normalizeWebPanelWidths]);
+
+  React.useEffect(() => {
+    setWebPanelWidths((current) => {
+      const next = normalizeWebPanelWidths(current);
+      return next.chat === current.chat && next.canvas === current.canvas ? current : next;
+    });
+  }, [normalizeWebPanelWidths]);
+  const webPdfViewerMinWidth = !isNativeWideApp && !focusMode
+    ? getEffectiveWebPdfMinWidth(webDocumentRowWidth)
+    : undefined;
 
   React.useEffect(() => {
     setRenameOpen(false);
@@ -473,6 +570,8 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           appRightSidebarPanel: props.appRightSidebarPanel,
           appChatMode: props.appChatMode,
           appRightSidebarWidth: props.appRightSidebarWidth,
+          webChatSidebarWidth: webPanelWidths.chat,
+          webAiCanvasPanelWidth: webPanelWidths.canvas,
           focusedWorkspaceTarget: props.focusedWorkspaceTarget,
           canUndoFocusedWorkspaceAction: props.canUndoFocusedWorkspaceAction,
           canRedoFocusedWorkspaceAction: props.canRedoFocusedWorkspaceAction,
@@ -560,6 +659,8 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           onFloatAppAiChatPanel: props.onFloatAppAiChatPanel,
           onDockAppAiChatPanel: props.onDockAppAiChatPanel,
           onChangeAppRightSidebarWidth: props.onChangeAppRightSidebarWidth,
+          onResizeWebChatSidebar: resizeWebChatSidebar,
+          onResizeWebAiCanvasPanel: resizeWebAiCanvasPanel,
           onFocusWorkspaceTarget: props.onFocusWorkspaceTarget,
           onUndoFocusedWorkspaceAction: props.onUndoFocusedWorkspaceAction,
           onRedoFocusedWorkspaceAction: props.onRedoFocusedWorkspaceAction,
@@ -743,12 +844,22 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
               style={[
                 props.styles.desktopDocumentSidebarContentRow,
                 !isNativeWideApp && !focusMode && props.styles.desktopDocumentSidebarContentRowGapped,
+                !isNativeWideApp && !focusMode && props.aiCanvas.isOpen && props.styles.desktopDocumentSidebarContentRowWebPanels,
                 focusMode && props.styles.desktopDocumentSidebarContentRowFocus,
               ]}
+              onLayout={(event) => {
+                if (isNativeWideApp || focusMode) return;
+                const nextWidth = Math.floor(event.nativeEvent.layout.width);
+                setWebDocumentRowWidth((current) => (current === nextWidth ? current : nextWidth));
+              }}
             >
-              {!focusMode && !isNativeWideApp && props.aiPanelMode === 'sidebar' ? <NotesAiAssistantPanel /> : null}
+              {showWebChatSidebarPanel ? <NotesAiAssistantPanel /> : null}
               <View
-                style={[props.styles.desktopDocumentViewerPane, focusMode && props.styles.desktopDocumentViewerPaneFocus]}
+                style={[
+                  props.styles.desktopDocumentViewerPane,
+                  webPdfViewerMinWidth ? { minWidth: webPdfViewerMinWidth } : null,
+                  focusMode && props.styles.desktopDocumentViewerPaneFocus,
+                ]}
                 onTouchStart={() => props.onFocusWorkspaceTarget('document')}
               >
                 {!focusMode && workspace.showWorkspaceDock ? <NotesWorkspaceDock /> : null}
@@ -756,7 +867,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
               </View>
               {!focusMode && showAppRightSidebar ? (
                 <AppRightSidebar />
-              ) : !focusMode && !isNativeWideApp && props.aiCanvas.isOpen ? (
+              ) : showWebAiCanvasPanel ? (
                 <NotesAiCanvasPanel />
               ) : null}
             </View>

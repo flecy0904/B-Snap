@@ -1,5 +1,5 @@
 import React from 'react';
-import { Pressable, ScrollView, Text, View } from 'react-native';
+import { Platform, Pressable, ScrollView, Text, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useDocumentContext } from './document-context';
 import { useCanvasContext } from '../canvas/canvas-context';
@@ -137,6 +137,7 @@ export const NotesWorkspaceToolbar = React.memo(function NotesWorkspaceToolbar()
   const documentContext = useDocumentContext();
   const canvasContext = useCanvasContext();
   const usesAppAiPanelLayout = Boolean(workspaceContext.usesAppAiPanelLayout);
+  const useWebAttachedToolbar = Platform.OS === 'web' && !usesAppAiPanelLayout;
   const chatToolActive = usesAppAiPanelLayout
     ? workspaceContext.appRightSidebarPanel === 'chat' || (workspaceContext.appChatMode === 'floating' && workspaceContext.aiPanelOpen)
     : workspaceContext.aiPanelOpen;
@@ -146,7 +147,7 @@ export const NotesWorkspaceToolbar = React.memo(function NotesWorkspaceToolbar()
 
   return (
     <View style={workspaceContext.styles.inkToolbarWrap}>
-      <View style={workspaceContext.styles.inkToolbar}>
+      <View style={[workspaceContext.styles.inkToolbar, useWebAttachedToolbar && workspaceContext.styles.inkToolbarWebAttached]}>
         <View style={[workspaceContext.styles.documentPageNavigator, { position: 'relative' }]}>
           <Pressable
             style={[
