@@ -160,11 +160,11 @@ def build_mock_contexts(query: str) -> list[RetrievedContext]:
 def _tokenize(text: str) -> list[str]:
     raw_tokens = re.findall(r"[0-9A-Za-z가-힣]+", text.lower())
     tokens = []
-    seen = set()
     for raw_token in raw_tokens:
         token = _normalize_token(raw_token)
         if len(token) < 2 or token in KOREAN_STOPWORDS:
             continue
+        seen = set()
         for expanded_token in (token, *TOKEN_ALIASES.get(token, ())):
             if expanded_token not in seen:
                 tokens.append(expanded_token)

@@ -2,9 +2,12 @@ import json
 import unittest
 from unittest.mock import patch
 
-from backend.app.schemas.rag import QuizQuestion
+from pydantic import ValidationError
+
+from backend.app.schemas.rag import QuizQuestion, RAGAskRequest, RAGSummaryRequest
 from backend.app.services.rag_service import (
     _parse_quiz_questions,
+    ask_with_rag,
     build_rag_context_hint,
     load_note_documents,
 )
@@ -177,6 +180,35 @@ class RAGRetrieverTest(unittest.TestCase):
 
         self.assertEqual(len(questions), 1)
         self.assertEqual(questions[0].answer, "LIFO")
+
+    def test_rag_request_rejects_empty_question(self):
+        with self.assertRaises(ValidationError):
+            RAGAskRequest(question="")
+
+    def test_rag_summary_request_restricts_mode(self):
+        with self.assertRaises(ValidationError):
+            RAGSummaryRequest(mode="brief")
+
+    def test_ask_with_rag_returns_answer_and_sources(self):
+        documents = [
+            {
+                "source_type": "note_page",
+                "source_id": "3",
+                "title": "자료구조 - page 1",
+                "content": "스택은 LIFO 구조이고 push와 pop 연산을 사용합니다.",
+            }
+        ]
+
+        with patch("backend.app.services.rag_service.generate_text_response", return_value="스택은 LIFO 구조입니다.") as llm:
+            response = ask_with_rag(question="스택 설명", documents=documents, top_k=1, model="test-model")
+
+        self.assertEqual(response.answer, "스택은 LIFO 구조입니다.")
+        self.assertEqual(len(response.sources), 1)
+        self.assertEqual(response.sources[0].source_id, "3")
+        self.assertEqual(response.sections[0].title, "핵심 답변")
+        llm_input = llm.call_args.kwargs["input_items"][0]["content"]
+        self.assertIn("User question:", llm_input)
+        self.assertIn("스택은 LIFO", llm_input)
 
 
 if __name__ == "__main__":
