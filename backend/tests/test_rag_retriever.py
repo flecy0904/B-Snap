@@ -2,7 +2,12 @@ import json
 import unittest
 from unittest.mock import patch
 
-from backend.app.services.rag_service import build_rag_context_hint, load_note_documents
+from backend.app.schemas.rag import QuizQuestion
+from backend.app.services.rag_service import (
+    _parse_quiz_questions,
+    build_rag_context_hint,
+    load_note_documents,
+)
 from backend.app.services.rag_retriever import (
     build_rag_context,
     retrieve_relevant_contexts,
@@ -38,6 +43,37 @@ class RAGRetrieverTest(unittest.TestCase):
         self.assertEqual(len(contexts), 1)
         self.assertEqual(contexts[0].title, "Stack")
         self.assertGreater(contexts[0].score, 0)
+
+    def test_retrieve_relevant_contexts_matches_korean_query_to_english_terms(self):
+        documents = [
+            {
+                "source_type": "note_page",
+                "source_id": "1",
+                "title": "자료구조",
+                "content": "Stack is a LIFO data structure. Queue is a FIFO data structure.",
+            }
+        ]
+
+        contexts = retrieve_relevant_contexts("스택은 후입선출 구조인가?", documents, top_k=1)
+
+        self.assertEqual(len(contexts), 1)
+        self.assertEqual(contexts[0].source_id, "1")
+        self.assertGreater(contexts[0].score, 0)
+
+    def test_retrieve_relevant_contexts_uses_title_keywords(self):
+        documents = [
+            {
+                "source_type": "note_page",
+                "source_id": "1",
+                "title": "해시 테이블",
+                "content": "충돌 해결 방식과 체이닝을 정리한 페이지입니다.",
+            }
+        ]
+
+        contexts = retrieve_relevant_contexts("hash table 설명", documents, top_k=1)
+
+        self.assertEqual(len(contexts), 1)
+        self.assertEqual(contexts[0].title, "해시 테이블")
 
     def test_build_rag_context_includes_sources(self):
         documents = [
@@ -113,6 +149,34 @@ class RAGRetrieverTest(unittest.TestCase):
         self.assertIn("Retrieved study context", hint or "")
         self.assertIn("자료구조 - page 3", hint or "")
         self.assertIn("Stack은 LIFO", hint or "")
+
+    def test_parse_quiz_questions_accepts_fenced_json(self):
+        fallback = [
+            QuizQuestion(
+                question="fallback",
+                answer="fallback",
+                explanation="fallback",
+            )
+        ]
+        raw_response = """
+        ```json
+        {
+          "questions": [
+            {
+              "question": "스택의 동작 방식은?",
+              "answer": "LIFO",
+              "explanation": "마지막에 들어간 데이터가 먼저 나온다.",
+              "type": "short_answer"
+            }
+          ]
+        }
+        ```
+        """
+
+        questions = _parse_quiz_questions(raw_response, fallback=fallback)
+
+        self.assertEqual(len(questions), 1)
+        self.assertEqual(questions[0].answer, "LIFO")
 
 
 if __name__ == "__main__":

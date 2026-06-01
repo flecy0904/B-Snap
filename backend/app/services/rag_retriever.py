@@ -24,6 +24,54 @@ KOREAN_STOPWORDS = {
     "있습니다",
 }
 
+KOREAN_PARTICLE_SUFFIXES = (
+    "으로",
+    "에서",
+    "에게",
+    "까지",
+    "부터",
+    "처럼",
+    "보다",
+    "은",
+    "는",
+    "이",
+    "가",
+    "을",
+    "를",
+    "와",
+    "과",
+    "도",
+    "만",
+    "의",
+    "에",
+)
+
+TOKEN_ALIASES = {
+    "스택": ("stack",),
+    "stack": ("스택",),
+    "큐": ("queue",),
+    "queue": ("큐",),
+    "후입선출": ("lifo",),
+    "lifo": ("후입선출",),
+    "선입선출": ("fifo",),
+    "fifo": ("선입선출",),
+    "트리": ("tree",),
+    "tree": ("트리",),
+    "그래프": ("graph",),
+    "graph": ("그래프",),
+    "정렬": ("sort", "sorting"),
+    "sort": ("정렬", "sorting"),
+    "sorting": ("정렬", "sort"),
+    "해시": ("hash", "hashing"),
+    "hash": ("해시", "hashing"),
+    "hashing": ("해시", "hash"),
+    "재귀": ("recursion", "recursive"),
+    "recursion": ("재귀", "recursive"),
+    "recursive": ("재귀", "recursion"),
+    "동적계획법": ("dp", "dynamic", "programming"),
+    "dp": ("동적계획법",),
+}
+
 
 def split_text_into_chunks(text: str, chunk_size: int = 800, overlap: int = 100) -> list[str]:
     if not text:
@@ -57,9 +105,10 @@ def retrieve_relevant_contexts(
     contexts = []
     for document in documents:
         content = document.get("content") or ""
+        title = document.get("title") or ""
         chunks = split_text_into_chunks(content)
         for chunk_index, chunk in enumerate(chunks):
-            score = _keyword_overlap_score(query_tokens, chunk)
+            score = _keyword_overlap_score(query_tokens, " ".join([str(title), chunk]))
             if score <= 0:
                 continue
             source_id = str(document.get("source_id") or document.get("id") or "")
@@ -109,8 +158,27 @@ def build_mock_contexts(query: str) -> list[RetrievedContext]:
 
 
 def _tokenize(text: str) -> list[str]:
-    tokens = re.findall(r"[0-9A-Za-z가-힣]+", text.lower())
-    return [token for token in tokens if len(token) >= 2 and token not in KOREAN_STOPWORDS]
+    raw_tokens = re.findall(r"[0-9A-Za-z가-힣]+", text.lower())
+    tokens = []
+    seen = set()
+    for raw_token in raw_tokens:
+        token = _normalize_token(raw_token)
+        if len(token) < 2 or token in KOREAN_STOPWORDS:
+            continue
+        for expanded_token in (token, *TOKEN_ALIASES.get(token, ())):
+            if expanded_token not in seen:
+                tokens.append(expanded_token)
+                seen.add(expanded_token)
+    return tokens
+
+
+def _normalize_token(token: str) -> str:
+    normalized = token.strip().lower()
+    if re.fullmatch(r"[가-힣]+", normalized):
+        for suffix in KOREAN_PARTICLE_SUFFIXES:
+            if len(normalized) > len(suffix) + 1 and normalized.endswith(suffix):
+                return normalized[: -len(suffix)]
+    return normalized
 
 
 def _keyword_overlap_score(query_tokens: list[str], text: str) -> float:
