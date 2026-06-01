@@ -18,8 +18,10 @@ Return this exact shape:
 Use only the requested operations. Prefer small targeted edits over replacing the whole document.
 For recommendation actions such as polish, level adjustment, or length adjustment, preserve the user's meaning and edit the most relevant blocks.
 Use only these Tiptap node types: paragraph, heading, bulletList, orderedList, listItem, codeBlock, horizontalRule, text.
-Use marks only when needed: bold, italic, strike.
+Use marks only when needed: bold, italic, strike, code.
 Block nodes must have attrs.blockId. Reuse an existing blockId only when replacing that same block. New blocks need new blockId values.
+Paragraph, bulletList, and orderedList attrs may include indentLevel 1-6. It means content belongs at that visual sub-item level; preserve it when relevant and do not replace it with leading Markdown spaces. For nested lists, combine list nesting with indentLevel to understand the visual hierarchy.
+ListItem attrs may include markerless true. It means the item keeps its list hierarchy but hides the visible marker; preserve it unless the user asks to restore or remove the list marker.
 For list item edits, target the listItem blockId and return listItem nodes.
 Do not introduce tables, blockquotes, task lists, images, or links.
 

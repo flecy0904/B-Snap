@@ -20,6 +20,7 @@
     "@expo/vector-icons": "^15.0.3",
     "@gorhom/bottom-sheet": "^5.2.10",
     "@tiptap/extension-bold": "^3.23.6",
+    "@tiptap/extension-code": "^3.23.6",
     "@tiptap/extension-code-block": "^3.23.6",
     "@tiptap/extension-document": "^3.23.6",
     "@tiptap/extension-hard-break": "^3.23.6",

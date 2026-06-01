@@ -4,6 +4,7 @@ import { Markdown } from '@tiptap/markdown';
 import { Strike } from '@tiptap/extension-strike';
 import { Bold } from '@tiptap/extension-bold';
 import { BulletList, ListItem, ListKeymap, OrderedList } from '@tiptap/extension-list';
+import { Code } from '@tiptap/extension-code';
 import { CodeBlock } from '@tiptap/extension-code-block';
 import { Document } from '@tiptap/extension-document';
 import { HardBreak } from '@tiptap/extension-hard-break';
@@ -49,6 +50,7 @@ function createExtensions() {
     Text,
     Bold,
     Italic,
+    Code,
     Heading.configure({ levels: [1, 2, 3] }),
     BulletList,
     OrderedList,

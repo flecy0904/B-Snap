@@ -285,7 +285,7 @@ ALLOWED_CANVAS_ROOT_NODE_TYPES = {
     "horizontalRule",
 }
 ALLOWED_CANVAS_NODE_TYPES = ALLOWED_CANVAS_ROOT_NODE_TYPES | {"text"}
-ALLOWED_CANVAS_MARK_TYPES = {"bold", "italic", "strike"}
+ALLOWED_CANVAS_MARK_TYPES = {"bold", "italic", "strike", "code"}
 
 
 def _validate_canvas_node(node: Any, *, allow_text: bool = True) -> dict[str, Any]:
@@ -302,6 +302,13 @@ def _validate_canvas_node(node: Any, *, allow_text: bool = True) -> dict[str, An
         clean_attrs: dict[str, Any] = {}
         if "blockId" in attrs and isinstance(attrs["blockId"], str):
             clean_attrs["blockId"] = attrs["blockId"][:80]
+        if node_type in {"paragraph", "bulletList", "orderedList"}:
+            indent_level = attrs.get("indentLevel")
+            if isinstance(indent_level, int) and not isinstance(indent_level, bool):
+                if 1 <= indent_level <= 6:
+                    clean_attrs["indentLevel"] = indent_level
+        if node_type == "listItem" and attrs.get("markerless") is True:
+            clean_attrs["markerless"] = True
         if node_type == "heading":
             level = attrs.get("level")
             clean_attrs["level"] = level if level in {1, 2, 3} else 2
