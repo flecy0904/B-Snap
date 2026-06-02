@@ -1,19 +1,25 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import { subjects as fallbackSubjects } from '../../app-defaults';
 import { createCaptureAsset, useSyncBridge, useSyncBridgeStatus } from '../use-sync-bridge';
-import { BackendApiError, isBackendApiEnabled, uploadBackendFile } from '../../services/backend-api';
-import type { CaptureAsset, Subject } from '../../types';
+import { BackendApiError, createBackendCaptureUploadJob, getBackendCaptureUploadJob, isBackendApiEnabled, type BackendCaptureUploadJob, type BackendUpload } from '../../services/backend-api';
+import type { CaptureAsset, CaptureProcessingStage, CaptureProcessingState, Subject } from '../../types';
 import { buildEmptyStudyWorkspaceState, loadStudyWorkspaceState, saveStudyWorkspaceState } from '../../storage/local-workspace-store';
 import { cleanAiDisplayText } from '../../ui-helpers';
 
-type UploadResult = Awaited<ReturnType<typeof uploadBackendFile>>;
+type UploadResult = BackendUpload;
 type PreprocessingFallbackChoice = 'continue' | 'use-original' | 'cancel';
+type ProcessingSource = CaptureProcessingState['source'];
+
+const PROCESSING_DISMISS_DELAY_MS = 650;
+const PHOTO_VIEWER_OPEN_DELAY_MS = PROCESSING_DISMISS_DELAY_MS + 120;
+const CAPTURE_JOB_POLL_INTERVAL_MS = 700;
+const CAPTURE_JOB_TIMEOUT_MS = 90000;
 
 function getCaptureErrorMessage(error: unknown, fallback: string) {
-  if (error instanceof BackendApiError && error.detail) return error.detail;
+  if (error instanceof BackendApiError) return error.detail ?? error.message;
   return fallback;
 }
 
@@ -34,14 +40,18 @@ function applyUploadAnalysis(asset: CaptureAsset, upload: UploadResult, options?
   return asset;
 }
 
+function isTargetDetectionFallback(upload: UploadResult | null) {
+  return upload?.preprocessing?.detail_code === 'segmentation_mask_not_found';
+}
+
 function resolvePreprocessingFallbackChoice(upload: UploadResult | null): Promise<PreprocessingFallbackChoice> {
-  if (upload?.preprocessing?.detail_code !== 'segmentation_mask_not_found') {
+  if (!isTargetDetectionFallback(upload)) {
     return Promise.resolve('continue');
   }
 
   return new Promise((resolve) => {
     Alert.alert(
-      '사진에서 판서 영역을 찾지 못했어요.',
+      '강의자료/칠판을 찾지 못했어요.',
       '원본 이미지를 사용할까요?',
       [
         { text: '아니오', style: 'cancel', onPress: () => resolve('cancel') },
@@ -82,6 +92,17 @@ async function persistPickedFileUri(file: {
   }
 }
 
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function mapBackendCaptureJobStage(stage: string | null | undefined): CaptureProcessingStage | null {
+  if (stage === 'target-detecting') return 'target-detecting';
+  if (stage === 'preprocessing') return 'preprocessing';
+  if (stage === 'ai-commenting') return 'ai-commenting';
+  return null;
+}
+
 export function useCaptureWorkspace(props: {
   subjectId: number;
   subjects?: Subject[];
@@ -93,8 +114,92 @@ export function useCaptureWorkspace(props: {
   const [lastFailedAction, setLastFailedAction] = useState<'camera' | 'library' | null>(null);
   const [captureFeedback, setCaptureFeedback] = useState<string | null>(null);
   const [captureError, setCaptureError] = useState<string | null>(null);
+  const [captureProcessing, setCaptureProcessing] = useState<CaptureProcessingState | null>(null);
+  const [completedPreviewAssetId, setCompletedPreviewAssetId] = useState<string | null>(null);
+  const processingTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const subjectOptions = props.subjects?.length ? props.subjects : fallbackSubjects;
   const subject = useMemo(() => subjectOptions.find((value) => value.id === props.subjectId) ?? null, [props.subjectId, subjectOptions]);
+
+  const clearProcessingTimers = () => {
+    const timers = Array.isArray(processingTimers.current) ? processingTimers.current : [];
+    timers.forEach((timer) => clearTimeout(timer));
+    processingTimers.current = [];
+  };
+
+  const setProcessingStage = (stage: CaptureProcessingStage) => {
+    setCaptureProcessing((current) => {
+      if (!current || current.stage === stage) return current;
+      return { ...current, stage };
+    });
+  };
+
+  const showProcessingModal = (source: ProcessingSource, imageUri: string) => {
+    clearProcessingTimers();
+    setCompletedPreviewAssetId(null);
+    setCaptureProcessing({ source, imageUri, stage: 'uploading' });
+  };
+
+  const completeProcessingModal = (previewAssetId?: string) => {
+    clearProcessingTimers();
+    setProcessingStage('ai-commenting');
+    processingTimers.current.push(setTimeout(() => setCaptureProcessing(null), PROCESSING_DISMISS_DELAY_MS));
+    if (previewAssetId) {
+      processingTimers.current.push(setTimeout(() => setCompletedPreviewAssetId(previewAssetId), PHOTO_VIEWER_OPEN_DELAY_MS));
+    }
+  };
+
+  const hideProcessingModal = () => {
+    clearProcessingTimers();
+    setCaptureProcessing(null);
+  };
+
+  const consumeCompletedPreviewAsset = () => {
+    setCompletedPreviewAssetId(null);
+  };
+
+  const applyBackendCaptureJobStage = (job: BackendCaptureUploadJob) => {
+    const mappedStage = mapBackendCaptureJobStage(job.stage);
+    if (mappedStage) setProcessingStage(mappedStage);
+  };
+
+  const waitForBackendCaptureJob = async (initialJob: BackendCaptureUploadJob): Promise<UploadResult> => {
+    let currentJob = initialJob;
+    const startedAt = Date.now();
+
+    while (true) {
+      applyBackendCaptureJobStage(currentJob);
+
+      if (currentJob.status === 'completed') {
+        if (!currentJob.upload) {
+          throw new BackendApiError('촬영 이미지 처리 결과를 받지 못했습니다.');
+        }
+        return currentJob.upload;
+      }
+
+      if (currentJob.status === 'failed') {
+        throw new BackendApiError(currentJob.error || currentJob.message || '촬영 이미지 처리에 실패했습니다.');
+      }
+
+      if (Date.now() - startedAt > CAPTURE_JOB_TIMEOUT_MS) {
+        throw new BackendApiError('촬영 이미지 처리 시간이 초과되었습니다.');
+      }
+
+      await wait(CAPTURE_JOB_POLL_INTERVAL_MS);
+      currentJob = await getBackendCaptureUploadJob(currentJob.job_id);
+    }
+  };
+
+  const uploadCaptureImageWithProgress = async (file: {
+    uri: string;
+    name: string;
+    type: string;
+  }) => {
+    const job = await createBackendCaptureUploadJob(file);
+    applyBackendCaptureJobStage(job);
+    return waitForBackendCaptureJob(job);
+  };
+
+  useEffect(() => () => clearProcessingTimers(), []);
 
   useEffect(() => {
     let mounted = true;
@@ -160,6 +265,7 @@ export function useCaptureWorkspace(props: {
       }
 
       const picked = result.assets[0];
+      showProcessingModal('camera', picked.uri);
       const localFileUri = await persistPickedFileUri({
         uri: picked.uri,
         fileName: picked.fileName,
@@ -169,15 +275,20 @@ export function useCaptureWorkspace(props: {
       let previewUri = picked.uri;
       let backendUpload: UploadResult | null = null;
       if (isBackendApiEnabled()) {
-        backendUpload = await uploadBackendFile({
+        backendUpload = await uploadCaptureImageWithProgress({
           uri: picked.uri,
           name: picked.fileName || `${subject.name} 카메라 캡처.jpg`,
           type: picked.mimeType || 'image/jpeg',
         });
         previewUri = backendUpload.url;
       }
+      if (isTargetDetectionFallback(backendUpload)) {
+        setProcessingStage('target-detecting');
+        await wait(120);
+      }
       const fallbackChoice = await resolvePreprocessingFallbackChoice(backendUpload);
       if (fallbackChoice === 'cancel') {
+        hideProcessingModal();
         setCaptureFeedback('촬영을 취소 했어요.');
         return;
       }
@@ -195,7 +306,9 @@ export function useCaptureWorkspace(props: {
       if (backendUpload) applyUploadAnalysis(newAsset, backendUpload, { useOriginalImage: fallbackChoice === 'use-original' });
       
       await pushAsset(newAsset);
+      completeProcessingModal(newAsset.id);
     } catch (error) {
+      hideProcessingModal();
       setLastFailedAction('camera');
       setCaptureError(getCaptureErrorMessage(error, '카메라를 실행하지 못했습니다.'));
     } finally {
@@ -230,6 +343,7 @@ export function useCaptureWorkspace(props: {
       }
 
       const picked = result.assets[0];
+      showProcessingModal('library', picked.uri);
       const localFileUri = await persistPickedFileUri({
         uri: picked.uri,
         fileName: picked.fileName,
@@ -239,15 +353,20 @@ export function useCaptureWorkspace(props: {
       let previewUri = picked.uri;
       let backendUpload: UploadResult | null = null;
       if (isBackendApiEnabled()) {
-        backendUpload = await uploadBackendFile({
+        backendUpload = await uploadCaptureImageWithProgress({
           uri: picked.uri,
           name: picked.fileName || `${subject.name} 갤러리 이미지.jpg`,
           type: picked.mimeType || 'image/jpeg',
         });
         previewUri = backendUpload.url;
       }
+      if (isTargetDetectionFallback(backendUpload)) {
+        setProcessingStage('target-detecting');
+        await wait(120);
+      }
       const fallbackChoice = await resolvePreprocessingFallbackChoice(backendUpload);
       if (fallbackChoice === 'cancel') {
+        hideProcessingModal();
         setCaptureFeedback('이미지 저장을 취소 할게요.');
         return;
       }
@@ -265,7 +384,9 @@ export function useCaptureWorkspace(props: {
       if (backendUpload) applyUploadAnalysis(newAsset, backendUpload, { useOriginalImage: fallbackChoice === 'use-original' });
       
       await pushAsset(newAsset);
+      completeProcessingModal(newAsset.id);
     } catch (error) {
+      hideProcessingModal();
       setLastFailedAction('library');
       setCaptureError(getCaptureErrorMessage(error, '사진첩에서 이미지를 가져오지 못했습니다.'));
     } finally {
@@ -289,10 +410,13 @@ export function useCaptureWorkspace(props: {
     recentUploads,
     syncStatus,
     pendingAction,
+    captureProcessing,
+    completedPreviewAssetId,
     lastFailedAction,
     captureFeedback,
     captureError,
     retryLastFailedAction,
+    consumeCompletedPreviewAsset,
     captureFromCamera,
     pickImageFromLibrary,
   };

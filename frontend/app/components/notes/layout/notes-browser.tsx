@@ -1,16 +1,14 @@
 import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { Image, Modal, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
+import { Image, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 import { subjects as allSubjects } from '../../../app-defaults';
 import { CaptureAsset, NoteEntry, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject } from '../../../types';
-import { cleanAiDisplayText, darkenHex } from '../../../ui-helpers';
-import { PhotoViewerLinkPanel } from './photo-viewer-link-panel';
+import { darkenHex } from '../../../ui-helpers';
+import { PhotoViewerModal } from './photo-viewer-modal';
 import {
   formatCaptureDate,
   getCaptureLibraryContextLabel,
   getCaptureImageSource,
-  getCaptureOriginalImageSource,
-  getCaptureReferences,
 } from '../shared/capture-assets';
 
 export type NotesBrowserProps = {
@@ -105,23 +103,6 @@ export function NotesBrowser(props: NotesBrowserProps) {
     () => selectedPhotoAssets.find((asset) => asset.id === previewAssetId) ?? null,
     [previewAssetId, selectedPhotoAssets],
   );
-  const previewImageSource = previewAsset ? getCaptureOriginalImageSource(previewAsset) : null;
-  const previewReferences = React.useMemo(
-    () => previewAsset ? getCaptureReferences(previewAsset, props.pageCaptureReferences) : [],
-    [previewAsset, props.pageCaptureReferences],
-  );
-  const previewPrimaryReference = previewReferences[0] ?? null;
-  const linkableDocuments = React.useMemo(() => {
-    if (!previewAsset) return [];
-    return props.allStudyDocuments
-      .filter((document) => document.subjectId === previewAsset.subjectId && document.type !== 'image' && document.pageCount > 0)
-      .sort((left, right) => (left.id === previewPrimaryReference?.documentId ? -1 : right.id === previewPrimaryReference?.documentId ? 1 : right.id - left.id));
-  }, [previewAsset, previewPrimaryReference?.documentId, props.allStudyDocuments]);
-  const selectedLinkDocument = React.useMemo(
-    () => linkableDocuments.find((document) => document.id === previewPrimaryReference?.documentId) ?? linkableDocuments[0] ?? null,
-    [linkableDocuments, previewPrimaryReference?.documentId],
-  );
-  const selectedLinkInitialPageNumber = previewPrimaryReference?.page.kind === 'pdf' ? previewPrimaryReference.page.pageNumber : 1;
 
   React.useEffect(() => {
     if (recoverableCount === 0) setRecoveryOpen(false);
@@ -295,143 +276,18 @@ export function NotesBrowser(props: NotesBrowserProps) {
           )}
         </View>
       </View>
-      <Modal
-        visible={!!previewAsset}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setPreviewAssetId(null)}
-      >
-        <View style={props.styles.photoViewerOverlay}>
-          <Pressable style={props.styles.photoViewerBackdrop} onPress={() => setPreviewAssetId(null)} />
-          {previewAsset ? (
-            <View style={props.styles.photoViewerCard}>
-              <View style={props.styles.photoViewerHeader}>
-                <View style={props.styles.fill}>
-                  <Text style={props.styles.photoViewerTitle} numberOfLines={1}>{previewAsset.title || '크롭 사진'}</Text>
-                  <View style={props.styles.photoViewerMetaRow}>
-                    <View style={props.styles.photoViewerMetaPill}>
-                      <MaterialCommunityIcons name="calendar-clock-outline" size={13} color="#7E8798" />
-                      <Text style={props.styles.photoViewerMetaPillText}>{formatCaptureDate(previewAsset.createdAt)}</Text>
-                    </View>
-                    <View style={[props.styles.photoViewerMetaPill, previewReferences.length && props.styles.photoViewerMetaPillLinked]}>
-                      <MaterialCommunityIcons name={previewReferences.length ? 'link-variant' : 'link-off'} size={13} color={previewReferences.length ? '#4F68D2' : '#7E8798'} />
-                      <Text style={[props.styles.photoViewerMetaPillText, previewReferences.length && props.styles.photoViewerMetaPillTextLinked]}>
-                        {previewReferences.length ? `${previewReferences.length}곳 연결` : '미연결'}
-                      </Text>
-                    </View>
-                  </View>
-                </View>
-                <Pressable style={props.styles.photoViewerCloseButton} onPress={() => setPreviewAssetId(null)}>
-                  <MaterialCommunityIcons name="close" size={20} color="#5F6876" />
-                </Pressable>
-              </View>
-              <ScrollView contentContainerStyle={props.styles.photoViewerBody} showsVerticalScrollIndicator={false}>
-                <View style={props.styles.photoViewerImageFrame}>
-                  {previewImageSource ? (
-                    <Image source={previewImageSource} style={props.styles.photoViewerImage} resizeMode="contain" />
-                  ) : (
-                    <View style={props.styles.photoViewerFallback}>
-                      <MaterialCommunityIcons name="image-off-outline" size={36} color="#9AA6B8" />
-                    </View>
-                  )}
-                </View>
-                <View style={props.styles.photoViewerInfo}>
-                  <View style={props.styles.photoViewerInfoCard}>
-                    <View style={props.styles.photoViewerInfoHeader}>
-                      <MaterialCommunityIcons name="file-link-outline" size={15} color="#5F79FF" />
-                      <Text style={props.styles.photoViewerInfoTitle}>연결 위치</Text>
-                    </View>
-                    {previewReferences.length ? (
-                      <View style={props.styles.photoViewerReferenceRow}>
-                        {previewReferences.map((reference) => (
-                          <Pressable
-                            key={reference.id}
-                            style={props.styles.photoViewerReferencePill}
-                            onPress={() => {
-                              props.onOpenPageCaptureReference(reference.id);
-                              setPreviewAssetId(null);
-                            }}
-                          >
-                            <Text style={props.styles.photoViewerReferencePillText}>{reference.pageLabel}</Text>
-                          </Pressable>
-                        ))}
-                      </View>
-                    ) : (
-                      <Text style={props.styles.photoViewerInfoValue}>아직 노트 페이지에 연결되지 않았습니다.</Text>
-                    )}
-                    <PhotoViewerLinkPanel
-                      styles={props.styles}
-                      assetId={previewAsset.id}
-                      documents={linkableDocuments}
-                      initialDocumentId={selectedLinkDocument?.id ?? null}
-                      initialPageNumber={selectedLinkInitialPageNumber}
-                      onLink={(assetId, documentId, pageNumber) => {
-                        props.onLinkCaptureAssetToPage(assetId, documentId, pageNumber);
-                        setPreviewAssetId(null);
-                      }}
-                    />
-                  </View>
-                  <View style={props.styles.photoViewerInfoCard}>
-                    <View style={props.styles.photoViewerInfoHeader}>
-                      <MaterialCommunityIcons name="star-four-points" size={15} color="#5F79FF" />
-                      <Text style={props.styles.photoViewerInfoTitle}>AI 설명</Text>
-                    </View>
-                    <Text style={props.styles.photoViewerInfoValue}>
-                      {cleanAiDisplayText(previewAsset.analysisSummary ?? previewAsset.summary)}
-                    </Text>
-                  </View>
-                </View>
-              </ScrollView>
-              <View style={props.styles.photoViewerActionRow}>
-                {previewPrimaryReference ? (
-                  <Pressable
-                    style={props.styles.photoViewerActionButton}
-                    onPress={() => {
-                      props.onAskAiAboutPageCaptureReference(previewPrimaryReference.id);
-                      setPreviewAssetId(null);
-                    }}
-                  >
-                    <MaterialCommunityIcons name="star-four-points" size={16} color="#4F68D2" />
-                    <Text style={props.styles.photoViewerActionText}>AI에게 질문하기</Text>
-                  </Pressable>
-                ) : null}
-                {previewPrimaryReference ? (
-                  <Pressable
-                    style={[props.styles.photoViewerActionButton, props.styles.photoViewerActionButtonPrimary]}
-                    onPress={() => {
-                      props.onOpenPageCaptureReference(previewPrimaryReference.id);
-                      setPreviewAssetId(null);
-                    }}
-                  >
-                    <MaterialCommunityIcons name="notebook-outline" size={16} color="#FFFFFF" />
-                    <Text style={[props.styles.photoViewerActionText, props.styles.photoViewerActionTextPrimary]}>노트에서 열기</Text>
-                  </Pressable>
-                ) : null}
-                <Pressable
-                  style={props.styles.photoViewerActionButton}
-                  onPress={() => {
-                    props.onInsertInboxAsset(previewAsset.id);
-                    setPreviewAssetId(null);
-                  }}
-                >
-                  <MaterialCommunityIcons name="file-image-plus-outline" size={16} color="#4F68D2" />
-                  <Text style={props.styles.photoViewerActionText}>이미지 노트 만들기</Text>
-                </Pressable>
-                <Pressable
-                  style={[props.styles.photoViewerActionButton, props.styles.photoViewerActionButtonDanger]}
-                  onPress={() => {
-                    props.onRemoveCaptureAsset(previewAsset.id);
-                    setPreviewAssetId(null);
-                  }}
-                >
-                  <MaterialCommunityIcons name="trash-can-outline" size={16} color="#D64B4B" />
-                  <Text style={[props.styles.photoViewerActionText, props.styles.photoViewerActionTextDanger]}>삭제</Text>
-                </Pressable>
-              </View>
-            </View>
-          ) : null}
-        </View>
-      </Modal>
+      <PhotoViewerModal
+        asset={previewAsset}
+        references={props.pageCaptureReferences}
+        documents={props.allStudyDocuments}
+        styles={props.styles}
+        onClose={() => setPreviewAssetId(null)}
+        onInsertInboxAsset={props.onInsertInboxAsset}
+        onLinkCaptureAssetToPage={props.onLinkCaptureAssetToPage}
+        onOpenPageCaptureReference={props.onOpenPageCaptureReference}
+        onAskAiAboutPageCaptureReference={props.onAskAiAboutPageCaptureReference}
+        onRemoveCaptureAsset={props.onRemoveCaptureAsset}
+      />
     </ScrollView>
   );
 }

@@ -2,7 +2,15 @@ import json
 import unittest
 from unittest.mock import patch
 
-from backend.app.services.rag_service import build_rag_context_hint, load_note_documents
+from pydantic import ValidationError
+
+from backend.app.schemas.rag import QuizQuestion, RAGAskRequest, RAGSummaryRequest
+from backend.app.services.rag_service import (
+    _parse_quiz_questions,
+    ask_with_rag,
+    build_rag_context_hint,
+    load_note_documents,
+)
 from backend.app.services.rag_retriever import (
     build_rag_context,
     retrieve_relevant_contexts,
@@ -38,6 +46,37 @@ class RAGRetrieverTest(unittest.TestCase):
         self.assertEqual(len(contexts), 1)
         self.assertEqual(contexts[0].title, "Stack")
         self.assertGreater(contexts[0].score, 0)
+
+    def test_retrieve_relevant_contexts_matches_korean_query_to_english_terms(self):
+        documents = [
+            {
+                "source_type": "note_page",
+                "source_id": "1",
+                "title": "자료구조",
+                "content": "Stack is a LIFO data structure. Queue is a FIFO data structure.",
+            }
+        ]
+
+        contexts = retrieve_relevant_contexts("스택은 후입선출 구조인가?", documents, top_k=1)
+
+        self.assertEqual(len(contexts), 1)
+        self.assertEqual(contexts[0].source_id, "1")
+        self.assertGreater(contexts[0].score, 0)
+
+    def test_retrieve_relevant_contexts_uses_title_keywords(self):
+        documents = [
+            {
+                "source_type": "note_page",
+                "source_id": "1",
+                "title": "해시 테이블",
+                "content": "충돌 해결 방식과 체이닝을 정리한 페이지입니다.",
+            }
+        ]
+
+        contexts = retrieve_relevant_contexts("hash table 설명", documents, top_k=1)
+
+        self.assertEqual(len(contexts), 1)
+        self.assertEqual(contexts[0].title, "해시 테이블")
 
     def test_build_rag_context_includes_sources(self):
         documents = [
@@ -113,6 +152,63 @@ class RAGRetrieverTest(unittest.TestCase):
         self.assertIn("Retrieved study context", hint or "")
         self.assertIn("자료구조 - page 3", hint or "")
         self.assertIn("Stack은 LIFO", hint or "")
+
+    def test_parse_quiz_questions_accepts_fenced_json(self):
+        fallback = [
+            QuizQuestion(
+                question="fallback",
+                answer="fallback",
+                explanation="fallback",
+            )
+        ]
+        raw_response = """
+        ```json
+        {
+          "questions": [
+            {
+              "question": "스택의 동작 방식은?",
+              "answer": "LIFO",
+              "explanation": "마지막에 들어간 데이터가 먼저 나온다.",
+              "type": "short_answer"
+            }
+          ]
+        }
+        ```
+        """
+
+        questions = _parse_quiz_questions(raw_response, fallback=fallback)
+
+        self.assertEqual(len(questions), 1)
+        self.assertEqual(questions[0].answer, "LIFO")
+
+    def test_rag_request_rejects_empty_question(self):
+        with self.assertRaises(ValidationError):
+            RAGAskRequest(question="")
+
+    def test_rag_summary_request_restricts_mode(self):
+        with self.assertRaises(ValidationError):
+            RAGSummaryRequest(mode="brief")
+
+    def test_ask_with_rag_returns_answer_and_sources(self):
+        documents = [
+            {
+                "source_type": "note_page",
+                "source_id": "3",
+                "title": "자료구조 - page 1",
+                "content": "스택은 LIFO 구조이고 push와 pop 연산을 사용합니다.",
+            }
+        ]
+
+        with patch("backend.app.services.rag_service.generate_text_response", return_value="스택은 LIFO 구조입니다.") as llm:
+            response = ask_with_rag(question="스택 설명", documents=documents, top_k=1, model="test-model")
+
+        self.assertEqual(response.answer, "스택은 LIFO 구조입니다.")
+        self.assertEqual(len(response.sources), 1)
+        self.assertEqual(response.sources[0].source_id, "3")
+        self.assertEqual(response.sections[0].title, "핵심 답변")
+        llm_input = llm.call_args.kwargs["input_items"][0]["content"]
+        self.assertIn("User question:", llm_input)
+        self.assertIn("스택은 LIFO", llm_input)
 
 
 if __name__ == "__main__":

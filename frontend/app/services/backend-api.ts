@@ -198,6 +198,17 @@ export type BackendUpload = {
   } | null;
 };
 
+export type BackendCaptureUploadJob = {
+  job_id: string;
+  status: 'processing' | 'completed' | 'failed' | string;
+  stage: 'target-detecting' | 'preprocessing' | 'ai-commenting' | 'completed' | 'failed' | string;
+  message?: string | null;
+  upload?: BackendUpload | null;
+  error?: string | null;
+  created_at?: number;
+  updated_at?: number;
+};
+
 export type BackendAuthUser = {
   id: number;
   email: string;
@@ -321,6 +332,22 @@ export function isBackendApiEnabled() {
   return !!getBackendUrl();
 }
 
+function normalizeBackendUpload(upload: BackendUpload): BackendUpload {
+  return {
+    ...upload,
+    url: resolveBackendAssetUrl(upload.url) ?? upload.url,
+    processed_url: resolveBackendAssetUrl(upload.processed_url) ?? upload.processed_url,
+    thumbnail_url: resolveBackendAssetUrl(upload.thumbnail_url) ?? upload.thumbnail_url,
+  };
+}
+
+function normalizeBackendCaptureUploadJob(job: BackendCaptureUploadJob): BackendCaptureUploadJob {
+  return {
+    ...job,
+    upload: job.upload ? normalizeBackendUpload(job.upload) : job.upload,
+  };
+}
+
 async function appendUploadFile(formData: FormData, fieldName: string, file: {
   uri: string;
   name: string;
@@ -380,12 +407,53 @@ export async function uploadBackendFile(file: {
   }
 
   const upload = await response.json() as BackendUpload;
-  return {
-    ...upload,
-    url: resolveBackendAssetUrl(upload.url) ?? upload.url,
-    processed_url: resolveBackendAssetUrl(upload.processed_url) ?? upload.processed_url,
-    thumbnail_url: resolveBackendAssetUrl(upload.thumbnail_url) ?? upload.thumbnail_url,
-  };
+  return normalizeBackendUpload(upload);
+}
+
+export async function createBackendCaptureUploadJob(file: {
+  uri: string;
+  name: string;
+  type: string;
+}) {
+  const baseUrl = getBackendUrl();
+  if (!baseUrl) {
+    throw new BackendApiError('Backend URL is not configured.');
+  }
+
+  const formData = new FormData();
+  await appendUploadFile(formData, 'file', file);
+
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}/uploads/capture-jobs`, {
+      method: 'POST',
+      headers: backendAuthToken ? { Authorization: `Bearer ${backendAuthToken}` } : undefined,
+      body: formData,
+    });
+  } catch {
+    throw new BackendApiError('Backend server is unreachable.');
+  }
+
+  if (!response.ok) {
+    let detail: string | null = null;
+    try {
+      const body = await response.json();
+      detail = parseBackendErrorDetail(body);
+    } catch {
+      detail = null;
+    }
+    throw new BackendApiError(`Backend capture upload failed: ${response.status}`, response.status, detail);
+  }
+
+  const job = await response.json() as BackendCaptureUploadJob;
+  return normalizeBackendCaptureUploadJob(job);
+}
+
+export async function getBackendCaptureUploadJob(jobId: string) {
+  const job = await request<BackendCaptureUploadJob>(`/uploads/capture-jobs/${encodeURIComponent(jobId)}`, {
+    timeoutMs: 8000,
+  });
+  return normalizeBackendCaptureUploadJob(job);
 }
 
 export async function uploadBackendPdfNote(payload: {
@@ -436,12 +504,7 @@ export async function uploadBackendPdfNote(payload: {
   const result = await response.json() as BackendPdfNoteUpload;
   return {
     ...result,
-    upload: {
-      ...result.upload,
-      url: resolveBackendAssetUrl(result.upload.url) ?? result.upload.url,
-      processed_url: resolveBackendAssetUrl(result.upload.processed_url) ?? result.upload.processed_url,
-      thumbnail_url: resolveBackendAssetUrl(result.upload.thumbnail_url) ?? result.upload.thumbnail_url,
-    },
+    upload: normalizeBackendUpload(result.upload),
     note: normalizeBackendNote(result.note),
     pages: result.pages.map((page) => ({
       ...page,

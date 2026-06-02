@@ -40,6 +40,7 @@ export type StudyDocumentBackendSyncStatus = 'local' | 'syncing' | 'synced' | 'f
 export type CaptureAssetType = 'image' | 'pdf';
 export type CaptureAssetStatus = 'uploaded' | 'suggested' | 'accepted' | 'archived' | 'dismissed';
 export type CaptureSource = 'camera' | 'library' | 'document';
+export type CaptureProcessingStage = 'uploading' | 'target-detecting' | 'preprocessing' | 'ai-commenting';
 export type WorkspaceAttachmentPlacement = 'next_page_insert' | 'side_reference' | 'library_only';
 export type SyncBridgeMode = 'local' | 'websocket';
 export type SyncBridgeStatus = 'local' | 'connecting' | 'connected' | 'reconnecting' | 'offline';
@@ -106,6 +107,12 @@ export interface CaptureAsset {
   analysisStatus?: 'pending' | 'ready' | 'failed';
   analysisSummary?: string;
   analysisKeywords?: string[];
+}
+
+export interface CaptureProcessingState {
+  source: Extract<CaptureSource, 'camera' | 'library'>;
+  stage: CaptureProcessingStage;
+  imageUri: string;
 }
 
 export interface CaptureAssetEvent {
