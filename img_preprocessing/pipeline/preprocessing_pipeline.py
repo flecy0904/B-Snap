@@ -11,7 +11,7 @@ import hashlib
 import json
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from img_preprocessing.crop.yolo_segmentation_cropper import (
     DEFAULT_SEGMENTATION_MODEL,
@@ -43,6 +43,7 @@ def preprocess_for_service(
     save_debug: bool = False,
     save_scan_metrics: bool = True,
     output_name: str | None = None,
+    progress_callback: Callable[[str, str], None] | None = None,
 ) -> dict[str, Any]:
     """Run raw image segmentation crop and return a service-friendly result."""
 
@@ -68,6 +69,8 @@ def preprocess_for_service(
         )
 
     crop_output_path = crop_dir / f"{output_id}_crop.jpg"
+    if progress_callback is not None:
+        progress_callback("target-detecting", "강의자료/칠판 영역을 찾고 있습니다.")
     if segmentation_cropper is not None:
         crop_result = segmentation_cropper.preprocess(
             path,
@@ -92,6 +95,8 @@ def preprocess_for_service(
             retina_masks=retina_masks,
         )
 
+    if progress_callback is not None and crop_result.get("success"):
+        progress_callback("preprocessing", "찾은 영역을 읽기 좋은 이미지로 보정하고 있습니다.")
     scan_enhance_result = _run_scan_enhancement(
         crop_result,
         output_dir=scan_enhance_dir,

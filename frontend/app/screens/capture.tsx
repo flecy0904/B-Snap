@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
 import { Pressable, ScrollView, Text, View } from 'react-native';
 import { subjects as fallbackSubjects } from '../app-defaults';
-import { CaptureAsset, Subject, SyncBridgeStatus } from '../types';
+import { CaptureAsset, CaptureProcessingState, PageCaptureReference, StudyDocumentEntry, Subject, SyncBridgeStatus } from '../types';
+import { CaptureProcessingModal } from '../components/capture/capture-processing-modal';
+import { PhotoViewerModal } from '../components/notes/layout/photo-viewer-modal';
 
 function getSyncStatusText(status: SyncBridgeStatus) {
   if (status === 'connected') return '실시간 연결됨';
@@ -21,21 +23,34 @@ export function MobileCapture(props: {
   captureId: number;
   subjects: Subject[];
   recentUploads: CaptureAsset[];
+  pageCaptureReferences: PageCaptureReference[];
+  allStudyDocuments: StudyDocumentEntry[];
   pickerOpen: boolean;
   onCaptureId: (id: number) => void;
   onTogglePicker: () => void;
   pendingAction: 'camera' | 'library' | null;
+  captureProcessing: CaptureProcessingState | null;
   syncStatus: SyncBridgeStatus;
   captureFeedback: string | null;
   captureError: string | null;
   onCaptureFromCamera: () => Promise<void>;
   onPickFromLibrary: () => Promise<void>;
   onRetryUpload: () => Promise<void>;
+  onInsertInboxAsset: (assetId: string) => void;
+  onLinkCaptureAssetToPage: (assetId: string, documentId: number, pageNumber: number) => boolean;
+  onOpenPageCaptureReference: (referenceId: string) => void;
+  onAskAiAboutPageCaptureReference: (referenceId: string) => void;
+  onRemoveCaptureAsset: (assetId: string) => void;
   styles: any;
 }) {
   const current = props.subjects.find((item) => item.id === props.captureId) ?? props.subjects[0] ?? fallbackSubjects[0];
   const busy = props.pendingAction !== null;
   const pendingText = getPendingActionText(props.pendingAction);
+  const [previewAssetId, setPreviewAssetId] = useState<string | null>(null);
+  const previewAsset = React.useMemo(
+    () => props.recentUploads.find((asset) => asset.id === previewAssetId && asset.type === 'image' && asset.status !== 'dismissed') ?? null,
+    [previewAssetId, props.recentUploads],
+  );
 
   return (
     <ScrollView style={props.styles.main} contentContainerStyle={props.styles.mobilePage}>
@@ -85,7 +100,14 @@ export function MobileCapture(props: {
         <View style={props.styles.captureRecentCard}>
           <Text style={props.styles.captureRecentTitle}>최근 업로드</Text>
           {props.recentUploads.map((asset, index) => (
-            <View key={asset.id} style={[props.styles.captureRecentRow, index === 0 && props.styles.captureRecentRowFirst]}>
+            <Pressable
+              key={asset.id}
+              style={[props.styles.captureRecentRow, index === 0 && props.styles.captureRecentRowFirst]}
+              onPress={() => {
+                if (asset.type === 'image') setPreviewAssetId(asset.id);
+              }}
+              disabled={asset.type !== 'image'}
+            >
               <View style={props.styles.captureRecentMeta}>
                 <Text style={props.styles.captureRecentType}>{asset.type === 'image' ? 'IMAGE' : 'PDF'}</Text>
                 <Text style={props.styles.captureRecentName} numberOfLines={1}>{asset.title}</Text>
@@ -97,7 +119,7 @@ export function MobileCapture(props: {
               <View style={props.styles.captureRecentStatusPill}>
                 <Text style={props.styles.captureRecentStatusText}>전송됨</Text>
               </View>
-            </View>
+            </Pressable>
           ))}
         </View>
       ) : (
@@ -107,6 +129,19 @@ export function MobileCapture(props: {
       )}
 
       <Text style={props.styles.captureHint}>촬영한 이미지는 각 과목의 페이지에서 확인할 수 있어요.</Text>
+      <CaptureProcessingModal processing={props.captureProcessing} styles={props.styles} />
+      <PhotoViewerModal
+        asset={previewAsset}
+        references={props.pageCaptureReferences}
+        documents={props.allStudyDocuments}
+        styles={props.styles}
+        onClose={() => setPreviewAssetId(null)}
+        onInsertInboxAsset={props.onInsertInboxAsset}
+        onLinkCaptureAssetToPage={props.onLinkCaptureAssetToPage}
+        onOpenPageCaptureReference={props.onOpenPageCaptureReference}
+        onAskAiAboutPageCaptureReference={props.onAskAiAboutPageCaptureReference}
+        onRemoveCaptureAsset={props.onRemoveCaptureAsset}
+      />
     </ScrollView>
   );
 }
@@ -116,21 +151,34 @@ export function DesktopCapture(props: {
   captureId: number;
   subjects: Subject[];
   recentUploads: CaptureAsset[];
+  pageCaptureReferences: PageCaptureReference[];
+  allStudyDocuments: StudyDocumentEntry[];
   onCaptureId: (id: number) => void;
   pendingAction: 'camera' | 'library' | null;
+  captureProcessing: CaptureProcessingState | null;
   syncStatus: SyncBridgeStatus;
   captureFeedback: string | null;
   captureError: string | null;
   onCaptureFromCamera: () => Promise<void>;
   onPickFromLibrary: () => Promise<void>;
   onRetryUpload: () => Promise<void>;
+  onInsertInboxAsset: (assetId: string) => void;
+  onLinkCaptureAssetToPage: (assetId: string, documentId: number, pageNumber: number) => boolean;
+  onOpenPageCaptureReference: (referenceId: string) => void;
+  onAskAiAboutPageCaptureReference: (referenceId: string) => void;
+  onRemoveCaptureAsset: (assetId: string) => void;
   styles: any;
   isWeb?: boolean;
 }) {
   const current = props.subjects.find((item) => item.id === props.captureId) ?? props.subjects[0] ?? fallbackSubjects[0];
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [previewAssetId, setPreviewAssetId] = useState<string | null>(null);
   const busy = props.pendingAction !== null;
   const pendingText = getPendingActionText(props.pendingAction);
+  const previewAsset = React.useMemo(
+    () => props.recentUploads.find((asset) => asset.id === previewAssetId && asset.type === 'image' && asset.status !== 'dismissed') ?? null,
+    [previewAssetId, props.recentUploads],
+  );
 
   return (
     <ScrollView style={props.styles.main} contentContainerStyle={[props.styles.desktopPage, props.compact && props.styles.desktopPageCompact, props.isWeb && props.styles.webDesktopPage]}>
@@ -203,7 +251,14 @@ export function DesktopCapture(props: {
           <View style={props.styles.captureRecentCard}>
             <Text style={props.styles.captureRecentTitle}>최근 업로드</Text>
             {props.recentUploads.map((asset, index) => (
-              <View key={asset.id} style={[props.styles.captureRecentRow, index === 0 && props.styles.captureRecentRowFirst]}>
+              <Pressable
+                key={asset.id}
+                style={[props.styles.captureRecentRow, index === 0 && props.styles.captureRecentRowFirst]}
+                onPress={() => {
+                  if (asset.type === 'image') setPreviewAssetId(asset.id);
+                }}
+                disabled={asset.type !== 'image'}
+              >
                 <View style={props.styles.captureRecentMeta}>
                   <Text style={props.styles.captureRecentType}>{asset.type === 'image' ? 'IMAGE' : 'PDF'}</Text>
                   <Text style={props.styles.captureRecentName} numberOfLines={1}>{asset.title}</Text>
@@ -215,7 +270,7 @@ export function DesktopCapture(props: {
                 <View style={props.styles.captureRecentStatusPill}>
                   <Text style={props.styles.captureRecentStatusText}>전송됨</Text>
                 </View>
-              </View>
+              </Pressable>
             ))}
           </View>
         ) : (
@@ -225,6 +280,19 @@ export function DesktopCapture(props: {
         )}
         <Text style={props.styles.captureHint}>촬영한 이미지는 각 과목의 페이지에서 확인할 수 있어요.</Text>
       </View>
+      <CaptureProcessingModal processing={props.captureProcessing} styles={props.styles} />
+      <PhotoViewerModal
+        asset={previewAsset}
+        references={props.pageCaptureReferences}
+        documents={props.allStudyDocuments}
+        styles={props.styles}
+        onClose={() => setPreviewAssetId(null)}
+        onInsertInboxAsset={props.onInsertInboxAsset}
+        onLinkCaptureAssetToPage={props.onLinkCaptureAssetToPage}
+        onOpenPageCaptureReference={props.onOpenPageCaptureReference}
+        onAskAiAboutPageCaptureReference={props.onAskAiAboutPageCaptureReference}
+        onRemoveCaptureAsset={props.onRemoveCaptureAsset}
+      />
     </ScrollView>
   );
 }
