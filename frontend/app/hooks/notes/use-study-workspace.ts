@@ -265,12 +265,15 @@ export function useStudyWorkspace(props: {
   useEffect(() => {
     if (previousStudyDocumentIdRef.current === studyDocumentId) return;
     previousStudyDocumentIdRef.current = studyDocumentId;
-    setInkHistoryByDocument({});
-    setRedoInkHistoryByDocument({});
-    setRedoInkByDocument({});
     setWorkspaceActionHistory([]);
     setWorkspaceRedoActionHistory([]);
     setFocusedWorkspaceTarget(null);
+
+    if (studyDocumentId === null) {
+      setInkHistoryByDocument({});
+      setRedoInkHistoryByDocument({});
+      setRedoInkByDocument({});
+    }
   }, [studyDocumentId]);
   const studyDocumentBackendNoteId = getStudyDocumentBackendNoteId(studyDocument);
   const {
