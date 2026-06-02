@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -29,7 +31,7 @@ class RAGAnswer(BaseModel):
 
 
 class RAGAskRequest(BaseModel):
-    question: str
+    question: str = Field(min_length=1)
     subject_id: int | None = None
     folder_id: int | None = None
     note_ids: list[int] | None = None
@@ -42,7 +44,7 @@ class RAGSummaryRequest(BaseModel):
     subject_id: int | None = None
     folder_id: int | None = None
     top_k: int = Field(default=5, ge=1, le=20)
-    mode: str = "note"
+    mode: Literal["note", "exam"] = "note"
     model: str | None = None
 
 

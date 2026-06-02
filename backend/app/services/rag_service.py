@@ -1,4 +1,5 @@
 import json
+import re
 from typing import Any
 
 from psycopg import Connection
@@ -30,6 +31,9 @@ from backend.app.services.rag_retriever import (
     retrieve_relevant_contexts,
     split_text_into_chunks,
 )
+
+
+JSON_FENCE_PATTERN = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
 
 
 def load_note_documents(
@@ -348,6 +352,7 @@ def _mock_quiz_questions(contexts: list[RetrievedContext], count: int) -> list[Q
 
 
 def _parse_quiz_questions(raw_response: str, fallback: list[QuizQuestion]) -> list[QuizQuestion]:
+    raw_response = _extract_json_payload(raw_response)
     try:
         payload = json.loads(raw_response)
     except json.JSONDecodeError:
@@ -366,6 +371,25 @@ def _parse_quiz_questions(raw_response: str, fallback: list[QuizQuestion]) -> li
         except ValueError:
             continue
     return parsed or fallback
+
+
+def _extract_json_payload(raw_response: str) -> str:
+    response = raw_response.strip()
+    fenced_match = JSON_FENCE_PATTERN.search(response)
+    if fenced_match:
+        return fenced_match.group(1).strip()
+
+    object_start = response.find("{")
+    array_start = response.find("[")
+    candidates = [index for index in [object_start, array_start] if index >= 0]
+    if not candidates:
+        return response
+
+    start = min(candidates)
+    end = max(response.rfind("}"), response.rfind("]"))
+    if end <= start:
+        return response
+    return response[start : end + 1]
 
 
 def _sources_text(contexts: list[RetrievedContext]) -> str:

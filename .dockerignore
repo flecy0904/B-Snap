@@ -1,0 +1,48 @@
+.git
+.gitignore
+.DS_Store
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+!.env.*.example
+backend/.env
+frontend/.env
+
+# Python local state
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+env/
+backend/.venv/
+backend/venv/
+backend/env/
+backend/ENV/
+
+# Backend runtime files
+backend/uploads/
+outputs/
+sample_images/
+
+# Frontend app is built separately from the backend Cloud Run image.
+frontend/
+
+# Large ML training artifacts; keep the service inference weight.
+img_preprocessing/target_area_yolo11n/
+WhiteBoard Detection.v1i.coco/
+*.pt
+!img_preprocessing/crop/best.pt
+
+# Local/editor files
+.idea/
+.vscode/
+*.swp
+*.bak
+*.log

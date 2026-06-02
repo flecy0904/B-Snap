@@ -80,6 +80,24 @@ def test_preprocess_for_service_runs_segmentation_crop_pipeline(tmp_path: Path) 
     assert result["artifacts"]["ocr_bw_path"] == result["scan_enhance"]["ocr_bw_path"]
 
 
+def test_preprocess_for_service_reports_target_detection_before_preprocessing(tmp_path: Path) -> None:
+    input_path = tmp_path / "raw.jpg"
+    output_dir = tmp_path / "service_outputs"
+    events: list[tuple[str, str]] = []
+    assert cv2.imwrite(str(input_path), _synthetic_board_with_text())
+
+    result = preprocess_for_service(
+        input_path,
+        output_dir,
+        segmentation_cropper=FakeSegmentationCropper(),
+        progress_callback=lambda stage, message: events.append((stage, message)),
+    )
+
+    assert result["success"] is True
+    assert [stage for stage, _message in events] == ["target-detecting", "preprocessing"]
+    assert "강의자료/칠판" in events[0][1]
+
+
 def test_preprocess_directory_for_service_avoids_same_stem_collisions(tmp_path: Path) -> None:
     input_root = tmp_path / "inputs"
     first_dir = input_root / "first"
