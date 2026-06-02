@@ -383,6 +383,7 @@ export function AppShell(props: {
                   captureId={scheduleState.captureId}
                   subjects={scheduleState.semesterSubjects}
                   recentUploads={captureState.recentUploads}
+                  completedPreviewAssetId={captureState.completedPreviewAssetId}
                   pageCaptureReferences={notesState.allPageCaptureReferences}
                   allStudyDocuments={notesState.allStudyDocuments}
                   syncStatus={captureState.syncStatus}
@@ -394,6 +395,7 @@ export function AppShell(props: {
                   onCaptureFromCamera={captureState.captureFromCamera}
                   onPickFromLibrary={captureState.pickImageFromLibrary}
                   onRetryUpload={captureState.retryLastFailedAction}
+                  onConsumeCompletedPreviewAsset={captureState.consumeCompletedPreviewAsset}
                   onInsertInboxAsset={notesState.insertInboxAsset}
                   onLinkCaptureAssetToPage={notesState.linkCaptureAssetToPage}
                   onOpenPageCaptureReference={notesState.openPageCaptureReference}
@@ -605,6 +607,7 @@ export function AppShell(props: {
                   captureId={scheduleState.captureId}
                   subjects={scheduleState.semesterSubjects}
                   recentUploads={captureState.recentUploads}
+                  completedPreviewAssetId={captureState.completedPreviewAssetId}
                   pageCaptureReferences={notesState.allPageCaptureReferences}
                   allStudyDocuments={notesState.allStudyDocuments}
                   syncStatus={captureState.syncStatus}
@@ -621,6 +624,7 @@ export function AppShell(props: {
                   onCaptureFromCamera={captureState.captureFromCamera}
                   onPickFromLibrary={captureState.pickImageFromLibrary}
                   onRetryUpload={captureState.retryLastFailedAction}
+                  onConsumeCompletedPreviewAsset={captureState.consumeCompletedPreviewAsset}
                   onInsertInboxAsset={notesState.insertInboxAsset}
                   onLinkCaptureAssetToPage={notesState.linkCaptureAssetToPage}
                   onOpenPageCaptureReference={notesState.openPageCaptureReference}

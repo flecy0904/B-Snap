@@ -14,6 +14,7 @@ type PreprocessingFallbackChoice = 'continue' | 'use-original' | 'cancel';
 type ProcessingSource = CaptureProcessingState['source'];
 
 const PROCESSING_DISMISS_DELAY_MS = 650;
+const PHOTO_VIEWER_OPEN_DELAY_MS = PROCESSING_DISMISS_DELAY_MS + 120;
 const CAPTURE_JOB_POLL_INTERVAL_MS = 700;
 const CAPTURE_JOB_TIMEOUT_MS = 90000;
 
@@ -114,6 +115,7 @@ export function useCaptureWorkspace(props: {
   const [captureFeedback, setCaptureFeedback] = useState<string | null>(null);
   const [captureError, setCaptureError] = useState<string | null>(null);
   const [captureProcessing, setCaptureProcessing] = useState<CaptureProcessingState | null>(null);
+  const [completedPreviewAssetId, setCompletedPreviewAssetId] = useState<string | null>(null);
   const processingTimers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const subjectOptions = props.subjects?.length ? props.subjects : fallbackSubjects;
   const subject = useMemo(() => subjectOptions.find((value) => value.id === props.subjectId) ?? null, [props.subjectId, subjectOptions]);
@@ -125,23 +127,34 @@ export function useCaptureWorkspace(props: {
   };
 
   const setProcessingStage = (stage: CaptureProcessingStage) => {
-    setCaptureProcessing((current) => current ? { ...current, stage } : current);
+    setCaptureProcessing((current) => {
+      if (!current || current.stage === stage) return current;
+      return { ...current, stage };
+    });
   };
 
   const showProcessingModal = (source: ProcessingSource, imageUri: string) => {
     clearProcessingTimers();
+    setCompletedPreviewAssetId(null);
     setCaptureProcessing({ source, imageUri, stage: 'uploading' });
   };
 
-  const completeProcessingModal = () => {
+  const completeProcessingModal = (previewAssetId?: string) => {
     clearProcessingTimers();
     setProcessingStage('ai-commenting');
     processingTimers.current.push(setTimeout(() => setCaptureProcessing(null), PROCESSING_DISMISS_DELAY_MS));
+    if (previewAssetId) {
+      processingTimers.current.push(setTimeout(() => setCompletedPreviewAssetId(previewAssetId), PHOTO_VIEWER_OPEN_DELAY_MS));
+    }
   };
 
   const hideProcessingModal = () => {
     clearProcessingTimers();
     setCaptureProcessing(null);
+  };
+
+  const consumeCompletedPreviewAsset = () => {
+    setCompletedPreviewAssetId(null);
   };
 
   const applyBackendCaptureJobStage = (job: BackendCaptureUploadJob) => {
@@ -293,7 +306,7 @@ export function useCaptureWorkspace(props: {
       if (backendUpload) applyUploadAnalysis(newAsset, backendUpload, { useOriginalImage: fallbackChoice === 'use-original' });
       
       await pushAsset(newAsset);
-      completeProcessingModal();
+      completeProcessingModal(newAsset.id);
     } catch (error) {
       hideProcessingModal();
       setLastFailedAction('camera');
@@ -371,7 +384,7 @@ export function useCaptureWorkspace(props: {
       if (backendUpload) applyUploadAnalysis(newAsset, backendUpload, { useOriginalImage: fallbackChoice === 'use-original' });
       
       await pushAsset(newAsset);
-      completeProcessingModal();
+      completeProcessingModal(newAsset.id);
     } catch (error) {
       hideProcessingModal();
       setLastFailedAction('library');
@@ -398,10 +411,12 @@ export function useCaptureWorkspace(props: {
     syncStatus,
     pendingAction,
     captureProcessing,
+    completedPreviewAssetId,
     lastFailedAction,
     captureFeedback,
     captureError,
     retryLastFailedAction,
+    consumeCompletedPreviewAsset,
     captureFromCamera,
     pickImageFromLibrary,
   };

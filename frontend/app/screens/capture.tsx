@@ -23,6 +23,7 @@ export function MobileCapture(props: {
   captureId: number;
   subjects: Subject[];
   recentUploads: CaptureAsset[];
+  completedPreviewAssetId: string | null;
   pageCaptureReferences: PageCaptureReference[];
   allStudyDocuments: StudyDocumentEntry[];
   pickerOpen: boolean;
@@ -36,6 +37,7 @@ export function MobileCapture(props: {
   onCaptureFromCamera: () => Promise<void>;
   onPickFromLibrary: () => Promise<void>;
   onRetryUpload: () => Promise<void>;
+  onConsumeCompletedPreviewAsset: () => void;
   onInsertInboxAsset: (assetId: string) => void;
   onLinkCaptureAssetToPage: (assetId: string, documentId: number, pageNumber: number) => boolean;
   onOpenPageCaptureReference: (referenceId: string) => void;
@@ -51,6 +53,13 @@ export function MobileCapture(props: {
     () => props.recentUploads.find((asset) => asset.id === previewAssetId && asset.type === 'image' && asset.status !== 'dismissed') ?? null,
     [previewAssetId, props.recentUploads],
   );
+  React.useEffect(() => {
+    if (!props.completedPreviewAssetId) return;
+    const completedAsset = props.recentUploads.find((asset) => asset.id === props.completedPreviewAssetId);
+    if (!completedAsset || completedAsset.type !== 'image' || completedAsset.status === 'dismissed') return;
+    setPreviewAssetId(completedAsset.id);
+    props.onConsumeCompletedPreviewAsset();
+  }, [props.completedPreviewAssetId, props.onConsumeCompletedPreviewAsset, props.recentUploads]);
 
   return (
     <ScrollView style={props.styles.main} contentContainerStyle={props.styles.mobilePage}>
@@ -151,6 +160,7 @@ export function DesktopCapture(props: {
   captureId: number;
   subjects: Subject[];
   recentUploads: CaptureAsset[];
+  completedPreviewAssetId: string | null;
   pageCaptureReferences: PageCaptureReference[];
   allStudyDocuments: StudyDocumentEntry[];
   onCaptureId: (id: number) => void;
@@ -162,6 +172,7 @@ export function DesktopCapture(props: {
   onCaptureFromCamera: () => Promise<void>;
   onPickFromLibrary: () => Promise<void>;
   onRetryUpload: () => Promise<void>;
+  onConsumeCompletedPreviewAsset: () => void;
   onInsertInboxAsset: (assetId: string) => void;
   onLinkCaptureAssetToPage: (assetId: string, documentId: number, pageNumber: number) => boolean;
   onOpenPageCaptureReference: (referenceId: string) => void;
@@ -179,6 +190,13 @@ export function DesktopCapture(props: {
     () => props.recentUploads.find((asset) => asset.id === previewAssetId && asset.type === 'image' && asset.status !== 'dismissed') ?? null,
     [previewAssetId, props.recentUploads],
   );
+  React.useEffect(() => {
+    if (!props.completedPreviewAssetId) return;
+    const completedAsset = props.recentUploads.find((asset) => asset.id === props.completedPreviewAssetId);
+    if (!completedAsset || completedAsset.type !== 'image' || completedAsset.status === 'dismissed') return;
+    setPreviewAssetId(completedAsset.id);
+    props.onConsumeCompletedPreviewAsset();
+  }, [props.completedPreviewAssetId, props.onConsumeCompletedPreviewAsset, props.recentUploads]);
 
   return (
     <ScrollView style={props.styles.main} contentContainerStyle={[props.styles.desktopPage, props.compact && props.styles.desktopPageCompact, props.isWeb && props.styles.webDesktopPage]}>

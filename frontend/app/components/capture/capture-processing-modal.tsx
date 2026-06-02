@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef } from 'react';
 import { Animated, Easing, Image, Modal, Text, View } from 'react-native';
 import { BlurView } from 'expo-blur';
+import { LinearGradient } from 'expo-linear-gradient';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import type { CaptureProcessingStage, CaptureProcessingState } from '../../types';
 
@@ -67,7 +68,9 @@ export function CaptureProcessingModal(props: {
   styles: any;
 }) {
   const shimmerProgress = useRef(new Animated.Value(0)).current;
+  const lightProgress = useRef(new Animated.Value(0)).current;
   const spinnerProgress = useRef(new Animated.Value(0)).current;
+  const processingVisible = !!props.processing;
   const activeTheme = useMemo(
     () => PROCESSING_THEMES.find((item) => item.stage === props.processing?.stage) ?? PROCESSING_THEMES[0],
     [props.processing?.stage],
@@ -75,15 +78,24 @@ export function CaptureProcessingModal(props: {
   const activeIndex = getStageIndex(activeTheme.stage);
 
   useEffect(() => {
-    if (!props.processing) return undefined;
+    if (!processingVisible) return undefined;
 
     shimmerProgress.setValue(0);
+    lightProgress.setValue(0);
     spinnerProgress.setValue(0);
     const sweepAnimation = Animated.loop(
       Animated.timing(shimmerProgress, {
         toValue: 1,
-        duration: 1180,
-        easing: Easing.bezier(0.4, 0, 0.2, 1),
+        duration: 1900,
+        easing: Easing.linear,
+        useNativeDriver: true,
+      }),
+    );
+    const lightAnimation = Animated.loop(
+      Animated.timing(lightProgress, {
+        toValue: 1,
+        duration: 6200,
+        easing: Easing.linear,
         useNativeDriver: true,
       }),
     );
@@ -96,17 +108,33 @@ export function CaptureProcessingModal(props: {
       }),
     );
     sweepAnimation.start();
+    lightAnimation.start();
     spinnerAnimation.start();
 
     return () => {
       sweepAnimation.stop();
+      lightAnimation.stop();
       spinnerAnimation.stop();
     };
-  }, [props.processing, shimmerProgress, spinnerProgress]);
+  }, [lightProgress, processingVisible, shimmerProgress, spinnerProgress]);
 
-  const shimmerTranslateX = shimmerProgress.interpolate({
+  const lightTranslateX = lightProgress.interpolate({
     inputRange: [0, 1],
-    outputRange: [-460, 620],
+    outputRange: [-980, 920],
+  });
+  const lightTranslateY = lightProgress.interpolate({
+    inputRange: [0, 0.5, 1],
+    outputRange: [34, -18, -34],
+  });
+  const lightOpacity = lightProgress.interpolate({
+    inputRange: [0, 0.08, 0.82, 1],
+    outputRange: [0, 0.92, 0.92, 0],
+    extrapolate: 'clamp',
+  });
+  const sweepOpacity = shimmerProgress.interpolate({
+    inputRange: [0, 0.12, 0.84, 1],
+    outputRange: [0, 1, 1, 0],
+    extrapolate: 'clamp',
   });
   const spinnerRotate = spinnerProgress.interpolate({
     inputRange: [0, 1],
@@ -145,16 +173,24 @@ export function CaptureProcessingModal(props: {
                 style={[
                   props.styles.captureProcessingLightSweep,
                   {
-                    shadowColor: activeTheme.tint,
-                    transform: [{ translateX: shimmerTranslateX }, { rotate: '12deg' }],
+                    opacity: lightOpacity,
+                    transform: [{ translateX: lightTranslateX }, { translateY: lightTranslateY }, { rotate: '8deg' }],
                   },
                 ]}
               >
-                <BlurView intensity={18} tint="light" style={props.styles.captureProcessingLightBlur} />
-                <View style={[props.styles.captureProcessingLightShade, { left: 0 }]} />
-                <View style={[props.styles.captureProcessingLightWash, { backgroundColor: activeTheme.overlay }]} />
-                <View style={[props.styles.captureProcessingLightHighlight, { backgroundColor: 'rgba(255,255,255,0.22)' }]} />
-                <View style={[props.styles.captureProcessingLightShade, { right: 0 }]} />
+                <LinearGradient
+                  colors={[
+                    'rgba(255,255,255,0)',
+                    activeTheme.overlay,
+                    'rgba(255,255,255,0.46)',
+                    'rgba(255,255,255,0.18)',
+                    'rgba(255,255,255,0)',
+                  ]}
+                  locations={[0, 0.28, 0.5, 0.7, 1]}
+                  start={{ x: 0, y: 0.5 }}
+                  end={{ x: 1, y: 0.5 }}
+                  style={props.styles.captureProcessingLightGradient}
+                />
               </Animated.View>
               <View style={[props.styles.captureProcessingImageBadge, { backgroundColor: activeTheme.tint }]}>
                 <MaterialCommunityIcons name={activeTheme.icon} size={14} color="#FFFFFF" />
@@ -167,8 +203,7 @@ export function CaptureProcessingModal(props: {
                 const completed = index < activeIndex;
                 const active = index === activeIndex;
                 const color = completed || active ? item.tint : '#A8B0C0';
-                const sweepTranslateX = shimmerProgress.interpolate({ inputRange: [0, 1], outputRange: [-140, 620] });
-                const delayedSweepTranslateX = shimmerProgress.interpolate({ inputRange: [0, 1], outputRange: [-320, 440] });
+                const sweepTranslateX = shimmerProgress.interpolate({ inputRange: [0, 1], outputRange: [-260, 780] });
                 return (
                   <View key={item.stage} style={props.styles.captureProcessingStep}>
                     <View
@@ -211,28 +246,29 @@ export function CaptureProcessingModal(props: {
                         {completed ? (
                           <View style={[props.styles.captureProcessingStepCompleteBar, { backgroundColor: item.tint }]} />
                         ) : active ? (
-                          <>
-                            <Animated.View
-                              style={[
-                                props.styles.captureProcessingStepSweepBar,
-                                {
-                                  backgroundColor: item.tint,
-                                  shadowColor: item.tint,
-                                  transform: [{ translateX: sweepTranslateX }],
-                                },
+                          <Animated.View
+                            style={[
+                              props.styles.captureProcessingStepSweepBar,
+                              {
+                                opacity: sweepOpacity,
+                                transform: [{ translateX: sweepTranslateX }],
+                              },
+                            ]}
+                          >
+                            <LinearGradient
+                              colors={[
+                                'rgba(255,255,255,0)',
+                                item.shimmer,
+                                item.tint,
+                                item.shimmer,
+                                'rgba(255,255,255,0)',
                               ]}
+                              locations={[0, 0.26, 0.5, 0.74, 1]}
+                              start={{ x: 0, y: 0.5 }}
+                              end={{ x: 1, y: 0.5 }}
+                              style={props.styles.captureProcessingStepSweepGradient}
                             />
-                            <Animated.View
-                              style={[
-                                props.styles.captureProcessingStepSweepBar,
-                                props.styles.captureProcessingStepSweepBarSoft,
-                                {
-                                  backgroundColor: item.tint,
-                                  transform: [{ translateX: delayedSweepTranslateX }],
-                                },
-                              ]}
-                            />
-                          </>
+                          </Animated.View>
                         ) : null}
                       </View>
                     </View>
