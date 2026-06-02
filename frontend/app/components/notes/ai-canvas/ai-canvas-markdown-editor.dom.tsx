@@ -53,7 +53,7 @@ const MIN_INDENT_LEVEL = 0;
 const MAX_INDENT_LEVEL = 6;
 const AI_CANVAS_BULLET_LIST_INPUT_REGEX = /^\s*([-*])\s$/;
 const AI_CANVAS_ORDERED_LIST_INPUT_REGEX = /^(\d+)\.\s$/;
-const AI_CANVAS_CODE_BLOCK_INPUT_REGEX = /^```([a-z]+)?[\s\n]$/;
+const AI_CANVAS_CODE_BLOCK_INPUT_REGEX = /^```([a-z]+)?$/;
 const INLINE_TAB = '\t';
 
 function normalizeIndentLevel(value: unknown) {
