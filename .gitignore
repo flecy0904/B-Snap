@@ -112,3 +112,5 @@ img_preprocessing/target_area_yolo11n/
 # Local Codex working notes
 # ==============================
 docs/codex/
+Document/google-cloud-deploy-commands.md
+cloud-server.sh
