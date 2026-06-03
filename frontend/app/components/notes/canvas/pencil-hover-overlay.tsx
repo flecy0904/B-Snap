@@ -1,12 +1,5 @@
 import React from 'react';
-import { Text, View } from 'react-native';
-import type { InkTool } from '../../../ui-types';
-import { PencilHoverQuickPalette } from './pencil-hover-quick-palette';
-import { usePencilQuickPaletteTrigger } from './use-pencil-quick-palette-trigger';
-
-function clamp(value: number, min: number, max: number) {
-  return Math.max(min, Math.min(max, value));
-}
+import { View } from 'react-native';
 
 export function PencilHoverOverlay(props: {
   x: number;
@@ -15,56 +8,41 @@ export function PencilHoverOverlay(props: {
   pageWidth: number;
   pageHeight: number;
   borderColor: string;
-  label: string;
   isEraser: boolean;
-  activeTool: InkTool;
   styles: any;
-  onSelectTool?: (tool: InkTool) => void;
 }) {
-  const quickPaletteVisible = usePencilQuickPaletteTrigger(Boolean(props.onSelectTool));
+  const renderSize = props.isEraser ? props.size : Math.max(7, Math.min(12, props.size));
+  const centerDotSize = props.isEraser ? 0 : 3;
 
   return (
-    <>
-      <View
-        pointerEvents="none"
-        style={[
-          props.styles.pencilHoverPreview,
-          props.isEraser && props.styles.pencilHoverPreviewEraser,
-          {
-            left: props.x - props.size / 2,
-            top: props.y - props.size / 2,
-            width: props.size,
-            height: props.size,
-            borderRadius: props.size / 2,
-            borderColor: props.borderColor,
-          },
-        ]}
-      />
-      {props.label ? (
+    <View
+      pointerEvents="none"
+      style={[
+        props.styles.pencilHoverPreview,
+        props.isEraser && props.styles.pencilHoverPreviewEraser,
+        {
+          left: props.x - renderSize / 2,
+          top: props.y - renderSize / 2,
+          width: renderSize,
+          height: renderSize,
+          borderRadius: renderSize / 2,
+          borderColor: props.borderColor,
+        },
+      ]}
+    >
+      {centerDotSize > 0 ? (
         <View
-          pointerEvents="none"
           style={[
-            props.styles.pencilHoverLabel,
+            props.styles.pencilHoverCenterDot,
             {
-              left: clamp(props.x + props.size / 2 + 8, 6, Math.max(6, props.pageWidth - 76)),
-              top: clamp(props.y - props.size / 2 - 2, 6, Math.max(6, props.pageHeight - 30)),
+              width: centerDotSize,
+              height: centerDotSize,
+              borderRadius: centerDotSize / 2,
+              backgroundColor: props.borderColor,
             },
           ]}
-        >
-          <Text style={props.styles.pencilHoverLabelText}>{props.label}</Text>
-        </View>
-      ) : null}
-      {props.onSelectTool && quickPaletteVisible ? (
-        <PencilHoverQuickPalette
-          x={props.x}
-          y={props.y}
-          pageWidth={props.pageWidth}
-          pageHeight={props.pageHeight}
-          activeTool={props.activeTool}
-          styles={props.styles}
-          onSelectTool={props.onSelectTool}
         />
       ) : null}
-    </>
+    </View>
   );
 }

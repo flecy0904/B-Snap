@@ -5,6 +5,8 @@
 #import <QuartzCore/QuartzCore.h>
 #import <React/RCTComponent.h>
 #import <React/RCTConvert.h>
+#import <React/RCTBridgeModule.h>
+#import <React/RCTEventEmitter.h>
 #import <React/RCTViewManager.h>
 
 static CGFloat const BsnPdfPageGap = 6.0;
@@ -26,6 +28,243 @@ static BOOL const BsnPdfPageDebugLoggingEnabled = NO;
 #define BsnPdfPageDebugLog(...) do { if (BsnPdfPageDebugLoggingEnabled) NSLog(__VA_ARGS__); } while (0)
 #define BsnPdfPerfLog(view, ...) do { if ((view).perfLoggingEnabled) NSLog(__VA_ARGS__); } while (0)
 #define BsnPdfRenderDebugLog(view, ...) do { if ((view).renderDebugLoggingEnabled) NSLog(__VA_ARGS__); } while (0)
+
+static NSString * const BsnPencilInteractionEventName = @"BsnPencilInteractionEvent";
+
+@interface BsnPencilInteractionModule : RCTEventEmitter <RCTBridgeModule, UIPencilInteractionDelegate>
+@property (nonatomic, strong, nullable) UIPencilInteraction *pencilInteraction;
+@property (nonatomic, weak, nullable) UIView *interactionView;
+@property (nonatomic, assign) BOOL hasListeners;
+@end
+
+@implementation BsnPencilInteractionModule
+
+RCT_EXPORT_MODULE(BsnPencilInteraction)
+
++ (BOOL)requiresMainQueueSetup
+{
+  return YES;
+}
+
+- (NSArray<NSString *> *)supportedEvents
+{
+  return @[BsnPencilInteractionEventName];
+}
+
+- (void)startObserving
+{
+  self.hasListeners = YES;
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [self installInteractionIfNeeded];
+  });
+}
+
+- (void)stopObserving
+{
+  self.hasListeners = NO;
+}
+
+RCT_EXPORT_METHOD(start)
+{
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [self installInteractionIfNeeded];
+  });
+}
+
+RCT_EXPORT_METHOD(stop)
+{
+  dispatch_async(dispatch_get_main_queue(), ^{
+    [self uninstallInteraction];
+  });
+}
+
+RCT_EXPORT_METHOD(getState:(RCTPromiseResolveBlock)resolve
+                  rejecter:(RCTPromiseRejectBlock)reject)
+{
+  dispatch_async(dispatch_get_main_queue(), ^{
+    NSMutableDictionary<NSString *, id> *state = [@{
+      @"available": @(YES),
+      @"installed": @(self.pencilInteraction != nil),
+      @"prefersPencilOnlyDrawing": @([UIPencilInteraction prefersPencilOnlyDrawing]),
+      @"preferredTapAction": [self preferredActionName:[UIPencilInteraction preferredTapAction]],
+    } mutableCopy];
+
+    if (@available(iOS 17.5, *)) {
+      state[@"preferredSqueezeAction"] = [self preferredActionName:[UIPencilInteraction preferredSqueezeAction]];
+      state[@"prefersHoverToolPreview"] = @([UIPencilInteraction prefersHoverToolPreview]);
+    } else {
+      state[@"preferredSqueezeAction"] = @"unavailable";
+      state[@"prefersHoverToolPreview"] = @(NO);
+    }
+
+    resolve(state);
+  });
+}
+
+- (void)installInteractionIfNeeded
+{
+  if (self.pencilInteraction != nil) {
+    self.pencilInteraction.enabled = YES;
+    return;
+  }
+
+  UIView *targetView = [self targetView];
+  if (targetView == nil) {
+    return;
+  }
+
+  UIPencilInteraction *interaction = nil;
+  if (@available(iOS 17.5, *)) {
+    interaction = [[UIPencilInteraction alloc] initWithDelegate:self];
+  } else {
+    interaction = [UIPencilInteraction new];
+    interaction.delegate = self;
+  }
+
+  interaction.enabled = YES;
+  [targetView addInteraction:interaction];
+  self.pencilInteraction = interaction;
+  self.interactionView = targetView;
+}
+
+- (void)uninstallInteraction
+{
+  if (self.pencilInteraction == nil || self.interactionView == nil) {
+    self.pencilInteraction = nil;
+    self.interactionView = nil;
+    return;
+  }
+
+  [self.interactionView removeInteraction:self.pencilInteraction];
+  self.pencilInteraction = nil;
+  self.interactionView = nil;
+}
+
+- (UIView *)targetView
+{
+  for (UIScene *scene in UIApplication.sharedApplication.connectedScenes) {
+    if (![scene isKindOfClass:UIWindowScene.class]) {
+      continue;
+    }
+    UIWindowScene *windowScene = (UIWindowScene *)scene;
+    for (UIWindow *window in windowScene.windows) {
+      if (window.isKeyWindow && window.rootViewController.view != nil) {
+        return window.rootViewController.view;
+      }
+    }
+  }
+
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+  UIWindow *legacyWindow = UIApplication.sharedApplication.keyWindow;
+#pragma clang diagnostic pop
+  return legacyWindow.rootViewController.view;
+}
+
+- (NSDictionary<NSString *, id> *)eventPayloadWithType:(NSString *)type
+                                             timestamp:(NSTimeInterval)timestamp
+                                                 phase:(nullable NSString *)phase
+                                             hoverPose:(nullable UIPencilHoverPose *)hoverPose
+{
+  NSMutableDictionary<NSString *, id> *payload = [@{
+    @"type": type,
+    @"timestamp": @(timestamp),
+    @"preferredTapAction": [self preferredActionName:[UIPencilInteraction preferredTapAction]],
+  } mutableCopy];
+
+  if (phase != nil) {
+    payload[@"phase"] = phase;
+  }
+
+  if (@available(iOS 17.5, *)) {
+    payload[@"preferredSqueezeAction"] = [self preferredActionName:[UIPencilInteraction preferredSqueezeAction]];
+  }
+
+  if (hoverPose != nil) {
+    payload[@"hoverPose"] = @{
+      @"x": @(hoverPose.location.x),
+      @"y": @(hoverPose.location.y),
+      @"zOffset": @(hoverPose.zOffset),
+      @"azimuthAngle": @(hoverPose.azimuthAngle),
+      @"altitudeAngle": @(hoverPose.altitudeAngle),
+      @"rollAngle": @(hoverPose.rollAngle),
+    };
+  }
+
+  return payload;
+}
+
+- (void)emitPencilEvent:(NSDictionary<NSString *, id> *)payload
+{
+  if (!self.hasListeners) {
+    return;
+  }
+
+  [self sendEventWithName:BsnPencilInteractionEventName body:payload];
+}
+
+- (void)pencilInteractionDidTap:(UIPencilInteraction *)interaction
+{
+  NSDictionary<NSString *, id> *payload = [self eventPayloadWithType:@"tap"
+                                                           timestamp:NSProcessInfo.processInfo.systemUptime
+                                                               phase:@"ended"
+                                                           hoverPose:nil];
+  [self emitPencilEvent:payload];
+}
+
+- (void)pencilInteraction:(UIPencilInteraction *)interaction didReceiveTap:(UIPencilInteractionTap *)tap
+{
+  NSDictionary<NSString *, id> *payload = [self eventPayloadWithType:@"tap"
+                                                           timestamp:tap.timestamp
+                                                               phase:@"ended"
+                                                           hoverPose:tap.hoverPose];
+  [self emitPencilEvent:payload];
+}
+
+- (void)pencilInteraction:(UIPencilInteraction *)interaction didReceiveSqueeze:(UIPencilInteractionSqueeze *)squeeze
+{
+  NSDictionary<NSString *, id> *payload = [self eventPayloadWithType:@"squeeze"
+                                                           timestamp:squeeze.timestamp
+                                                               phase:[self phaseName:squeeze.phase]
+                                                           hoverPose:squeeze.hoverPose];
+  [self emitPencilEvent:payload];
+}
+
+- (NSString *)phaseName:(UIPencilInteractionPhase)phase
+{
+  switch (phase) {
+    case UIPencilInteractionPhaseBegan:
+      return @"began";
+    case UIPencilInteractionPhaseChanged:
+      return @"changed";
+    case UIPencilInteractionPhaseEnded:
+      return @"ended";
+    case UIPencilInteractionPhaseCancelled:
+      return @"cancelled";
+  }
+}
+
+- (NSString *)preferredActionName:(UIPencilPreferredAction)action
+{
+  switch (action) {
+    case UIPencilPreferredActionIgnore:
+      return @"ignore";
+    case UIPencilPreferredActionSwitchEraser:
+      return @"switchEraser";
+    case UIPencilPreferredActionSwitchPrevious:
+      return @"switchPrevious";
+    case UIPencilPreferredActionShowColorPalette:
+      return @"showColorPalette";
+    case UIPencilPreferredActionShowInkAttributes:
+      return @"showInkAttributes";
+    case UIPencilPreferredActionShowContextualPalette:
+      return @"showContextualPalette";
+    case UIPencilPreferredActionRunSystemShortcut:
+      return @"runSystemShortcut";
+  }
+}
+
+@end
 
 static CGRect BsnPdfUnionDirtyRects(CGRect first, CGRect second)
 {
@@ -184,6 +423,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 @property (nonatomic) BOOL selectionMenuEnabled;
 @property (nonatomic) BOOL selectionMenuEditable;
 @property (nonatomic) BOOL textGestureEnabled;
+@property (nonatomic) BOOL imageAnnotationPreviewOnTap;
 @property (nonatomic) BOOL customViewportCoreEnabled;
 @property (nonatomic) BOOL perfLoggingEnabled;
 @property (nonatomic) BOOL renderDebugLoggingEnabled;
@@ -202,6 +442,9 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 @property (nonatomic, copy, nullable) RCTDirectEventBlock onTextAnnotationChange;
 @property (nonatomic, copy, nullable) RCTDirectEventBlock onTextAnnotationRemove;
 @property (nonatomic, copy, nullable) RCTDirectEventBlock onPageCaptureReferenceAction;
+@property (nonatomic, copy, nullable) RCTDirectEventBlock onImageAnnotationAction;
+@property (nonatomic, copy, nullable) RCTDirectEventBlock onPencilHover;
+@property (nonatomic, copy, nullable) RCTDirectEventBlock onViewportDoubleTap;
 - (void)drawInkForLayout:(BsnPdfPageLayout *)layout inContext:(CGContextRef)context;
 - (void)drawImageAnnotationsForLayout:(BsnPdfPageLayout *)layout inContext:(CGContextRef)context;
 - (void)drawSelectionOverlayForLayout:(BsnPdfPageLayout *)layout inContext:(CGContextRef)context;
@@ -246,6 +489,10 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 @property (nonatomic, strong) UIPanGestureRecognizer *selectionGesture;
 @property (nonatomic, strong) UITapGestureRecognizer *selectionTapGesture;
 @property (nonatomic, strong) UITapGestureRecognizer *textTapGesture;
+@property (nonatomic, strong) UITapGestureRecognizer *viewportDoubleTapGesture;
+@property (nonatomic, strong) UITapGestureRecognizer *imageAnnotationTapGesture;
+@property (nonatomic, strong) UITapGestureRecognizer *imageAnnotationDoubleTapGesture;
+@property (nonatomic, strong, nullable) UIHoverGestureRecognizer *pencilHoverGesture;
 @property (nonatomic, strong) BsnPdfNativeInkGestureRecognizer *pencilInkPanGesture;
 @property (nonatomic, strong) BsnPdfNativeInkGestureRecognizer *fingerInkPanGesture;
 @property (nonatomic, strong) NSOperationQueue *baseRenderQueue;
@@ -319,6 +566,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 @property (nonatomic) CFTimeInterval suppressAnchorSaveUntil;
 @property (nonatomic) CFTimeInterval suppressInkViewportEventsUntil;
 @property (nonatomic) CFTimeInterval suppressScrollPageEventsUntil;
+@property (nonatomic) BOOL pencilHoverActive;
 @property (nonatomic) NSInteger protectedPageNumber;
 @property (nonatomic) CFTimeInterval lastPerfLogTime;
 @property (nonatomic) CFTimeInterval lastScrollDebugLogTime;
@@ -390,6 +638,9 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 - (void)handleViewportPinch:(UIPinchGestureRecognizer *)gesture;
 - (void)handleSelectionPan:(UIPanGestureRecognizer *)gesture;
 - (void)handleSelectionTap:(UITapGestureRecognizer *)gesture;
+- (void)handleViewportDoubleTap:(UITapGestureRecognizer *)gesture;
+- (void)handleImageAnnotationTap:(UITapGestureRecognizer *)gesture;
+- (void)handleImageAnnotationDoubleTap:(UITapGestureRecognizer *)gesture;
 - (void)handleTextAnnotationMovePan:(UIPanGestureRecognizer *)gesture;
 - (void)handleTextAnnotationResizePan:(UIPanGestureRecognizer *)gesture;
 - (void)handleTextAnnotationTap:(UITapGestureRecognizer *)gesture;
@@ -412,6 +663,8 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 - (void)handlePageReferenceSticker:(id)sender;
 - (void)handlePageReferenceClose:(id)sender;
 - (void)handlePageReferenceAsk:(id)sender;
+- (void)handlePageReferencePreview:(id)sender;
+- (void)handlePencilHover:(UIHoverGestureRecognizer *)gesture;
 - (void)emitPageReferenceAction:(NSString *)action referenceId:(NSString *)referenceId;
 - (nullable UIImage *)imageForPageReference:(NSDictionary *)reference;
 - (void)startInertiaWithVelocity:(CGPoint)velocity;
@@ -430,8 +683,10 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 - (CGRect)dirtyRectForStrokeChangesFrom:(NSArray<NSDictionary *> *)beforeStrokes to:(NSArray<NSDictionary *> *)afterStrokes;
 - (BOOL)imageAnnotation:(NSDictionary *)annotation belongsToLayout:(BsnPdfPageLayout *)layout;
 - (CGRect)rectForImageAnnotation:(NSDictionary *)annotation layout:(BsnPdfPageLayout *)layout;
+- (nullable NSDictionary *)imageAnnotationAtViewPoint:(CGPoint)viewPoint;
 - (CGRect)dirtyRectForImageAnnotation:(NSDictionary *)annotation;
 - (CGRect)dirtyRectForImageAnnotationChangesFrom:(NSArray<NSDictionary *> *)beforeAnnotations to:(NSArray<NSDictionary *> *)afterAnnotations;
+- (CGRect)aspectFitRectForImage:(UIImage *)image inRect:(CGRect)rect;
 - (nullable UIImage *)imageForAnnotation:(NSDictionary *)annotation dirtyRect:(CGRect)dirtyRect;
 - (nullable UIImage *)decodeImageFromUri:(NSString *)uri;
 - (nullable UIImage *)decodeImageFromData:(NSData *)data;
@@ -470,6 +725,9 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 - (void)logScrollDebugWithSource:(NSString *)source deltaY:(CGFloat)deltaY force:(BOOL)force;
 - (void)emitSelectionGesture:(UIPanGestureRecognizer *)gesture phase:(NSString *)phase;
 - (NSString *)selectionActionForPoint:(NSDictionary *)point resizeCorner:(NSString * __autoreleasing *)resizeCorner;
+- (BOOL)isSelectionEditingTouchAtViewPoint:(CGPoint)viewPoint;
+- (BOOL)shouldAcceptPencilTouch:(UITouch *)touch;
+- (BOOL)shouldAcceptFingerTouch:(UITouch *)touch;
 @end
 
 @implementation BsnPdfCustomCoreView
@@ -795,6 +1053,9 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     _imageView.layer.cornerRadius = 12.0;
     _imageView.layer.borderWidth = 1.0;
     _imageView.layer.borderColor = [UIColor colorWithRed:0.91 green:0.93 blue:0.96 alpha:1.0].CGColor;
+    _imageView.userInteractionEnabled = YES;
+    UITapGestureRecognizer *imageTap = [[UITapGestureRecognizer alloc] initWithTarget:owner action:@selector(handlePageReferencePreview:)];
+    [_imageView addGestureRecognizer:imageTap];
 
     _closeButton = [UIButton buttonWithType:UIButtonTypeSystem];
     [_closeButton setTitle:@"x" forState:UIControlStateNormal];
@@ -883,12 +1144,9 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 - (BOOL)shouldTrackTouch:(UITouch *)touch
 {
   if (touch == nil || self.owner == nil) return NO;
-  if (![self.owner shouldAcceptTouch:touch]) return NO;
-  if (@available(iOS 9.1, *)) {
-    if (touch.type == UITouchTypePencil) return self.acceptsPencil;
-    return self.acceptsFinger;
-  }
-  return self.acceptsFinger || self.acceptsPencil;
+  if (self.acceptsPencil && [self.owner shouldAcceptPencilTouch:touch]) return YES;
+  if (self.acceptsFinger && [self.owner shouldAcceptFingerTouch:touch]) return YES;
+  return NO;
 }
 
 - (void)beginWithTouch:(UITouch *)touch
@@ -1115,11 +1373,13 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     _viewportPanGesture.minimumNumberOfTouches = 1;
     _viewportPanGesture.maximumNumberOfTouches = 1;
     _viewportPanGesture.cancelsTouchesInView = YES;
+    _viewportPanGesture.requiresExclusiveTouchType = NO;
     _viewportPanGesture.delegate = self;
     [self addGestureRecognizer:_viewportPanGesture];
 
     _viewportPinchGesture = [[UIPinchGestureRecognizer alloc] initWithTarget:self action:@selector(handleViewportPinch:)];
     _viewportPinchGesture.cancelsTouchesInView = YES;
+    _viewportPinchGesture.requiresExclusiveTouchType = NO;
     _viewportPinchGesture.delegate = self;
     [self addGestureRecognizer:_viewportPinchGesture];
 
@@ -1127,6 +1387,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     _selectionGesture.minimumNumberOfTouches = 1;
     _selectionGesture.maximumNumberOfTouches = 1;
     _selectionGesture.cancelsTouchesInView = YES;
+    _selectionGesture.requiresExclusiveTouchType = NO;
     _selectionGesture.delegate = self;
     _selectionGesture.enabled = NO;
     [self addGestureRecognizer:_selectionGesture];
@@ -1134,6 +1395,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     _selectionTapGesture = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleSelectionTap:)];
     _selectionTapGesture.numberOfTapsRequired = 1;
     _selectionTapGesture.cancelsTouchesInView = YES;
+    _selectionTapGesture.requiresExclusiveTouchType = NO;
     _selectionTapGesture.delegate = self;
     _selectionTapGesture.enabled = NO;
     [self addGestureRecognizer:_selectionTapGesture];
@@ -1141,19 +1403,51 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     _textTapGesture = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleTextTap:)];
     _textTapGesture.numberOfTapsRequired = 1;
     _textTapGesture.cancelsTouchesInView = YES;
+    _textTapGesture.requiresExclusiveTouchType = NO;
     _textTapGesture.delegate = self;
     _textTapGesture.enabled = NO;
     [self addGestureRecognizer:_textTapGesture];
+
+    _viewportDoubleTapGesture = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleViewportDoubleTap:)];
+    _viewportDoubleTapGesture.numberOfTapsRequired = 2;
+    _viewportDoubleTapGesture.cancelsTouchesInView = NO;
+    _viewportDoubleTapGesture.requiresExclusiveTouchType = NO;
+    _viewportDoubleTapGesture.delegate = self;
+    [self addGestureRecognizer:_viewportDoubleTapGesture];
+    [_textTapGesture requireGestureRecognizerToFail:_viewportDoubleTapGesture];
+
+    _imageAnnotationTapGesture = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleImageAnnotationTap:)];
+    _imageAnnotationTapGesture.numberOfTapsRequired = 1;
+    _imageAnnotationTapGesture.cancelsTouchesInView = NO;
+    _imageAnnotationTapGesture.requiresExclusiveTouchType = NO;
+    _imageAnnotationTapGesture.delegate = self;
+    _imageAnnotationTapGesture.enabled = NO;
+    [self addGestureRecognizer:_imageAnnotationTapGesture];
+
+    _imageAnnotationDoubleTapGesture = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(handleImageAnnotationDoubleTap:)];
+    _imageAnnotationDoubleTapGesture.numberOfTapsRequired = 2;
+    _imageAnnotationDoubleTapGesture.cancelsTouchesInView = NO;
+    _imageAnnotationDoubleTapGesture.requiresExclusiveTouchType = NO;
+    _imageAnnotationDoubleTapGesture.delegate = self;
+    _imageAnnotationDoubleTapGesture.enabled = NO;
+    [self addGestureRecognizer:_imageAnnotationDoubleTapGesture];
+    [_imageAnnotationTapGesture requireGestureRecognizerToFail:_imageAnnotationDoubleTapGesture];
+
+    if (@available(iOS 13.0, *)) {
+      _pencilHoverGesture = [[UIHoverGestureRecognizer alloc] initWithTarget:self action:@selector(handlePencilHover:)];
+      _pencilHoverGesture.cancelsTouchesInView = NO;
+      _pencilHoverGesture.requiresExclusiveTouchType = NO;
+      _pencilHoverGesture.delegate = self;
+      [self addGestureRecognizer:_pencilHoverGesture];
+    }
 
     _pencilInkPanGesture = [BsnPdfNativeInkGestureRecognizer new];
     _pencilInkPanGesture.owner = self;
     _pencilInkPanGesture.acceptsPencil = YES;
     _pencilInkPanGesture.acceptsFinger = NO;
     _pencilInkPanGesture.cancelsTouchesInView = YES;
+    _pencilInkPanGesture.requiresExclusiveTouchType = NO;
     _pencilInkPanGesture.delegate = self;
-    if (@available(iOS 9.1, *)) {
-      _pencilInkPanGesture.allowedTouchTypes = @[@(UITouchTypePencil)];
-    }
     [self addGestureRecognizer:_pencilInkPanGesture];
 
     _fingerInkPanGesture = [BsnPdfNativeInkGestureRecognizer new];
@@ -1161,10 +1455,8 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     _fingerInkPanGesture.acceptsPencil = NO;
     _fingerInkPanGesture.acceptsFinger = YES;
     _fingerInkPanGesture.cancelsTouchesInView = YES;
+    _fingerInkPanGesture.requiresExclusiveTouchType = NO;
     _fingerInkPanGesture.delegate = self;
-    if (@available(iOS 9.1, *)) {
-      _fingerInkPanGesture.allowedTouchTypes = @[@(UITouchTypeDirect)];
-    }
     [self addGestureRecognizer:_fingerInkPanGesture];
     [_scrollView.panGestureRecognizer requireGestureRecognizerToFail:_pencilInkPanGesture];
     [_scrollView.panGestureRecognizer requireGestureRecognizerToFail:_fingerInkPanGesture];
@@ -1615,6 +1907,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 {
   NSArray<NSDictionary *> *previous = self.imageAnnotations ?: @[];
   _imageAnnotations = [imageAnnotations isKindOfClass:NSArray.class] ? [imageAnnotations copy] : @[];
+  [self updateInkInputEnabled];
   CGRect dirtyRect = [self dirtyRectForImageAnnotationChangesFrom:previous to:_imageAnnotations];
   if (!CGRectIsNull(dirtyRect) && !CGRectIsEmpty(dirtyRect)) {
     [self setEditOverlayNeedsDisplayInRectSafely:dirtyRect];
@@ -1859,6 +2152,11 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
         [self requestBaseRenderForLayout:layout priority:0];
       }
       [self drawHiResOverlayForLayout:layout inContext:context];
+    } else if ([layout.kind isEqualToString:@"blank"]) {
+      [[UIColor whiteColor] setFill];
+      CGContextFillRect(context, layout.frame);
+      [[UIColor colorWithRed:0.95 green:0.96 blue:0.98 alpha:1.0] setStroke];
+      CGContextStrokeRectWithWidth(context, layout.frame, 1.0 / zoom);
     } else {
       [[UIColor colorWithRed:1.0 green:0.99 blue:0.97 alpha:1.0] setFill];
       CGContextFillRect(context, layout.frame);
@@ -1985,6 +2283,24 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
         pdfPage = nil;
       }
       logicalSize = [self safeLogicalSizeForPage:pdfPage];
+    } else {
+      NSNumber *pageWidth = pageInfo[@"pageWidth"] != nil ? [RCTConvert NSNumber:pageInfo[@"pageWidth"]] : nil;
+      NSNumber *pageHeight = pageInfo[@"pageHeight"] != nil ? [RCTConvert NSNumber:pageInfo[@"pageHeight"]] : nil;
+      if (pageWidth.doubleValue > 0 && pageHeight.doubleValue > 0) {
+        logicalSize = CGSizeMake(MAX(1.0, pageWidth.doubleValue), MAX(1.0, pageHeight.doubleValue));
+      } else {
+        NSNumber *insertAfterPage = pageInfo[@"insertAfterPage"] != nil ? [RCTConvert NSNumber:pageInfo[@"insertAfterPage"]] : nil;
+        NSInteger sourcePageNumber = insertAfterPage != nil ? insertAfterPage.integerValue : 0;
+        if (sourcePageNumber >= 1 && sourcePageNumber <= pageCount) {
+          PDFPage *sourcePage = nil;
+          @try {
+            sourcePage = [self.document pageAtIndex:sourcePageNumber - 1];
+          } @catch (NSException *exception) {
+            sourcePage = nil;
+          }
+          logicalSize = [self safeLogicalSizeForPage:sourcePage];
+        }
+      }
     }
     CGFloat heightFitWidth = maxVisiblePageHeight * logicalSize.width / MAX(1.0, logicalSize.height);
     CGFloat pageFrameWidth = MIN(maxPageFrameWidth, MAX(1.0, heightFitWidth));
@@ -2680,6 +2996,44 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   }
 }
 
+- (void)handleImageAnnotationTap:(UITapGestureRecognizer *)gesture
+{
+  if (gesture.state != UIGestureRecognizerStateEnded) return;
+  if (self.onImageAnnotationAction == nil) return;
+  NSDictionary *annotation = [self imageAnnotationAtViewPoint:[gesture locationInView:self]];
+  NSString *annotationId = [RCTConvert NSString:annotation[@"id"]];
+  if (annotationId.length == 0) return;
+  NSString *action = self.imageAnnotationPreviewOnTap ? @"preview" : @"select";
+  self.onImageAnnotationAction(@{@"action": action, @"imageAnnotationId": annotationId});
+}
+
+- (void)handleImageAnnotationDoubleTap:(UITapGestureRecognizer *)gesture
+{
+  if (gesture.state != UIGestureRecognizerStateEnded) return;
+  if (self.onImageAnnotationAction == nil) return;
+  NSDictionary *annotation = [self imageAnnotationAtViewPoint:[gesture locationInView:self]];
+  NSString *annotationId = [RCTConvert NSString:annotation[@"id"]];
+  if (annotationId.length == 0) return;
+  self.onImageAnnotationAction(@{@"action": @"preview", @"imageAnnotationId": annotationId});
+}
+
+- (void)handleViewportDoubleTap:(UITapGestureRecognizer *)gesture
+{
+  if (gesture.state != UIGestureRecognizerStateEnded) return;
+  if (self.onViewportDoubleTap == nil) return;
+  CGPoint viewPoint = [gesture locationInView:self];
+  if ([self imageAnnotationAtViewPoint:viewPoint] != nil) return;
+  NSDictionary *hit = [self hitPagePointAtViewPoint:viewPoint];
+  NSDictionary *pagePoint = hit[@"point"];
+  NSMutableDictionary *payload = [NSMutableDictionary dictionaryWithDictionary:@{
+    @"x": @(viewPoint.x),
+    @"y": @(viewPoint.y),
+  }];
+  NSNumber *pageNumber = pagePoint[@"pageNumber"];
+  if (pageNumber != nil) payload[@"pageNumber"] = pageNumber;
+  self.onViewportDoubleTap(payload);
+}
+
 - (void)handleTextTap:(UITapGestureRecognizer *)gesture
 {
   if (gesture.state != UIGestureRecognizerStateEnded) return;
@@ -2771,6 +3125,18 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   }
   if (x >= left && x <= right && y >= top && y <= bottom) return @"move";
   return @"new";
+}
+
+- (BOOL)isSelectionEditingTouchAtViewPoint:(CGPoint)viewPoint
+{
+  if (![self.inkTool isEqualToString:@"select"] || !self.selectionGestureEnabled) return NO;
+  if (self.selectionOverlayWidth <= 0 || self.selectionOverlayHeight <= 0) return NO;
+  NSDictionary *hit = [self hitPagePointAtViewPoint:viewPoint];
+  NSDictionary *point = hit[@"point"];
+  if (point == nil) return NO;
+  NSString *corner = nil;
+  NSString *action = [self selectionActionForPoint:point resizeCorner:&corner];
+  return [action isEqualToString:@"move"] || [action isEqualToString:@"resize"];
 }
 
 - (void)handleViewportPinch:(UIPinchGestureRecognizer *)gesture
@@ -3812,20 +4178,22 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 - (void)emitViewportChangedForce:(BOOL)force
 {
   if (self.onViewportChanged == nil) return;
-  CGFloat zoom = MAX(0.0001, self.scrollView.zoomScale);
+  CGFloat zoom = MAX(0.0001, [self viewportScale]);
+  CGPoint offset = [self viewportContentOffset];
+  CGSize contentSize = [self viewportContentSize];
   NSMutableArray *pages = [NSMutableArray array];
   NSMutableArray<NSString *> *keyParts = [NSMutableArray arrayWithArray:@[
     [NSString stringWithFormat:@"%ld", (long)llround(self.bounds.size.width)],
     [NSString stringWithFormat:@"%ld", (long)llround(self.bounds.size.height)],
     [NSString stringWithFormat:@"%ld", (long)llround(zoom * 1000.0)],
-    [NSString stringWithFormat:@"%ld", (long)llround(self.scrollView.contentOffset.y)],
-    [NSString stringWithFormat:@"%ld", (long)llround(self.scrollView.contentOffset.x)],
+    [NSString stringWithFormat:@"%ld", (long)llround(offset.y)],
+    [NSString stringWithFormat:@"%ld", (long)llround(offset.x)],
   ]];
-  CGRect viewport = CGRectMake(self.scrollView.contentOffset.x / zoom, self.scrollView.contentOffset.y / zoom, self.bounds.size.width / zoom, self.bounds.size.height / zoom);
+  CGRect viewport = CGRectMake(offset.x / zoom, offset.y / zoom, self.bounds.size.width / zoom, self.bounds.size.height / zoom);
   for (BsnPdfPageLayout *layout in self.layouts) {
     if (!CGRectIntersectsRect(CGRectInset(viewport, 0, -layout.frame.size.height), layout.frame)) continue;
-    CGFloat left = layout.frame.origin.x * zoom - self.scrollView.contentOffset.x;
-    CGFloat top = layout.frame.origin.y * zoom - self.scrollView.contentOffset.y;
+    CGFloat left = layout.frame.origin.x * zoom - offset.x;
+    CGFloat top = layout.frame.origin.y * zoom - offset.y;
     [pages addObject:@{
       @"id": layout.pageId ?: @"page",
       @"kind": layout.kind ?: @"pdf",
@@ -3846,11 +4214,11 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   self.lastViewportEventKey = eventKey;
   self.onViewportChanged(@{
     @"scale": @(zoom),
-    @"scrollY": @(self.scrollView.contentOffset.y),
-    @"translateX": @(-self.scrollView.contentOffset.x),
+    @"scrollY": @(offset.y),
+    @"translateX": @(-offset.x),
     @"viewportWidth": @(self.bounds.size.width),
     @"viewportHeight": @(self.bounds.size.height),
-    @"contentHeight": @(self.scrollView.contentSize.height),
+    @"contentHeight": @(contentSize.height),
     @"pinching": @(self.viewportPinchActive),
     @"panning": @(self.viewportPanActive || self.inertiaDisplayLink != nil),
     @"restoring": @(self.restoringViewportAnchor || [self isSuppressingProgrammaticLayout] || self.deferredWidthLayoutPending),
@@ -3978,6 +4346,9 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   self.selectionGesture.enabled = selectionTool;
   self.selectionTapGesture.enabled = selectionTool;
   self.textTapGesture.enabled = textTool;
+  BOOL imageAnnotationTapEnabled = self.imageAnnotations.count > 0;
+  self.imageAnnotationTapGesture.enabled = imageAnnotationTapEnabled;
+  self.imageAnnotationDoubleTapGesture.enabled = imageAnnotationTapEnabled;
   self.viewportPanGesture.enabled = YES;
   self.viewportPinchGesture.enabled = YES;
   self.scrollView.panGestureRecognizer.enabled = NO;
@@ -3986,15 +4357,43 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 
 - (BOOL)shouldAcceptTouch:(UITouch *)touch
 {
-  if (self.fingerDrawingEnabled) return YES;
+  if ([self shouldAcceptFingerTouch:touch]) return YES;
+  return [self shouldAcceptPencilTouch:touch];
+}
+
+- (BOOL)shouldAcceptFingerTouch:(UITouch *)touch
+{
+  if (!self.fingerDrawingEnabled || touch == nil) return NO;
   if (@available(iOS 9.1, *)) {
-    return touch.type == UITouchTypePencil;
+    return touch.type != UITouchTypePencil;
+  }
+  return YES;
+}
+
+- (BOOL)shouldAcceptPencilTouch:(UITouch *)touch
+{
+  if (touch == nil) return NO;
+  if (@available(iOS 9.1, *)) {
+    if (touch.type == UITouchTypePencil) return YES;
+    if (touch.type == UITouchTypeIndirect || touch.type == UITouchTypeIndirectPointer) return NO;
+
+    CGFloat altitude = touch.altitudeAngle;
+    if (altitude > 0.0 && altitude < ((CGFloat)M_PI_2 - 0.001)) return YES;
+    if (touch.maximumPossibleForce > 1.0 && touch.force > 0.0) return YES;
+    return NO;
   }
   return YES;
 }
 
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldRecognizeSimultaneouslyWithGestureRecognizer:(UIGestureRecognizer *)otherGestureRecognizer
 {
+  if (gestureRecognizer == self.pencilHoverGesture || otherGestureRecognizer == self.pencilHoverGesture) {
+    return YES;
+  }
+  if (gestureRecognizer == self.imageAnnotationTapGesture || otherGestureRecognizer == self.imageAnnotationTapGesture
+    || gestureRecognizer == self.imageAnnotationDoubleTapGesture || otherGestureRecognizer == self.imageAnnotationDoubleTapGesture) {
+    return YES;
+  }
   if ((gestureRecognizer == self.viewportPanGesture && otherGestureRecognizer == self.viewportPinchGesture)
     || (gestureRecognizer == self.viewportPinchGesture && otherGestureRecognizer == self.viewportPanGesture)) {
     return YES;
@@ -4016,6 +4415,20 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   if (gestureRecognizer == self.textTapGesture) {
     return self.layouts.count > 0 && [self.inkTool isEqualToString:@"text"] && self.textGestureEnabled;
   }
+  if (gestureRecognizer == self.viewportDoubleTapGesture) {
+    if (self.layouts.count == 0 || self.onViewportDoubleTap == nil) return NO;
+    CGPoint viewPoint = [gestureRecognizer locationInView:self];
+    if ([self imageAnnotationAtViewPoint:viewPoint] != nil) return NO;
+    if ([self selectionMenuActionAtViewPoint:viewPoint] != nil) return NO;
+    return [self hitPagePointAtViewPoint:viewPoint][@"point"] != nil;
+  }
+  if (gestureRecognizer == self.imageAnnotationTapGesture || gestureRecognizer == self.imageAnnotationDoubleTapGesture) {
+    if (self.layouts.count == 0) return NO;
+    return [self imageAnnotationAtViewPoint:[gestureRecognizer locationInView:self]] != nil;
+  }
+  if (gestureRecognizer == self.pencilHoverGesture) {
+    return self.layouts.count > 0;
+  }
   if (gestureRecognizer == self.fingerInkPanGesture) {
     BOOL drawingTool = [@[@"pen", @"highlight", @"line", @"arrow", @"rect", @"ellipse", @"erase"] containsObject:self.inkTool ?: @"view"];
     return drawingTool && self.fingerDrawingEnabled;
@@ -4029,6 +4442,20 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 
 - (BOOL)gestureRecognizer:(UIGestureRecognizer *)gestureRecognizer shouldReceiveTouch:(UITouch *)touch
 {
+  if (self.activeTextAnnotationId.length > 0) {
+    BOOL touchInsideTextAnnotation = NO;
+    UIView *view = touch.view;
+    while (view != nil && view != self) {
+      if ([view isKindOfClass:BsnPdfTextAnnotationView.class]) {
+        touchInsideTextAnnotation = YES;
+        break;
+      }
+      view = view.superview;
+    }
+    if (!touchInsideTextAnnotation) {
+      [self deactivateActiveTextAnnotationCommit:YES];
+    }
+  }
   if (gestureRecognizer == self.viewportPanGesture
     || gestureRecognizer == self.viewportPinchGesture
     || gestureRecognizer == self.selectionGesture
@@ -4039,10 +4466,12 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     [self interruptViewportMotionForUserTouch];
   }
   if (gestureRecognizer == self.viewportPanGesture) {
-    if (@available(iOS 9.1, *)) {
-      if (touch.type == UITouchTypePencil) return NO;
-    }
     BOOL drawingTool = [@[@"pen", @"highlight", @"line", @"arrow", @"rect", @"ellipse", @"erase"] containsObject:self.inkTool ?: @"view"];
+    BOOL viewportTool = self.inkTool.length == 0 || [self.inkTool isEqualToString:@"view"];
+    CGPoint viewPoint = [touch locationInView:self];
+    if ([self isSelectionEditingTouchAtViewPoint:viewPoint]) return NO;
+    if (!self.imageAnnotationPreviewOnTap && [self imageAnnotationAtViewPoint:viewPoint] != nil) return NO;
+    if ([self shouldAcceptPencilTouch:touch] && !viewportTool) return NO;
     if (drawingTool && self.fingerDrawingEnabled) return NO;
     return YES;
   }
@@ -4053,8 +4482,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     if (![self.inkTool isEqualToString:@"select"] || !self.selectionGestureEnabled) return NO;
     if ([self selectionMenuActionAtViewPoint:[touch locationInView:self]] != nil) return NO;
     if (self.fingerDrawingEnabled) return YES;
-    if (@available(iOS 9.1, *)) return touch.type == UITouchTypePencil;
-    return YES;
+    return [self shouldAcceptPencilTouch:touch];
   }
   if (gestureRecognizer == self.selectionTapGesture) {
     if (![self.inkTool isEqualToString:@"select"] || !self.selectionGestureEnabled || !self.selectionMenuEnabled) return NO;
@@ -4071,13 +4499,27 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     NSDictionary *hit = [self hitPagePointAtViewPoint:[touch locationInView:self]];
     return hit[@"point"] != nil;
   }
+  if (gestureRecognizer == self.viewportDoubleTapGesture) {
+    if (self.onViewportDoubleTap == nil) return NO;
+    if (@available(iOS 9.1, *)) {
+      if (touch.type != UITouchTypeDirect) return NO;
+    }
+    BOOL drawingTool = [@[@"pen", @"highlight", @"line", @"arrow", @"rect", @"ellipse", @"erase"] containsObject:self.inkTool ?: @"view"];
+    if (drawingTool && self.fingerDrawingEnabled) return NO;
+    CGPoint viewPoint = [touch locationInView:self];
+    if ([self imageAnnotationAtViewPoint:viewPoint] != nil) return NO;
+    if ([self selectionMenuActionAtViewPoint:viewPoint] != nil) return NO;
+    return [self hitPagePointAtViewPoint:viewPoint][@"point"] != nil;
+  }
+  if (gestureRecognizer == self.imageAnnotationTapGesture || gestureRecognizer == self.imageAnnotationDoubleTapGesture) {
+    if ([self shouldAcceptPencilTouch:touch]) return NO;
+    return [self imageAnnotationAtViewPoint:[touch locationInView:self]] != nil;
+  }
   if (gestureRecognizer == self.fingerInkPanGesture) {
-    if (@available(iOS 9.1, *)) return touch.type != UITouchTypePencil;
-    return YES;
+    return [self shouldAcceptFingerTouch:touch];
   }
   if (gestureRecognizer == self.pencilInkPanGesture) {
-    if (@available(iOS 9.1, *)) return touch.type == UITouchTypePencil;
-    return YES;
+    return [self shouldAcceptPencilTouch:touch];
   }
   return YES;
 }
@@ -4895,6 +5337,33 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   return CGRectMake(x, y, width, height);
 }
 
+- (nullable NSDictionary *)imageAnnotationAtViewPoint:(CGPoint)viewPoint
+{
+  CGPoint contentPoint = [self contentPointForViewportPoint:viewPoint];
+  NSArray<NSDictionary *> *annotations = [self.imageAnnotations isKindOfClass:NSArray.class] ? self.imageAnnotations : @[];
+  if (annotations.count == 0) return nil;
+  NSArray<NSDictionary *> *sortedAnnotations = [annotations sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *left, NSDictionary *right) {
+    NSInteger leftZ = left[@"zIndex"] != nil ? [left[@"zIndex"] integerValue] : 0;
+    NSInteger rightZ = right[@"zIndex"] != nil ? [right[@"zIndex"] integerValue] : 0;
+    if (leftZ == rightZ) return NSOrderedSame;
+    return leftZ < rightZ ? NSOrderedAscending : NSOrderedDescending;
+  }];
+
+  for (NSDictionary *annotation in sortedAnnotations.reverseObjectEnumerator) {
+    if (![annotation isKindOfClass:NSDictionary.class]) continue;
+    NSString *annotationId = [RCTConvert NSString:annotation[@"id"]];
+    if (annotationId.length == 0) continue;
+    for (BsnPdfPageLayout *layout in self.layouts) {
+      if (![self imageAnnotation:annotation belongsToLayout:layout]) continue;
+      CGRect rect = [self rectForImageAnnotation:annotation layout:layout];
+      if (CGRectContainsPoint(CGRectInset(rect, -8.0, -8.0), contentPoint)) {
+        return annotation;
+      }
+    }
+  }
+  return nil;
+}
+
 - (CGRect)dirtyRectForImageAnnotation:(NSDictionary *)annotation
 {
   if (![annotation isKindOfClass:NSDictionary.class]) return CGRectNull;
@@ -5013,6 +5482,20 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   return nil;
 }
 
+- (CGRect)aspectFitRectForImage:(UIImage *)image inRect:(CGRect)rect
+{
+  if (image == nil || image.size.width <= 0 || image.size.height <= 0 || rect.size.width <= 0 || rect.size.height <= 0) return rect;
+  CGFloat scale = MIN(rect.size.width / image.size.width, rect.size.height / image.size.height);
+  CGFloat width = image.size.width * scale;
+  CGFloat height = image.size.height * scale;
+  return CGRectMake(
+    rect.origin.x + (rect.size.width - width) * 0.5,
+    rect.origin.y + (rect.size.height - height) * 0.5,
+    width,
+    height
+  );
+}
+
 - (void)drawImageAnnotationsForLayout:(BsnPdfPageLayout *)layout inContext:(CGContextRef)context
 {
   NSArray<NSDictionary *> *annotations = [self.imageAnnotations isKindOfClass:NSArray.class] ? self.imageAnnotations : @[];
@@ -5042,7 +5525,8 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     }
 
     if (image != nil) {
-      [image drawInRect:rect blendMode:kCGBlendModeNormal alpha:opacity];
+      CGRect imageRect = [self aspectFitRectForImage:image inRect:rect];
+      [image drawInRect:imageRect blendMode:kCGBlendModeNormal alpha:opacity];
     } else {
       UIColor *fill = [UIColor colorWithWhite:0.94 alpha:0.9];
       UIColor *stroke = [UIColor colorWithWhite:0.74 alpha:0.9];
@@ -5626,7 +6110,9 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 
 - (BsnPdfPageReferenceView *)pageReferenceViewFromSender:(id)sender
 {
-  UIView *view = [sender isKindOfClass:UIView.class] ? sender : nil;
+  UIView *view = [sender isKindOfClass:UIView.class]
+    ? sender
+    : ([sender isKindOfClass:UIGestureRecognizer.class] ? ((UIGestureRecognizer *)sender).view : nil);
   while (view != nil && ![view isKindOfClass:BsnPdfPageReferenceView.class]) view = view.superview;
   return (BsnPdfPageReferenceView *)view;
 }
@@ -5650,6 +6136,73 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 - (void)handlePageReferenceAsk:(id)sender
 {
   [self emitPageReferenceAction:@"askAi" referenceId:[self pageReferenceViewFromSender:sender].referenceId];
+}
+
+- (void)handlePageReferencePreview:(id)sender
+{
+  [self emitPageReferenceAction:@"preview" referenceId:[self pageReferenceViewFromSender:sender].referenceId];
+}
+
+- (void)handlePencilHover:(UIHoverGestureRecognizer *)gesture
+{
+  if (self.onPencilHover == nil) return;
+
+  NSString *phase = nil;
+  switch (gesture.state) {
+    case UIGestureRecognizerStateBegan:
+      phase = @"began";
+      break;
+    case UIGestureRecognizerStateChanged:
+      phase = @"changed";
+      break;
+    case UIGestureRecognizerStateEnded:
+      phase = @"ended";
+      break;
+    case UIGestureRecognizerStateCancelled:
+    case UIGestureRecognizerStateFailed:
+      phase = @"cancelled";
+      break;
+    default:
+      return;
+  }
+
+  CGPoint location = [gesture locationInView:self];
+  CGFloat zOffset = 0;
+  CGFloat azimuthAngle = 0;
+  CGFloat altitudeAngle = 0;
+  CGFloat rollAngle = 0;
+
+  if (@available(iOS 16.1, *)) {
+    zOffset = gesture.zOffset;
+  }
+  if (@available(iOS 16.4, *)) {
+    azimuthAngle = [gesture azimuthAngleInView:self];
+    altitudeAngle = gesture.altitudeAngle;
+  }
+  if (@available(iOS 17.5, *)) {
+    rollAngle = gesture.rollAngle;
+  }
+
+  BOOL hasPencilPose = zOffset > 0.0001
+    || altitudeAngle > 0.0001
+    || fabs(azimuthAngle) > 0.0001
+    || fabs(rollAngle) > 0.0001;
+  BOOL ending = [phase isEqualToString:@"ended"] || [phase isEqualToString:@"cancelled"];
+  if (!hasPencilPose && !self.pencilHoverActive) return;
+  if (!ending && !CGRectContainsPoint(CGRectInset(self.bounds, -8.0, -8.0), location)) return;
+
+  self.pencilHoverActive = !ending;
+  self.onPencilHover(@{
+    @"phase": phase,
+    @"pointerType": @"pencil",
+    @"x": @(location.x),
+    @"y": @(location.y),
+    @"zOffset": @(zOffset),
+    @"azimuthAngle": @(azimuthAngle),
+    @"altitudeAngle": @(altitudeAngle),
+    @"rollAngle": @(rollAngle),
+    @"timestamp": @(CACurrentMediaTime()),
+  });
 }
 
 - (NSDictionary *)logicalTextFrameForHost:(BsnPdfTextAnnotationView *)host
@@ -6516,6 +7069,7 @@ RCT_EXPORT_VIEW_PROPERTY(selectionOverlayPath, NSArray)
 RCT_EXPORT_VIEW_PROPERTY(selectionMenuEnabled, BOOL)
 RCT_EXPORT_VIEW_PROPERTY(selectionMenuEditable, BOOL)
 RCT_EXPORT_VIEW_PROPERTY(textGestureEnabled, BOOL)
+RCT_EXPORT_VIEW_PROPERTY(imageAnnotationPreviewOnTap, BOOL)
 RCT_EXPORT_VIEW_PROPERTY(customViewportCoreEnabled, BOOL)
 RCT_EXPORT_VIEW_PROPERTY(perfLoggingEnabled, BOOL)
 RCT_EXPORT_VIEW_PROPERTY(renderDebugLoggingEnabled, BOOL)
@@ -6531,5 +7085,8 @@ RCT_EXPORT_VIEW_PROPERTY(onTextAnnotationAdd, RCTDirectEventBlock)
 RCT_EXPORT_VIEW_PROPERTY(onTextAnnotationChange, RCTDirectEventBlock)
 RCT_EXPORT_VIEW_PROPERTY(onTextAnnotationRemove, RCTDirectEventBlock)
 RCT_EXPORT_VIEW_PROPERTY(onPageCaptureReferenceAction, RCTDirectEventBlock)
+RCT_EXPORT_VIEW_PROPERTY(onImageAnnotationAction, RCTDirectEventBlock)
+RCT_EXPORT_VIEW_PROPERTY(onPencilHover, RCTDirectEventBlock)
+RCT_EXPORT_VIEW_PROPERTY(onViewportDoubleTap, RCTDirectEventBlock)
 
 @end

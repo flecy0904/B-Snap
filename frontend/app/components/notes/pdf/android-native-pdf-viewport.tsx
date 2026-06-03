@@ -1,8 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { Image, PanResponder, PixelRatio, Platform, Pressable, requireNativeComponent, StyleSheet, Text, View, type GestureResponderEvent, type NativeSyntheticEvent, type StyleProp, type ViewStyle } from 'react-native';
+import { Image, Modal, PanResponder, PixelRatio, Platform, Pressable, requireNativeComponent, StyleSheet, Text, View, type GestureResponderEvent, type LayoutChangeEvent, type NativeSyntheticEvent, type StyleProp, type ViewStyle } from 'react-native';
 import Svg, { Path } from 'react-native-svg';
 import { InkPath } from '../canvas/ink-path';
+import { PencilHoverOverlay } from '../canvas/pencil-hover-overlay';
 import { SelectionContextMenu } from '../canvas/selection-context-menu';
 import { getSelectedObjectIdsForSelection, getSelectionMovePreview, SelectionMovePreview } from '../canvas/selection-move-preview';
 import { TextAnnotationLayer } from '../canvas/text-annotation-layer';
@@ -11,6 +12,7 @@ import { buildSelectionRectFromDrag, buildSelectionRectFromPoints, cleanAiDispla
 import type { InkBrush, InkBrushSettings, InkEraserMode, InkImageAnnotation, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import type { CaptureAsset, NotebookPage, PageCaptureReference } from '../../../types';
 import { renderPdfSelectionPreview, resolveLocalPdfUri, type PdfRenderSource } from '../../../services/pdf-page-renderer';
+import { getPencilHoverSize, isPencilHoverFarEnough, shouldPreviewPencilHover, type PencilHoverPoint } from '../canvas/native-pencil-hover';
 
 type NativeDocumentLoadedEvent = NativeSyntheticEvent<{ pageCount: number }>;
 type NativePageChangedEvent = NativeSyntheticEvent<{ pageNumber: number; source?: string }>;
@@ -49,8 +51,28 @@ type NativeTextAnnotationChangeEvent = NativeSyntheticEvent<{
 }>;
 type NativeTextAnnotationRemoveEvent = NativeSyntheticEvent<{ id: string }>;
 type NativePageCaptureReferenceActionEvent = NativeSyntheticEvent<{
-  action: 'toggle' | 'close' | 'askAi';
+  action: 'toggle' | 'close' | 'askAi' | 'preview';
   referenceId: string;
+}>;
+type NativeImageAnnotationActionEvent = NativeSyntheticEvent<{
+  action: 'preview' | 'select';
+  imageAnnotationId: string;
+}>;
+type NativeViewportDoubleTapEvent = NativeSyntheticEvent<{
+  x: number;
+  y: number;
+  pageNumber?: number;
+}>;
+type NativePencilHoverEvent = NativeSyntheticEvent<{
+  phase: 'began' | 'changed' | 'ended' | 'cancelled';
+  pointerType?: 'pencil' | string;
+  x: number;
+  y: number;
+  zOffset?: number;
+  azimuthAngle?: number;
+  altitudeAngle?: number;
+  rollAngle?: number;
+  timestamp?: number;
 }>;
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
 
@@ -101,6 +123,7 @@ type BsnPdfViewportNativeProps = {
   inkStrokes: InkStroke[];
   textAnnotations?: InkTextAnnotation[];
   imageAnnotations?: InkImageAnnotation[];
+  imageAnnotationPreviewOnTap?: boolean;
   pageCaptureReferences?: Array<PageCaptureReference & { nativeImageUri?: string }>;
   openPageCaptureReferenceId?: string | null;
   hiddenTextAnnotationIds?: string[];
@@ -141,6 +164,9 @@ type BsnPdfViewportNativeProps = {
   onTextAnnotationChange?: (event: NativeTextAnnotationChangeEvent) => void;
   onTextAnnotationRemove?: (event: NativeTextAnnotationRemoveEvent) => void;
   onPageCaptureReferenceAction?: (event: NativePageCaptureReferenceActionEvent) => void;
+  onImageAnnotationAction?: (event: NativeImageAnnotationActionEvent) => void;
+  onViewportDoubleTap?: (event: NativeViewportDoubleTapEvent) => void;
+  onPencilHover?: (event: NativePencilHoverEvent) => void;
 };
 
 const NativeBsnPdfViewportView = Platform.OS === 'android' || Platform.OS === 'ios'
@@ -312,6 +338,7 @@ export function AndroidNativePdfViewport(props: {
   inkStrokes: InkStroke[];
   textAnnotations?: InkTextAnnotation[];
   imageAnnotations?: InkImageAnnotation[];
+  readOnly?: boolean;
   textAnnotationVariant?: 'floating' | 'marker';
   selectionRect?: SelectionRect | null;
   notebookPages?: NotebookPage[];
@@ -341,6 +368,9 @@ export function AndroidNativePdfViewport(props: {
   onDismissIncomingAsset?: () => void;
   onOpenPageCaptureReference?: (referenceId: string) => void;
   onAskAiAboutPageCaptureReference?: (referenceId: string) => void;
+  onOpenGeneratedPage?: (pageId: string) => void;
+  onChangeInkTool?: (tool: InkTool) => void;
+  onViewportDoubleTap?: () => void;
   onPageChanged?: (page: number) => void;
   onDocumentLoaded?: (pageCount: number) => void;
   onViewportChanged?: (viewport: PdfViewportOverlayState) => void;
@@ -355,6 +385,10 @@ export function AndroidNativePdfViewport(props: {
   const [draftSelectionPath, setDraftSelectionPath] = useState<InkPoint[]>([]);
   const [capturingSelection, setCapturingSelection] = useState(false);
   const [openReferenceId, setOpenReferenceId] = useState<string | null>(null);
+  const [expandedReferenceId, setExpandedReferenceId] = useState<string | null>(null);
+  const [expandedImageAnnotationId, setExpandedImageAnnotationId] = useState<string | null>(null);
+  const [pencilHover, setPencilHover] = useState<PencilHoverPoint | null>(null);
+  const [nativeViewportSize, setNativeViewportSize] = useState({ width: 0, height: 0 });
   const nativeSurfaceOnly = Platform.OS === 'ios' && Boolean(props.surfaceOnly);
   const selectionOriginRef = useRef<InkPoint | null>(null);
   const selectionPageRef = useRef<PdfViewportOverlayPage | null>(null);
@@ -388,13 +422,16 @@ export function AndroidNativePdfViewport(props: {
     toolSignatureRef.current = toolSignature;
     recentToolChangeUntilRef.current = Date.now() + 1600;
   }
+  const needsNotebookOverlay = Boolean(props.notebookPages?.some((page) => (
+    page.kind !== 'pdf' && !(Platform.OS === 'ios' && !nativeSurfaceOnly && page.kind === 'blank')
+  )));
   const overlayEnabled = nativeSurfaceOnly
     || props.inkTool === 'select'
     || props.inkTool === 'text'
     || Boolean(props.textAnnotations?.length)
     || Boolean(props.pageCaptureReferences?.length)
     || Boolean(props.incomingAssetSuggestion)
-    || Boolean(props.notebookPages?.some((page) => page.kind !== 'pdf'));
+    || needsNotebookOverlay;
   const useNativeSelectionSurface = Platform.OS === 'ios' && !nativeSurfaceOnly;
   const nativeSelectionGestureEnabled = useNativeSelectionSurface && props.inkTool === 'select';
   const nativeTextGestureEnabled = useNativeSelectionSurface && props.inkTool === 'text';
@@ -408,6 +445,33 @@ export function AndroidNativePdfViewport(props: {
         }))
       : []
   ), [props.pageCaptureReferences, useNativePageReferenceSurface]);
+  const expandedReference = useMemo(
+    () => (props.pageCaptureReferences ?? []).find((reference) => reference.id === expandedReferenceId) ?? null,
+    [expandedReferenceId, props.pageCaptureReferences],
+  );
+  const expandedReferenceImage = expandedReference ? getPageCaptureReferenceImageSource(expandedReference) : null;
+  const expandedImageAnnotation = useMemo(
+    () => (props.imageAnnotations ?? []).find((annotation) => annotation.id === expandedImageAnnotationId) ?? null,
+    [expandedImageAnnotationId, props.imageAnnotations],
+  );
+  const expandedImageAnnotationSource = expandedImageAnnotation?.uri ? { uri: expandedImageAnnotation.uri } : null;
+  const expandedImageTitle = expandedReference?.title ?? (expandedImageAnnotation ? 'Inserted photo' : 'Photo');
+  const expandedImageSource = expandedReferenceImage ?? expandedImageAnnotationSource;
+  const expandedImageReferenceForAi = useMemo(() => {
+    if (expandedReference) return expandedReference;
+    if (!expandedImageAnnotation?.assetId) return null;
+    return (props.pageCaptureReferences ?? []).find((reference) => reference.assetId === expandedImageAnnotation.assetId) ?? null;
+  }, [expandedImageAnnotation?.assetId, expandedReference, props.pageCaptureReferences]);
+  const expandedImageCanAskAi = Boolean(expandedImageReferenceForAi && props.onAskAiAboutPageCaptureReference);
+  const closeExpandedImage = useCallback(() => {
+    setExpandedReferenceId(null);
+    setExpandedImageAnnotationId(null);
+  }, []);
+  const askAiAboutExpandedImage = useCallback(() => {
+    if (!expandedImageReferenceForAi) return;
+    props.onAskAiAboutPageCaptureReference?.(expandedImageReferenceForAi.id);
+    closeExpandedImage();
+  }, [closeExpandedImage, expandedImageReferenceForAi, props.onAskAiAboutPageCaptureReference]);
 
   const textAnnotationBuckets = useMemo(() => {
     const pdf = new Map<number, InkTextAnnotation[]>();
@@ -449,6 +513,13 @@ export function AndroidNativePdfViewport(props: {
       setOpenReferenceId(null);
     }
   }, [openReferenceId, props.pageCaptureReferences]);
+
+  useEffect(() => {
+    if (!expandedImageAnnotationId) return;
+    if (!(props.imageAnnotations ?? []).some((annotation) => annotation.id === expandedImageAnnotationId)) {
+      setExpandedImageAnnotationId(null);
+    }
+  }, [expandedImageAnnotationId, props.imageAnnotations]);
 
   useEffect(() => {
     let cancelled = false;
@@ -498,6 +569,10 @@ export function AndroidNativePdfViewport(props: {
   ]);
 
   useEffect(() => {
+    if (!shouldPreviewPencilHover(props.inkTool)) setPencilHover(null);
+  }, [props.inkTool]);
+
+  useEffect(() => {
     if (props.page === requestedPageRef.current) return;
     const nativePageEvent = lastNativePageEventRef.current;
     if (
@@ -508,7 +583,6 @@ export function AndroidNativePdfViewport(props: {
     ) {
       requestedPageRef.current = props.page;
       viewportPageRef.current = props.page;
-      setNativeRequestedPage(props.page);
       return;
     }
     if (
@@ -550,7 +624,6 @@ export function AndroidNativePdfViewport(props: {
     viewportPageRef.current = nextPage;
     requestedPageRef.current = nextPage;
     lastNativePageEventRef.current = { page: nextPage, at: Date.now() };
-    setNativeRequestedPage(nextPage);
     props.onPageChanged?.(nextPage);
   }, [props.onPageChanged]);
 
@@ -598,7 +671,6 @@ export function AndroidNativePdfViewport(props: {
     viewportPageRef.current = nextPage;
     requestedPageRef.current = nextPage;
     lastNativePageEventRef.current = { page: nextPage, at: Date.now() };
-    setNativeRequestedPage(nextPage);
     props.onPageChanged?.(nextPage);
   }, [props.onPageChanged]);
 
@@ -615,12 +687,46 @@ export function AndroidNativePdfViewport(props: {
   const handleNativePageCaptureReferenceAction = useCallback((event: NativePageCaptureReferenceActionEvent) => {
     const { action, referenceId } = event.nativeEvent;
     if (!referenceId) return;
+    if (action === 'preview') {
+      setExpandedReferenceId(referenceId);
+      return;
+    }
     if (action === 'askAi') {
       props.onAskAiAboutPageCaptureReference?.(referenceId);
       return;
     }
     setOpenReferenceId((current) => (action === 'toggle' && current !== referenceId ? referenceId : null));
   }, [props.onAskAiAboutPageCaptureReference]);
+
+  const handleNativePencilHover = useCallback((event: NativePencilHoverEvent) => {
+    const { phase, pointerType, x, y } = event.nativeEvent;
+    if (pointerType && pointerType !== 'pencil') return;
+    if (!shouldPreviewPencilHover(props.inkTool) || !isPencilHoverFarEnough(event)) {
+      setPencilHover(null);
+      return;
+    }
+    if (phase === 'ended' || phase === 'cancelled') {
+      setPencilHover(null);
+      return;
+    }
+    const viewportWidth = nativeViewportSize.width || viewportRef.current?.viewportWidth || 0;
+    const viewportHeight = nativeViewportSize.height || viewportRef.current?.viewportHeight || 0;
+    if (!Number.isFinite(x) || !Number.isFinite(y) || viewportWidth <= 0 || viewportHeight <= 0) return;
+    if (x < 0 || y < 0 || x > viewportWidth || y > viewportHeight) {
+      setPencilHover(null);
+      return;
+    }
+    setPencilHover({ x, y });
+  }, [nativeViewportSize.height, nativeViewportSize.width, props.inkTool]);
+
+  const handleNativeViewportLayout = useCallback((event: LayoutChangeEvent) => {
+    const { width, height } = event.nativeEvent.layout;
+    setNativeViewportSize((current) => (
+      Math.abs(current.width - width) < 0.5 && Math.abs(current.height - height) < 0.5
+        ? current
+        : { width, height }
+    ));
+  }, []);
 
   useEffect(() => {
     if (!overlayEnabled) {
@@ -648,6 +754,43 @@ export function AndroidNativePdfViewport(props: {
       ))
       .map((annotation) => scaleImageAnnotationToPageSize(annotation, page.width, page.height))
   ), [props.imageAnnotations]);
+
+  const selectImageAnnotation = useCallback((imageAnnotationId: string) => {
+    const annotation = (props.imageAnnotations ?? []).find((item) => item.id === imageAnnotationId);
+    if (!annotation) return false;
+    const pages = (viewportRef.current ?? viewport)?.pages ?? currentPages;
+    const page = pages.find((candidate) => (
+      annotation.generatedPageId
+        ? candidate.generatedPageId === annotation.generatedPageId
+        : !candidate.generatedPageId && candidate.pageNumber === annotation.pageNumber
+    ));
+    if (!page) return false;
+    const pageAnnotation = scaleImageAnnotationToPageSize(annotation, page.pageWidth, page.pageHeight);
+    props.onChangeInkTool?.('select');
+    props.onSelectionPreviewChange?.(null);
+    props.onSelectionChange?.({
+      x: pageAnnotation.x,
+      y: pageAnnotation.y,
+      width: pageAnnotation.width,
+      height: pageAnnotation.height,
+      pageNumber: page.pageNumber,
+      generatedPageId: page.generatedPageId,
+      pageWidth: page.pageWidth,
+      pageHeight: page.pageHeight,
+    });
+    return true;
+  }, [currentPages, props, viewport]);
+
+  const handleNativeImageAnnotationAction = useCallback((event: NativeImageAnnotationActionEvent) => {
+    const { action, imageAnnotationId } = event.nativeEvent;
+    if (action === 'select' && imageAnnotationId) {
+      selectImageAnnotation(imageAnnotationId);
+      return;
+    }
+    if (action === 'preview' && imageAnnotationId) {
+      setExpandedImageAnnotationId(imageAnnotationId);
+    }
+  }, [selectImageAnnotation]);
 
   const getPageInkStrokesForView = useCallback((page: PdfViewportOverlayPage) => (
     (props.inkStrokes ?? [])
@@ -1239,7 +1382,21 @@ export function AndroidNativePdfViewport(props: {
     );
   }
 
+  const hoverViewportWidth = nativeViewportSize.width || viewport?.viewportWidth || 0;
+  const hoverViewportHeight = nativeViewportSize.height || viewport?.viewportHeight || 0;
+  const hoverSize = getPencilHoverSize(
+    props.inkTool,
+    props.inkTool === 'erase' ? props.eraserWidth ?? 12 : props.penWidth,
+    props.eraserMode ?? 'partial',
+  );
+  const hoverVisible = Platform.OS === 'ios'
+    && pencilHover
+    && shouldPreviewPencilHover(props.inkTool)
+    && hoverViewportWidth > 0
+    && hoverViewportHeight > 0;
+
   const renderPageOverlay = (page: PdfViewportOverlayPage) => {
+    if (Platform.OS === 'ios' && !nativeSurfaceOnly && page.kind === 'blank') return null;
     const pageTextAnnotations = getPageTextAnnotationsForView(page);
     const pageInkStrokes = getPageInkStrokesForView(page);
     const pageImageAnnotations = getPageImageAnnotationsForView(page);
@@ -1305,7 +1462,7 @@ export function AndroidNativePdfViewport(props: {
         pointerEvents="box-none"
         style={[styles.pageOverlay, { left: page.left, top: page.top, width: page.width, height: page.height }]}
       >
-        {page.kind !== 'pdf' ? <NotebookPaperBackground page={page} /> : null}
+        {page.kind !== 'pdf' && !(Platform.OS === 'ios' && !nativeSurfaceOnly && page.kind === 'blank') ? <NotebookPaperBackground page={page} /> : null}
 
         {nativeSurfaceOnly && pageInkStrokes.length > 0 ? (
           <Svg width="100%" height="100%" pointerEvents="none" style={StyleSheet.absoluteFill}>
@@ -1392,9 +1549,12 @@ export function AndroidNativePdfViewport(props: {
               </Pressable>
             </View>
             {activeReferenceImage ? (
-              <View style={[props.styles.pdfPageReferencePopoverImageFrame, { height: referenceImageFrameHeight }]}>
+              <Pressable
+                style={[props.styles.pdfPageReferencePopoverImageFrame, { height: referenceImageFrameHeight }]}
+                onPress={() => setExpandedReferenceId(activePageReference.id)}
+              >
                 <Image source={activeReferenceImage} style={props.styles.pdfPageReferencePopoverImage} resizeMode="contain" fadeDuration={0} />
-              </View>
+              </Pressable>
             ) : (
               <View style={props.styles.pdfPageReferencePopoverFallback}>
                 <MaterialCommunityIcons name={activePageReference.type === 'pdf' ? 'file-pdf-box' : 'image-outline'} size={24} color="#6D7BD9" />
@@ -1491,6 +1651,7 @@ export function AndroidNativePdfViewport(props: {
   return (
     <View
       collapsable={false}
+      onLayout={handleNativeViewportLayout}
       style={[styles.viewportWrap, props.style]}
     >
       <NativeBsnPdfViewportView
@@ -1511,6 +1672,7 @@ export function AndroidNativePdfViewport(props: {
         textAnnotations={nativeSurfaceOnly ? [] : props.textAnnotations ?? []}
         imageAnnotations={nativeSurfaceOnly ? [] : props.imageAnnotations ?? []}
         {...(Platform.OS === 'ios' ? {
+          imageAnnotationPreviewOnTap: Boolean(props.readOnly),
           pageCaptureReferences: nativePageCaptureReferences,
           openPageCaptureReferenceId: useNativePageReferenceSurface ? openReferenceId : null,
           onPageCaptureReferenceAction: handleNativePageCaptureReferenceAction,
@@ -1543,7 +1705,12 @@ export function AndroidNativePdfViewport(props: {
         style={styles.nativeView}
         onDocumentLoaded={(event) => props.onDocumentLoaded?.(event.nativeEvent.pageCount)}
         onPageChanged={handleNativePageChanged}
-        onCommitInkStroke={(event) => props.onCommitInkStroke(event.nativeEvent)}
+        onCommitInkStroke={(event) => {
+          setPencilHover(null);
+          const stroke = event.nativeEvent;
+          if (stroke.generatedPageId) props.onOpenGeneratedPage?.(stroke.generatedPageId);
+          props.onCommitInkStroke(stroke);
+        }}
         onRemoveInkStroke={(event) => props.onRemoveInkStroke(event.nativeEvent.strokeId)}
         onReplaceInkStrokes={(event) => {
           props.onReplaceInkStrokes?.(event.nativeEvent.removedStrokeIds ?? [], event.nativeEvent.addedStrokes ?? []);
@@ -1551,6 +1718,9 @@ export function AndroidNativePdfViewport(props: {
         onViewportChanged={handleNativeViewportChanged}
         onSelectionGesture={handleNativeSelectionGesture}
         onSelectionAction={handleNativeSelectionAction}
+        {...(Platform.OS === 'ios' ? { onImageAnnotationAction: handleNativeImageAnnotationAction } : {})}
+        {...(Platform.OS === 'ios' ? { onViewportDoubleTap: props.onViewportDoubleTap } : {})}
+        {...(Platform.OS === 'ios' ? { onPencilHover: handleNativePencilHover } : {})}
         onTextAnnotationAdd={handleNativeTextAnnotationAdd}
         onTextAnnotationChange={(event) => {
           const payload = event.nativeEvent;
@@ -1577,6 +1747,46 @@ export function AndroidNativePdfViewport(props: {
           {currentPages.map(renderPageOverlay)}
         </View>
       ) : null}
+      {hoverVisible ? (
+        <View pointerEvents="none" style={StyleSheet.absoluteFill}>
+          <PencilHoverOverlay
+            x={pencilHover.x}
+            y={pencilHover.y}
+            size={hoverSize}
+            pageWidth={hoverViewportWidth}
+            pageHeight={hoverViewportHeight}
+            borderColor={props.inkTool === 'erase' ? '#EF4444' : props.penColor}
+            isEraser={props.inkTool === 'erase'}
+            styles={props.styles}
+          />
+        </View>
+      ) : null}
+      <Modal
+        visible={Boolean(expandedImageSource)}
+        transparent
+        animationType="fade"
+        onRequestClose={closeExpandedImage}
+      >
+        <View style={styles.expandedImageOverlay}>
+          <Pressable style={styles.expandedImageBackdrop} onPress={closeExpandedImage} />
+          <View style={styles.expandedImagePanel}>
+            <View style={styles.expandedImageHeader}>
+              <Text style={styles.expandedImageTitle} numberOfLines={1}>{expandedImageTitle}</Text>
+              {expandedImageCanAskAi ? (
+                <Pressable style={styles.expandedImageHeaderAction} onPress={askAiAboutExpandedImage}>
+                  <MaterialCommunityIcons name="comment-question-outline" size={20} color="#FFFFFF" />
+                </Pressable>
+              ) : null}
+              <Pressable style={styles.expandedImageClose} onPress={closeExpandedImage}>
+                <MaterialCommunityIcons name="close" size={20} color="#FFFFFF" />
+              </Pressable>
+            </View>
+            {expandedImageSource ? (
+              <Image source={expandedImageSource} style={styles.expandedImage} resizeMode="contain" fadeDuration={0} />
+            ) : null}
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -1610,5 +1820,60 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
     position: 'relative',
     width: '100%',
+  },
+  expandedImageOverlay: {
+    alignItems: 'center',
+    backgroundColor: 'rgba(10, 12, 18, 0.76)',
+    flex: 1,
+    justifyContent: 'center',
+    padding: 18,
+  },
+  expandedImageBackdrop: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  expandedImagePanel: {
+    width: '100%',
+    maxWidth: 980,
+    height: '86%',
+    borderRadius: 18,
+    backgroundColor: '#0F1117',
+    overflow: 'hidden',
+  },
+  expandedImageHeader: {
+    minHeight: 52,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(255,255,255,0.1)',
+  },
+  expandedImageTitle: {
+    flex: 1,
+    minWidth: 0,
+    color: '#FFFFFF',
+    fontSize: 14,
+    fontWeight: '900',
+  },
+  expandedImageClose: {
+    width: 36,
+    height: 36,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(255,255,255,0.12)',
+  },
+  expandedImageHeaderAction: {
+    width: 36,
+    height: 36,
+    borderRadius: 999,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#5F79FF',
+  },
+  expandedImage: {
+    flex: 1,
+    width: '100%',
+    height: '100%',
   },
 });

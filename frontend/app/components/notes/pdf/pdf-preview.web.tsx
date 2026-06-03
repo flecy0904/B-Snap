@@ -372,6 +372,7 @@ export function PdfPreview(props: {
   onDismissIncomingAsset?: () => void;
   onOpenPageCaptureReference?: (referenceId: string) => void;
   onAskAiAboutPageCaptureReference?: (referenceId: string) => void;
+  onViewportDoubleTap?: () => void;
   styles: any;
 }) {
   const { width, height } = useWindowDimensions();
