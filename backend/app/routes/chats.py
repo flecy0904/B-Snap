@@ -41,6 +41,15 @@ CANVAS_TARGET_KEYWORDS = (
     "정리 노트",
 )
 CANVAS_EDIT_KEYWORDS = (
+    "add",
+    "rewrite",
+    "revise",
+    "shorten",
+    "lengthen",
+    "simplify",
+    "polish",
+    "delete",
+    "remove",
     "정리",
     "요약",
     "추가",
@@ -51,6 +60,87 @@ CANVAS_EDIT_KEYWORDS = (
     "수정",
     "고쳐",
     "만들",
+    "다듬",
+    "바꿔",
+    "바꾸",
+    "변경",
+    "줄여",
+    "줄이",
+    "짧게",
+    "늘려",
+    "길게",
+    "쉽게",
+    "전문적",
+    "삭제",
+    "빼줘",
+)
+CANVAS_EXPLICIT_EDIT_KEYWORDS = (
+    "rewrite",
+    "revise",
+    "shorten",
+    "lengthen",
+    "simplify",
+    "polish",
+    "delete",
+    "remove",
+    "고쳐줘",
+    "고쳐 줘",
+    "수정해",
+    "수정해줘",
+    "수정해 줘",
+    "다듬어",
+    "다듬어줘",
+    "다듬어 줘",
+    "바꿔",
+    "바꿔줘",
+    "바꿔 줘",
+    "변경해",
+    "변경해줘",
+    "변경해 줘",
+    "줄여",
+    "줄여줘",
+    "줄여 줘",
+    "짧게",
+    "늘려",
+    "늘려줘",
+    "늘려 줘",
+    "길게",
+    "쉽게",
+    "전문적",
+    "삭제해",
+    "삭제해줘",
+    "삭제해 줘",
+    "빼줘",
+    "빼 줘",
+    "추가해",
+    "추가해줘",
+    "추가해 줘",
+    "넣어",
+    "넣어줘",
+    "넣어 줘",
+)
+CANVAS_EXPLANATION_KEYWORDS = (
+    "what",
+    "why",
+    "how",
+    "explain",
+    "meaning",
+    "definition",
+    "이유",
+    "왜",
+    "어떻게",
+    "무슨",
+    "뭐야",
+    "뭔지",
+    "뜻",
+    "의미",
+    "설명",
+    "알려줘",
+    "알려 줘",
+    "이해",
+    "해석",
+    "정의",
+    "예시",
 )
 CANVAS_CREATE_KEYWORDS = (
     "new canvas",
@@ -69,35 +159,48 @@ CANVAS_CREATE_KEYWORDS = (
 )
 
 
-def keyword_canvas_action(content: str) -> str | None:
+def keyword_canvas_action(content: str, *, target_implied: bool = False) -> str | None:
     normalized = content.lower()
     if any(keyword in normalized for keyword in CANVAS_CREATE_KEYWORDS):
         return "canvas_create"
 
     has_canvas_target = any(keyword in normalized for keyword in CANVAS_TARGET_KEYWORDS)
     has_canvas_edit = any(keyword in normalized for keyword in CANVAS_EDIT_KEYWORDS)
+    has_explicit_edit = any(keyword in normalized for keyword in CANVAS_EXPLICIT_EDIT_KEYWORDS)
+    has_explanation = any(keyword in normalized for keyword in CANVAS_EXPLANATION_KEYWORDS)
+    if target_implied and has_explicit_edit and not has_explanation:
+        return "canvas_edit"
     if has_canvas_target and has_canvas_edit:
         return "canvas_edit"
     return None
 
 
-def resolve_canvas_action(content: str, requested_action: str, model: str) -> str:
+def resolve_canvas_action(
+    content: str,
+    requested_action: str,
+    model: str,
+    *,
+    canvas_origin_request: bool = False,
+    canvas_block_context: dict | None = None,
+) -> str:
     if requested_action in {"chat_only", "canvas_edit", "canvas_create"}:
         return requested_action
 
-    keyword_action = keyword_canvas_action(content)
+    keyword_action = keyword_canvas_action(content, target_implied=canvas_origin_request)
     if keyword_action:
         return keyword_action
 
-    normalized = content.lower()
-    might_be_canvas_request = any(keyword in normalized for keyword in CANVAS_EDIT_KEYWORDS)
-    if not might_be_canvas_request:
-        return "chat_only"
+    if canvas_origin_request:
+        try:
+            return generate_ai_canvas_intent(
+                model=model,
+                user_content=content,
+                canvas_block_context=canvas_block_context,
+            )
+        except Exception:
+            return "chat_only"
 
-    try:
-        return generate_ai_canvas_intent(model=model, user_content=content)
-    except Exception:
-        return "chat_only"
+    return "chat_only"
 
 
 def get_canvas_note_for_chat(canvas_note_id: int, note_id: int, connection: Connection) -> dict:
@@ -337,17 +440,31 @@ def create_ai_chat_message(
     )
     model = payload.model or session.get("model") or get_settings().default_ai_model
     canvas_edit = None
-    canvas_action = resolve_canvas_action(payload.content, payload.canvas_action, model)
+    canvas_note = None
+    created_canvas_note = False
+    canvas_origin_request = payload.source in {"canvas-mini", "canvas-block"}
+    canvas_action = resolve_canvas_action(
+        payload.content,
+        payload.canvas_action,
+        model,
+        canvas_origin_request=canvas_origin_request,
+        canvas_block_context=payload.canvas_block_context,
+    )
+
+    if canvas_origin_request and canvas_action == "canvas_create":
+        canvas_action = "chat_only"
 
     if canvas_action in {"canvas_edit", "canvas_create"}:
-        created_canvas_note = False
-        if canvas_action == "canvas_create" or not payload.canvas_note_id:
+        if canvas_origin_request and not payload.canvas_note_id:
+            canvas_action = "chat_only"
+        elif canvas_action == "canvas_create" or not payload.canvas_note_id:
             canvas_note = create_canvas_note_for_chat(note, connection)
             created_canvas_note = True
             canvas_action = "canvas_create"
         else:
             canvas_note = get_canvas_note_for_chat(payload.canvas_note_id, session["note_id"], connection)
 
+    if canvas_action in {"canvas_edit", "canvas_create"} and canvas_note is not None:
         try:
             context_pages = select_chat_context_pages(pages, payload.page_number)
             current_canvas_markdown = (
@@ -372,6 +489,7 @@ def create_ai_chat_message(
                 current_page_number=payload.page_number,
                 selection_image=payload.selection_image,
                 selection_image_url=payload.selection_image_url,
+                canvas_block_context=payload.canvas_block_context,
             )
             canvas_title = canvas_note["title"]
             if canvas_action == "canvas_create" or payload.canvas_note_needs_title:
@@ -450,6 +568,7 @@ def create_ai_chat_message(
             page_number=payload.page_number,
             selection_image_url=payload.selection_image_url,
             context_hint=context_hint,
+            canvas_block_context=payload.canvas_block_context,
         )
     user_message = execute_returning(
         connection,

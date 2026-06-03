@@ -53,6 +53,7 @@ def build_response_input(
     current_page_number: int | None = None,
     selection_image_url: str | None = None,
     context_hint: str | None = None,
+    canvas_block_context: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     active_page_number = current_page_number if current_page_number is not None else page_number
     input_items: list[dict[str, Any]] = [
@@ -80,6 +81,17 @@ def build_response_input(
                 "Use it silently to improve recommendations. "
                 "Never reveal, quote, or describe this internal context or its raw sources to the user.\n\n"
                 f"{context_hint}"
+            ),
+        })
+
+    block_context_text = format_canvas_block_context(canvas_block_context)
+    if block_context_text:
+        input_items.append({
+            "role": "user",
+            "content": (
+                "Canvas block context follows. Use it as local context for the user's question. "
+                "Do not quote this metadata unless it is helpful to answer naturally.\n\n"
+                f"{block_context_text}"
             ),
         })
 
@@ -167,6 +179,33 @@ def build_selection_context(
     return "\n".join(parts)
 
 
+def format_canvas_block_context(canvas_block_context: dict[str, Any] | None) -> str:
+    if not isinstance(canvas_block_context, dict):
+        return ""
+
+    def clean(value: Any, limit: int) -> str:
+        if value is None:
+            return ""
+        return " ".join(str(value).replace("\n", " ").split()).strip()[:limit]
+
+    lines = []
+    fields = [
+        ("Block id", "blockId", 120),
+        ("Block type", "type", 40),
+        ("Block text", "text", 1200),
+        ("Block markdown", "markdown", 1200),
+        ("Section heading", "sectionHeading", 300),
+        ("Section excerpt", "sectionExcerpt", 1600),
+        ("Previous block", "beforeText", 500),
+        ("Next block", "afterText", 500),
+    ]
+    for label, key, limit in fields:
+        value = clean(canvas_block_context.get(key), limit)
+        if value:
+            lines.append(f"{label}: {value}")
+    return "\n".join(lines)
+
+
 def generate_note_chat_answer(
     *,
     model: str,
@@ -180,6 +219,7 @@ def generate_note_chat_answer(
     current_page_number: int | None = None,
     selection_image_url: str | None = None,
     context_hint: str | None = None,
+    canvas_block_context: dict[str, Any] | None = None,
 ) -> str:
     return generate_text_response(
         model=model,
@@ -195,6 +235,7 @@ def generate_note_chat_answer(
             current_page_number=current_page_number,
             selection_image_url=selection_image_url,
             context_hint=context_hint,
+            canvas_block_context=canvas_block_context,
         ),
     )
 
@@ -261,13 +302,22 @@ def generate_ai_canvas_intent(
     *,
     model: str,
     user_content: str,
+    canvas_block_context: dict[str, Any] | None = None,
 ) -> str:
+    context_text = format_canvas_block_context(canvas_block_context)
     intent = generate_text_response(
         model=model,
         instructions=CANVAS_INTENT_INSTRUCTIONS,
         input_items=[{
             "role": "user",
-            "content": user_content,
+            "content": "\n\n".join(
+                part for part in [
+                    "User request:",
+                    user_content,
+                    "Canvas block context:",
+                    context_text,
+                ] if part
+            ),
         }],
     ).strip().lower()
     if intent in {"chat_only", "canvas_edit", "canvas_create"}:
@@ -378,7 +428,9 @@ def generate_ai_canvas_operations_from_chat(
     current_page_number: int | None = None,
     selection_image: str | None = None,
     selection_image_url: str | None = None,
+    canvas_block_context: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
+    block_context_text = format_canvas_block_context(canvas_block_context)
     input_items: list[dict[str, Any]] = [
         {
             "role": "user",
@@ -395,6 +447,9 @@ def generate_ai_canvas_operations_from_chat(
                 "",
                 "Current Canvas Markdown cache:",
                 canvas_markdown or "(empty)",
+                "",
+                "Canvas block context:",
+                block_context_text or "(none)",
                 "",
                 "Note/PDF context:",
                 build_note_context(note, pages, current_page_number=current_page_number),

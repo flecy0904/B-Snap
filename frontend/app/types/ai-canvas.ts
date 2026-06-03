@@ -26,9 +26,27 @@ export type CanvasOperationRequest = {
   operations: CanvasOperation[];
 };
 
+export type AiCanvasSelection = {
+  from: number;
+  to: number;
+};
+
 export type AiCanvasEditorChange = {
   documentJson: AiCanvasDocumentJson;
   markdown: string;
+  selection: AiCanvasSelection | null;
+  source?: 'editor' | 'editor-history' | 'external';
+};
+
+export type AiCanvasBlockContext = {
+  blockId: string;
+  type: string;
+  text: string;
+  markdown: string;
+  sectionHeading: string | null;
+  sectionExcerpt: string;
+  beforeText: string | null;
+  afterText: string | null;
 };
 
 export const EMPTY_AI_CANVAS_DOCUMENT: AiCanvasDocumentJson = {
