@@ -11,8 +11,30 @@ export function PencilHoverOverlay(props: {
   isEraser: boolean;
   styles: any;
 }) {
-  const renderSize = props.isEraser ? props.size : Math.max(7, Math.min(12, props.size));
-  const centerDotSize = props.isEraser ? 0 : 3;
+  if (!props.isEraser) {
+    const dotSize = 5;
+    return (
+      <View
+        pointerEvents="none"
+        style={[
+          props.styles.pencilHoverCenterDot,
+          {
+            position: 'absolute',
+            left: props.x - dotSize / 2,
+            top: props.y - dotSize / 2,
+            width: dotSize,
+            height: dotSize,
+            borderRadius: dotSize / 2,
+            backgroundColor: props.borderColor,
+            zIndex: 31,
+            elevation: 31,
+          },
+        ]}
+      />
+    );
+  }
+
+  const renderSize = props.size;
 
   return (
     <View
@@ -29,20 +51,6 @@ export function PencilHoverOverlay(props: {
           borderColor: props.borderColor,
         },
       ]}
-    >
-      {centerDotSize > 0 ? (
-        <View
-          style={[
-            props.styles.pencilHoverCenterDot,
-            {
-              width: centerDotSize,
-              height: centerDotSize,
-              borderRadius: centerDotSize / 2,
-              backgroundColor: props.borderColor,
-            },
-          ]}
-        />
-      ) : null}
-    </View>
+    />
   );
 }

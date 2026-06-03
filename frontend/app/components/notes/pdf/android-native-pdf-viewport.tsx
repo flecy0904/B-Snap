@@ -66,6 +66,8 @@ type NativeViewportDoubleTapEvent = NativeSyntheticEvent<{
 type NativePencilHoverEvent = NativeSyntheticEvent<{
   phase: 'began' | 'changed' | 'ended' | 'cancelled';
   pointerType?: 'pencil' | string;
+  source?: 'hover' | 'touch' | string;
+  contact?: boolean;
   x: number;
   y: number;
   zOffset?: number;
@@ -78,6 +80,9 @@ type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
 
 const PDF_RENDER_DEBUG_LOGGING = process.env.EXPO_PUBLIC_PDF_RENDER_DEBUG === '1';
 const IOS_CUSTOM_PDF_CORE = process.env.EXPO_PUBLIC_IOS_CUSTOM_PDF_CORE !== '0';
+const PENCIL_HOVER_IDLE_CLEAR_MS = 560;
+const PENCIL_HOVER_CONTACT_CLEAR_MS = 220;
+const PENCIL_HOVER_POST_STROKE_SUPPRESS_MS = 2600;
 
 export type PdfViewportOverlayPage = {
   id: string;
@@ -400,6 +405,9 @@ export function AndroidNativePdfViewport(props: {
   const draftSelectionPageIdRef = useRef<string | null>(null);
   const draftSelectionPathRef = useRef<InkPoint[]>([]);
   const draftSelectionFrameRef = useRef<number | null>(null);
+  const pencilHoverClearTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const pencilHoverSuppressedUntilRef = useRef(0);
+  const pencilHoverWaitingForFirstContactRef = useRef(shouldPreviewPencilHover(props.inkTool));
   const pendingDraftSelectionRef = useRef<SelectionRect | null | undefined>(undefined);
   const pendingDraftSelectionPageIdRef = useRef<string | null | undefined>(undefined);
   const pendingDraftSelectionPathRef = useRef<InkPoint[] | undefined>(undefined);
@@ -417,10 +425,12 @@ export function AndroidNativePdfViewport(props: {
   const [nativeRequestedPageSerial, setNativeRequestedPageSerial] = useState(0);
   const pdfSource = useMemo(() => getPdfRenderSource(props.file), [props.file]);
   const pdfSourceUri = typeof pdfSource === 'string' ? pdfSource : pdfSource?.uri ?? null;
-  const toolSignature = `${props.inkTool}:${props.fingerDrawingEnabled ? '1' : '0'}:${props.penColor}:${props.penWidth}:${props.brushType}:${props.linePattern}`;
+  const toolSignature = `${props.inkTool}:${props.fingerDrawingEnabled ? '1' : '0'}:${props.penColor}:${props.penWidth}:${props.brushType}:${props.linePattern}:${props.eraserMode ?? 'partial'}:${props.eraserWidth ?? 12}`;
   if (Platform.OS === 'ios' && toolSignatureRef.current !== toolSignature) {
     toolSignatureRef.current = toolSignature;
     recentToolChangeUntilRef.current = Date.now() + 1600;
+    pencilHoverSuppressedUntilRef.current = 0;
+    pencilHoverWaitingForFirstContactRef.current = shouldPreviewPencilHover(props.inkTool);
   }
   const needsNotebookOverlay = Boolean(props.notebookPages?.some((page) => (
     page.kind !== 'pdf' && !(Platform.OS === 'ios' && !nativeSurfaceOnly && page.kind === 'blank')
@@ -569,8 +579,19 @@ export function AndroidNativePdfViewport(props: {
   ]);
 
   useEffect(() => {
-    if (!shouldPreviewPencilHover(props.inkTool)) setPencilHover(null);
+    if (!shouldPreviewPencilHover(props.inkTool)) {
+      pencilHoverWaitingForFirstContactRef.current = false;
+      if (pencilHoverClearTimeoutRef.current) {
+        clearTimeout(pencilHoverClearTimeoutRef.current);
+        pencilHoverClearTimeoutRef.current = null;
+      }
+      setPencilHover(null);
+    }
   }, [props.inkTool]);
+
+  useEffect(() => () => {
+    if (pencilHoverClearTimeoutRef.current) clearTimeout(pencilHoverClearTimeoutRef.current);
+  }, []);
 
   useEffect(() => {
     if (props.page === requestedPageRef.current) return;
@@ -698,26 +719,71 @@ export function AndroidNativePdfViewport(props: {
     setOpenReferenceId((current) => (action === 'toggle' && current !== referenceId ? referenceId : null));
   }, [props.onAskAiAboutPageCaptureReference]);
 
-  const handleNativePencilHover = useCallback((event: NativePencilHoverEvent) => {
-    const { phase, pointerType, x, y } = event.nativeEvent;
-    if (pointerType && pointerType !== 'pencil') return;
-    if (!shouldPreviewPencilHover(props.inkTool) || !isPencilHoverFarEnough(event)) {
+  const clearPencilHover = useCallback((delayMs = 0) => {
+    if (pencilHoverClearTimeoutRef.current) {
+      clearTimeout(pencilHoverClearTimeoutRef.current);
+      pencilHoverClearTimeoutRef.current = null;
+    }
+    if (delayMs <= 0) {
       setPencilHover(null);
       return;
     }
-    if (phase === 'ended' || phase === 'cancelled') {
+    pencilHoverClearTimeoutRef.current = setTimeout(() => {
+      pencilHoverClearTimeoutRef.current = null;
       setPencilHover(null);
+    }, delayMs);
+  }, []);
+
+  const keepPencilHoverVisible = useCallback((delayMs = PENCIL_HOVER_IDLE_CLEAR_MS) => {
+    if (pencilHoverClearTimeoutRef.current) {
+      clearTimeout(pencilHoverClearTimeoutRef.current);
+      pencilHoverClearTimeoutRef.current = null;
+    }
+    pencilHoverClearTimeoutRef.current = setTimeout(() => {
+      pencilHoverClearTimeoutRef.current = null;
+      setPencilHover(null);
+    }, delayMs);
+  }, []);
+
+  const suppressPencilHoverAfterContact = useCallback(() => {
+    pencilHoverWaitingForFirstContactRef.current = false;
+    pencilHoverSuppressedUntilRef.current = Date.now() + PENCIL_HOVER_POST_STROKE_SUPPRESS_MS;
+    clearPencilHover();
+  }, [clearPencilHover]);
+
+  const handleNativePencilHover = useCallback((event: NativePencilHoverEvent) => {
+    const { phase, pointerType, x, y, source, contact } = event.nativeEvent;
+    if (pointerType && pointerType !== 'pencil') return;
+    if (!shouldPreviewPencilHover(props.inkTool) || source === 'touch' || contact) {
+      suppressPencilHoverAfterContact();
+      return;
+    }
+    if (!pencilHoverWaitingForFirstContactRef.current) {
+      clearPencilHover();
+      return;
+    }
+    if (Date.now() < pencilHoverSuppressedUntilRef.current) {
+      clearPencilHover();
+      return;
+    }
+    if (phase === 'ended' || phase === 'cancelled') {
+      clearPencilHover();
+      return;
+    }
+    if (!isPencilHoverFarEnough(event)) {
+      clearPencilHover(PENCIL_HOVER_CONTACT_CLEAR_MS);
       return;
     }
     const viewportWidth = nativeViewportSize.width || viewportRef.current?.viewportWidth || 0;
     const viewportHeight = nativeViewportSize.height || viewportRef.current?.viewportHeight || 0;
     if (!Number.isFinite(x) || !Number.isFinite(y) || viewportWidth <= 0 || viewportHeight <= 0) return;
     if (x < 0 || y < 0 || x > viewportWidth || y > viewportHeight) {
-      setPencilHover(null);
+      clearPencilHover(PENCIL_HOVER_CONTACT_CLEAR_MS);
       return;
     }
+    keepPencilHoverVisible();
     setPencilHover({ x, y });
-  }, [nativeViewportSize.height, nativeViewportSize.width, props.inkTool]);
+  }, [clearPencilHover, keepPencilHoverVisible, nativeViewportSize.height, nativeViewportSize.width, props.inkTool, suppressPencilHoverAfterContact]);
 
   const handleNativeViewportLayout = useCallback((event: LayoutChangeEvent) => {
     const { width, height } = event.nativeEvent.layout;
@@ -1706,13 +1772,17 @@ export function AndroidNativePdfViewport(props: {
         onDocumentLoaded={(event) => props.onDocumentLoaded?.(event.nativeEvent.pageCount)}
         onPageChanged={handleNativePageChanged}
         onCommitInkStroke={(event) => {
-          setPencilHover(null);
+          suppressPencilHoverAfterContact();
           const stroke = event.nativeEvent;
           if (stroke.generatedPageId) props.onOpenGeneratedPage?.(stroke.generatedPageId);
           props.onCommitInkStroke(stroke);
         }}
-        onRemoveInkStroke={(event) => props.onRemoveInkStroke(event.nativeEvent.strokeId)}
+        onRemoveInkStroke={(event) => {
+          suppressPencilHoverAfterContact();
+          props.onRemoveInkStroke(event.nativeEvent.strokeId);
+        }}
         onReplaceInkStrokes={(event) => {
+          suppressPencilHoverAfterContact();
           props.onReplaceInkStrokes?.(event.nativeEvent.removedStrokeIds ?? [], event.nativeEvent.addedStrokes ?? []);
         }}
         onViewportChanged={handleNativeViewportChanged}

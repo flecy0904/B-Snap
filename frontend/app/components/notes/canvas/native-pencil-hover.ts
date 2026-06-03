@@ -2,8 +2,6 @@ import { InkEraserMode, InkTool } from '../../../ui-types';
 
 export type PencilHoverPoint = { x: number; y: number };
 
-const MIN_VISIBLE_HOVER_Z_OFFSET = 2.5;
-
 export function shouldPreviewPencilHover(tool: InkTool) {
   return tool !== 'view' && tool !== 'text';
 }
@@ -25,18 +23,7 @@ export function isPencilHoverFarEnough(event: unknown) {
   const nativeEvent = (event as { nativeEvent?: Record<string, unknown> } | null)?.nativeEvent ?? {};
   const phase = String(nativeEvent.phase ?? '').toLowerCase();
   if (phase === 'ended' || phase === 'cancelled') return false;
-
-  const rawZOffset = nativeEvent.zOffset;
-  const zOffset = typeof rawZOffset === 'number' ? rawZOffset : Number(rawZOffset);
-  if (!Number.isFinite(zOffset)) return true;
-  if (zOffset <= 0) {
-    return typeof nativeEvent.altitudeAngle === 'number'
-      || typeof nativeEvent.azimuthAngle === 'number'
-      || typeof nativeEvent.rollAngle === 'number'
-      || typeof nativeEvent.tiltX === 'number'
-      || typeof nativeEvent.tiltY === 'number';
-  }
-  return zOffset >= MIN_VISIBLE_HOVER_Z_OFFSET;
+  return true;
 }
 
 export function getPencilHoverPoint(event: unknown): PencilHoverPoint | null {

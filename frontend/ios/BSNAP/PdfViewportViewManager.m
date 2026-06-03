@@ -665,6 +665,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 - (void)handlePageReferenceAsk:(id)sender;
 - (void)handlePageReferencePreview:(id)sender;
 - (void)handlePencilHover:(UIHoverGestureRecognizer *)gesture;
+- (void)clearPencilHoverAtPoint:(CGPoint)point;
 - (void)emitPageReferenceAction:(NSString *)action referenceId:(NSString *)referenceId;
 - (nullable UIImage *)imageForPageReference:(NSDictionary *)reference;
 - (void)startInertiaWithVelocity:(CGPoint)velocity;
@@ -4570,6 +4571,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 
 - (void)beginInkAtPoint:(CGPoint)viewPoint
 {
+  [self clearPencilHoverAtPoint:viewPoint];
   NSDictionary *hit = [self hitPagePointAtViewPoint:viewPoint];
   if (hit == nil) return;
   if (self.retainedLiveStroke != nil) {
@@ -6143,6 +6145,25 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   [self emitPageReferenceAction:@"preview" referenceId:[self pageReferenceViewFromSender:sender].referenceId];
 }
 
+- (void)clearPencilHoverAtPoint:(CGPoint)point
+{
+  self.pencilHoverActive = NO;
+  if (self.onPencilHover == nil) return;
+  self.onPencilHover(@{
+    @"phase": @"cancelled",
+    @"pointerType": @"pencil",
+    @"source": @"touch",
+    @"contact": @YES,
+    @"x": @(point.x),
+    @"y": @(point.y),
+    @"zOffset": @(0),
+    @"azimuthAngle": @(0),
+    @"altitudeAngle": @(0),
+    @"rollAngle": @(0),
+    @"timestamp": @(CACurrentMediaTime()),
+  });
+}
+
 - (void)handlePencilHover:(UIHoverGestureRecognizer *)gesture
 {
   if (self.onPencilHover == nil) return;
@@ -6167,6 +6188,10 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   }
 
   CGPoint location = [gesture locationInView:self];
+  if (self.inkInteractionActive) {
+    [self clearPencilHoverAtPoint:location];
+    return;
+  }
   CGFloat zOffset = 0;
   CGFloat azimuthAngle = 0;
   CGFloat altitudeAngle = 0;
@@ -6183,18 +6208,18 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     rollAngle = gesture.rollAngle;
   }
 
-  BOOL hasPencilPose = zOffset > 0.0001
-    || altitudeAngle > 0.0001
-    || fabs(azimuthAngle) > 0.0001
-    || fabs(rollAngle) > 0.0001;
   BOOL ending = [phase isEqualToString:@"ended"] || [phase isEqualToString:@"cancelled"];
-  if (!hasPencilPose && !self.pencilHoverActive) return;
-  if (!ending && !CGRectContainsPoint(CGRectInset(self.bounds, -8.0, -8.0), location)) return;
+  if (!ending && !CGRectContainsPoint(CGRectInset(self.bounds, -8.0, -8.0), location)) {
+    [self clearPencilHoverAtPoint:location];
+    return;
+  }
 
   self.pencilHoverActive = !ending;
   self.onPencilHover(@{
     @"phase": phase,
     @"pointerType": @"pencil",
+    @"source": @"hover",
+    @"contact": @NO,
     @"x": @(location.x),
     @"y": @(location.y),
     @"zOffset": @(zOffset),
