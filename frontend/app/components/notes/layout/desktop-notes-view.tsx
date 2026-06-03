@@ -14,6 +14,7 @@ import { NotesBrowser } from './notes-browser';
 import { DesktopNotesWorkspaceProvider, useDesktopNotesWorkspaceContext } from '../workspace/notes-workspace-context';
 import type { BackendChatMessage, BackendChatSession, BackendClassInsight } from '../../../services/backend-api';
 import type { UseAiCanvasNotesResult } from '../../../hooks/notes/ai-canvas/use-ai-canvas-notes';
+import type { AiCanvasBlockContext } from '../../../types/ai-canvas';
 import type { AppChatMode, AppRightSidebarPanel, WorkspaceFocusTarget } from '../../../hooks/notes/use-study-workspace';
 import {
   AiAnswer,
@@ -210,6 +211,8 @@ export type DesktopNotesViewProps = {
   onFocusWorkspaceTarget: (target: WorkspaceFocusTarget | null) => void;
   onUndoFocusedWorkspaceAction: () => void;
   onRedoFocusedWorkspaceAction: () => void;
+  onUndoAiCanvasAction: () => void;
+  onRedoAiCanvasAction: () => void;
   onChangeAiQuestion: (value: string) => void;
   onChangeAiChatScope: (scope: 'note' | 'all') => void;
   onLoadAllAiChatSessions: () => void;
@@ -221,7 +224,12 @@ export type DesktopNotesViewProps = {
   onCreateAiChatSession: () => void;
   onRequestAiAnswer: () => void;
   onAskAiAboutSelection: (selectionPreviewUri?: string | null) => void;
-  onRequestAiCanvasCommand: (command: string, options?: { selectionImageUri?: string | null }) => Promise<boolean>;
+  onRequestAiCanvasCommand: (command: string, options?: {
+    selectionImageUri?: string | null;
+    canvasAction?: 'auto' | 'chat_only' | 'canvas_edit';
+    source?: 'canvas-mini' | 'canvas-block';
+    canvasBlockContext?: AiCanvasBlockContext | null;
+  }) => Promise<boolean>;
   onInsertAiAnswerPage: () => void;
   onSelectionChange: (rect: SelectionRect | null) => void;
   onSelectionPreviewChange: (uri: string | null) => void;
@@ -666,6 +674,8 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           onFocusWorkspaceTarget: props.onFocusWorkspaceTarget,
           onUndoFocusedWorkspaceAction: props.onUndoFocusedWorkspaceAction,
           onRedoFocusedWorkspaceAction: props.onRedoFocusedWorkspaceAction,
+          onUndoAiCanvasAction: props.onUndoAiCanvasAction,
+          onRedoAiCanvasAction: props.onRedoAiCanvasAction,
           onChangeAiQuestion: props.onChangeAiQuestion,
           onChangeAiChatScope: props.onChangeAiChatScope,
           onLoadAllAiChatSessions: props.onLoadAllAiChatSessions,
@@ -836,12 +846,6 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           <View style={[props.styles.desktopDocumentDetailBody, focusMode && props.styles.desktopDocumentDetailBodyFocus]}>
             {showFloatingChat ? <NotesAiAssistantPanel /> : null}
             <NotesWorkspaceToolbar />
-            {props.workspaceFeedback ? (
-              <View style={props.styles.workspaceToast}>
-                <MaterialCommunityIcons name="check-circle-outline" size={16} color="#4D67D8" />
-                <Text style={props.styles.workspaceToastText}>{props.workspaceFeedback}</Text>
-              </View>
-            ) : null}
             <View
               style={[
                 props.styles.desktopDocumentSidebarContentRow,
@@ -873,6 +877,12 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
                 <NotesAiCanvasPanel />
               ) : null}
             </View>
+            {props.workspaceFeedback ? (
+              <View pointerEvents="none" style={props.styles.workspaceToast}>
+                <MaterialCommunityIcons name="check-circle-outline" size={16} color="#4D67D8" />
+                <Text style={props.styles.workspaceToastText}>{props.workspaceFeedback}</Text>
+              </View>
+            ) : null}
           </View>
         </View>
         <NotesPageListOverlay />

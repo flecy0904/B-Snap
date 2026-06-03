@@ -336,6 +336,8 @@ export function AppShell(props: {
                   onFocusWorkspaceTarget={notesState.setFocusedWorkspaceTarget}
                   onUndoFocusedWorkspaceAction={notesState.undoFocusedWorkspaceAction}
                   onRedoFocusedWorkspaceAction={notesState.redoFocusedWorkspaceAction}
+                  onUndoAiCanvasAction={notesState.undoAiCanvasAction}
+                  onRedoAiCanvasAction={notesState.redoAiCanvasAction}
                   onChangeAiQuestion={notesState.setAiQuestion}
                   onChangeAiChatScope={notesState.setAiChatScope}
                   onLoadAllAiChatSessions={notesState.onLoadAllAiChatSessions}
