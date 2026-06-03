@@ -36,7 +36,7 @@ export function useWorkspaceSaveStatus(params: {
             : '저장 준비 중';
 
     return {
-      effectiveWorkspaceFeedback: null,
+      effectiveWorkspaceFeedback: params.workspaceFeedback,
       documentSaveStatus,
     };
   }, [

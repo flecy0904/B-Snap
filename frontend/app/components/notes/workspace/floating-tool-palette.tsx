@@ -27,6 +27,7 @@ import {
   type DetailMode,
 } from './ink-toolbar-options';
 import { useDesktopNotesWorkspaceContext } from './notes-workspace-context';
+import { useDelayedTooltip } from '../../../hooks/notes/use-delayed-tooltip';
 
 export function FloatingToolPalette() {
   const workspaceContext = useDesktopNotesWorkspaceContext();
@@ -38,7 +39,7 @@ export function FloatingToolPalette() {
   const [colorLibraryOpen, setColorLibraryOpen] = React.useState(false);
   const [selectionModeOpen, setSelectionModeOpen] = React.useState(false);
   const [eraserModeOpen, setEraserModeOpen] = React.useState(false);
-  const [hoveredToolLabel, setHoveredToolLabel] = React.useState<string | null>(null);
+  const { activeTooltipId, getTooltipTriggerProps } = useDelayedTooltip();
 
   React.useEffect(() => {
     setDetailMode('pen');
@@ -73,14 +74,10 @@ export function FloatingToolPalette() {
     workspaceContext.setPageListOpen(false);
   }, [workspaceContext]);
 
-  const getToolHoverProps = (label: string) => ({
-    accessibilityLabel: label,
-    onHoverIn: () => setHoveredToolLabel(label),
-    onHoverOut: () => setHoveredToolLabel((current) => (current === label ? null : current)),
-  });
+  const getToolHoverProps = getTooltipTriggerProps;
 
   const renderToolTooltip = (label: string) => (
-    hoveredToolLabel === label ? (
+    activeTooltipId === label ? (
       <View pointerEvents="none" style={workspaceContext.styles.fixedInkToolTooltip}>
         <Text style={workspaceContext.styles.fixedInkToolTooltipText}>{label}</Text>
       </View>
