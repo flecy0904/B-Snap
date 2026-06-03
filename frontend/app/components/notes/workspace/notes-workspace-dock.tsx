@@ -49,6 +49,12 @@ export function NotesWorkspaceDock() {
     null
   );
   const previewIsIncoming = Boolean(globalContext.previewedIncoming);
+  const importantRecommendations = globalContext.importantPageRecommendations ?? [];
+  const getPriorityText = (priority: string) => {
+    if (priority === 'very-high') return '최상';
+    if (priority === 'high') return '높음';
+    return '중간';
+  };
 
   React.useEffect(() => {
     startPositionRef.current = position;
@@ -162,6 +168,46 @@ export function NotesWorkspaceDock() {
                 </Pressable>
               </View>
             ) : null}
+          </View>
+        ) : null}
+        {importantRecommendations.length ? (
+          <View style={globalContext.styles.workspaceDockSection}>
+            <View style={globalContext.styles.workspaceDockSectionHeader}>
+              <Text style={globalContext.styles.workspaceDockSectionTitle}>추천 Top</Text>
+              <Text style={globalContext.styles.workspaceDockSectionMeta}>필기 신호</Text>
+            </View>
+            {importantRecommendations.map((signal: any, index: number) => (
+              <View key={`${signal.pageNumber}-${index}`} style={globalContext.styles.workspaceDockRow}>
+                <Pressable style={globalContext.styles.workspaceDockRowMeta} onPress={() => documentContext.onSetCurrentPdfPage(signal.pageNumber)}>
+                  <Text style={globalContext.styles.workspaceDockRowTitle} numberOfLines={1}>
+                    {index + 1}. {signal.pageNumber}p · {getPriorityText(signal.priority)}
+                  </Text>
+                  <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>
+                    {(signal.reasonTags ?? []).slice(0, 2).join(' · ') || `신호 점수 ${signal.importanceScore}`}
+                  </Text>
+                  <View style={globalContext.styles.workspaceDockSignalChipRow}>
+                    <View style={globalContext.styles.workspaceDockSignalChip}>
+                      <Text style={globalContext.styles.workspaceDockSignalChipText}>score {signal.importanceScore}</Text>
+                    </View>
+                    {signal.bookmarkCount ? (
+                      <View style={globalContext.styles.workspaceDockSignalChip}>
+                        <Text style={globalContext.styles.workspaceDockSignalChipText}>star {signal.bookmarkCount}</Text>
+                      </View>
+                    ) : null}
+                    {signal.highlightCount ? (
+                      <View style={globalContext.styles.workspaceDockSignalChip}>
+                        <Text style={globalContext.styles.workspaceDockSignalChipText}>highlight {signal.highlightCount}</Text>
+                      </View>
+                    ) : null}
+                  </View>
+                </Pressable>
+                <View style={globalContext.styles.workspaceDockRowButtons}>
+                  <Pressable style={globalContext.styles.workspaceDockInlineAction} onPress={() => documentContext.onSetCurrentPdfPage(signal.pageNumber)}>
+                    <Text style={globalContext.styles.workspaceDockInlineActionText}>이동</Text>
+                  </Pressable>
+                </View>
+              </View>
+            ))}
           </View>
         ) : null}
         <View style={globalContext.styles.workspaceDockSection}>

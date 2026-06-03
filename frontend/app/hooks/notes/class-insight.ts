@@ -83,6 +83,7 @@ type RankedPageSignal = PageSignal & {
   importanceScore: number;
   priority: 'very-high' | 'high' | 'medium';
 };
+export type ImportantPageRecommendation = RankedPageSignal;
 
 export type ClassInsightAggregate = {
   participant_count?: number;
@@ -381,4 +382,36 @@ export function buildClassInsightContext(params: {
     'Recommended page priorities:',
     ...pageLines,
   ].join('\n');
+}
+
+export function buildImportantPageRecommendations(params: {
+  studyDocument: StudyDocumentEntry | null;
+  subject: Subject | null;
+  inkStrokes: InkStroke[];
+  textAnnotations: InkTextAnnotation[];
+  bookmarks: BookmarkedPage[];
+  pageCaptureReferences: PageCaptureReference[];
+  generatedPages: GeneratedWorkspacePage[];
+  classInsight?: ClassInsightAggregate | null;
+  limit?: number;
+}) {
+  if (!params.studyDocument) return [];
+  const pageCount = Math.max(1, params.studyDocument.pageCount ?? 1);
+  const aggregateSignals = isClassInsightTargetDocument(params.studyDocument, params.subject)
+    ? buildAggregateSignals(params.classInsight, pageCount)
+    : [];
+  const liveSignals = buildLiveSignals({
+    pageCount,
+    inkStrokes: params.inkStrokes,
+    textAnnotations: params.textAnnotations,
+    bookmarks: params.bookmarks,
+    pageCaptureReferences: params.pageCaptureReferences,
+    generatedPages: params.generatedPages,
+  });
+
+  return rankSignals(
+    [...aggregateSignals, ...liveSignals],
+    pageCount,
+    Math.min(params.limit ?? DEFAULT_RECOMMENDATION_LIMIT, pageCount),
+  );
 }

@@ -225,6 +225,9 @@ export function AppShell(props: {
                   appRightSidebarPanel={notesState.appRightSidebarPanel}
                   appChatMode={notesState.appChatMode}
                   appRightSidebarWidth={notesState.appRightSidebarWidth}
+                  aiFloatingPanelSize={notesState.aiFloatingPanelSize}
+                  appSidebarPosition={notesState.appSidebarPosition}
+                  studyInteractionMode={notesState.studyInteractionMode}
                   focusedWorkspaceTarget={notesState.focusedWorkspaceTarget}
                   canUndoFocusedWorkspaceAction={notesState.canUndoFocusedWorkspaceAction}
                   canRedoFocusedWorkspaceAction={notesState.canRedoFocusedWorkspaceAction}
@@ -244,6 +247,8 @@ export function AppShell(props: {
                   aiLoading={notesState.aiLoading}
                   aiError={notesState.aiError}
                   aiCanvas={notesState.aiCanvas}
+                  classInsight={notesState.classInsight}
+                  importantPageRecommendations={notesState.importantPageRecommendations}
                   incomingAssetSuggestion={notesState.incomingAssetSuggestion}
                   inboxHint={notesState.inboxHint}
                   inboxPendingCount={notesState.inboxPendingCount}
@@ -287,6 +292,10 @@ export function AppShell(props: {
                   onFloatAppAiChatPanel={notesState.floatAppAiChatPanel}
                   onDockAppAiChatPanel={notesState.dockAppAiChatPanel}
                   onChangeAppRightSidebarWidth={notesState.setAppRightSidebarWidth}
+                  onChangeAiFloatingPanelSize={notesState.setAiFloatingPanelSize}
+                  onChangeAppSidebarPosition={notesState.changeAppSidebarPosition}
+                  onToggleAppSidebarPosition={notesState.toggleAppSidebarPosition}
+                  onToggleStudyInteractionMode={notesState.toggleStudyInteractionMode}
                   onFocusWorkspaceTarget={notesState.setFocusedWorkspaceTarget}
                   onUndoFocusedWorkspaceAction={notesState.undoFocusedWorkspaceAction}
                   onRedoFocusedWorkspaceAction={notesState.redoFocusedWorkspaceAction}
@@ -354,6 +363,7 @@ export function AppShell(props: {
                   onRemovePdfPage={notesState.removePdfPage}
                   onMovePdfPage={notesState.movePdfPage}
                   onCreateMemoPage={notesState.createMemoPage}
+                  onChangeBlankNoteTemplate={notesState.changeBlankNoteTemplate}
                   onQuery={notesState.setQuery}
                   onSort={notesState.toggleSort}
                   onChangeMode={notesState.changeNoteWorkspaceMode}
@@ -367,6 +377,7 @@ export function AppShell(props: {
                   onRenameStudyDocument={notesState.renameStudyDocument}
                   onCreateBlankNote={notesState.createBlankNote}
                   onUploadPdf={notesState.uploadPdfDocument}
+                  onInsertImageFromLibrary={notesState.insertImageFromLibrary}
                   onUpdateStudyDocumentPageCount={notesState.updateStudyDocumentPageCount}
                   onReset={notesState.resetNotes}
                   onSetCurrentPdfPage={notesState.setCurrentPdfPage}
@@ -509,6 +520,7 @@ export function AppShell(props: {
                   aiChatReadOnly={notesState.aiChatReadOnly}
                   aiLoading={notesState.aiLoading}
                   aiError={notesState.aiError}
+                  classInsight={notesState.classInsight}
                   incomingAssetSuggestion={notesState.incomingAssetSuggestion}
                   inboxHint={notesState.inboxHint}
                   inboxPendingCount={notesState.inboxPendingCount}

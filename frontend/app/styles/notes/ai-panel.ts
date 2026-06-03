@@ -6,6 +6,7 @@ export const aiPanelStyles = {
   aiPanelSidebarResizeHandle: { position: 'absolute' as const, top: 0, right: 0, bottom: 0, width: 16, cursor: 'col-resize' as const, zIndex: 130, alignItems: 'center' as const, justifyContent: 'center' as const },
   aiPanelSidebarResizeGrip: { width: 14, minHeight: 38, borderRadius: 99, alignItems: 'center' as const, justifyContent: 'center' as const, gap: 3, backgroundColor: '#EEF2FF', borderWidth: 1, borderColor: '#DCE4FF' },
   aiPanelSidebarResizeDot: { width: 3, height: 3, borderRadius: 99, backgroundColor: '#7A86A3' },
+  aiPanelFloatingResizeHandle: { position: 'absolute' as const, right: -12, bottom: -12, width: 46, height: 46, borderRadius: 14, alignItems: 'center' as const, justifyContent: 'center' as const, backgroundColor: 'rgba(255,255,255,0.96)', borderWidth: 1, borderColor: '#DCE4FF', shadowColor: '#475569', shadowOpacity: 0.16, shadowRadius: 12, shadowOffset: { width: 0, height: 6 }, elevation: 14, zIndex: 130 },
   aiMenuDismissLayer: { position: 'absolute' as const, top: 0, right: 0, bottom: 0, left: 0, zIndex: 50 },
   aiHomePane: { flex: 1, minHeight: 0, position: 'relative' as const, zIndex: 60 },
   aiHomeMenuDismissLayer: { position: 'absolute' as const, top: 0, right: 0, bottom: 0, left: 0, zIndex: 65 },

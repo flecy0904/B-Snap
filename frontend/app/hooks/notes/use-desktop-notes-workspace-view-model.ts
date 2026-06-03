@@ -1,5 +1,6 @@
 import React from 'react';
 import { resolvePreviewImage } from '../../preview-images';
+import type { ImportantPageRecommendation } from './class-insight';
 import { CaptureAsset, DocumentPageView, GeneratedWorkspacePage, PageCaptureReference, StudyDocumentEntry, WorkspaceAttachment } from '../../types';
 import { InkTextAnnotation } from '../../ui-types';
 import { derivePreprocessedCropUrl } from '../../ui-helpers';
@@ -19,6 +20,7 @@ export type DesktopNotesWorkspaceViewModelParams = {
   totalDocumentPageCount: number;
   studyDocument: StudyDocumentEntry | null;
   textAnnotations: InkTextAnnotation[];
+  importantPageRecommendations: ImportantPageRecommendation[];
 };
 
 export function useDesktopNotesWorkspaceViewModel(params: DesktopNotesWorkspaceViewModelParams) {
@@ -36,6 +38,7 @@ export function useDesktopNotesWorkspaceViewModel(params: DesktopNotesWorkspaceV
     !!params.incomingAssetSuggestion ||
     params.pageCaptureReferences.length > 0 ||
     params.workspaceAttachments.length > 0 ||
+    params.importantPageRecommendations.length > 0 ||
     params.captureInbox.length > 0 ||
     params.generatedWorkspacePages.some((value) => value.pageKind === 'memo') ||
     params.textAnnotations.length > 0;

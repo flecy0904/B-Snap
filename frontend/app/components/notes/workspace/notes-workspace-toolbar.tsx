@@ -3,7 +3,7 @@ import { Pressable, ScrollView, Text, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useDocumentContext } from './document-context';
 import { useCanvasContext } from '../canvas/canvas-context';
-import { NotebookPage } from '../../../types';
+import { NotebookPage, NotebookPageTemplate } from '../../../types';
 import { useDesktopNotesWorkspaceContext } from './notes-workspace-context';
 import { FloatingToolPalette } from './floating-tool-palette';
 
@@ -136,6 +136,7 @@ export const NotesWorkspaceToolbar = React.memo(function NotesWorkspaceToolbar()
   const workspaceContext = useDesktopNotesWorkspaceContext();
   const documentContext = useDocumentContext();
   const canvasContext = useCanvasContext();
+  const [blankTemplateMenuOpen, setBlankTemplateMenuOpen] = React.useState(false);
   const usesAppAiPanelLayout = Boolean(workspaceContext.usesAppAiPanelLayout);
   const chatToolActive = usesAppAiPanelLayout
     ? workspaceContext.appRightSidebarPanel === 'chat' || (workspaceContext.appChatMode === 'floating' && workspaceContext.aiPanelOpen)
@@ -143,10 +144,26 @@ export const NotesWorkspaceToolbar = React.memo(function NotesWorkspaceToolbar()
   const canvasToolActive = usesAppAiPanelLayout
     ? workspaceContext.appRightSidebarPanel === 'canvas'
     : workspaceContext.aiCanvas.isOpen;
+  const readMode = workspaceContext.studyInteractionMode === 'read';
+  const blankTemplate = documentContext.studyDocument?.blankTemplate ?? 'plain';
+  const blankTemplateIcon: React.ComponentProps<typeof MaterialCommunityIcons>['name'] =
+    blankTemplate === 'grid' ? 'grid' : blankTemplate === 'ruled' ? 'format-align-justify' : 'note-outline';
+  const blankTemplateOptions: Array<{ template: NotebookPageTemplate; label: string; icon: React.ComponentProps<typeof MaterialCommunityIcons>['name'] }> = [
+    { template: 'plain', label: '무지', icon: 'note-outline' },
+    { template: 'ruled', label: '줄노트', icon: 'format-align-justify' },
+    { template: 'grid', label: '격자', icon: 'grid' },
+  ];
 
   return (
     <View style={workspaceContext.styles.inkToolbarWrap}>
-      <View style={workspaceContext.styles.inkToolbar}>
+      <View style={[workspaceContext.styles.inkToolbar, readMode && workspaceContext.styles.inkToolbarReadMode]}>
+        {readMode ? (
+          <View pointerEvents="none" style={workspaceContext.styles.inkToolbarReadModeRail}>
+            <View style={workspaceContext.styles.inkToolbarReadModeRailSoft} />
+            <View style={workspaceContext.styles.inkToolbarReadModeRailStrong} />
+            <View style={workspaceContext.styles.inkToolbarReadModeRailSoft} />
+          </View>
+        ) : null}
         <View style={[workspaceContext.styles.documentPageNavigator, { position: 'relative' }]}>
           <Pressable
             style={[
@@ -159,21 +176,70 @@ export const NotesWorkspaceToolbar = React.memo(function NotesWorkspaceToolbar()
           >
             <MaterialCommunityIcons name="view-grid-outline" size={18} color={workspaceContext.pageListOpen ? '#4F68D2' : '#556070'} />
           </Pressable>
-          
-          <Pressable 
+
+          <Pressable
             style={workspaceContext.styles.inkActionButton}
-            onPress={() => documentContext.onCreateMemoPage()}
+            onPress={() => documentContext.onCreateMemoPage(documentContext.currentPdfPage)}
+            accessibilityLabel={documentContext.studyDocument?.type === 'blank' ? '빈 노트 페이지 추가' : '현재 페이지 뒤에 메모 페이지 추가'}
           >
             <MaterialCommunityIcons name="note-plus-outline" size={18} color="#4F68D2" />
           </Pressable>
+          {!readMode && documentContext.studyDocument?.type === 'blank' ? (
+            <Pressable
+              style={[
+                workspaceContext.styles.inkActionButton,
+                blankTemplateMenuOpen && workspaceContext.styles.inkToolButtonActive,
+              ]}
+              onPress={() => setBlankTemplateMenuOpen((current) => !current)}
+            >
+              <MaterialCommunityIcons name={blankTemplateIcon} size={18} color="#4F68D2" />
+            </Pressable>
+          ) : null}
+          {!readMode && documentContext.studyDocument?.type === 'blank' && blankTemplateMenuOpen ? (
+            <View style={[workspaceContext.styles.inkPopover, { top: 42, left: 44, minWidth: 160, gap: 7 }]}>
+              {blankTemplateOptions.map((option) => {
+                const active = blankTemplate === option.template;
+                return (
+                  <Pressable
+                    key={option.template}
+                    style={[
+                      workspaceContext.styles.workspaceDockMiniActionsRow,
+                      { minHeight: 34, paddingHorizontal: 8, borderRadius: 10, backgroundColor: active ? '#EEF2FF' : '#FFFFFF' },
+                    ]}
+                    onPress={() => {
+                      documentContext.onChangeBlankNoteTemplate(option.template);
+                      setBlankTemplateMenuOpen(false);
+                    }}
+                  >
+                    <MaterialCommunityIcons name={option.icon} size={16} color={active ? '#4F68D2' : '#556070'} />
+                    <Text style={[workspaceContext.styles.workspaceDockMiniActionText, { color: active ? '#4F68D2' : '#556070' }]}>{option.label}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+          ) : null}
           <Pressable
-            style={[workspaceContext.styles.inkActionButton, documentContext.currentPageBookmarked && workspaceContext.styles.inkToolButtonActive]}
+            style={[
+              workspaceContext.styles.inkActionButton,
+              documentContext.currentPageBookmarked && workspaceContext.styles.bookmarkActionButtonActive,
+            ]}
             onPress={documentContext.onToggleBookmarkCurrentPage}
           >
-            <MaterialCommunityIcons name={documentContext.currentPageBookmarked ? 'star' : 'star-outline'} size={18} color={documentContext.currentPageBookmarked ? '#F59E0B' : '#556070'} />
+            <MaterialCommunityIcons name={documentContext.currentPageBookmarked ? 'star' : 'star-outline'} size={18} color={documentContext.currentPageBookmarked ? '#D97706' : '#556070'} />
+            {documentContext.currentPageBookmarked ? <View pointerEvents="none" style={workspaceContext.styles.bookmarkActionButtonDot} /> : null}
           </Pressable>
           <Pressable style={workspaceContext.styles.inkActionButton} onPress={documentContext.onExportCurrentDocument}>
             <MaterialCommunityIcons name="share-variant-outline" size={18} color="#556070" />
+          </Pressable>
+          <Pressable
+            style={[
+              workspaceContext.styles.inkActionButton,
+              readMode && workspaceContext.styles.inkToolButtonActive,
+            ]}
+            onPress={workspaceContext.onToggleStudyInteractionMode}
+          >
+            <MaterialCommunityIcons name={readMode ? 'lock-outline' : 'lock-open-outline'} size={18} color={readMode ? '#4F68D2' : '#556070'} />
+            {readMode ? <View pointerEvents="none" style={workspaceContext.styles.readModeLockDot} /> : null}
           </Pressable>
           {workspaceContext.focusMode ? (
             <Pressable style={workspaceContext.styles.inkActionButton} onPress={workspaceContext.onToggleFocusMode}>
@@ -183,33 +249,35 @@ export const NotesWorkspaceToolbar = React.memo(function NotesWorkspaceToolbar()
         </View>
 
         <View style={workspaceContext.styles.inkToolbarTools}>
-          <View style={workspaceContext.styles.inkSecondaryCluster}>
-            <Pressable
-              style={[
-                workspaceContext.styles.inkActionButton,
-                !workspaceContext.canUndoFocusedWorkspaceAction && workspaceContext.styles.inkActionButtonDisabled,
-              ]}
-              onPress={workspaceContext.onUndoFocusedWorkspaceAction}
-              disabled={!workspaceContext.canUndoFocusedWorkspaceAction}
-            >
-              <MaterialCommunityIcons name="undo-variant" size={18} color={workspaceContext.canUndoFocusedWorkspaceAction ? '#556070' : '#A8B0BF'} />
-            </Pressable>
-            <Pressable
-              style={[
-                workspaceContext.styles.inkActionButton,
-                !workspaceContext.canRedoFocusedWorkspaceAction && workspaceContext.styles.inkActionButtonDisabled,
-              ]}
-              onPress={workspaceContext.onRedoFocusedWorkspaceAction}
-              disabled={!workspaceContext.canRedoFocusedWorkspaceAction}
-            >
-              <MaterialCommunityIcons name="redo-variant" size={18} color={workspaceContext.canRedoFocusedWorkspaceAction ? '#556070' : '#A8B0BF'} />
-            </Pressable>
-            <Pressable style={workspaceContext.styles.inkActionButton} onPress={canvasContext.clearInk}>
-              <MaterialCommunityIcons name="trash-can-outline" size={18} color="#556070" />
-            </Pressable>
-          </View>
+          {!readMode ? (
+            <View style={workspaceContext.styles.inkSecondaryCluster}>
+              <Pressable
+                style={[
+                  workspaceContext.styles.inkActionButton,
+                  !workspaceContext.canUndoFocusedWorkspaceAction && workspaceContext.styles.inkActionButtonDisabled,
+                ]}
+                onPress={workspaceContext.onUndoFocusedWorkspaceAction}
+                disabled={!workspaceContext.canUndoFocusedWorkspaceAction}
+              >
+                <MaterialCommunityIcons name="undo-variant" size={18} color={workspaceContext.canUndoFocusedWorkspaceAction ? '#556070' : '#A8B0BF'} />
+              </Pressable>
+              <Pressable
+                style={[
+                  workspaceContext.styles.inkActionButton,
+                  !workspaceContext.canRedoFocusedWorkspaceAction && workspaceContext.styles.inkActionButtonDisabled,
+                ]}
+                onPress={workspaceContext.onRedoFocusedWorkspaceAction}
+                disabled={!workspaceContext.canRedoFocusedWorkspaceAction}
+              >
+                <MaterialCommunityIcons name="redo-variant" size={18} color={workspaceContext.canRedoFocusedWorkspaceAction ? '#556070' : '#A8B0BF'} />
+              </Pressable>
+              <Pressable style={workspaceContext.styles.inkActionButton} onPress={canvasContext.clearInk}>
+                <MaterialCommunityIcons name="trash-can-outline" size={18} color="#556070" />
+              </Pressable>
+            </View>
+          ) : null}
 
-          <View style={workspaceContext.styles.inkToolbarDivider} />
+          {!readMode ? <View style={workspaceContext.styles.inkToolbarDivider} /> : null}
 
           <View style={workspaceContext.styles.inkSecondaryCluster}>
             <Pressable
@@ -244,9 +312,18 @@ export const NotesWorkspaceToolbar = React.memo(function NotesWorkspaceToolbar()
             >
               <MaterialCommunityIcons name="note-text-outline" size={18} color={canvasToolActive ? '#5A74E8' : '#77839A'} />
             </Pressable>
+            {usesAppAiPanelLayout && workspaceContext.appRightSidebarPanel ? (
+              <Pressable style={workspaceContext.styles.inkActionButton} onPress={workspaceContext.onToggleAppSidebarPosition}>
+                <MaterialCommunityIcons
+                  name={workspaceContext.appSidebarPosition === 'left' ? 'dock-right' : 'dock-left'}
+                  size={18}
+                  color="#556070"
+                />
+              </Pressable>
+            ) : null}
           </View>
         </View>
-        <FloatingToolPalette />
+        {!readMode ? <FloatingToolPalette /> : null}
       </View>
     </View>
   );
