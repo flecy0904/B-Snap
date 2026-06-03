@@ -927,7 +927,7 @@ export function BlankNoteCanvas(props: {
     : Math.max(1, Math.min(pageCount, props.currentPage ?? documentContext.currentPdfPage ?? 1));
   const allInkStrokes = documentId ? canvasCtx.inkByDocument[documentId] ?? [] : canvasCtx.inkStrokes;
   const allTextAnnotations = documentId ? canvasCtx.textAnnotationsByDocument[documentId] ?? [] : canvasCtx.textAnnotations;
-  const allImageAnnotations: InkImageAnnotation[] = [];
+  const allImageAnnotations = documentId ? canvasCtx.imageAnnotationsByDocument[documentId] ?? [] : canvasCtx.imageAnnotations;
   const horizontalInset = windowWidth >= 900 ? 24 : 16;
   const availableWidth = Math.max(320, (containerWidth || windowWidth || 780) - horizontalInset);
   const pageWidth = Math.round(Math.max(360, Math.min(availableWidth, 1320)));

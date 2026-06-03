@@ -349,7 +349,7 @@ export function MobileNotesView(props: MobileNotesViewProps) {
           selectionMode={props.selectionMode}
           inkStrokes={props.inkByDocument[props.studyDocument.id] ?? props.inkStrokes}
           textAnnotations={props.textAnnotationsByDocument[props.studyDocument.id] ?? props.textAnnotations}
-          imageAnnotations={[]}
+          imageAnnotations={props.imageAnnotationsByDocument[props.studyDocument.id] ?? props.imageAnnotations}
           textAnnotationVariant={phoneViewerOnly ? 'marker' : undefined}
           selectionRect={props.selectionRect}
           onCommitInkStroke={props.onCommitInkStroke}

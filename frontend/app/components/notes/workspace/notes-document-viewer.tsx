@@ -49,6 +49,9 @@ export const NotesDocumentViewer = React.memo(function NotesDocumentViewer() {
     const documentTextAnnotations = documentContext.studyDocument?.id
       ? (canvasContext.textAnnotationsByDocument[documentContext.studyDocument.id] ?? []).filter((annotation) => !annotation.generatedPageId || documentContext.notebookPages.some((page) => page.generatedPageId === annotation.generatedPageId))
       : canvasContext.textAnnotations;
+    const documentImageAnnotations = documentContext.studyDocument?.id
+      ? (canvasContext.imageAnnotationsByDocument[documentContext.studyDocument.id] ?? []).filter((annotation) => !annotation.generatedPageId || documentContext.notebookPages.some((page) => page.generatedPageId === annotation.generatedPageId))
+      : canvasContext.imageAnnotations;
     const readMode = globalContext.studyInteractionMode === 'read';
     const effectiveInkTool = readMode ? 'view' : canvasContext.inkTool;
 
@@ -68,7 +71,7 @@ export const NotesDocumentViewer = React.memo(function NotesDocumentViewer() {
         brushSettings={canvasContext.brushSettings}
         inkStrokes={documentInkStrokes}
         textAnnotations={documentTextAnnotations}
-        imageAnnotations={[]}
+        imageAnnotations={documentImageAnnotations}
         readOnly={readMode}
         notebookPages={documentContext.notebookPages}
         activeGeneratedPageId={documentContext.currentDocumentPage?.kind === 'generated' ? documentContext.currentDocumentPage.pageId : null}
