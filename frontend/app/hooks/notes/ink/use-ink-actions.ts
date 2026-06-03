@@ -135,32 +135,8 @@ export function useInkActions(params: {
     ));
   };
 
-  const getPageImageAnnotationsForSelection = () => {
-    if (!params.studyDocumentId) return [];
-    const annotations = params.imageAnnotationsByDocument[params.studyDocumentId] ?? [];
-    const selectionScope = getSelectionPageScope();
-    return annotations.filter((annotation) => (
-      selectionScope.generatedPageId
-        ? annotation.generatedPageId === selectionScope.generatedPageId
-        : (
-            !annotation.generatedPageId &&
-            (typeof selectionScope.pageNumber === 'number'
-              ? (
-                  params.studyDocument?.type === 'blank'
-                    ? (annotation.pageNumber ?? 1) === selectionScope.pageNumber
-                    : annotation.pageNumber === selectionScope.pageNumber
-                )
-              : (
-                  params.currentDocumentPage?.kind === 'generated'
-                    ? annotation.generatedPageId === params.currentDocumentPage.pageId
-                    : (
-                        params.studyDocument?.type === 'blank'
-                          ? (annotation.pageNumber ?? 1) === params.currentPdfPage
-                          : annotation.pageNumber === params.currentPdfPage
-                      )
-                ))
-          )
-    ));
+  const getPageImageAnnotationsForSelection = (): InkImageAnnotation[] => {
+    return [];
   };
 
   const scaleRectToSelection = (rect: SelectionRect): SelectionRect => {
@@ -753,8 +729,21 @@ export function useInkActions(params: {
       ...current,
       [params.studyDocumentId!]: [],
     }));
-    if (anchoredSelection) clearCurrentSelection();
+    params.setSelectionByDocument((current) => ({
+      ...current,
+      [params.studyDocumentId!]: {
+        x: nextAnnotation.x,
+        y: nextAnnotation.y,
+        width: nextAnnotation.width,
+        height: nextAnnotation.height,
+        pageNumber: nextAnnotation.generatedPageId ? undefined : nextAnnotation.pageNumber,
+        generatedPageId: nextAnnotation.generatedPageId,
+        pageWidth: nextAnnotation.pageWidth,
+        pageHeight: nextAnnotation.pageHeight,
+      },
+    }));
     if (!generatedPageId) markPageDirty(pageNumber);
+    params.setInkTool('select');
     params.setWorkspaceFeedback('현재 페이지에 이미지를 배치했습니다.');
   };
 

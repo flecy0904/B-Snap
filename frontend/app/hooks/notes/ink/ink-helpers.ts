@@ -31,13 +31,16 @@ export function scopeInkStrokeToPage(params: {
   currentPdfPage: number;
 }) {
   const { stroke, currentDocumentPage, currentPdfPage } = params;
+  const pointScope = stroke.points.find((point) => point.generatedPageId || typeof point.pageNumber === 'number');
 
-  if (stroke.generatedPageId) {
-    return { ...stroke, pageNumber: undefined };
+  const generatedPageId = stroke.generatedPageId ?? pointScope?.generatedPageId;
+  if (generatedPageId) {
+    return { ...stroke, generatedPageId, pageNumber: undefined };
   }
 
-  if (stroke.pageNumber) {
-    return { ...stroke, generatedPageId: undefined, pageNumber: stroke.pageNumber };
+  const pageNumber = stroke.pageNumber ?? pointScope?.pageNumber;
+  if (pageNumber) {
+    return { ...stroke, generatedPageId: undefined, pageNumber };
   }
 
   if (currentDocumentPage?.kind === 'generated') {

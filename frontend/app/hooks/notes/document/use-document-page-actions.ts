@@ -9,9 +9,10 @@ import {
   type BackendNotePage,
 } from '../../../services/backend-api';
 import type { InkStroke, InkTextAnnotation, InkTool } from '../../../ui-types';
-import type { AiAnswer, BookmarkedPage, DocumentPageView, GeneratedWorkspacePage, StudyDocumentEntry } from '../../../types';
+import type { AiAnswer, BookmarkedPage, DocumentPageView, GeneratedWorkspacePage, NotebookPageTemplate, StudyDocumentEntry } from '../../../types';
 import { getDocumentPageLabel, isSameDocumentPage } from '../../../ui-helpers';
 import { getStudyDocumentBackendNoteId } from './backend-sync';
+import { persistBlankPdfDocument } from './blank-pdf-local';
 import { upsertStudyDocument } from './collection-helpers';
 import { serializeNotePageContent } from './note-page-content';
 
@@ -270,16 +271,29 @@ export function useDocumentPageActions(params: {
     params.setWorkspaceFeedback('AI 답변을 페이지에 추가했어요.');
   };
 
-  const createMemoPage = (insertAfterPageOverride?: number) => {
+  const createMemoPage = async (insertAfterPageOverride?: number) => {
     if (!params.studyDocumentId || !params.studyDocument) return;
 
     if (params.studyDocument.type === 'blank') {
       const nextPage = params.studyDocument.pageCount + 1;
-      const nextDocument = {
+      let nextDocument: StudyDocumentEntry = {
         ...params.studyDocument,
         pageCount: nextPage,
         updatedAt: '방금 전',
       };
+      try {
+        const blankPdfUri = await persistBlankPdfDocument({
+          documentId: params.studyDocumentId,
+          pageCount: nextPage,
+          template: params.studyDocument.blankTemplate ?? 'plain',
+        });
+        nextDocument = blankPdfUri
+          ? { ...nextDocument, file: { uri: blankPdfUri }, localFileUri: blankPdfUri }
+          : nextDocument;
+      } catch {
+        const { file: _file, localFileUri: _localFileUri, ...fallbackDocument } = nextDocument;
+        nextDocument = fallbackDocument;
+      }
 
       params.setUserStudyDocuments((current) => upsertStudyDocument(current, nextDocument));
       params.setCurrentPdfPageByDocument((current) => ({
@@ -346,6 +360,36 @@ export function useDocumentPageActions(params: {
     }));
     params.setInkTool('pen');
     params.setWorkspaceFeedback(`${insertAfterPage}페이지 뒤에 메모를 추가했어요.`);
+  };
+
+  const changeBlankNoteTemplate = async (template: NotebookPageTemplate) => {
+    if (!params.studyDocumentId || !params.studyDocument || params.studyDocument.type !== 'blank') return;
+    let nextDocument: StudyDocumentEntry = {
+      ...params.studyDocument!,
+      blankTemplate: template,
+      updatedAt: '방금 전',
+    };
+    try {
+      const blankPdfUri = await persistBlankPdfDocument({
+        documentId: params.studyDocumentId,
+        pageCount: params.studyDocument.pageCount,
+        template,
+      });
+      if (blankPdfUri) {
+        nextDocument = { ...nextDocument, file: { uri: blankPdfUri }, localFileUri: blankPdfUri };
+      }
+    } catch {
+      const { file: _file, localFileUri: _localFileUri, ...fallbackDocument } = nextDocument;
+      nextDocument = fallbackDocument;
+    }
+    params.setUserStudyDocuments((current) => upsertStudyDocument(current, nextDocument));
+    params.setWorkspaceFeedback(
+      template === 'plain'
+        ? '빈 노트 배경을 기본으로 바꿨어요.'
+        : template === 'ruled'
+          ? '빈 노트 배경을 줄노트로 바꿨어요.'
+          : '빈 노트 배경을 격자노트로 바꿨어요.',
+    );
   };
 
   const openGeneratedPage = (pageId: string) => {
@@ -702,6 +746,7 @@ export function useDocumentPageActions(params: {
   return {
     insertAiAnswerPage,
     createMemoPage,
+    changeBlankNoteTemplate,
     openGeneratedPage,
     removeGeneratedPage,
     duplicateGeneratedPage,

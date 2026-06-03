@@ -1,6 +1,6 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState, memo } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, memo } from 'react';
 import { manipulateAsync, SaveFormat } from 'expo-image-manipulator';
-import { Image, PanResponder, View } from 'react-native';
+import { Image, PanResponder, Platform, Pressable, ScrollView, View, useWindowDimensions, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native';
 import { Gesture, GestureDetector } from 'react-native-gesture-handler';
 import { runOnJS } from 'react-native-reanimated';
 import Svg from 'react-native-svg';
@@ -11,14 +11,59 @@ import { SelectionContextMenu, isPointInSelectionContextMenu } from './selection
 import { PencilHoverOverlay } from './pencil-hover-overlay';
 import { SelectionLassoOverlay, SelectionOverlay } from './selection-overlays';
 import { SelectionMovePreview, getSelectedObjectIdsForSelection, getSelectionMovePreview } from './selection-move-preview';
-import { buildSelectionRectFromDrag, buildSelectionRectFromPoints, finalizeInkStroke, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, shouldAppendInkPoint } from '../../../ui-helpers';
-import { InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
+import { buildSelectionRectFromDrag, buildSelectionRectFromPoints, finalizeInkStroke, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, shouldAppendInkPoint } from '../../../ui-helpers';
+import { InkImageAnnotation, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
+import type { NotebookPageTemplate } from '../../../types';
 import { useCanvasContext } from './canvas-context';
 import { shouldActivateNativeInkGesture, type NativeGestureStateManager, type NativeInkGestureEvent, type NativeInkTouchEvent } from './native-ink-gesture-policy';
-import { getPencilEraserRadius, getPencilHoverPoint, getPencilHoverSize, getPencilHoverToolLabel, isStylusHoverEvent, shouldPreviewPencilHover, type PencilHoverPoint } from './native-pencil-hover';
+import { getPencilEraserRadius, getPencilHoverPoint, getPencilHoverSize, isPencilHoverFarEnough, isStylusHoverEvent, shouldPreviewPencilHover, type PencilHoverPoint } from './native-pencil-hover';
 import { useDesktopNotesWorkspaceContext } from '../workspace/notes-workspace-context';
+import { useDocumentContext } from '../workspace/document-context';
 
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
+type BlankNotePageCanvasProps = {
+  backgroundImageUri?: string | null;
+  styles: any;
+  pageNumber?: number;
+  currentPage?: number;
+  generatedPageId?: string;
+  template: NotebookPageTemplate;
+  pageWidth?: number;
+  pageHeight?: number;
+  inkStrokes: InkStroke[];
+  textAnnotations: InkTextAnnotation[];
+  imageAnnotations: InkImageAnnotation[];
+  onPageFocus?: (pageNumber: number) => void;
+  readOnly?: boolean;
+};
+
+const BLANK_NOTE_ASPECT_RATIO = 0.68;
+const BLANK_NOTE_PAGE_GAP = 26;
+
+function isStrokeOnBlankCanvasPage(stroke: InkStroke, pageNumber?: number, generatedPageId?: string) {
+  if (generatedPageId) return stroke.generatedPageId === generatedPageId;
+  if (stroke.generatedPageId) return false;
+  return (stroke.pageNumber ?? 1) === (pageNumber ?? 1);
+}
+
+function isTextAnnotationOnBlankCanvasPage(annotation: InkTextAnnotation, pageNumber?: number, generatedPageId?: string) {
+  if (generatedPageId) return annotation.generatedPageId === generatedPageId;
+  if (annotation.generatedPageId) return false;
+  return (annotation.pageNumber ?? 1) === (pageNumber ?? 1);
+}
+
+function isImageAnnotationOnBlankCanvasPage(annotation: InkImageAnnotation, pageNumber?: number, generatedPageId?: string) {
+  if (generatedPageId) return annotation.generatedPageId === generatedPageId;
+  if (annotation.generatedPageId) return false;
+  return (annotation.pageNumber ?? 1) === (pageNumber ?? 1);
+}
+
+function isSelectionOnBlankCanvasPage(selection: SelectionRect | null, pageNumber?: number, generatedPageId?: string) {
+  if (!selection) return false;
+  if (generatedPageId) return selection.generatedPageId === generatedPageId;
+  if (selection.generatedPageId) return false;
+  return (selection.pageNumber ?? 1) === (pageNumber ?? 1);
+}
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
@@ -92,10 +137,51 @@ const StaticStrokes = memo(({ strokes, type }: { strokes: InkStroke[]; type: 'hi
   );
 });
 
-export function BlankNoteCanvas(props: {
-  backgroundImageUri?: string | null;
+function BlankNoteTemplateLayer(props: {
+  template: NotebookPageTemplate;
+  pageWidth: number;
+  pageHeight: number;
   styles: any;
 }) {
+  if (props.template === 'plain' || props.pageWidth <= 0 || props.pageHeight <= 0) return null;
+
+  const spacing = props.template === 'grid' ? 32 : 34;
+  const horizontalCount = Math.floor(props.pageHeight / spacing);
+  const verticalCount = Math.floor(props.pageWidth / spacing);
+
+  return (
+    <View pointerEvents="none" style={props.styles.blankNoteRuleLayer}>
+      {Array.from({ length: horizontalCount }).map((_, index) => (
+        <View
+          key={`h-${index}`}
+          style={[
+            props.styles.blankNoteRuleLine,
+            {
+              top: 28 + index * spacing,
+              backgroundColor: props.template === 'grid' ? '#E7EDF7' : '#DFE8F4',
+              opacity: props.template === 'grid' ? 0.82 : 0.95,
+            },
+          ]}
+        />
+      ))}
+      {props.template === 'grid'
+        ? Array.from({ length: verticalCount }).map((_, index) => (
+          <View
+            key={`v-${index}`}
+            style={[
+              props.styles.blankNoteGridLineVertical,
+              {
+                left: 28 + index * spacing,
+              },
+            ]}
+          />
+        ))
+        : null}
+    </View>
+  );
+}
+
+function BlankNotePageCanvas(props: BlankNotePageCanvasProps) {
   const canvasCtx = useCanvasContext();
   const workspaceContext = useDesktopNotesWorkspaceContext();
   const {
@@ -107,8 +193,6 @@ export function BlankNoteCanvas(props: {
     linePattern,
     selectionMode,
     brushSettings,
-    inkStrokes,
-    textAnnotations,
     selectionRect,
     commitInkStroke: onCommitInkStroke,
     addTextAnnotation: onAddTextAnnotation,
@@ -120,32 +204,63 @@ export function BlankNoteCanvas(props: {
     setSelectionRect: onSelectionChange,
     setSelectionPreviewUri: onSelectionPreviewChange,
   } = canvasCtx;
-
   const [pageSize, setPageSize] = useState({ width: 0, height: 0 });
+  const pageRenderWidth = pageSize.width || props.pageWidth || 1000;
+  const pageRenderHeight = pageSize.height || props.pageHeight || 1000;
+  const rawPageInkStrokes = useMemo(
+    () => props.inkStrokes.filter((stroke) => isStrokeOnBlankCanvasPage(stroke, props.pageNumber, props.generatedPageId)),
+    [props.generatedPageId, props.inkStrokes, props.pageNumber],
+  );
+  const pageInkStrokes = useMemo(
+    () => rawPageInkStrokes.map((stroke) => scaleInkStrokeToPageSize(stroke, pageRenderWidth, pageRenderHeight)),
+    [pageRenderHeight, pageRenderWidth, rawPageInkStrokes],
+  );
+  const pageTextAnnotations = useMemo(
+    () => props.textAnnotations.filter((annotation) => isTextAnnotationOnBlankCanvasPage(annotation, props.pageNumber, props.generatedPageId)),
+    [props.generatedPageId, props.pageNumber, props.textAnnotations],
+  );
+  const pageImageAnnotations = useMemo(
+    () => props.imageAnnotations.filter((annotation) => isImageAnnotationOnBlankCanvasPage(annotation, props.pageNumber, props.generatedPageId)),
+    [props.generatedPageId, props.imageAnnotations, props.pageNumber],
+  );
+  const effectiveInkTool: InkTool = props.readOnly ? 'view' : inkTool;
+  const rawPageSelectionRect = !props.readOnly && isSelectionOnBlankCanvasPage(selectionRect, props.pageNumber, props.generatedPageId) ? selectionRect : null;
+  const pageSelectionRect = useMemo(
+    () => scaleSelectionRectToPageSize(rawPageSelectionRect, pageRenderWidth, pageRenderHeight),
+    [pageRenderHeight, pageRenderWidth, rawPageSelectionRect],
+  );
+  const allowUnknownPointerAsStylus = Platform.OS === 'ios';
+
   const [currentStroke, setCurrentStroke] = useState<InkStroke | null>(null);
   const [draftSelection, setDraftSelection] = useState<SelectionRect | null>(null);
   const [draftSelectionPath, setDraftSelectionPath] = useState<InkPoint[]>([]);
   const [capturingSelection, setCapturingSelection] = useState(false);
   const [pencilHover, setPencilHover] = useState<PencilHoverPoint | null>(null);
   const selectionMovePreview = useMemo(
-    () => getSelectionMovePreview(selectionRect, draftSelection, inkStrokes, textAnnotations),
-    [draftSelection, inkStrokes, selectionRect, textAnnotations],
+    () => getSelectionMovePreview(pageSelectionRect, draftSelection, pageInkStrokes, pageTextAnnotations, pageImageAnnotations),
+    [draftSelection, pageImageAnnotations, pageInkStrokes, pageSelectionRect, pageTextAnnotations],
   );
   const selectedObjectCount = useMemo(() => {
-    const { strokeIds, textAnnotationIds } = getSelectedObjectIdsForSelection(selectionRect, inkStrokes, textAnnotations);
-    return strokeIds.size + textAnnotationIds.size;
-  }, [inkStrokes, selectionRect, textAnnotations]);
+    const { strokeIds, textAnnotationIds, imageAnnotationIds } = getSelectedObjectIdsForSelection(pageSelectionRect, pageInkStrokes, pageTextAnnotations, pageImageAnnotations);
+    return strokeIds.size + textAnnotationIds.size + imageAnnotationIds.size;
+  }, [pageImageAnnotations, pageInkStrokes, pageSelectionRect, pageTextAnnotations]);
   const visibleInkStrokes = useMemo(
     () => selectionMovePreview
-      ? inkStrokes.filter((stroke) => !selectionMovePreview.strokeIds.has(stroke.id))
-      : inkStrokes,
-    [inkStrokes, selectionMovePreview],
+      ? pageInkStrokes.filter((stroke) => !selectionMovePreview.strokeIds.has(stroke.id))
+      : pageInkStrokes,
+    [pageInkStrokes, selectionMovePreview],
   );
   const visibleTextAnnotations = useMemo(
     () => selectionMovePreview
-      ? textAnnotations.filter((annotation) => !selectionMovePreview.textAnnotationIds.has(annotation.id))
-      : textAnnotations,
-    [selectionMovePreview, textAnnotations],
+      ? pageTextAnnotations.filter((annotation) => !selectionMovePreview.textAnnotationIds.has(annotation.id))
+      : pageTextAnnotations,
+    [pageTextAnnotations, selectionMovePreview],
+  );
+  const visibleImageAnnotations = useMemo(
+    () => selectionMovePreview
+      ? pageImageAnnotations.filter((annotation) => !selectionMovePreview.imageAnnotationIds.has(annotation.id))
+      : pageImageAnnotations,
+    [pageImageAnnotations, selectionMovePreview],
   );
   const currentStrokeRef = useRef<InkStroke | null>(null);
   const selectionOriginRef = useRef<InkPoint | null>(null);
@@ -153,6 +268,7 @@ export function BlankNoteCanvas(props: {
   const selectionMoveStartRectRef = useRef<SelectionRect | null>(null);
   const selectionResizeCornerRef = useRef<ResizeCorner | null>(null);
   const selectionResizeStartRectRef = useRef<SelectionRect | null>(null);
+  const selectionResizeStartPointRef = useRef<InkPoint | null>(null);
   const draftSelectionRef = useRef<SelectionRect | null>(null);
   const draftSelectionPathRef = useRef<InkPoint[]>([]);
   const selectionPreviewTokenRef = useRef(0);
@@ -160,13 +276,30 @@ export function BlankNoteCanvas(props: {
   const captureTargetRef = useRef<View | null>(null);
   const eraserSnapshotPushedRef = useRef(false);
 
+  const scaleDisplayedRectToSelectionSpace = useCallback((rect: SelectionRect) => (
+    rawPageSelectionRect?.pageWidth && rawPageSelectionRect.pageHeight
+      ? scaleSelectionRectToPageSize(rect, rawPageSelectionRect.pageWidth, rawPageSelectionRect.pageHeight) ?? rect
+      : rect
+  ), [rawPageSelectionRect]);
+
+  const scaleDisplayedDeltaToSelectionSpace = useCallback((dx: number, dy: number) => ({
+    dx: rawPageSelectionRect?.pageWidth && pageRenderWidth
+      ? dx * (rawPageSelectionRect.pageWidth / pageRenderWidth)
+      : dx,
+    dy: rawPageSelectionRect?.pageHeight && pageRenderHeight
+      ? dy * (rawPageSelectionRect.pageHeight / pageRenderHeight)
+      : dy,
+  }), [pageRenderHeight, pageRenderWidth, rawPageSelectionRect]);
+
   useEffect(() => {
-    if (!shouldPreviewPencilHover(inkTool)) setPencilHover(null);
-  }, [inkTool]);
+    if (!shouldPreviewPencilHover(effectiveInkTool)) setPencilHover(null);
+  }, [effectiveInkTool]);
 
   const clampPointToPage = (x: number, y: number): InkPoint => ({
     x: Math.max(0, Math.min(pageSize.width || 1000, x)),
     y: Math.max(0, Math.min(pageSize.height || 1000, y)),
+    pageNumber: props.generatedPageId ? undefined : props.pageNumber ?? 1,
+    generatedPageId: props.generatedPageId,
     pageWidth: pageSize.width || 1000,
     pageHeight: pageSize.height || 1000,
   });
@@ -205,7 +338,7 @@ export function BlankNoteCanvas(props: {
   }, [pageSize.height, pageSize.width]);
 
   const askAiAboutCurrentSelection = useCallback(async () => {
-    if (!selectionRect) {
+    if (!pageSelectionRect) {
       workspaceContext.onAskAiAboutSelection();
       return;
     }
@@ -213,11 +346,11 @@ export function BlankNoteCanvas(props: {
     const token = selectionPreviewTokenRef.current + 1;
     selectionPreviewTokenRef.current = token;
     onSelectionPreviewChange?.(null);
-    const uri = await buildSelectionPreview(selectionRect);
+    const uri = await buildSelectionPreview(pageSelectionRect);
     if (selectionPreviewTokenRef.current !== token) return;
     if (uri) onSelectionPreviewChange?.(uri);
     workspaceContext.onAskAiAboutSelection(uri ?? null);
-  }, [buildSelectionPreview, onSelectionPreviewChange, selectionRect, workspaceContext]);
+  }, [buildSelectionPreview, onSelectionPreviewChange, pageSelectionRect, workspaceContext]);
 
   const eraseAtPoint = useCallback((point: InkPoint) => {
     const radius = getPencilEraserRadius(canvasCtx.eraserWidth, canvasCtx.eraserMode);
@@ -225,21 +358,30 @@ export function BlankNoteCanvas(props: {
     if (changed) eraserSnapshotPushedRef.current = true;
   }, [canvasCtx]);
 
+  const reportPageFocus = useCallback(() => {
+    if (props.generatedPageId || !props.pageNumber || props.currentPage === props.pageNumber) return;
+    props.onPageFocus?.(props.pageNumber);
+  }, [props.currentPage, props.generatedPageId, props.onPageFocus, props.pageNumber]);
+
   const handleInkGestureStart = useCallback((x: number, y: number) => {
+    setPencilHover(null);
+    reportPageFocus();
     const point = clampPointToPage(x, y);
-    if (isDrawingTool(inkTool)) {
-      const appearance = isShapeTool(inkTool)
+    if (isDrawingTool(effectiveInkTool)) {
+      const appearance = isShapeTool(effectiveInkTool)
         ? resolveShapeStrokeAppearance(penColor, penWidth)
-        : resolveInkStrokeAppearance(inkTool, penColor, penWidth, brushType);
+        : resolveInkStrokeAppearance(effectiveInkTool, penColor, penWidth, brushType);
       const stroke: InkStroke = {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         color: appearance.color,
         width: appearance.width,
-        style: isShapeTool(inkTool) ? 'shape' : inkTool === 'highlight' ? 'highlight' : 'pen',
-        brush: isShapeTool(inkTool) ? undefined : brushType,
-        brushSettings: isShapeTool(inkTool) ? undefined : brushSettings,
+        style: isShapeTool(effectiveInkTool) ? 'shape' : effectiveInkTool === 'highlight' ? 'highlight' : 'pen',
+        brush: isShapeTool(effectiveInkTool) ? undefined : brushType,
+        brushSettings: isShapeTool(effectiveInkTool) ? undefined : brushSettings,
         linePattern,
-        shape: isShapeTool(inkTool) ? inkTool : undefined,
+        shape: isShapeTool(effectiveInkTool) ? effectiveInkTool : undefined,
+        pageNumber: props.generatedPageId ? undefined : props.pageNumber ?? 1,
+        generatedPageId: props.generatedPageId,
         pageWidth: pageSize.width || 1000,
         pageHeight: pageSize.height || 1000,
         points: [point],
@@ -249,8 +391,8 @@ export function BlankNoteCanvas(props: {
       return;
     }
 
-    if (inkTool === 'select') {
-      const currentSelection = selectionRect;
+    if (effectiveInkTool === 'select') {
+      const currentSelection = pageSelectionRect;
       if (currentSelection && isPointInSelectionContextMenu(point, currentSelection, pageSize.width, pageSize.height)) return;
       const resizeCorner = getResizeCorner(currentSelection, point);
       if (currentSelection && resizeCorner) {
@@ -300,17 +442,17 @@ export function BlankNoteCanvas(props: {
       return;
     }
 
-    if (inkTool === 'text') {
+    if (effectiveInkTool === 'text') {
       textTapRef.current = point;
       return;
     }
-    if (inkTool === 'erase') {
+    if (effectiveInkTool === 'erase') {
       eraseAtPoint(point);
     }
   }, [
     brushSettings,
     brushType,
-    inkTool,
+    effectiveInkTool,
     linePattern,
     onSelectionChange,
     onSelectionPreviewChange,
@@ -318,20 +460,21 @@ export function BlankNoteCanvas(props: {
     penColor,
     penWidth,
     selectionMode,
-    selectionRect,
+    pageSelectionRect,
     eraseAtPoint,
+    reportPageFocus,
   ]);
 
   const handleInkGestureMove = useCallback((x: number, y: number) => {
-    if (!isDrawingTool(inkTool) && inkTool !== 'select' && inkTool !== 'erase') return;
+    if (!isDrawingTool(effectiveInkTool) && effectiveInkTool !== 'select' && effectiveInkTool !== 'erase') return;
     const point = clampPointToPage(x, y);
 
-    if (inkTool === 'erase') {
+    if (effectiveInkTool === 'erase') {
       eraseAtPoint(point);
       return;
     }
 
-    if (isDrawingTool(inkTool)) {
+    if (isDrawingTool(effectiveInkTool)) {
       const stroke = currentStrokeRef.current;
       if (!stroke) return;
       if (stroke.style === 'shape') {
@@ -348,7 +491,7 @@ export function BlankNoteCanvas(props: {
       return;
     }
 
-    if (inkTool === 'select') {
+    if (effectiveInkTool === 'select') {
       const resizeCorner = selectionResizeCornerRef.current;
       const resizeStartRect = selectionResizeStartRectRef.current;
       if (resizeCorner && resizeStartRect) {
@@ -399,12 +542,12 @@ export function BlankNoteCanvas(props: {
       draftSelectionRef.current = nextRect;
       setDraftSelection(nextRect);
     }
-  }, [eraseAtPoint, inkTool, pageSize, selectionMode]);
+  }, [effectiveInkTool, eraseAtPoint, pageSize, selectionMode]);
 
   const handleInkGestureEnd = useCallback(() => {
     const stroke = currentStrokeRef.current;
     if (stroke && stroke.points.length > 1) onCommitInkStroke(finalizeInkStroke(stroke));
-    if (inkTool === 'select') {
+    if (effectiveInkTool === 'select') {
       const rect = draftSelectionRef.current;
       const resized = Boolean(selectionResizeCornerRef.current && selectionResizeStartRectRef.current);
       const moveOrigin = selectionMoveOriginRef.current;
@@ -415,18 +558,20 @@ export function BlankNoteCanvas(props: {
       selectionMoveStartRectRef.current = null;
       selectionResizeCornerRef.current = null;
       selectionResizeStartRectRef.current = null;
+      selectionResizeStartPointRef.current = null;
       draftSelectionPathRef.current = [];
       setDraftSelection(null);
       setDraftSelectionPath([]);
       if (resized && rect && rect.width > 24 && rect.height > 24) {
-        canvasCtx.resizeSelectedStrokesToRect(rect);
+        canvasCtx.resizeSelectedStrokesToRect(scaleDisplayedRectToSelectionSpace(rect));
         onSelectionPreviewChange?.(null);
         selectionPreviewTokenRef.current += 1;
       } else if (rect && moveOrigin && moveStartRect) {
         const dx = rect.x - moveStartRect.x;
         const dy = rect.y - moveStartRect.y;
-        if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) canvasCtx.nudgeSelectedStrokes(dx, dy);
         if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
+          const rawDelta = scaleDisplayedDeltaToSelectionSpace(dx, dy);
+          canvasCtx.nudgeSelectedStrokes(rawDelta.dx, rawDelta.dy);
           onSelectionPreviewChange?.(null);
           selectionPreviewTokenRef.current += 1;
         }
@@ -441,12 +586,13 @@ export function BlankNoteCanvas(props: {
         });
       }
     }
-    if (inkTool === 'text' && textTapRef.current) onAddTextAnnotation(textTapRef.current);
+    if (effectiveInkTool === 'text' && textTapRef.current) onAddTextAnnotation(textTapRef.current);
     currentStrokeRef.current = null;
     eraserSnapshotPushedRef.current = false;
     textTapRef.current = null;
     setCurrentStroke(null);
-  }, [buildSelectionPreview, canvasCtx, inkTool, onAddTextAnnotation, onCommitInkStroke, onSelectionChange, onSelectionPreviewChange]);
+    setPencilHover(null);
+  }, [buildSelectionPreview, canvasCtx, effectiveInkTool, onAddTextAnnotation, onCommitInkStroke, onSelectionChange, onSelectionPreviewChange, scaleDisplayedDeltaToSelectionSpace, scaleDisplayedRectToSelectionSpace]);
 
   const handleInkGestureCancel = useCallback(() => {
     const stroke = currentStrokeRef.current;
@@ -460,22 +606,24 @@ export function BlankNoteCanvas(props: {
     selectionMoveStartRectRef.current = null;
     selectionResizeCornerRef.current = null;
     selectionResizeStartRectRef.current = null;
+    selectionResizeStartPointRef.current = null;
     textTapRef.current = null;
     setDraftSelection(null);
     setDraftSelectionPath([]);
     setCurrentStroke(null);
+    setPencilHover(null);
   }, [onCommitInkStroke]);
 
   const inkGesture = useMemo(
     () => Gesture.Pan()
-      .enabled(inkTool !== 'view')
+      .enabled(effectiveInkTool !== 'view')
       .manualActivation(true)
       .minDistance(0)
       .shouldCancelWhenOutside(false)
       .cancelsTouchesInView(false)
       .onTouchesDown((event: NativeInkTouchEvent, state: NativeGestureStateManager) => {
         'worklet';
-        if (shouldActivateNativeInkGesture(inkTool, event, fingerDrawingEnabled)) {
+        if (shouldActivateNativeInkGesture(effectiveInkTool, event, fingerDrawingEnabled, allowUnknownPointerAsStylus)) {
           state.activate();
         } else {
           state.fail();
@@ -497,24 +645,46 @@ export function BlankNoteCanvas(props: {
         'worklet';
         if (!success) runOnJS(handleInkGestureCancel)();
       }),
-    [fingerDrawingEnabled, handleInkGestureCancel, handleInkGestureEnd, handleInkGestureMove, handleInkGestureStart, inkTool],
+    [allowUnknownPointerAsStylus, effectiveInkTool, fingerDrawingEnabled, handleInkGestureCancel, handleInkGestureEnd, handleInkGestureMove, handleInkGestureStart],
   );
   const selectionMovePanResponder = useMemo(() => PanResponder.create({
-    onStartShouldSetPanResponder: () => inkTool === 'select' && Boolean(selectionRect),
+    onStartShouldSetPanResponder: () => effectiveInkTool === 'select' && Boolean(pageSelectionRect),
     onMoveShouldSetPanResponder: (_event, gesture) => (
-      inkTool === 'select'
-      && Boolean(selectionRect)
+      effectiveInkTool === 'select'
+      && Boolean(pageSelectionRect)
       && (Math.abs(gesture.dx) > 1 || Math.abs(gesture.dy) > 1)
     ),
-    onPanResponderGrant: () => {
-      if (!selectionRect) return;
-      selectionMoveStartRectRef.current = selectionRect;
-      draftSelectionRef.current = selectionRect;
+    onPanResponderGrant: (event) => {
+      if (!pageSelectionRect) return;
+      const startPoint = clampPointToPage(
+        pageSelectionRect.x + (event.nativeEvent.locationX ?? pageSelectionRect.width / 2),
+        pageSelectionRect.y + (event.nativeEvent.locationY ?? pageSelectionRect.height / 2),
+      );
+      const resizeCorner = getResizeCorner(pageSelectionRect, startPoint);
+      if (resizeCorner) {
+        selectionResizeCornerRef.current = resizeCorner;
+        selectionResizeStartRectRef.current = pageSelectionRect;
+        selectionResizeStartPointRef.current = startPoint;
+      } else {
+        selectionMoveStartRectRef.current = pageSelectionRect;
+        selectionMoveOriginRef.current = startPoint;
+      }
+      draftSelectionRef.current = pageSelectionRect;
       draftSelectionPathRef.current = [];
       setDraftSelectionPath([]);
-      setDraftSelection(selectionRect);
+      setDraftSelection(pageSelectionRect);
     },
     onPanResponderMove: (_event, gesture) => {
+      const resizeCorner = selectionResizeCornerRef.current;
+      const resizeStartRect = selectionResizeStartRectRef.current;
+      const resizeStartPoint = selectionResizeStartPointRef.current;
+      if (resizeCorner && resizeStartRect && resizeStartPoint) {
+        const nextPoint = clampPointToPage(resizeStartPoint.x + gesture.dx, resizeStartPoint.y + gesture.dy);
+        const nextRect = resizeRectFromCorner(resizeStartRect, resizeCorner, nextPoint);
+        draftSelectionRef.current = nextRect;
+        setDraftSelection(nextRect);
+        return;
+      }
       const startRect = selectionMoveStartRectRef.current;
       if (!startRect) return;
       const nextRect = translateSelectionRect(startRect, gesture.dx, gesture.dy, pageSize.width || 1000, pageSize.height || 1000);
@@ -522,81 +692,145 @@ export function BlankNoteCanvas(props: {
       setDraftSelection(nextRect);
     },
     onPanResponderRelease: (_event, gesture) => {
+      const resizeCorner = selectionResizeCornerRef.current;
+      const resizeStartRect = selectionResizeStartRectRef.current;
+      const resizeStartPoint = selectionResizeStartPointRef.current;
       const startRect = selectionMoveStartRectRef.current;
       selectionMoveStartRectRef.current = null;
+      selectionMoveOriginRef.current = null;
+      selectionResizeCornerRef.current = null;
+      selectionResizeStartRectRef.current = null;
+      selectionResizeStartPointRef.current = null;
       draftSelectionRef.current = null;
       draftSelectionPathRef.current = [];
       setDraftSelection(null);
       setDraftSelectionPath([]);
+      if (resizeCorner && resizeStartRect && resizeStartPoint) {
+        const nextPoint = clampPointToPage(resizeStartPoint.x + gesture.dx, resizeStartPoint.y + gesture.dy);
+        const nextRect = resizeRectFromCorner(resizeStartRect, resizeCorner, nextPoint);
+        if (nextRect.width > 24 && nextRect.height > 24) {
+          canvasCtx.resizeSelectedStrokesToRect(scaleDisplayedRectToSelectionSpace(nextRect));
+          onSelectionPreviewChange?.(null);
+          selectionPreviewTokenRef.current += 1;
+        }
+        return;
+      }
       if (!startRect) return;
       const nextRect = translateSelectionRect(startRect, gesture.dx, gesture.dy, pageSize.width || 1000, pageSize.height || 1000);
       const dx = nextRect.x - startRect.x;
       const dy = nextRect.y - startRect.y;
       if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
-        canvasCtx.nudgeSelectedStrokes(dx, dy);
+        const rawDelta = scaleDisplayedDeltaToSelectionSpace(dx, dy);
+        canvasCtx.nudgeSelectedStrokes(rawDelta.dx, rawDelta.dy);
         onSelectionPreviewChange?.(null);
         selectionPreviewTokenRef.current += 1;
       }
     },
     onPanResponderTerminate: () => {
       selectionMoveStartRectRef.current = null;
+      selectionMoveOriginRef.current = null;
+      selectionResizeCornerRef.current = null;
+      selectionResizeStartRectRef.current = null;
+      selectionResizeStartPointRef.current = null;
       draftSelectionRef.current = null;
       draftSelectionPathRef.current = [];
       setDraftSelection(null);
       setDraftSelectionPath([]);
     },
     onPanResponderTerminationRequest: () => false,
-  }), [canvasCtx, inkTool, onSelectionPreviewChange, pageSize.height, pageSize.width, selectionRect]);
+  }), [canvasCtx, effectiveInkTool, onSelectionPreviewChange, pageSelectionRect, pageSize.height, pageSize.width, scaleDisplayedDeltaToSelectionSpace, scaleDisplayedRectToSelectionSpace]);
   const handlePencilHoverMove = useCallback((event: unknown) => {
-    if (!shouldPreviewPencilHover(inkTool) || !isStylusHoverEvent(event)) return;
+    if (currentStrokeRef.current || !shouldPreviewPencilHover(effectiveInkTool) || !isStylusHoverEvent(event) || !isPencilHoverFarEnough(event)) {
+      setPencilHover(null);
+      return;
+    }
     const point = getPencilHoverPoint(event);
     if (!point) return;
     if (point.x < 0 || point.y < 0 || point.x > pageSize.width || point.y > pageSize.height) return;
     setPencilHover(point);
-  }, [inkTool, pageSize.height, pageSize.width]);
+  }, [effectiveInkTool, pageSize.height, pageSize.width]);
   const hoverHandlers = useMemo(() => ({
     onPointerEnter: handlePencilHoverMove,
     onPointerMove: handlePencilHoverMove,
     onPointerLeave: () => setPencilHover(null),
     onPointerCancel: () => setPencilHover(null),
   } as any), [handlePencilHoverMove]);
-  const hoverSize = getPencilHoverSize(inkTool, inkTool === 'erase' ? canvasCtx.eraserWidth : penWidth, canvasCtx.eraserMode);
-  const hoverVisible = pencilHover && shouldPreviewPencilHover(inkTool);
-  const hoverToolLabel = getPencilHoverToolLabel(inkTool, canvasCtx.eraserMode);
+  const hoverSize = getPencilHoverSize(effectiveInkTool, effectiveInkTool === 'erase' ? canvasCtx.eraserWidth : penWidth, canvasCtx.eraserMode);
+  const hoverVisible = pencilHover && shouldPreviewPencilHover(effectiveInkTool);
 
   return (
-    <View style={[props.styles.blankNoteCanvasCard, { paddingVertical: 0, borderWidth: 0 }]}>
-      <View
-        {...hoverHandlers}
-        ref={captureTargetRef}
-        collapsable={false}
-        style={[props.styles.blankNotePage, { flex: 1, width: '100%', height: '100%', borderRadius: 20, borderWidth: 0, elevation: 0 }]}
-        onTouchStart={() => workspaceContext.onFocusWorkspaceTarget?.('document')}
-        onLayout={(e) => setPageSize({ width: e.nativeEvent.layout.width, height: e.nativeEvent.layout.height })}
-      >
-        {props.backgroundImageUri ? (
-          <Image
-            source={{ uri: props.backgroundImageUri }}
-            style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, width: '100%', height: '100%' }}
-            resizeMode="contain"
-          />
-        ) : null}
-        <View pointerEvents="none" style={props.styles.blankNoteRuleLayer} />
+    <View
+      {...hoverHandlers}
+      ref={captureTargetRef}
+      collapsable={false}
+      style={[
+        props.styles.blankNotePage,
+        {
+          width: props.pageWidth ?? '100%',
+          height: props.pageHeight ?? '100%',
+        },
+      ]}
+      onTouchStart={() => {
+        setPencilHover(null);
+        workspaceContext.onFocusWorkspaceTarget?.('document');
+      }}
+      onLayout={(e) => setPageSize({ width: e.nativeEvent.layout.width, height: e.nativeEvent.layout.height })}
+    >
+      {props.backgroundImageUri ? (
+        <Image
+          source={{ uri: props.backgroundImageUri }}
+          style={{ position: 'absolute', top: 0, right: 0, bottom: 0, left: 0, width: '100%', height: '100%' }}
+          resizeMode="contain"
+        />
+      ) : null}
+      <BlankNoteTemplateLayer template={props.template} pageWidth={pageSize.width} pageHeight={pageSize.height} styles={props.styles} />
 
         <Svg width="100%" height="100%" pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0 }}>
           <StaticStrokes strokes={visibleInkStrokes} type="highlight" />
           {currentStroke?.style === 'highlight' ? <InkPath stroke={currentStroke} draft /> : null}
         </Svg>
 
-        <TextAnnotationLayer
-          annotations={visibleTextAnnotations}
-          styles={props.styles}
-          onChangeText={onUpdateTextAnnotation}
-          onMove={onMoveTextAnnotation}
-          onResize={onResizeTextAnnotation}
-          onChangeFontSize={onChangeTextAnnotationFontSize}
-          onRemove={onRemoveTextAnnotation}
-        />
+      {visibleImageAnnotations.map((annotation) => (
+        <Pressable
+          key={annotation.id}
+          pointerEvents={props.readOnly ? 'none' : 'auto'}
+          onPress={() => {
+            onSelectionChange?.({
+              x: annotation.x,
+              y: annotation.y,
+              width: annotation.width,
+              height: annotation.height,
+              pageNumber: annotation.generatedPageId ? undefined : annotation.pageNumber,
+              generatedPageId: annotation.generatedPageId,
+              pageWidth: annotation.pageWidth ?? pageSize.width,
+              pageHeight: annotation.pageHeight ?? pageSize.height,
+            });
+            canvasCtx.setInkTool('select');
+          }}
+          style={[
+            props.styles.imageAnnotationCard,
+            !props.readOnly && { zIndex: 42, elevation: 42 },
+            {
+              left: annotation.x,
+              top: annotation.y,
+              width: annotation.width,
+              height: annotation.height,
+            },
+          ]}
+        >
+          <Image source={{ uri: annotation.uri }} style={props.styles.imageAnnotationImage} resizeMode="contain" fadeDuration={0} />
+        </Pressable>
+      ))}
+
+      <TextAnnotationLayer
+        annotations={visibleTextAnnotations}
+        styles={props.styles}
+        onChangeText={onUpdateTextAnnotation}
+        onMove={onMoveTextAnnotation}
+        onResize={onResizeTextAnnotation}
+        onChangeFontSize={onChangeTextAnnotationFontSize}
+        onRemove={onRemoveTextAnnotation}
+      />
 
         <Svg width="100%" height="100%" pointerEvents="none" style={{ position: 'absolute', top: 0, left: 0 }}>
           <StaticStrokes strokes={visibleInkStrokes} type="ink" />
@@ -604,31 +838,31 @@ export function BlankNoteCanvas(props: {
         </Svg>
         {selectionMovePreview ? <SelectionMovePreview preview={selectionMovePreview} styles={props.styles} /> : null}
 
-        {!capturingSelection && !draftSelection && selectionRect ? <SelectionOverlay rect={selectionRect} styles={props.styles} /> : null}
+        {!capturingSelection && !draftSelection && pageSelectionRect ? <SelectionOverlay rect={pageSelectionRect} styles={props.styles} /> : null}
         {!capturingSelection && draftSelectionPath.length > 1 ? <SelectionLassoOverlay points={draftSelectionPath} /> : null}
         {!capturingSelection && draftSelection && draftSelection.mode !== 'lasso' ? <SelectionOverlay rect={draftSelection} styles={props.styles} draft /> : null}
         <GestureDetector gesture={inkGesture}>
-          <View {...hoverHandlers} pointerEvents={inkTool === 'view' ? 'none' : 'auto'} style={props.styles.inkOverlay} />
+          <View {...hoverHandlers} pointerEvents={effectiveInkTool === 'view' ? 'none' : 'auto'} style={props.styles.inkOverlay} />
         </GestureDetector>
-        {!capturingSelection && selectionRect ? (
+        {!capturingSelection && pageSelectionRect ? (
           <View
             {...selectionMovePanResponder.panHandlers}
-            pointerEvents={inkTool === 'select' ? 'auto' : 'none'}
+            pointerEvents={effectiveInkTool === 'select' ? 'auto' : 'none'}
             style={{
               position: 'absolute',
-              left: selectionRect.x,
-              top: selectionRect.y,
-              width: selectionRect.width,
-              height: selectionRect.height,
+              left: pageSelectionRect.x,
+              top: pageSelectionRect.y,
+              width: pageSelectionRect.width,
+              height: pageSelectionRect.height,
               zIndex: 70,
               elevation: 70,
               backgroundColor: 'transparent',
             }}
           />
         ) : null}
-        {!capturingSelection && !draftSelection && selectionRect ? (
+        {!capturingSelection && !draftSelection && pageSelectionRect ? (
           <SelectionContextMenu
-            rect={selectionRect}
+            rect={pageSelectionRect}
             pageWidth={pageSize.width}
             pageHeight={pageSize.height}
             styles={props.styles}
@@ -646,15 +880,256 @@ export function BlankNoteCanvas(props: {
             size={hoverSize}
             pageWidth={pageSize.width}
             pageHeight={pageSize.height}
-            borderColor={inkTool === 'erase' ? '#EF4444' : penColor}
-            label={hoverToolLabel}
-            isEraser={inkTool === 'erase'}
-            activeTool={inkTool}
+            borderColor={effectiveInkTool === 'erase' ? '#EF4444' : penColor}
+            isEraser={effectiveInkTool === 'erase'}
             styles={props.styles}
-            onSelectTool={canvasCtx.setInkTool}
           />
         ) : null}
-      </View>
+    </View>
+  );
+}
+
+export function BlankNoteCanvas(props: {
+  backgroundImageUri?: string | null;
+  styles: any;
+  pageCount?: number;
+  currentPage?: number;
+  generatedPageId?: string;
+  template?: NotebookPageTemplate;
+  onPageChange?: (pageNumber: number) => void;
+  readOnly?: boolean;
+}) {
+  const canvasCtx = useCanvasContext();
+  const documentContext = useDocumentContext();
+  const { width: windowWidth } = useWindowDimensions();
+  const scrollRef = useRef<ScrollView | null>(null);
+  const [containerWidth, setContainerWidth] = useState(0);
+  const documentId = documentContext.studyDocument?.id ?? null;
+  const singleGeneratedPage = Boolean(props.generatedPageId);
+  const pageCount = singleGeneratedPage
+    ? 1
+    : Math.max(1, props.pageCount ?? documentContext.studyDocument?.pageCount ?? 1);
+  const previousDocumentIdRef = useRef(documentId);
+  const previousPageCountRef = useRef(pageCount);
+  const initialScrollDoneRef = useRef(false);
+  const reportedPageRef = useRef(props.currentPage ?? documentContext.currentPdfPage ?? 1);
+  const suppressScrollPageReportUntilRef = useRef(0);
+  const pendingRestorePageRef = useRef<number | null>(null);
+  const pendingRestoreUntilRef = useRef(0);
+  const restoreRetryTimersRef = useRef<Array<ReturnType<typeof setTimeout>>>([]);
+  const userScrollActiveRef = useRef(false);
+  const dragScrollActiveRef = useRef(false);
+  const momentumScrollActiveRef = useRef(false);
+  const userScrollEndTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastRestoreLayoutKeyRef = useRef<string | null>(null);
+  const restorePage = singleGeneratedPage
+    ? 1
+    : Math.max(1, Math.min(pageCount, props.currentPage ?? documentContext.currentPdfPage ?? 1));
+  const allInkStrokes = documentId ? canvasCtx.inkByDocument[documentId] ?? [] : canvasCtx.inkStrokes;
+  const allTextAnnotations = documentId ? canvasCtx.textAnnotationsByDocument[documentId] ?? [] : canvasCtx.textAnnotations;
+  const allImageAnnotations: InkImageAnnotation[] = [];
+  const horizontalInset = windowWidth >= 900 ? 24 : 16;
+  const availableWidth = Math.max(320, (containerWidth || windowWidth || 780) - horizontalInset);
+  const pageWidth = Math.round(Math.max(360, Math.min(availableWidth, 1320)));
+  const pageHeight = Math.round(Math.max(300, pageWidth * BLANK_NOTE_ASPECT_RATIO));
+  const template = props.template ?? documentContext.studyDocument?.blankTemplate ?? 'plain';
+  const selectionScrollLocked = !props.readOnly && canvasCtx.inkTool === 'select' && Boolean(canvasCtx.selectionRect);
+  const scrollEnabled = props.readOnly || canvasCtx.inkTool === 'view' || !selectionScrollLocked;
+  const pageNumbers = useMemo(
+    () => Array.from({ length: pageCount }, (_, index) => index + 1),
+    [pageCount],
+  );
+
+  const getPageScrollY = useCallback((pageNumber: number) => (
+    Math.max(0, (Math.max(1, Math.min(pageCount, pageNumber)) - 1) * (pageHeight + BLANK_NOTE_PAGE_GAP))
+  ), [pageCount, pageHeight]);
+  const initialScrollY = singleGeneratedPage ? 0 : getPageScrollY(restorePage);
+  const initialContentOffset = useMemo(() => ({ x: 0, y: initialScrollY }), [initialScrollY]);
+
+  const clearRestoreRetryTimers = useCallback(() => {
+    restoreRetryTimersRef.current.forEach((timer) => clearTimeout(timer));
+    restoreRetryTimersRef.current = [];
+  }, []);
+
+  const scrollToBlankPage = useCallback((pageNumber: number, animated: boolean) => {
+    if (singleGeneratedPage || !scrollRef.current || !pageHeight) return;
+    const targetPage = Math.max(1, Math.min(pageCount, pageNumber));
+    clearRestoreRetryTimers();
+    reportedPageRef.current = targetPage;
+    pendingRestorePageRef.current = targetPage;
+    pendingRestoreUntilRef.current = Date.now() + 2800;
+    suppressScrollPageReportUntilRef.current = Date.now() + 1400;
+    userScrollActiveRef.current = false;
+    dragScrollActiveRef.current = false;
+    momentumScrollActiveRef.current = false;
+    lastRestoreLayoutKeyRef.current = `${documentId ?? 'none'}:${targetPage}:${pageCount}:${pageHeight}`;
+    const y = getPageScrollY(targetPage);
+    scrollRef.current.scrollTo({ y, animated });
+
+    [80, 220, 520, 900, 1400, 2200].forEach((delay) => {
+      const timer = setTimeout(() => {
+        if (pendingRestorePageRef.current !== targetPage || !scrollRef.current) {
+          return;
+        }
+        scrollRef.current.scrollTo({ y: getPageScrollY(targetPage), animated: false });
+      }, delay);
+      restoreRetryTimersRef.current.push(timer);
+    });
+  }, [clearRestoreRetryTimers, documentId, getPageScrollY, pageCount, pageHeight, singleGeneratedPage]);
+
+  useEffect(() => () => {
+    clearRestoreRetryTimers();
+    if (userScrollEndTimerRef.current) clearTimeout(userScrollEndTimerRef.current);
+  }, [clearRestoreRetryTimers]);
+
+  useLayoutEffect(() => {
+    if (singleGeneratedPage || !scrollRef.current || !pageHeight) {
+      previousDocumentIdRef.current = documentId;
+      previousPageCountRef.current = pageCount;
+      return;
+    }
+    const previousDocumentId = previousDocumentIdRef.current;
+    const documentChanged = previousDocumentId !== documentId;
+    previousDocumentIdRef.current = documentId;
+
+    if (!initialScrollDoneRef.current || documentChanged) {
+      initialScrollDoneRef.current = true;
+      previousPageCountRef.current = pageCount;
+      scrollToBlankPage(restorePage, false);
+      return;
+    }
+    const previousPageCount = previousPageCountRef.current;
+    previousPageCountRef.current = pageCount;
+    if (pageCount > previousPageCount) {
+      props.onPageChange?.(pageCount);
+      scrollToBlankPage(pageCount, true);
+      return;
+    }
+    const restoreLayoutKey = `${documentId ?? 'none'}:${restorePage}:${pageCount}:${pageHeight}`;
+    if (!userScrollActiveRef.current && restorePage > 1 && restoreLayoutKey !== lastRestoreLayoutKeyRef.current) {
+      scrollToBlankPage(restorePage, false);
+    }
+  }, [documentId, pageCount, pageHeight, props.onPageChange, restorePage, scrollToBlankPage, singleGeneratedPage]);
+
+  const reportVisiblePageFromOffset = useCallback((offsetY: number) => {
+    if (!props.onPageChange || !pageHeight) return;
+    const stride = pageHeight + BLANK_NOTE_PAGE_GAP;
+    const nextPage = Math.max(1, Math.min(pageCount, Math.floor((offsetY + pageHeight / 2) / stride) + 1));
+    if (reportedPageRef.current === nextPage) return;
+    reportedPageRef.current = nextPage;
+    props.onPageChange(nextPage);
+  }, [pageCount, pageHeight, props.onPageChange]);
+
+  const handleScroll = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    if (singleGeneratedPage || !props.onPageChange || !pageHeight) return;
+    const offsetY = event.nativeEvent.contentOffset.y;
+    const stride = pageHeight + BLANK_NOTE_PAGE_GAP;
+    const nextPage = Math.max(1, Math.min(pageCount, Math.floor((offsetY + pageHeight / 2) / stride) + 1));
+    const pendingRestorePage = pendingRestorePageRef.current;
+    if (pendingRestorePage && Date.now() < pendingRestoreUntilRef.current) {
+      if (nextPage !== pendingRestorePage && !userScrollActiveRef.current) {
+        scrollRef.current?.scrollTo({ y: getPageScrollY(pendingRestorePage), animated: false });
+      }
+      return;
+    }
+    if (pendingRestorePage && Date.now() >= pendingRestoreUntilRef.current) {
+      pendingRestorePageRef.current = null;
+    }
+    if (!userScrollActiveRef.current || Date.now() < suppressScrollPageReportUntilRef.current) return;
+    reportVisiblePageFromOffset(offsetY);
+  }, [getPageScrollY, pageCount, pageHeight, props.onPageChange, reportVisiblePageFromOffset, singleGeneratedPage]);
+
+  const handleContentSizeChange = useCallback(() => {
+    const pendingRestorePage = pendingRestorePageRef.current;
+    if (!pendingRestorePage || Date.now() >= pendingRestoreUntilRef.current) return;
+    scrollToBlankPage(pendingRestorePage, false);
+  }, [scrollToBlankPage]);
+
+  const handleScrollBeginDrag = useCallback(() => {
+    userScrollActiveRef.current = true;
+    dragScrollActiveRef.current = true;
+    momentumScrollActiveRef.current = false;
+    pendingRestorePageRef.current = null;
+    suppressScrollPageReportUntilRef.current = 0;
+    if (userScrollEndTimerRef.current) {
+      clearTimeout(userScrollEndTimerRef.current);
+      userScrollEndTimerRef.current = null;
+    }
+  }, []);
+
+  const handleScrollEndDrag = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    if (dragScrollActiveRef.current) {
+      reportVisiblePageFromOffset(event.nativeEvent.contentOffset.y);
+    }
+    if (userScrollEndTimerRef.current) clearTimeout(userScrollEndTimerRef.current);
+    userScrollEndTimerRef.current = setTimeout(() => {
+      if (momentumScrollActiveRef.current) return;
+      dragScrollActiveRef.current = false;
+      userScrollActiveRef.current = false;
+    }, 700);
+  }, [reportVisiblePageFromOffset]);
+
+  const handleMomentumScrollBegin = useCallback(() => {
+    if (!dragScrollActiveRef.current) return;
+    userScrollActiveRef.current = true;
+    momentumScrollActiveRef.current = true;
+    if (userScrollEndTimerRef.current) {
+      clearTimeout(userScrollEndTimerRef.current);
+      userScrollEndTimerRef.current = null;
+    }
+  }, []);
+
+  const handleMomentumScrollEnd = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    if (momentumScrollActiveRef.current) {
+      reportVisiblePageFromOffset(event.nativeEvent.contentOffset.y);
+    }
+    momentumScrollActiveRef.current = false;
+    dragScrollActiveRef.current = false;
+    userScrollActiveRef.current = false;
+  }, [reportVisiblePageFromOffset]);
+
+  return (
+    <View
+      style={[props.styles.blankNoteCanvasCard, { paddingVertical: 0, borderWidth: 0 }]}
+      onLayout={(event) => setContainerWidth(event.nativeEvent.layout.width)}
+    >
+      <ScrollView
+        key={singleGeneratedPage ? `generated:${props.generatedPageId ?? 'single'}` : `blank:${documentId ?? 'none'}:${pageCount}`}
+        ref={scrollRef}
+        style={props.styles.blankNoteScroller}
+        contentContainerStyle={props.styles.blankNotePagesContent}
+        contentOffset={initialContentOffset}
+        showsVerticalScrollIndicator
+        keyboardShouldPersistTaps="handled"
+        scrollEnabled={scrollEnabled}
+        onScroll={handleScroll}
+        onContentSizeChange={handleContentSizeChange}
+        onScrollBeginDrag={handleScrollBeginDrag}
+        onScrollEndDrag={handleScrollEndDrag}
+        onMomentumScrollBegin={handleMomentumScrollBegin}
+        onMomentumScrollEnd={handleMomentumScrollEnd}
+        scrollEventThrottle={96}
+      >
+        {pageNumbers.map((pageNumber) => (
+          <View key={pageNumber} style={[props.styles.blankNotePageSlot, { marginBottom: BLANK_NOTE_PAGE_GAP }]}>
+            <BlankNotePageCanvas
+              backgroundImageUri={pageNumber === 1 ? props.backgroundImageUri : null}
+              styles={props.styles}
+              pageNumber={singleGeneratedPage ? undefined : pageNumber}
+              currentPage={props.currentPage ?? documentContext.currentPdfPage}
+              generatedPageId={props.generatedPageId}
+              template={template}
+              pageWidth={pageWidth}
+              pageHeight={pageHeight}
+              inkStrokes={allInkStrokes}
+              textAnnotations={allTextAnnotations}
+              imageAnnotations={allImageAnnotations}
+              onPageFocus={props.onPageChange}
+              readOnly={props.readOnly}
+            />
+          </View>
+        ))}
+      </ScrollView>
     </View>
   );
 }

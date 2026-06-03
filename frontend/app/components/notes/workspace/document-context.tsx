@@ -1,5 +1,5 @@
 import React, { createContext, useContext } from 'react';
-import type { AiAnswer, BookmarkedPage, DocumentPageView, GeneratedWorkspacePage, NotebookPage, StudyDocumentEntry } from '../../../types';
+import type { AiAnswer, BookmarkedPage, DocumentPageView, GeneratedWorkspacePage, NotebookPage, NotebookPageTemplate, StudyDocumentEntry } from '../../../types';
 import { useNotesGlobalContext } from './notes-global-context';
 
 export type DocumentState = {
@@ -29,6 +29,7 @@ export type DocumentActions = {
   onDuplicatePdfPage: (pageNumber?: number) => void;
   onRemovePdfPage: (pageNumber?: number) => void;
   onMovePdfPage: (pageNumber: number | undefined, delta: -1 | 1) => void;
+  onChangeBlankNoteTemplate: (template: NotebookPageTemplate) => void;
   onUpdateStudyDocumentPageCount: (pageCount: number) => void;
   onSetCurrentPdfPage: (pageNumber: number) => void;
   onGoToPreviousDocumentPage: () => void;
@@ -69,6 +70,7 @@ export function DocumentProvider({ children }: { children: React.ReactNode }) {
     onDuplicatePdfPage: global.onDuplicatePdfPage,
     onRemovePdfPage: global.onRemovePdfPage,
     onMovePdfPage: global.onMovePdfPage,
+    onChangeBlankNoteTemplate: global.onChangeBlankNoteTemplate,
     onUpdateStudyDocumentPageCount: global.onUpdateStudyDocumentPageCount,
     onSetCurrentPdfPage: global.onSetCurrentPdfPage,
     onGoToPreviousDocumentPage: global.onGoToPreviousDocumentPage,

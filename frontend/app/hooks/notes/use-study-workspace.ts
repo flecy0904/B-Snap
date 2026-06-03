@@ -12,7 +12,9 @@ import {
   type BackendChatSession,
   type BackendChatMessage,
 } from '../../services/backend-api';
+import type { PencilInteractionEvent } from '../../services/pencil-interaction';
 import {
+  type AiFloatingPanelSize,
   type PersistedStudyWorkspaceState,
 } from '../../storage/local-workspace-store';
 import {
@@ -25,7 +27,7 @@ import { getAiBackendErrorMessage } from './ai/ai-errors';
 import { useAiChatActions } from './ai/use-ai-chat-actions';
 import { useAiChatDerivedState } from './ai/use-ai-chat-derived-state';
 import { useAiCanvasNotes } from './ai-canvas/use-ai-canvas-notes';
-import { buildClassInsightContext } from './class-insight';
+import { buildClassInsightContext, buildImportantPageRecommendations } from './class-insight';
 import { getStudyDocumentBackendNoteId } from './document/backend-sync';
 import { useStudyDocumentActions } from './document/use-study-document-actions';
 import { useDocumentPageActions } from './document/use-document-page-actions';
@@ -50,6 +52,20 @@ import type { AiAnswer, BookmarkedPage, CaptureAsset, DocumentPageView, Generate
 export type WorkspaceFocusTarget = 'document' | 'aiCanvas';
 export type AppRightSidebarPanel = 'chat' | 'canvas' | null;
 export type AppChatMode = 'sidebar' | 'floating';
+export type AppSidebarPosition = 'left' | 'right';
+export type StudyInteractionMode = 'edit' | 'read';
+export type { AiFloatingPanelSize };
+
+const DEFAULT_AI_FLOATING_PANEL_SIZE: AiFloatingPanelSize = { width: 380, height: 620 };
+
+function normalizeAiFloatingPanelSize(size?: AiFloatingPanelSize | null): AiFloatingPanelSize {
+  const width = Number.isFinite(size?.width) ? Math.round(size!.width) : DEFAULT_AI_FLOATING_PANEL_SIZE.width;
+  const height = Number.isFinite(size?.height) ? Math.round(size!.height) : DEFAULT_AI_FLOATING_PANEL_SIZE.height;
+  return {
+    width: Math.max(300, Math.min(640, width)),
+    height: Math.max(360, Math.min(760, height)),
+  };
+}
 
 export function useStudyWorkspace(props: {
   wide: boolean;
@@ -87,9 +103,14 @@ export function useStudyWorkspace(props: {
   const [imageAnnotationsByDocument, setImageAnnotationsByDocument] = useState<Record<number, InkImageAnnotation[]>>({});
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
   const [aiPanelMode, setAiPanelMode] = useState<'floating' | 'sidebar'>('floating');
-  const [appRightSidebarPanel, setAppRightSidebarPanel] = useState<AppRightSidebarPanel>('chat');
+  const [appRightSidebarPanel, setAppRightSidebarPanel] = useState<AppRightSidebarPanel>(null);
   const [appChatMode, setAppChatMode] = useState<AppChatMode>('sidebar');
   const [appRightSidebarWidth, setAppRightSidebarWidth] = useState(380);
+  const [aiFloatingPanelSize, setAiFloatingPanelSize] = useState<AiFloatingPanelSize>(DEFAULT_AI_FLOATING_PANEL_SIZE);
+  const [appSidebarPosition, setAppSidebarPosition] = useState<AppSidebarPosition>('right');
+  const [studyInteractionMode, setStudyInteractionMode] = useState<StudyInteractionMode>('edit');
+  const [chatSidebarOpenByDocument, setChatSidebarOpenByDocument] = useState<Record<number, boolean>>({});
+  const lastEditingInkToolRef = useRef<InkTool>('pen');
   const [focusedWorkspaceTarget, setFocusedWorkspaceTarget] = useState<WorkspaceFocusTarget | null>(null);
   const [workspaceActionHistory, setWorkspaceActionHistory] = useState<WorkspaceFocusTarget[]>([]);
   const [workspaceRedoActionHistory, setWorkspaceRedoActionHistory] = useState<WorkspaceFocusTarget[]>([]);
@@ -222,7 +243,11 @@ export function useStudyWorkspace(props: {
     setActivePageByDocument(snapshot.activePageByDocument);
     setBookmarksByDocument(snapshot.bookmarksByDocument ?? {});
     setLastChatSessionByDocument(snapshot.lastChatSessionByDocument ?? {});
+    setChatSidebarOpenByDocument(snapshot.chatSidebarOpenByDocument ?? {});
     setAiPanelMode(snapshot.aiPanelMode === 'sidebar' ? 'sidebar' : 'floating');
+    setAiFloatingPanelSize(normalizeAiFloatingPanelSize(snapshot.aiFloatingPanelSize));
+    setAppSidebarPosition(snapshot.appSidebarPosition === 'left' ? 'left' : 'right');
+    setStudyInteractionMode(snapshot.studyInteractionMode === 'read' ? 'read' : 'edit');
   }, []);
   const persistedWorkspaceState = useMemo<PersistedStudyWorkspaceState>(() => ({
     version: 1,
@@ -240,13 +265,20 @@ export function useStudyWorkspace(props: {
     activePageByDocument,
     bookmarksByDocument,
     lastChatSessionByDocument,
+    chatSidebarOpenByDocument,
     aiPanelMode,
+    aiFloatingPanelSize,
+    appSidebarPosition,
+    studyInteractionMode,
   }), [
     activePageByDocument,
+    aiFloatingPanelSize,
     aiPanelMode,
+    appSidebarPosition,
     attachmentsByDocument,
     bookmarksByDocument,
     captureAssetsBySubject,
+    chatSidebarOpenByDocument,
     currentPdfPageByDocument,
     deletedNoteIds,
     deletedStudyDocumentIds,
@@ -255,6 +287,7 @@ export function useStudyWorkspace(props: {
     inkByDocument,
     lastChatSessionByDocument,
     pageCaptureReferencesByDocument,
+    studyInteractionMode,
     textAnnotationsByDocument,
     userStudyDocuments,
   ]);
@@ -262,6 +295,37 @@ export function useStudyWorkspace(props: {
     state: persistedWorkspaceState,
     onHydrate: hydrateWorkspaceState,
   });
+  useEffect(() => {
+    if (!workspaceHydrated) return;
+    if (!studyDocumentId) {
+      if (appRightSidebarPanel === 'chat') {
+        setAppRightSidebarPanel(null);
+        setAiPanelOpen(false);
+      }
+      return;
+    }
+
+    if (chatSidebarOpenByDocument[studyDocumentId]) {
+      if (appChatMode !== 'sidebar') setAppChatMode('sidebar');
+      if (appRightSidebarPanel !== 'chat') setAppRightSidebarPanel('chat');
+      if (aiPanelMode !== 'sidebar') setAiPanelMode('sidebar');
+      if (!aiPanelOpen) setAiPanelOpen(true);
+      return;
+    }
+
+    if (appRightSidebarPanel === 'chat' && appChatMode === 'sidebar') {
+      setAppRightSidebarPanel(null);
+      if (aiPanelOpen) setAiPanelOpen(false);
+    }
+  }, [
+    aiPanelMode,
+    aiPanelOpen,
+    appChatMode,
+    appRightSidebarPanel,
+    chatSidebarOpenByDocument,
+    studyDocumentId,
+    workspaceHydrated,
+  ]);
   const studyDocumentBackendNoteId = getStudyDocumentBackendNoteId(studyDocument);
   const {
     backendPageIdsByDocument,
@@ -323,12 +387,28 @@ export function useStudyWorkspace(props: {
     onRecordWorkspaceAction: () => recordWorkspaceActionTarget('aiCanvas'),
   });
   const currentClassInsight = studyDocumentId ? classInsightByDocument[studyDocumentId] ?? null : null;
+  const importantPageRecommendations = useMemo(() => buildImportantPageRecommendations({
+    studyDocument,
+    subject,
+    inkStrokes: studyDocumentId ? inkByDocument[studyDocumentId] ?? [] : [],
+    textAnnotations: studyDocumentId ? textAnnotationsByDocument[studyDocumentId] ?? [] : [],
+    bookmarks: currentDocumentBookmarks,
+    pageCaptureReferences,
+    generatedPages: generatedWorkspacePages,
+    classInsight: currentClassInsight,
+    limit: 5,
+  }), [
+    currentClassInsight,
+    currentDocumentBookmarks,
+    generatedWorkspacePages,
+    inkByDocument,
+    pageCaptureReferences,
+    studyDocument,
+    studyDocumentId,
+    subject,
+    textAnnotationsByDocument,
+  ]);
   const currentBackendNoteId = getStudyDocumentBackendNoteId(studyDocument);
-
-  usePencilInteractionFeedback({
-    enabled: noteWorkspaceMode === 'note' && Boolean(studyDocumentId),
-    onFeedback: setWorkspaceFeedback,
-  });
 
   useEffect(() => {
     if (!activeIncomingBanner) return;
@@ -564,7 +644,9 @@ export function useStudyWorkspace(props: {
     allStudyDocuments,
     deletedStudyDocuments,
     currentPdfPageByDocument,
+    activePageByDocument,
     lastChatSessionByDocument,
+    chatSidebarOpenByDocument,
     onOpenNotesTab: props.onOpenNotesTab,
     syncPdfDocumentToBackend,
     setSubjectId,
@@ -575,7 +657,11 @@ export function useStudyWorkspace(props: {
     setStudyDocumentId,
     setInkTool,
     setAiPanelOpen,
+    setAiPanelMode,
+    setAppChatMode,
+    setAppRightSidebarPanel,
     setViewingAiChatSessionId,
+    setChatSidebarOpenByDocument,
     setChatSessionByDocument,
     setLastChatSessionByDocument,
     setChatSessionsByDocument,
@@ -602,7 +688,15 @@ export function useStudyWorkspace(props: {
     setWorkspaceFeedback,
   });
 
+  const enterEditModeForTool = (tool: InkTool) => {
+    if (tool !== 'view') {
+      lastEditingInkToolRef.current = tool;
+      setStudyInteractionMode('edit');
+    }
+  };
+
   const changeInkTool = (tool: InkTool) => {
+    enterEditModeForTool(tool);
     if (tool === 'select' && inkTool === 'select') {
       setInkTool('view');
       if (studyDocumentId) {
@@ -646,17 +740,39 @@ export function useStudyWorkspace(props: {
     }
   };
 
+  const handlePencilInteractionAction = useCallback((event: PencilInteractionEvent) => {
+    if (event.type !== 'tap') return;
+    changeInkTool(inkTool === 'erase' ? 'pen' : 'erase');
+  }, [changeInkTool, inkTool]);
+
+  const getPencilInteractionFeedbackMessage = useCallback((event: PencilInteractionEvent) => {
+    if (event.type !== 'tap') return null;
+    return inkTool === 'erase'
+      ? 'Apple Pencil double tap: 펜으로 전환'
+      : 'Apple Pencil double tap: 지우개로 전환';
+  }, [inkTool]);
+
+  usePencilInteractionFeedback({
+    enabled: noteWorkspaceMode === 'note' && Boolean(studyDocumentId) && studyInteractionMode === 'edit',
+    onFeedback: setWorkspaceFeedback,
+    onPrimaryAction: handlePencilInteractionAction,
+    getFeedbackMessage: getPencilInteractionFeedbackMessage,
+  });
+
   const changePenColor = (color: string) => {
+    setStudyInteractionMode('edit');
     setPenColor(color);
     setInkTool((current) => (current !== 'pen' && current !== 'highlight' && !isShapeTool(current) ? 'pen' : current));
   };
 
   const changePenWidth = (width: number) => {
+    setStudyInteractionMode('edit');
     setPenWidth(width);
     setInkTool((current) => (current !== 'pen' && current !== 'highlight' && !isShapeTool(current) ? 'pen' : current));
   };
 
   const changeBrushType = (brush: InkBrush) => {
+    setStudyInteractionMode('edit');
     setBrushType(brush);
     setInkTool(brush === 'highlighter' ? 'highlight' : 'pen');
     if (brush === 'highlighter' && penWidth < 8) setPenWidth(12);
@@ -664,21 +780,25 @@ export function useStudyWorkspace(props: {
   };
 
   const changeLinePattern = (pattern: InkLinePattern) => {
+    setStudyInteractionMode('edit');
     setLinePattern(pattern === 'dashed' ? 'dotted' : pattern);
     setInkTool((current) => (current !== 'pen' && current !== 'highlight' && !isShapeTool(current) ? 'pen' : current));
   };
 
   const changeEraserMode = (mode: InkEraserMode) => {
+    setStudyInteractionMode('edit');
     setEraserMode(mode);
     setInkTool('erase');
   };
 
   const changeEraserWidth = (width: number) => {
+    setStudyInteractionMode('edit');
     setEraserWidth(Math.max(6, Math.min(36, Math.round(width))));
     setInkTool('erase');
   };
 
   const changeSelectionMode = (mode: InkSelectionMode) => {
+    setStudyInteractionMode('edit');
     setSelectionMode(mode);
     setInkTool('select');
     if (studyDocumentId) {
@@ -997,7 +1117,6 @@ export function useStudyWorkspace(props: {
     removeInkStroke: removeInkStrokeBase,
     replaceInkStrokes: replaceInkStrokesBase,
     addTextAnnotation: addTextAnnotationBase,
-    addImageAnnotation: addImageAnnotationBase,
     updateTextAnnotation: updateTextAnnotationBase,
     removeTextAnnotation: removeTextAnnotationBase,
     moveTextAnnotation: moveTextAnnotationBase,
@@ -1059,10 +1178,12 @@ export function useStudyWorkspace(props: {
     recordDocumentAction();
     addTextAnnotationBase(point);
   }, [addTextAnnotationBase, recordDocumentAction]);
-  const addImageAnnotation = useCallback((annotation: Partial<InkImageAnnotation> & Pick<InkImageAnnotation, 'uri'>) => {
-    recordDocumentAction();
-    addImageAnnotationBase(annotation);
-  }, [addImageAnnotationBase, recordDocumentAction]);
+  const addImageAnnotation = useCallback((_annotation: Partial<InkImageAnnotation> & Pick<InkImageAnnotation, 'uri'>) => {
+    setWorkspaceFeedback('사진 삽입 기능은 임시로 꺼두었습니다.');
+  }, [setWorkspaceFeedback]);
+  const insertImageFromLibrary = useCallback(() => {
+    setWorkspaceFeedback('사진 삽입 기능은 임시로 꺼두었습니다.');
+  }, [setWorkspaceFeedback]);
   const updateTextAnnotation = useCallback((annotationId: string, text: string) => {
     recordDocumentAction();
     updateTextAnnotationBase(annotationId, text);
@@ -1116,6 +1237,7 @@ export function useStudyWorkspace(props: {
   const {
     insertAiAnswerPage,
     createMemoPage,
+    changeBlankNoteTemplate,
     openGeneratedPage,
     removeGeneratedPage,
     duplicateGeneratedPage,
@@ -1230,7 +1352,38 @@ export function useStudyWorkspace(props: {
     }
     aiCanvas.redoCanvasEdit();
   };
+  const changeAppSidebarPosition = (position: AppSidebarPosition) => {
+    setAppSidebarPosition(position);
+  };
+  const toggleAppSidebarPosition = () => {
+    setAppSidebarPosition((current) => (current === 'right' ? 'left' : 'right'));
+  };
+  const toggleStudyInteractionMode = () => {
+    if (studyInteractionMode === 'read') {
+      setStudyInteractionMode('edit');
+      setInkTool(lastEditingInkToolRef.current || 'pen');
+      return;
+    }
+
+    lastEditingInkToolRef.current = inkTool === 'view' ? 'pen' : inkTool;
+    setStudyInteractionMode('read');
+    setInkTool('view');
+    if (studyDocumentId) {
+      setSelectionByDocument((current) => ({ ...current, [studyDocumentId]: null }));
+      setSelectionPreviewByDocument((current) => ({ ...current, [studyDocumentId]: null }));
+      setSelectionPreviewAttachedByDocument((current) => ({ ...current, [studyDocumentId]: false }));
+    }
+  };
+  const rememberCurrentDocumentChatSidebar = (open: boolean) => {
+    if (!studyDocumentId) return;
+    setChatSidebarOpenByDocument((current) => (
+      current[studyDocumentId] === open
+        ? current
+        : { ...current, [studyDocumentId]: open }
+    ));
+  };
   const openAppChatSidebar = () => {
+    rememberCurrentDocumentChatSidebar(true);
     setAppChatMode('sidebar');
     setAppRightSidebarPanel('chat');
     setAiPanelMode('sidebar');
@@ -1238,14 +1391,17 @@ export function useStudyWorkspace(props: {
     setAiPanelOpen(true);
   };
   const openAppAiCanvasSidebar = () => {
+    if (appRightSidebarPanel === 'chat') rememberCurrentDocumentChatSidebar(false);
     setAppRightSidebarPanel('canvas');
     aiCanvas.open();
     if (appChatMode === 'sidebar') setAiPanelOpen(false);
   };
   const closeAppRightSidebar = () => {
+    if (appRightSidebarPanel === 'chat') rememberCurrentDocumentChatSidebar(false);
     setAppRightSidebarPanel(null);
   };
   const floatAppAiChatPanel = () => {
+    if (appRightSidebarPanel === 'chat') rememberCurrentDocumentChatSidebar(false);
     setAppChatMode('floating');
     setAppRightSidebarPanel(null);
     setAiPanelMode('floating');
@@ -1281,9 +1437,12 @@ export function useStudyWorkspace(props: {
     imageAnnotationsByDocument,
     aiPanelOpen,
     aiPanelMode,
+    aiFloatingPanelSize,
     appRightSidebarPanel,
     appChatMode,
     appRightSidebarWidth,
+    appSidebarPosition,
+    studyInteractionMode,
     focusedWorkspaceTarget,
     canUndoFocusedWorkspaceAction,
     canRedoFocusedWorkspaceAction,
@@ -1304,6 +1463,7 @@ export function useStudyWorkspace(props: {
     aiError,
     aiCanvas,
     classInsight: currentClassInsight,
+    importantPageRecommendations,
     query,
     sort,
     incomingAssetSuggestion,
@@ -1347,6 +1507,7 @@ export function useStudyWorkspace(props: {
     restoreStudyDocument,
     renameStudyDocument,
     uploadPdfDocument,
+    insertImageFromLibrary,
     resetNotes,
     resetLocalWorkspaceData,
     setNoteDetailTab,
@@ -1362,7 +1523,11 @@ export function useStudyWorkspace(props: {
     changeBrushSettings,
     toggleAiPanel,
     setAiPanelMode,
+    setAiFloatingPanelSize,
     setAppRightSidebarWidth,
+    changeAppSidebarPosition,
+    toggleAppSidebarPosition,
+    toggleStudyInteractionMode,
     setFocusedWorkspaceTarget,
     openAppChatSidebar,
     openAppAiCanvasSidebar,
@@ -1427,6 +1592,7 @@ export function useStudyWorkspace(props: {
     openIncomingBanner,
     removeWorkspaceAttachment,
     createMemoPage,
+    changeBlankNoteTemplate,
     openWorkspaceAttachment,
     toggleBookmarkCurrentPage,
     openBookmarkedPage,
