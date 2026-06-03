@@ -159,6 +159,7 @@ export type DesktopNotesViewProps = {
   activeAiChatSessionId: number | null;
   aiChatReadOnly: boolean;
   aiLoading: boolean;
+  aiCanvasRequestBusy: boolean;
   aiError: string | null;
   aiCanvas: UseAiCanvasNotesResult;
   classInsight: BackendClassInsight | null;
@@ -592,6 +593,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           activeAiChatSessionId: props.activeAiChatSessionId,
           aiChatReadOnly: props.aiChatReadOnly,
           aiLoading: props.aiLoading,
+          aiCanvasRequestBusy: props.aiCanvasRequestBusy,
           aiError: props.aiError,
           aiCanvas: props.aiCanvas,
           classInsight: props.classInsight,

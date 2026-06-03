@@ -287,6 +287,7 @@ export function AppShell(props: {
                   activeAiChatSessionId={notesState.activeAiChatSessionId}
                   aiChatReadOnly={notesState.aiChatReadOnly}
                   aiLoading={notesState.aiLoading}
+                  aiCanvasRequestBusy={notesState.aiCanvasRequestBusy}
                   aiError={notesState.aiError}
                   aiCanvas={notesState.aiCanvas}
                   incomingAssetSuggestion={notesState.incomingAssetSuggestion}

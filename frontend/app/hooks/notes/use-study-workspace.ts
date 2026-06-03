@@ -111,6 +111,7 @@ export function useStudyWorkspace(props: {
   const [incomingBannerQueue, setIncomingBannerQueue] = useState<CaptureAsset[]>([]);
   const [aiAnswer, setAiAnswer] = useState<AiAnswer | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
+  const [aiCanvasRequestBusy, setAiCanvasRequestBusy] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const [selectionPreviewByDocument, setSelectionPreviewByDocument] = useState<Record<number, string | null>>({});
   const [selectionPreviewAttachedByDocument, setSelectionPreviewAttachedByDocument] = useState<Record<number, boolean>>({});
@@ -336,6 +337,13 @@ export function useStudyWorkspace(props: {
     onRecordWorkspaceAction: () => recordWorkspaceActionTarget('aiCanvas'),
   });
   const currentClassInsight = studyDocumentId ? classInsightByDocument[studyDocumentId] ?? null : null;
+  const applyCanvasEditFromChat = useCallback((
+    payload: Parameters<typeof aiCanvas.applyChatCanvasEdit>[0],
+  ) => {
+    aiCanvas.applyChatCanvasEdit(payload);
+    setAppRightSidebarPanel('canvas');
+    if (appChatMode === 'sidebar') setAiPanelOpen(false);
+  }, [aiCanvas.applyChatCanvasEdit, appChatMode]);
   const currentBackendNoteId = getStudyDocumentBackendNoteId(studyDocument);
 
   usePencilInteractionFeedback({
@@ -796,6 +804,7 @@ export function useStudyWorkspace(props: {
     setAiQuestion,
     setAiError,
     setAiLoading,
+    setAiCanvasRequestBusy,
     setSelectionPreviewByDocument,
     setChatSessionByDocument,
     setViewingAiChatSessionId,
@@ -804,7 +813,9 @@ export function useStudyWorkspace(props: {
     setAllChatSessions,
     setAiMessagesBySession,
     activeCanvasNoteId: aiCanvas.activeNoteId,
-    onApplyCanvasEditFromChat: aiCanvas.applyChatCanvasEdit,
+    activeCanvasMarkdown: aiCanvas.markdownDraft,
+    activeCanvasDocumentJson: aiCanvas.documentDraft,
+    onApplyCanvasEditFromChat: applyCanvasEditFromChat,
     clearSelection: clearSelectionForCurrentDocument,
     buildContextHint: (question) => buildClassInsightContext({
       question,
@@ -970,8 +981,10 @@ export function useStudyWorkspace(props: {
       question: command,
       source: 'canvas-mini',
       selectionImageUri: options?.selectionImageUri ?? null,
+      canvasMarkdown: aiCanvas.markdownDraft,
+      canvasDocumentJson: aiCanvas.documentDraft,
     })
-  ), [requestAiAnswer]);
+  ), [aiCanvas.documentDraft, aiCanvas.markdownDraft, requestAiAnswer]);
 
   const {
     acceptIncomingAsset,
@@ -1305,6 +1318,7 @@ export function useStudyWorkspace(props: {
     activeAiChatSessionId,
     aiChatReadOnly,
     aiLoading,
+    aiCanvasRequestBusy,
     aiError,
     aiCanvas,
     classInsight: currentClassInsight,

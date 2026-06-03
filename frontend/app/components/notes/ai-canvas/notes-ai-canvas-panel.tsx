@@ -2,14 +2,26 @@ import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { ActivityIndicator, Image, Platform, Pressable, Text, TextInput, View } from 'react-native';
 
+import { hasUsefulAiCanvasMarkdown } from '../../../hooks/notes/ai-canvas/use-ai-canvas-notes';
+import AiCanvasMarkdownEditor from './ai-canvas-markdown-editor.dom';
 import { useDesktopNotesWorkspaceContext } from '../workspace/notes-workspace-context';
 
 const AI_CANVAS_MINI_PROMPTS = ['마무리 다듬기', '수준 조정', '길이 조절'];
+
+type RecommendationMode = 'polish' | 'level' | 'length' | null;
 
 type WebCanvasResizeState = {
   pointerId: number | null;
   startClientX: number;
   startWidth: number;
+};
+
+const AI_CANVAS_RECOMMENDATION_COMMANDS = {
+  polish: '마무리 다듬기',
+  easier: '수준 조정 - 쉽게',
+  professional: '수준 조정 - 전문적으로',
+  shorter: '길이 조절 - 짧게',
+  longer: '길이 조절 - 길게',
 };
 
 export function NotesAiCanvasPanel() {
@@ -26,24 +38,46 @@ export function NotesAiCanvasPanel() {
   const [miniCommand, setMiniCommand] = React.useState('');
   const [miniSelectionImageUri, setMiniSelectionImageUri] = React.useState<string | null>(null);
   const [miniComposerOpen, setMiniComposerOpen] = React.useState(false);
+  const [recommendationMode, setRecommendationMode] = React.useState<RecommendationMode>(null);
+  const [canvasRequestBusy, setCanvasRequestBusy] = React.useState(false);
+  const [nativeEditorMode, setNativeEditorMode] = React.useState<'view' | 'edit'>('view');
   const [webCanvasResizeActive, setWebCanvasResizeActive] = React.useState(false);
   const webCanvasWidthRef = React.useRef(workspace.webAiCanvasPanelWidth);
   const webCanvasResizeDraggingRef = React.useRef(false);
   const webCanvasResizeRef = React.useRef<WebCanvasResizeState | null>(null);
   const isAppAiCanvasSidebar = Boolean(workspace.isAppAiCanvasSidebarPanel);
   const isWebAiCanvasPanel = Platform.OS === 'web' && !isAppAiCanvasSidebar;
+  const isNativeApp = Platform.OS !== 'web';
+  const canvasEditModeEnabled = !isNativeApp || nativeEditorMode === 'edit';
+  const canvasControlsLocked = canvasRequestBusy || workspace.aiCanvasRequestBusy;
+  const editorEditable = canvasEditModeEnabled && !canvasControlsLocked;
+  const canvasCanModify = canvasEditModeEnabled;
+  const recommendationBusy = canvasRequestBusy || workspace.aiLoading || canvas.loading || canvas.saving;
+  const recommendationEnabled = canvasCanModify && Boolean(canvas.activeNote) && hasUsefulAiCanvasMarkdown(canvas.markdownDraft) && !recommendationBusy;
   const miniCommandReady = Boolean(miniCommand.trim());
+  const canvasManagementDisabled = canvasControlsLocked || canvas.loading || canvas.saving;
   const resizeWebAiCanvasPanel = workspace.onResizeWebAiCanvasPanel;
 
   React.useEffect(() => {
     webCanvasWidthRef.current = workspace.webAiCanvasPanelWidth;
   }, [workspace.webAiCanvasPanelWidth]);
 
+  React.useEffect(() => {
+    if (!canvasControlsLocked) return;
+    setNoteListOpen(false);
+    setNoteActionMenuId(null);
+    setRenameOpen(false);
+    setDeleteConfirmOpen(false);
+    setPendingRenameNoteId(null);
+    setPendingDeleteNoteId(null);
+  }, [canvasControlsLocked]);
+
   const noteActionMenuNote = React.useMemo(
     () => canvas.notes.find((note) => note.id === noteActionMenuId) ?? null,
     [canvas.notes, noteActionMenuId],
   );
   const startRename = () => {
+    if (canvasControlsLocked) return;
     const targetNote = noteActionMenuNote ?? canvas.activeNote;
     if (!targetNote) return;
     setPendingRenameNoteId(targetNote.id);
@@ -60,6 +94,7 @@ export function NotesAiCanvasPanel() {
     setRenameError(null);
   };
   const saveRename = async () => {
+    if (canvasManagementDisabled) return;
     if (!renameDraft.trim()) {
       setRenameError('Canvas 이름을 입력해 주세요.');
       return;
@@ -68,6 +103,7 @@ export function NotesAiCanvasPanel() {
     if (saved) cancelRename();
   };
   const openDeleteConfirm = () => {
+    if (canvasControlsLocked) return;
     const targetNote = noteActionMenuNote ?? canvas.activeNote;
     if (!targetNote) return;
     setPendingDeleteNoteId(targetNote.id);
@@ -132,28 +168,58 @@ export function NotesAiCanvasPanel() {
   }, [isWebAiCanvasPanel]);
 
   const confirmDelete = async () => {
+    if (canvasManagementDisabled) return;
     setDeleteConfirmOpen(false);
     await canvas.deleteNote(pendingDeleteNoteId ?? undefined);
     setPendingDeleteNoteId(null);
   };
   const submitMiniCommand = async () => {
     const command = miniCommand.trim();
-    if (!command || workspace.aiLoading) return;
-    const sent = await workspace.onRequestAiCanvasCommand(command, {
-      selectionImageUri: miniSelectionImageUri,
-    });
-    if (sent) {
-      setMiniCommand('');
-      setMiniSelectionImageUri(null);
-      setMiniComposerOpen(false);
+    if (!command || recommendationBusy) return;
+    setCanvasRequestBusy(true);
+    try {
+      const sent = await workspace.onRequestAiCanvasCommand(command, {
+        selectionImageUri: miniSelectionImageUri,
+      });
+      if (sent) {
+        setMiniCommand('');
+        setMiniSelectionImageUri(null);
+        setMiniComposerOpen(false);
+      }
+      if (!sent) {
+        canvas.showFeedback('Canvas 수정에 실패했습니다. 잠시 후 다시 시도해 주세요.');
+      }
+    } finally {
+      setCanvasRequestBusy(false);
+    }
+  };
+  const submitRecommendationCommand = async (command: string) => {
+    if (!recommendationEnabled) return;
+    setCanvasRequestBusy(true);
+    try {
+      const sent = await workspace.onRequestAiCanvasCommand(command, {
+        selectionImageUri: miniSelectionImageUri,
+      });
+      if (sent) {
+        setRecommendationMode(null);
+        setMiniCommand('');
+        setMiniSelectionImageUri(null);
+        setMiniComposerOpen(false);
+        return;
+      }
+      canvas.showFeedback('Canvas 수정에 실패했습니다. 잠시 후 다시 시도해 주세요.');
+    } finally {
+      setCanvasRequestBusy(false);
     }
   };
   const closeMiniComposer = () => {
     setMiniCommand('');
     setMiniSelectionImageUri(null);
     setMiniComposerOpen(false);
+    setRecommendationMode(null);
   };
   const pasteCopiedSelectionImage = () => {
+    if (canvasControlsLocked) return;
     if (!workspace.copiedSelectionImageUri) return;
     setMiniSelectionImageUri(workspace.copiedSelectionImageUri);
   };
@@ -164,8 +230,96 @@ export function NotesAiCanvasPanel() {
     }
     canvas.close();
   };
+  const renderRecommendationActions = () => {
+    if (!miniComposerOpen) return null;
+
+    if (recommendationMode === 'polish') {
+      return (
+        <View style={workspace.styles.aiCanvasMiniQuickRow}>
+          <Pressable style={workspace.styles.aiCanvasMiniQuickChip} onPress={() => setRecommendationMode(null)} disabled={recommendationBusy}>
+            <MaterialCommunityIcons name="close" size={14} color="#4F68D2" />
+          </Pressable>
+          <Pressable
+            style={[workspace.styles.aiCanvasMiniQuickChip, !recommendationEnabled && workspace.styles.aiCanvasMiniQuickChipDisabled]}
+            onPress={() => submitRecommendationCommand(AI_CANVAS_RECOMMENDATION_COMMANDS.polish)}
+            disabled={!recommendationEnabled}
+          >
+            <Text style={workspace.styles.aiCanvasMiniQuickChipText}>실행</Text>
+          </Pressable>
+        </View>
+      );
+    }
+
+    if (recommendationMode === 'level') {
+      return (
+        <View style={workspace.styles.aiCanvasMiniQuickRow}>
+          <Pressable style={workspace.styles.aiCanvasMiniQuickChip} onPress={() => setRecommendationMode(null)} disabled={recommendationBusy}>
+            <MaterialCommunityIcons name="close" size={14} color="#4F68D2" />
+          </Pressable>
+          <Pressable
+            style={[workspace.styles.aiCanvasMiniQuickChip, !recommendationEnabled && workspace.styles.aiCanvasMiniQuickChipDisabled]}
+            onPress={() => submitRecommendationCommand(AI_CANVAS_RECOMMENDATION_COMMANDS.easier)}
+            disabled={!recommendationEnabled}
+          >
+            <Text style={workspace.styles.aiCanvasMiniQuickChipText}>쉽게</Text>
+          </Pressable>
+          <Pressable
+            style={[workspace.styles.aiCanvasMiniQuickChip, !recommendationEnabled && workspace.styles.aiCanvasMiniQuickChipDisabled]}
+            onPress={() => submitRecommendationCommand(AI_CANVAS_RECOMMENDATION_COMMANDS.professional)}
+            disabled={!recommendationEnabled}
+          >
+            <Text style={workspace.styles.aiCanvasMiniQuickChipText}>전문적으로</Text>
+          </Pressable>
+        </View>
+      );
+    }
+
+    if (recommendationMode === 'length') {
+      return (
+        <View style={workspace.styles.aiCanvasMiniQuickRow}>
+          <Pressable style={workspace.styles.aiCanvasMiniQuickChip} onPress={() => setRecommendationMode(null)} disabled={recommendationBusy}>
+            <MaterialCommunityIcons name="close" size={14} color="#4F68D2" />
+          </Pressable>
+          <Pressable
+            style={[workspace.styles.aiCanvasMiniQuickChip, !recommendationEnabled && workspace.styles.aiCanvasMiniQuickChipDisabled]}
+            onPress={() => submitRecommendationCommand(AI_CANVAS_RECOMMENDATION_COMMANDS.shorter)}
+            disabled={!recommendationEnabled}
+          >
+            <Text style={workspace.styles.aiCanvasMiniQuickChipText}>짧게</Text>
+          </Pressable>
+          <Pressable
+            style={[workspace.styles.aiCanvasMiniQuickChip, !recommendationEnabled && workspace.styles.aiCanvasMiniQuickChipDisabled]}
+            onPress={() => submitRecommendationCommand(AI_CANVAS_RECOMMENDATION_COMMANDS.longer)}
+            disabled={!recommendationEnabled}
+          >
+            <Text style={workspace.styles.aiCanvasMiniQuickChipText}>길게</Text>
+          </Pressable>
+        </View>
+      );
+    }
+
+    return (
+      <View style={workspace.styles.aiCanvasMiniQuickRow}>
+        {AI_CANVAS_MINI_PROMPTS.map((prompt) => (
+          <Pressable
+            key={prompt}
+            style={[workspace.styles.aiCanvasMiniQuickChip, !recommendationEnabled && workspace.styles.aiCanvasMiniQuickChipDisabled]}
+            onPress={() => {
+              if (prompt === '마무리 다듬기') setRecommendationMode('polish');
+              if (prompt === '수준 조정') setRecommendationMode('level');
+              if (prompt === '길이 조절') setRecommendationMode('length');
+            }}
+            disabled={!recommendationEnabled}
+          >
+            <Text style={workspace.styles.aiCanvasMiniQuickChipText}>{prompt}</Text>
+          </Pressable>
+        ))}
+      </View>
+    );
+  };
   const renderMiniCommandInput = () => {
     if (workspace.aiPanelOpen) return null;
+    if (!canvasCanModify) return null;
 
     return (
       <View
@@ -191,42 +345,29 @@ export function NotesAiCanvasPanel() {
             <Text style={workspace.styles.aiCanvasPasteSelectionText}>복사한 선택 영역 붙여넣기</Text>
           </Pressable>
         ) : null}
-        {miniComposerOpen ? (
-          <View style={workspace.styles.aiCanvasMiniQuickRow}>
-            {AI_CANVAS_MINI_PROMPTS.map((prompt) => (
-              <Pressable
-                key={prompt}
-                style={workspace.styles.aiCanvasMiniQuickChip}
-                onPress={() => setMiniCommand(prompt)}
-                disabled={workspace.aiLoading}
-              >
-                <Text style={workspace.styles.aiCanvasMiniQuickChipText}>{prompt}</Text>
-              </Pressable>
-            ))}
-          </View>
-        ) : null}
+        {renderRecommendationActions()}
         {miniComposerOpen ? (
           <View style={workspace.styles.aiCanvasMiniInputBar}>
             <TextInput
               value={miniCommand}
               onChangeText={setMiniCommand}
-              placeholder="AI에게 도움 받기"
+              placeholder="AI에게 수정 요청"
               placeholderTextColor="#8F96A3"
               style={workspace.styles.aiCanvasMiniInput}
               multiline
-              editable={!workspace.aiLoading}
+              editable={!recommendationBusy}
               onSubmitEditing={submitMiniCommand}
               autoFocus
             />
             <Pressable
               style={[
                 workspace.styles.aiCanvasMiniSendButton,
-                workspace.aiLoading && workspace.styles.aiCanvasMiniSendButtonDisabled,
+                recommendationBusy && workspace.styles.aiCanvasMiniSendButtonDisabled,
               ]}
               onPress={miniCommandReady ? submitMiniCommand : closeMiniComposer}
-              disabled={workspace.aiLoading}
+              disabled={recommendationBusy}
             >
-              {workspace.aiLoading ? (
+              {recommendationBusy ? (
                 <ActivityIndicator size="small" color="#FFFFFF" />
               ) : miniCommandReady ? (
                 <MaterialCommunityIcons name="arrow-up" size={18} color="#FFFFFF" />
@@ -249,7 +390,7 @@ export function NotesAiCanvasPanel() {
     );
   };
   const renderNoteListMenu = () => {
-    if (!noteListOpen) return null;
+    if (!noteListOpen || canvasControlsLocked) return null;
 
     return (
       <View style={workspace.styles.aiCanvasNoteListMenu}>
@@ -263,13 +404,16 @@ export function NotesAiCanvasPanel() {
                   active && workspace.styles.aiCanvasNoteListMenuItemActive,
                 ]}
                 onPress={() => {
+                  if (canvasControlsLocked) return;
                   canvas.selectNote(note.id);
                   setNoteListOpen(false);
                   setNoteActionMenuId(null);
                 }}
                 onLongPress={() => {
+                  if (canvasControlsLocked) return;
                   setNoteActionMenuId(note.id);
                 }}
+                disabled={canvasControlsLocked}
                 delayLongPress={350}
               >
                 <Text
@@ -287,13 +431,14 @@ export function NotesAiCanvasPanel() {
                   <Pressable
                     style={workspace.styles.aiCanvasTitleMenuItem}
                     onPress={startRename}
+                    disabled={canvasControlsLocked}
                   >
                     <Text style={workspace.styles.aiCanvasTitleMenuText}>이름 바꾸기</Text>
                   </Pressable>
                   <Pressable
                     style={workspace.styles.aiCanvasTitleMenuItem}
                     onPress={openDeleteConfirm}
-                    disabled={canvas.saving}
+                    disabled={canvasManagementDisabled}
                   >
                     <Text style={workspace.styles.aiCanvasTitleMenuDangerText}>삭제하기</Text>
                   </Pressable>
@@ -344,13 +489,28 @@ export function NotesAiCanvasPanel() {
           </Text>
         </View>
         <View style={workspace.styles.aiCanvasHeaderActions}>
+          {isNativeApp ? (
+            <Pressable
+              style={[
+                workspace.styles.aiCanvasIconButton,
+                canvasEditModeEnabled && workspace.styles.aiCanvasIconButtonActive,
+              ]}
+              onPress={() => setNativeEditorMode((current) => (current === 'edit' ? 'view' : 'edit'))}
+              disabled={canvasControlsLocked}
+            >
+              <MaterialCommunityIcons name={canvasEditModeEnabled ? 'pencil' : 'eye-outline'} size={18} color="#303744" />
+            </Pressable>
+          ) : null}
           <Pressable
             style={[
               workspace.styles.aiCanvasHeaderNewButton,
-              canvas.saving && workspace.styles.aiCanvasSaveButtonDisabled,
+              (canvasManagementDisabled || !canvas.canCreateNote) && workspace.styles.aiCanvasSaveButtonDisabled,
             ]}
-            onPress={canvas.createNote}
-            disabled={canvas.saving}
+            onPress={() => {
+              if (canvasManagementDisabled || !canvas.canCreateNote) return;
+              void canvas.createNote();
+            }}
+            disabled={canvasManagementDisabled || !canvas.canCreateNote}
           >
             <MaterialCommunityIcons name="note-edit-outline" size={18} color="#111827" />
           </Pressable>
@@ -358,10 +518,11 @@ export function NotesAiCanvasPanel() {
             <Pressable
               style={workspace.styles.aiCanvasIconButton}
               onPress={() => {
+                if (canvasControlsLocked) return;
                 setNoteActionMenuId(null);
                 setNoteListOpen((current) => !current);
               }}
-              disabled={!canvas.notes.length}
+              disabled={!canvas.notes.length || canvasControlsLocked}
             >
               <MaterialCommunityIcons name="dots-vertical" size={20} color="#303744" />
             </Pressable>
@@ -392,16 +553,37 @@ export function NotesAiCanvasPanel() {
 
           {canvas.activeNote ? (
             <View style={workspace.styles.aiCanvasEditorShell}>
-              <TextInput
-                value={canvas.markdownDraft}
-                onChangeText={canvas.setMarkdownDraft}
-                onFocus={() => workspace.onFocusWorkspaceTarget('aiCanvas')}
-                placeholder="Markdown 형식으로 내용을 정리해 보세요."
-                placeholderTextColor="#A2AAB8"
-                multiline
-                scrollEnabled
-                textAlignVertical="top"
-                style={workspace.styles.aiCanvasMarkdownInput}
+              <AiCanvasMarkdownEditor
+                documentJson={canvas.documentDraft}
+                fallbackMarkdown={canvas.markdownDraft}
+                editable={editorEditable}
+                placeholder="Markdown으로 정리 내용을 작성하세요."
+                pendingOperations={canvas.pendingCanvasOperations}
+                onChangeDocument={async (change) => {
+                  canvas.setDocumentDraft(change);
+                }}
+                onFocusEditor={async () => {
+                  workspace.onFocusWorkspaceTarget('aiCanvas');
+                }}
+                canUndoShortcut={canvas.canUndo}
+                canRedoShortcut={canvas.canRedo}
+                onUndoShortcut={() => {
+                  workspace.onFocusWorkspaceTarget('aiCanvas');
+                  canvas.undoCanvasEdit();
+                }}
+                onRedoShortcut={() => {
+                  workspace.onFocusWorkspaceTarget('aiCanvas');
+                  canvas.redoCanvasEdit();
+                }}
+                onApplyOperationsResult={async (requestId, applied) => {
+                  canvas.completeCanvasOperations(requestId, applied);
+                }}
+                dom={{
+                  style: workspace.styles.aiCanvasMarkdownWebView,
+                  scrollEnabled: true,
+                  nestedScrollEnabled: true,
+                  hideKeyboardAccessoryView: true,
+                }}
               />
               {renderMiniCommandInput()}
             </View>
@@ -420,7 +602,7 @@ export function NotesAiCanvasPanel() {
       {renameOpen ? (
         <Pressable style={workspace.styles.aiPanelDialogOverlay} onPress={cancelRename}>
           <Pressable style={workspace.styles.aiRenameModalCard} onPress={(event) => event.stopPropagation()}>
-            <Text style={workspace.styles.aiRenameModalTitle}>Canvac 이름 변경</Text>
+            <Text style={workspace.styles.aiRenameModalTitle}>Canvas 이름 바꾸기</Text>
             <TextInput
               value={renameDraft}
               onChangeText={(value) => {
@@ -432,17 +614,18 @@ export function NotesAiCanvasPanel() {
               style={[workspace.styles.aiRenameModalInput, renameError && workspace.styles.aiRenameModalInputError]}
               returnKeyType="done"
               onSubmitEditing={saveRename}
+              editable={!canvasManagementDisabled}
               autoFocus
             />
             {renameError ? <Text style={workspace.styles.aiRenameModalError}>{renameError}</Text> : null}
             <View style={workspace.styles.aiRenameModalActions}>
-              <Pressable style={workspace.styles.aiRenameModalCancelButton} onPress={cancelRename} disabled={canvas.saving}>
+              <Pressable style={workspace.styles.aiRenameModalCancelButton} onPress={cancelRename} disabled={canvasManagementDisabled}>
                 <Text style={workspace.styles.aiRenameModalCancelText}>취소</Text>
               </Pressable>
               <Pressable
-                style={[workspace.styles.aiRenameModalSaveButton, (!renameDraft.trim() || canvas.saving) && workspace.styles.aiRenameModalSaveButtonDisabled]}
+                style={[workspace.styles.aiRenameModalSaveButton, (!renameDraft.trim() || canvasManagementDisabled) && workspace.styles.aiRenameModalSaveButtonDisabled]}
                 onPress={saveRename}
-                disabled={!renameDraft.trim() || canvas.saving}
+                disabled={!renameDraft.trim() || canvasManagementDisabled}
               >
                 <Text style={workspace.styles.aiRenameModalSaveText}>이름 바꾸기</Text>
               </Pressable>
@@ -470,11 +653,11 @@ export function NotesAiCanvasPanel() {
                   setDeleteConfirmOpen(false);
                   setPendingDeleteNoteId(null);
                 }}
-                disabled={canvas.saving}
+                disabled={canvasManagementDisabled}
               >
                 <Text style={workspace.styles.aiRenameModalCancelText}>취소</Text>
               </Pressable>
-              <Pressable style={workspace.styles.aiRenameModalDangerButton} onPress={confirmDelete} disabled={canvas.saving}>
+              <Pressable style={workspace.styles.aiRenameModalDangerButton} onPress={confirmDelete} disabled={canvasManagementDisabled}>
                 <Text style={workspace.styles.aiRenameModalSaveText}>삭제</Text>
               </Pressable>
             </View>
