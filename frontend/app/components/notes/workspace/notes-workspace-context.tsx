@@ -20,6 +20,8 @@ export type DesktopNotesWorkspaceContextValue = {
   appRightSidebarPanel: AppRightSidebarPanel;
   appChatMode: AppChatMode;
   appRightSidebarWidth: number;
+  webChatSidebarWidth: number;
+  webAiCanvasPanelWidth: number;
   focusedWorkspaceTarget: WorkspaceFocusTarget | null;
   canUndoFocusedWorkspaceAction: boolean;
   canRedoFocusedWorkspaceAction: boolean;
@@ -40,6 +42,7 @@ export type DesktopNotesWorkspaceContextValue = {
   activeAiChatSessionId: number | null;
   aiChatReadOnly: boolean;
   aiLoading: boolean;
+  aiCanvasRequestBusy: boolean;
   aiError: string | null;
   aiCanvas: UseAiCanvasNotesResult;
   classInsight: BackendClassInsight | null;
@@ -107,6 +110,8 @@ export type DesktopNotesWorkspaceContextValue = {
   onFloatAppAiChatPanel: () => void;
   onDockAppAiChatPanel: () => void;
   onChangeAppRightSidebarWidth: (width: number) => void;
+  onResizeWebChatSidebar: (width: number) => void;
+  onResizeWebAiCanvasPanel: (width: number) => void;
   onFocusWorkspaceTarget: (target: WorkspaceFocusTarget | null) => void;
   onUndoFocusedWorkspaceAction: () => void;
   onRedoFocusedWorkspaceAction: () => void;

@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException
 from psycopg import Connection
+from psycopg.types.json import Jsonb
 
 from backend.app.core.auth import get_current_user
 from backend.app.db.crud import execute_commit, execute_returning, fetch_all, fetch_one, require_row
@@ -18,8 +19,8 @@ from backend.app.schemas.chats import (
 )
 from backend.app.services.openai_service import (
     generate_ai_canvas_intent,
+    generate_ai_canvas_operations_from_chat,
     generate_ai_canvas_title,
-    generate_ai_canvas_edit_from_chat,
     generate_chat_title,
     generate_note_chat_answer,
 )
@@ -29,8 +30,9 @@ from backend.app.services.rag_service import ask_with_rag, build_rag_context_hin
 router = APIRouter(tags=["chats"])
 
 MAX_AI_CANVAS_NOTES_PER_NOTE = 3
-DEFAULT_CANVAS_TITLE = "AI Canvas Note"
-DEFAULT_CANVAS_MARKDOWN = "# AI Canvas Note\n\n정리할 내용을 입력하거나 AI에게 추가를 요청해보세요."
+DEFAULT_CANVAS_TITLE = "Canvas Note"
+DEFAULT_CANVAS_MARKDOWN = ""
+DEFAULT_CANVAS_DOCUMENT_JSON = {"type": "doc", "content": []}
 
 CANVAS_TARGET_KEYWORDS = (
     "canvas",
@@ -103,7 +105,7 @@ def get_canvas_note_for_chat(canvas_note_id: int, note_id: int, connection: Conn
         fetch_one(
             connection,
             """
-            SELECT id, folder_id, note_id, title, markdown, source_page_start, source_page_end, created_at, updated_at
+            SELECT id, folder_id, note_id, title, markdown, document_json, revision, source_page_start, source_page_end, created_at, updated_at
             FROM ai_canvas_notes
             WHERE id = %s AND note_id = %s
             """,
@@ -128,15 +130,16 @@ def create_canvas_note_for_chat(note: dict, connection: Connection) -> dict:
     return execute_returning(
         connection,
         """
-        INSERT INTO ai_canvas_notes (folder_id, note_id, title, markdown, source_page_start, source_page_end)
-        VALUES (%s, %s, %s, %s, %s, %s)
-        RETURNING id, folder_id, note_id, title, markdown, source_page_start, source_page_end, created_at, updated_at
+        INSERT INTO ai_canvas_notes (folder_id, note_id, title, markdown, document_json, source_page_start, source_page_end)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        RETURNING id, folder_id, note_id, title, markdown, document_json, revision, source_page_start, source_page_end, created_at, updated_at
         """,
         (
             note["folder_id"],
             note["id"],
             DEFAULT_CANVAS_TITLE,
             DEFAULT_CANVAS_MARKDOWN,
+            Jsonb(DEFAULT_CANVAS_DOCUMENT_JSON),
             None,
             None,
         ),
@@ -237,7 +240,7 @@ def get_chat_session(
     session["messages"] = fetch_all(
         connection,
         """
-        SELECT id, session_id, role, content, model, created_at
+        SELECT id, session_id, role, content, COALESCE(source, 'chat') AS source, model, created_at
         FROM chat_messages
         WHERE session_id = %s
         ORDER BY created_at ASC, id ASC
@@ -292,11 +295,11 @@ def create_chat_message(
     message = execute_returning(
         connection,
         """
-        INSERT INTO chat_messages (session_id, role, content, model)
-        VALUES (%s, %s, %s, %s)
-        RETURNING id, session_id, role, content, model, created_at
+        INSERT INTO chat_messages (session_id, role, content, source, model)
+        VALUES (%s, %s, %s, %s, %s)
+        RETURNING id, session_id, role, content, COALESCE(source, 'chat') AS source, model, created_at
         """,
-        (session_id, payload.role, payload.content, payload.model),
+        (session_id, payload.role, payload.content, payload.source, payload.model),
     )
     execute_commit(connection, "UPDATE chat_sessions SET updated_at = now() WHERE id = %s", (session_id,))
     return message
@@ -324,9 +327,10 @@ def create_ai_chat_message(
     previous_messages = fetch_all(
         connection,
         """
-        SELECT id, session_id, role, content, model, created_at
+        SELECT id, session_id, role, content, COALESCE(source, 'chat') AS source, model, created_at
         FROM chat_messages
         WHERE session_id = %s
+          AND COALESCE(source, 'chat') <> 'canvas-mini'
         ORDER BY created_at ASC, id ASC
         """,
         (session_id,),
@@ -346,14 +350,25 @@ def create_ai_chat_message(
 
         try:
             context_pages = select_chat_context_pages(pages, payload.page_number)
-            canvas_markdown = generate_ai_canvas_edit_from_chat(
+            current_canvas_markdown = (
+                payload.canvas_markdown
+                if canvas_action == "canvas_edit" and payload.canvas_markdown is not None
+                else canvas_note["markdown"]
+            )
+            current_canvas_document_json = (
+                payload.canvas_document_json
+                if canvas_action == "canvas_edit" and payload.canvas_document_json is not None
+                else canvas_note["document_json"]
+            )
+            operations = generate_ai_canvas_operations_from_chat(
                 model=model,
                 note=note,
                 pages=context_pages,
                 messages=previous_messages,
                 user_content=payload.content,
                 canvas_title=canvas_note["title"],
-                canvas_markdown=canvas_note["markdown"],
+                canvas_markdown=current_canvas_markdown,
+                canvas_document_json=current_canvas_document_json,
                 current_page_number=payload.page_number,
                 selection_image=payload.selection_image,
                 selection_image_url=payload.selection_image_url,
@@ -365,25 +380,25 @@ def create_ai_chat_message(
                         model=model,
                         note=note,
                         user_content=payload.content,
-                        canvas_markdown=canvas_markdown,
+                        canvas_markdown=current_canvas_markdown,
                     )
                 except Exception:
                     canvas_title = canvas_note["title"]
 
-            updated_canvas_note = execute_returning(
-                connection,
-                """
-                UPDATE ai_canvas_notes
-                SET title = %s, markdown = %s, updated_at = now()
-                WHERE id = %s
-                RETURNING id, folder_id, note_id, title, markdown, source_page_start, source_page_end, created_at, updated_at
-                """,
-                (
-                    canvas_title,
-                    canvas_markdown,
-                    canvas_note["id"],
-                ),
-            )
+            if canvas_title != canvas_note["title"]:
+                canvas_note = execute_returning(
+                    connection,
+                    """
+                    UPDATE ai_canvas_notes
+                    SET title = %s, updated_at = now()
+                    WHERE id = %s
+                    RETURNING id, folder_id, note_id, title, markdown, document_json, revision, source_page_start, source_page_end, created_at, updated_at
+                    """,
+                    (
+                        canvas_title,
+                        canvas_note["id"],
+                    ),
+                )
         except Exception:
             if created_canvas_note:
                 try:
@@ -398,10 +413,10 @@ def create_ai_chat_message(
         )
         canvas_edit = {
             "action": canvas_action,
-            "canvas_note_id": updated_canvas_note["id"],
-            "markdown": updated_canvas_note["markdown"],
-            "title": updated_canvas_note["title"],
-            "canvas_note": updated_canvas_note,
+            "canvas_note_id": canvas_note["id"],
+            "title": canvas_note["title"],
+            "canvas_note": canvas_note,
+            "operations": operations,
         }
     elif payload.use_rag:
         documents = load_note_documents(connection, note_ids=[session["note_id"]], user_id=current_user["id"])
@@ -439,23 +454,23 @@ def create_ai_chat_message(
     user_message = execute_returning(
         connection,
         """
-        INSERT INTO chat_messages (session_id, role, content, model)
-        VALUES (%s, 'user', %s, %s)
-        RETURNING id, session_id, role, content, model, created_at
+        INSERT INTO chat_messages (session_id, role, content, source, model)
+        VALUES (%s, 'user', %s, %s, %s)
+        RETURNING id, session_id, role, content, COALESCE(source, 'chat') AS source, model, created_at
         """,
-        (session_id, payload.content, model),
+        (session_id, payload.content, payload.source, model),
     )
     assistant_message = execute_returning(
         connection,
         """
-        INSERT INTO chat_messages (session_id, role, content, model)
-        VALUES (%s, 'assistant', %s, %s)
-        RETURNING id, session_id, role, content, model, created_at
+        INSERT INTO chat_messages (session_id, role, content, source, model)
+        VALUES (%s, 'assistant', %s, %s, %s)
+        RETURNING id, session_id, role, content, COALESCE(source, 'chat') AS source, model, created_at
         """,
-        (session_id, answer, model),
+        (session_id, answer, payload.source, model),
     )
     updated_session = None
-    if not previous_messages:
+    if payload.source != "canvas-mini" and not previous_messages:
         generated_title = None
         try:
             generated_title = generate_chat_title(
@@ -499,7 +514,7 @@ def list_chat_messages(
     return fetch_all(
         connection,
         """
-        SELECT id, session_id, role, content, model, created_at
+        SELECT id, session_id, role, content, COALESCE(source, 'chat') AS source, model, created_at
         FROM chat_messages
         WHERE session_id = %s
         ORDER BY created_at ASC, id ASC
