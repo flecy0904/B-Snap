@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import {
+  BackendApiError,
   createBackendAiCanvasNote,
   deleteBackendAiCanvasNote,
   getBackendAiCanvasNote,
@@ -9,13 +10,31 @@ import {
   type BackendAiCanvasNote,
   type BackendAiCanvasNoteSummary,
 } from '../../../services/backend-api';
+import {
+  EMPTY_AI_CANVAS_DOCUMENT,
+  areAiCanvasDocumentsEqual,
+  cloneAiCanvasDocument,
+  normalizeAiCanvasDocumentJson,
+  stringifyAiCanvasDocument,
+  type AiCanvasDocumentJson,
+  type AiCanvasEditorChange,
+  type CanvasOperation,
+  type CanvasOperationRequest,
+} from '../../../types/ai-canvas';
+
+type CanvasSnapshot = {
+  documentJson: AiCanvasDocumentJson;
+  markdown: string;
+};
 
 export type UseAiCanvasNotesResult = {
   isOpen: boolean;
   notes: BackendAiCanvasNoteSummary[];
   activeNote: BackendAiCanvasNote | null;
   activeNoteId: number | null;
+  documentDraft: AiCanvasDocumentJson;
   markdownDraft: string;
+  pendingCanvasOperations: CanvasOperationRequest | null;
   loading: boolean;
   saving: boolean;
   error: string | null;
@@ -29,34 +48,64 @@ export type UseAiCanvasNotesResult = {
   close: () => void;
   toggle: () => void;
   selectNote: (noteId: number) => void;
-  setMarkdownDraft: (value: string) => void;
+  setDocumentDraft: (change: AiCanvasEditorChange) => void;
+  completeCanvasOperations: (requestId: number, applied: boolean) => Promise<void>;
   createNote: () => Promise<void>;
-  saveNote: () => Promise<void>;
   renameNote: (title: string, noteId?: number) => Promise<boolean>;
-  renameActiveNote: (title: string) => Promise<boolean>;
   deleteNote: (noteId?: number) => Promise<void>;
-  deleteActiveNote: () => Promise<void>;
   ensureNoteForChatEdit: () => Promise<{ note: BackendAiCanvasNote; needsTitle: boolean } | null>;
-  applyChatCanvasEdit: (payload: { action: 'canvas_edit' | 'canvas_create'; canvasNote: BackendAiCanvasNote }) => void;
+  applyChatCanvasEdit: (payload: {
+    action: 'canvas_edit' | 'canvas_create';
+    canvasNote: BackendAiCanvasNote;
+    operations: CanvasOperation[];
+  }) => void;
   undoCanvasEdit: () => void;
   redoCanvasEdit: () => void;
+  showFeedback: (message: string) => void;
 };
 
-const DEFAULT_CANVAS_TITLE = 'AI Canvas Note';
-const DEFAULT_CANVAS_MARKDOWN = '# AI Canvas Note\n\n정리할 내용을 입력하거나 AI에게 추가를 요청해보세요.';
+const DEFAULT_CANVAS_TITLE = 'Canvas Note';
+const DEFAULT_CANVAS_MARKDOWN = '';
 const MAX_AI_CANVAS_NOTES_PER_NOTE = 3;
 const DIRECT_EDIT_BATCH_DELAY_MS = 1200;
 const TRANSIENT_ERROR_DELAY_MS = 3000;
 const MAX_UNDO_STACK_SIZE = 50;
 
-function appendUndoSnapshot(stack: string[], snapshot: string) {
-  if (stack[stack.length - 1] === snapshot) return stack;
+function createEmptyCanvasSnapshot(): CanvasSnapshot {
+  return {
+    documentJson: cloneAiCanvasDocument(EMPTY_AI_CANVAS_DOCUMENT),
+    markdown: DEFAULT_CANVAS_MARKDOWN,
+  };
+}
+
+function snapshotFromNote(note: BackendAiCanvasNote | null): CanvasSnapshot {
+  if (!note) return createEmptyCanvasSnapshot();
+  return {
+    documentJson: normalizeAiCanvasDocumentJson(note.documentJson),
+    markdown: note.markdown ?? '',
+  };
+}
+
+function snapshotEquals(left: CanvasSnapshot, right: CanvasSnapshot) {
+  return left.markdown === right.markdown && areAiCanvasDocumentsEqual(left.documentJson, right.documentJson);
+}
+
+function appendUndoSnapshot(stack: CanvasSnapshot[], snapshot: CanvasSnapshot) {
+  if (stack.length > 0 && snapshotEquals(stack[stack.length - 1], snapshot)) return stack;
   return [...stack, snapshot].slice(-MAX_UNDO_STACK_SIZE);
 }
 
-function hasMeaningfulUndoState(markdown: string) {
-  const normalized = markdown.trim();
-  return Boolean(normalized) && normalized !== DEFAULT_CANVAS_MARKDOWN;
+function normalizeAiCanvasMarkdown(markdown: string) {
+  return markdown.replace(/&nbsp;/g, '').replace(/\u00A0/g, '').trim();
+}
+
+function hasMeaningfulSnapshot(snapshot: CanvasSnapshot) {
+  return Boolean(normalizeAiCanvasMarkdown(snapshot.markdown)) || stringifyAiCanvasDocument(snapshot.documentJson) !== stringifyAiCanvasDocument(EMPTY_AI_CANVAS_DOCUMENT);
+}
+
+export function hasUsefulAiCanvasMarkdown(markdown: string) {
+  const normalized = normalizeAiCanvasMarkdown(markdown);
+  return Boolean(normalized);
 }
 
 export function useAiCanvasNotes({
@@ -76,16 +125,41 @@ export function useAiCanvasNotes({
   const [notes, setNotes] = useState<BackendAiCanvasNoteSummary[]>([]);
   const [activeNote, setActiveNote] = useState<BackendAiCanvasNote | null>(null);
   const [activeNoteId, setActiveNoteId] = useState<number | null>(null);
+  const [documentDraft, setDocumentDraftState] = useState<AiCanvasDocumentJson>(() => cloneAiCanvasDocument(EMPTY_AI_CANVAS_DOCUMENT));
   const [markdownDraft, setMarkdownDraft] = useState('');
+  const [pendingCanvasOperations, setPendingCanvasOperations] = useState<CanvasOperationRequest | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [undoStack, setUndoStack] = useState<string[]>([]);
-  const [redoStack, setRedoStack] = useState<string[]>([]);
+  const [undoStack, setUndoStack] = useState<CanvasSnapshot[]>([]);
+  const [redoStack, setRedoStack] = useState<CanvasSnapshot[]>([]);
   const detailRequestIdRef = useRef(0);
-  const directEditBaselineRef = useRef<string | null>(null);
+  const autosaveRequestIdRef = useRef(0);
+  const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const autosaveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const activeNoteIdRef = useRef<number | null>(null);
+  const activeNoteRevisionRef = useRef<number | null>(null);
+  const documentDraftRef = useRef<AiCanvasDocumentJson>(cloneAiCanvasDocument(EMPTY_AI_CANVAS_DOCUMENT));
+  const markdownDraftRef = useRef('');
+  const directEditBaselineRef = useRef<CanvasSnapshot | null>(null);
   const directEditTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const transientErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const operationRequestIdRef = useRef(0);
+
+  useEffect(() => {
+    activeNoteIdRef.current = activeNote?.id ?? null;
+    activeNoteRevisionRef.current = activeNote?.revision ?? null;
+  }, [activeNote?.id, activeNote?.revision]);
+
+  useEffect(() => {
+    documentDraftRef.current = documentDraft;
+    markdownDraftRef.current = markdownDraft;
+  }, [documentDraft, markdownDraft]);
+
+  const currentSnapshot = useCallback((): CanvasSnapshot => ({
+    documentJson: documentDraft,
+    markdown: markdownDraft,
+  }), [documentDraft, markdownDraft]);
 
   const finishDirectEditBatch = useCallback(() => {
     if (directEditTimerRef.current) {
@@ -109,25 +183,40 @@ export function useAiCanvasNotes({
 
   useEffect(() => () => {
     finishDirectEditBatch();
+    if (autosaveTimerRef.current) {
+      clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
     if (transientErrorTimerRef.current) {
       clearTimeout(transientErrorTimerRef.current);
       transientErrorTimerRef.current = null;
     }
   }, [finishDirectEditBatch]);
 
-  const hasUnsavedChanges = !!activeNote && markdownDraft !== activeNote.markdown;
+  const activeSnapshot = snapshotFromNote(activeNote);
+  const draftSnapshot = currentSnapshot();
+  const hasUnsavedChanges = !!activeNote && !snapshotEquals(draftSnapshot, activeSnapshot);
   const canCreateNote = notes.length < MAX_AI_CANVAS_NOTES_PER_NOTE;
   const canUndo = undoStack.length > 0;
   const canRedo = redoStack.length > 0;
+
+  const setDraftSnapshot = useCallback((snapshot: CanvasSnapshot) => {
+    const nextDocument = normalizeAiCanvasDocumentJson(snapshot.documentJson);
+    setDocumentDraftState(nextDocument);
+    setMarkdownDraft(snapshot.markdown);
+    documentDraftRef.current = nextDocument;
+    markdownDraftRef.current = snapshot.markdown;
+  }, []);
 
   const applyActiveNote = useCallback((note: BackendAiCanvasNote | null) => {
     finishDirectEditBatch();
     setActiveNote(note);
     setActiveNoteId(note?.id ?? null);
-    setMarkdownDraft(note?.markdown ?? '');
+    setDraftSnapshot(snapshotFromNote(note));
+    setPendingCanvasOperations(null);
     setUndoStack([]);
     setRedoStack([]);
-  }, [finishDirectEditBatch]);
+  }, [finishDirectEditBatch, setDraftSnapshot]);
 
   const loadCanvasNoteDetail = useCallback(async (canvasNoteId: number) => {
     const requestId = detailRequestIdRef.current + 1;
@@ -140,7 +229,7 @@ export function useAiCanvasNotes({
       applyActiveNote(detail);
       return detail;
     } catch {
-      if (detailRequestIdRef.current === requestId) setError('AI 캔버스 노트를 불러오지 못했습니다.');
+      if (detailRequestIdRef.current === requestId) setError('Failed to load AI Canvas Note.');
       return null;
     } finally {
       if (detailRequestIdRef.current === requestId) setLoading(false);
@@ -182,7 +271,7 @@ export function useAiCanvasNotes({
       })
       .catch(() => {
         if (!mounted) return;
-        setError('AI Canvas Notes를 불러오지 못했습니다.');
+        setError('Failed to load AI Canvas Notes.');
       })
       .finally(() => {
         if (mounted) setLoading(false);
@@ -203,19 +292,24 @@ export function useAiCanvasNotes({
     void loadCanvasNoteDetail(next.id);
   }, [applyActiveNote, loadCanvasNoteDetail, notes]);
 
-  const changeMarkdownDraft = useCallback((value: string) => {
-    if (value === markdownDraft) return;
+  const changeDocumentDraft = useCallback((change: AiCanvasEditorChange) => {
+    const nextSnapshot: CanvasSnapshot = {
+      documentJson: normalizeAiCanvasDocumentJson(change.documentJson),
+      markdown: change.markdown,
+    };
+    const previousSnapshot = currentSnapshot();
+    if (snapshotEquals(nextSnapshot, previousSnapshot)) return;
 
-    const lineCountChanged = value.split('\n').length !== markdownDraft.split('\n').length;
-    const likelyPaste = Math.abs(value.length - markdownDraft.length) > 8;
+    const lineCountChanged = nextSnapshot.markdown.split('\n').length !== previousSnapshot.markdown.split('\n').length;
+    const likelyPaste = Math.abs(nextSnapshot.markdown.length - previousSnapshot.markdown.length) > 8;
 
     if (directEditBaselineRef.current === null) {
-      directEditBaselineRef.current = markdownDraft;
-      setUndoStack((current) => appendUndoSnapshot(current, markdownDraft));
+      directEditBaselineRef.current = previousSnapshot;
+      setUndoStack((current) => appendUndoSnapshot(current, previousSnapshot));
       setRedoStack([]);
       onRecordWorkspaceAction?.();
     }
-    setMarkdownDraft(value);
+    setDraftSnapshot(nextSnapshot);
 
     if (directEditTimerRef.current) {
       clearTimeout(directEditTimerRef.current);
@@ -228,15 +322,15 @@ export function useAiCanvasNotes({
     if (lineCountChanged || likelyPaste) {
       finishDirectEditBatch();
     }
-  }, [finishDirectEditBatch, markdownDraft, onRecordWorkspaceAction]);
+  }, [currentSnapshot, finishDirectEditBatch, onRecordWorkspaceAction, setDraftSnapshot]);
 
   const createCanvasNote = useCallback(async () => {
     if (!enabled || !noteId) {
-      setError('AI 캔버스를 사용하려면 먼저 노트를 서버에 업로드해 주세요.');
+      setError('Canvas is only available for backend-saved notes.');
       return null;
     }
     if (!canCreateNote) {
-      const message = `Canvas는 노트당 최대 ${MAX_AI_CANVAS_NOTES_PER_NOTE}개까지 만들 수 있습니다.`;
+      const message = `Canvas notes are limited to ${MAX_AI_CANVAS_NOTES_PER_NOTE}.`;
       setTransientError(message);
       onFeedback(message);
       return null;
@@ -247,6 +341,7 @@ export function useAiCanvasNotes({
       noteId,
       title: DEFAULT_CANVAS_TITLE,
       markdown: DEFAULT_CANVAS_MARKDOWN,
+      documentJson: EMPTY_AI_CANVAS_DOCUMENT,
       sourcePageStart: pageNumber,
       sourcePageEnd: pageNumber,
     });
@@ -261,33 +356,21 @@ export function useAiCanvasNotes({
     try {
       const created = await createCanvasNote();
       if (!created) return;
-      onFeedback('AI Canvas Note를 만들었어요.');
+      onFeedback('AI Canvas Note created.');
     } catch {
-      setError('AI Canvas Note를 만드는 중 문제가 발생했어요.');
+      setError('Failed to create AI Canvas Note.');
     } finally {
       setSaving(false);
     }
   }, [createCanvasNote, onFeedback]);
 
-  const saveNote = useCallback(async () => {
-    if (!activeNote) return;
-
-    setSaving(true);
-    setError(null);
-    try {
-      const updated = await updateBackendAiCanvasNote({
-        canvasNoteId: activeNote.id,
-        markdown: markdownDraft,
-      });
-      setNotes((current) => current.map((note) => (note.id === updated.id ? updated : note)));
-      applyActiveNote(updated);
-      onFeedback('AI Canvas Note를 저장했어요.');
-    } catch {
-      setError('AI Canvas Note를 저장하는 중 문제가 발생했어요.');
-    } finally {
-      setSaving(false);
-    }
-  }, [activeNote, applyActiveNote, markdownDraft, onFeedback]);
+  const enqueueCanvasMutation = useCallback(<T,>(task: () => Promise<T>) => {
+    const nextTask = autosaveQueueRef.current
+      .catch(() => undefined)
+      .then(task);
+    autosaveQueueRef.current = nextTask.then(() => undefined, () => undefined);
+    return nextTask;
+  }, []);
 
   const renameNote = useCallback(async (title: string, noteIdToRename?: number) => {
     const targetNoteId = noteIdToRename ?? activeNote?.id ?? null;
@@ -295,33 +378,53 @@ export function useAiCanvasNotes({
 
     const nextTitle = title.trim();
     if (!nextTitle) {
-      setError('제목을 입력해 주세요.');
+      setError('Enter a title.');
       return false;
     }
 
     setSaving(true);
     setError(null);
+    if (autosaveTimerRef.current) {
+      clearTimeout(autosaveTimerRef.current);
+      autosaveTimerRef.current = null;
+    }
+    autosaveRequestIdRef.current += 1;
+
+    const isActiveTarget = targetNoteId === activeNote?.id;
+    const renameMarkdown = isActiveTarget ? markdownDraftRef.current : undefined;
+    const renameDocumentJson = isActiveTarget ? documentDraftRef.current : undefined;
+    const renameDocumentString = renameDocumentJson ? stringifyAiCanvasDocument(renameDocumentJson) : null;
     try {
-      const updated = await updateBackendAiCanvasNote({
+      const updated = await enqueueCanvasMutation(() => updateBackendAiCanvasNote({
         canvasNoteId: targetNoteId,
         title: nextTitle,
-        markdown: targetNoteId === activeNote?.id ? markdownDraft : undefined,
-      });
+        markdown: renameMarkdown,
+        documentJson: renameDocumentJson,
+        expectedRevision: isActiveTarget
+          ? activeNoteRevisionRef.current ?? activeNote?.revision
+          : notes.find((note) => note.id === targetNoteId)?.revision,
+      }));
       setNotes((current) => current.map((note) => (note.id === updated.id ? updated : note)));
-      if (updated.id === activeNote?.id) {
-        applyActiveNote(updated);
+      if (updated.id === activeNoteIdRef.current) {
+        activeNoteRevisionRef.current = updated.revision;
+        const draftUnchanged = markdownDraftRef.current === renameMarkdown
+          && stringifyAiCanvasDocument(documentDraftRef.current) === renameDocumentString;
+        if (draftUnchanged) {
+          applyActiveNote(updated);
+        } else {
+          setActiveNote(updated);
+          setActiveNoteId(updated.id);
+        }
       }
-      onFeedback('AI Canvas Note 이름을 변경했어요.');
+      onFeedback('AI Canvas Note renamed.');
       return true;
     } catch {
-      setError('AI Canvas Note 이름을 변경하는 중 문제가 발생했어요.');
+      setError('Failed to rename AI Canvas Note.');
       return false;
     } finally {
       setSaving(false);
     }
-  }, [activeNote, applyActiveNote, markdownDraft, onFeedback]);
-
-  const renameActiveNote = useCallback((title: string) => renameNote(title), [renameNote]);
+  }, [activeNote, applyActiveNote, enqueueCanvasMutation, notes, onFeedback]);
 
   const deleteNote = useCallback(async (noteIdToDelete?: number) => {
     const targetNoteId = noteIdToDelete ?? activeNote?.id ?? null;
@@ -329,11 +432,19 @@ export function useAiCanvasNotes({
 
     setSaving(true);
     setError(null);
+    const isActiveTarget = targetNoteId === activeNote?.id;
+    if (isActiveTarget) {
+      if (autosaveTimerRef.current) {
+        clearTimeout(autosaveTimerRef.current);
+        autosaveTimerRef.current = null;
+      }
+      autosaveRequestIdRef.current += 1;
+    }
     try {
-      await deleteBackendAiCanvasNote(targetNoteId);
+      await enqueueCanvasMutation(() => deleteBackendAiCanvasNote(targetNoteId));
       const nextNotes = notes.filter((note) => note.id !== targetNoteId);
       setNotes(nextNotes);
-      if (targetNoteId === activeNote?.id) {
+      if (isActiveTarget) {
         const nextActive = nextNotes[0] ?? null;
         if (nextActive) {
           await loadCanvasNoteDetail(nextActive.id);
@@ -341,44 +452,95 @@ export function useAiCanvasNotes({
           applyActiveNote(null);
         }
       }
-      onFeedback('AI Canvas Note를 삭제했어요.');
+      onFeedback('AI Canvas Note deleted.');
     } catch {
-      setError('AI Canvas Note를 삭제하는 중 문제가 발생했어요.');
+      setError('Failed to delete AI Canvas Note.');
     } finally {
       setSaving(false);
     }
-  }, [activeNote, applyActiveNote, loadCanvasNoteDetail, notes, onFeedback]);
+  }, [activeNote, applyActiveNote, enqueueCanvasMutation, loadCanvasNoteDetail, notes, onFeedback]);
 
-  const deleteActiveNote = useCallback(() => deleteNote(), [deleteNote]);
+  const refreshActiveNoteAfterConflict = useCallback(async (canvasNoteId: number) => {
+    try {
+      const latest = await getBackendAiCanvasNote(canvasNoteId);
+      if (activeNoteIdRef.current !== canvasNoteId) return false;
+      activeNoteRevisionRef.current = latest.revision;
+      setNotes((current) => current.map((note) => (note.id === latest.id ? latest : note)));
+      setActiveNote((current) => (current?.id === latest.id ? latest : current));
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
 
   useEffect(() => {
-    if (!activeNote || markdownDraft === activeNote.markdown) return;
+    if (!activeNote || !hasUnsavedChanges) return;
 
     const timer = setTimeout(() => {
-      setSaving(true);
-      setError(null);
-      updateBackendAiCanvasNote({
-        canvasNoteId: activeNote.id,
-        markdown: markdownDraft,
-      })
-        .then((updated) => {
-          setActiveNote(updated);
-          setNotes((current) => current.map((note) => (note.id === updated.id ? updated : note)));
-        })
-        .catch(() => {
-          setError('AI Canvas Note 자동 저장 중 문제가 발생했어요.');
-        })
-        .finally(() => {
-          setSaving(false);
+      if (autosaveTimerRef.current === timer) {
+        autosaveTimerRef.current = null;
+      }
+      const requestId = autosaveRequestIdRef.current + 1;
+      autosaveRequestIdRef.current = requestId;
+      const targetNoteId = activeNote.id;
+      const targetMarkdown = markdownDraft;
+      const targetDocumentJson = documentDraft;
+      const targetDocumentString = stringifyAiCanvasDocument(targetDocumentJson);
+
+      void enqueueCanvasMutation(async () => {
+          if (
+            autosaveRequestIdRef.current !== requestId
+            || activeNoteIdRef.current !== targetNoteId
+            || markdownDraftRef.current !== targetMarkdown
+            || stringifyAiCanvasDocument(documentDraftRef.current) !== targetDocumentString
+          ) {
+            return;
+          }
+          try {
+            const expectedRevision = activeNoteRevisionRef.current;
+            if (expectedRevision === null) return;
+            const updated = await updateBackendAiCanvasNote({
+              canvasNoteId: targetNoteId,
+              markdown: targetMarkdown,
+              documentJson: targetDocumentJson,
+              expectedRevision,
+            });
+            setNotes((current) => current.map((note) => (note.id === updated.id ? updated : note)));
+            if (activeNoteIdRef.current === updated.id) {
+              activeNoteRevisionRef.current = updated.revision;
+            }
+            if (
+              autosaveRequestIdRef.current === requestId
+              && activeNoteIdRef.current === updated.id
+              && markdownDraftRef.current === targetMarkdown
+              && stringifyAiCanvasDocument(documentDraftRef.current) === targetDocumentString
+            ) {
+              setActiveNote(updated);
+            }
+          } catch (error) {
+            if (autosaveRequestIdRef.current === requestId) {
+              if (error instanceof BackendApiError && error.status === 409) {
+                const refreshed = await refreshActiveNoteAfterConflict(targetNoteId);
+                if (refreshed) return;
+              }
+              onFeedback('Canvas autosave failed.');
+            }
+          }
         });
     }, 700);
+    autosaveTimerRef.current = timer;
 
-    return () => clearTimeout(timer);
-  }, [activeNote, markdownDraft]);
+    return () => {
+      clearTimeout(timer);
+      if (autosaveTimerRef.current === timer) {
+        autosaveTimerRef.current = null;
+      }
+    };
+  }, [activeNote, documentDraft, enqueueCanvasMutation, hasUnsavedChanges, markdownDraft, onFeedback, refreshActiveNoteAfterConflict]);
 
   const ensureNoteForChatEdit = useCallback(async () => {
     if (!enabled || !noteId) {
-      setError('Canvas를 수정하려면 먼저 해당 노트를 서버에 업로드해 주세요.');
+      setError('Canvas can only be edited for backend-saved notes.');
       return null;
     }
     if (activeNote) return { note: activeNote, needsTitle: false };
@@ -386,51 +548,124 @@ export function useAiCanvasNotes({
     return created ? { note: created, needsTitle: true } : null;
   }, [activeNote, createCanvasNote, enabled, noteId]);
 
-  const applyChatCanvasEdit = useCallback(({ action, canvasNote }: { action: 'canvas_edit' | 'canvas_create'; canvasNote: BackendAiCanvasNote }) => {
+  const applyChatCanvasEdit = useCallback(({
+    action,
+    canvasNote,
+    operations,
+  }: {
+    action: 'canvas_edit' | 'canvas_create';
+    canvasNote: BackendAiCanvasNote;
+    operations: CanvasOperation[];
+  }) => {
     setIsOpen(true);
     finishDirectEditBatch();
-    const previousMarkdown = action === 'canvas_create' ? DEFAULT_CANVAS_MARKDOWN : markdownDraft;
-    if (hasMeaningfulUndoState(previousMarkdown) && previousMarkdown !== canvasNote.markdown) {
-      setUndoStack((current) => appendUndoSnapshot(current, previousMarkdown));
+    if (!operations.length) {
+      setTransientError('AI returned no Canvas edits.');
+      return;
+    }
+
+    const previousSnapshot = action === 'canvas_create' ? createEmptyCanvasSnapshot() : currentSnapshot();
+    if (hasMeaningfulSnapshot(previousSnapshot)) {
+      setUndoStack((current) => appendUndoSnapshot(current, previousSnapshot));
       setRedoStack([]);
       onRecordWorkspaceAction?.();
     }
-    setActiveNote(canvasNote);
+
+    const preservedRevision = action === 'canvas_edit'
+      ? Math.max(activeNoteRevisionRef.current ?? canvasNote.revision, canvasNote.revision)
+      : canvasNote.revision;
+    const nextCanvasNote: BackendAiCanvasNote = action === 'canvas_edit' && activeNote?.id === canvasNote.id
+      ? {
+        ...canvasNote,
+        markdown: activeNote.markdown,
+        documentJson: activeNote.documentJson,
+        revision: preservedRevision,
+      }
+      : {
+        ...canvasNote,
+        revision: preservedRevision,
+      };
+
+    setActiveNote(nextCanvasNote);
     setActiveNoteId(canvasNote.id);
-    setMarkdownDraft(canvasNote.markdown);
+    activeNoteIdRef.current = canvasNote.id;
+    activeNoteRevisionRef.current = preservedRevision;
+
+    if (action === 'canvas_create') {
+      setDraftSnapshot(snapshotFromNote(nextCanvasNote));
+    }
+
     setNotes((current) => {
       const exists = current.some((note) => note.id === canvasNote.id);
-      if (!exists) return [canvasNote, ...current];
-      return current.map((note) => (note.id === canvasNote.id ? canvasNote : note));
+      if (!exists) return [nextCanvasNote, ...current];
+      return current.map((note) => (note.id === canvasNote.id ? nextCanvasNote : note));
+    });
+    autosaveRequestIdRef.current += 1;
+    operationRequestIdRef.current += 1;
+    setPendingCanvasOperations({
+      id: operationRequestIdRef.current,
+      action,
+      canvasNoteId: canvasNote.id,
+      operations,
     });
     setError(null);
-    onFeedback(action === 'canvas_create' ? 'AI Chat에서 Canvas를 만들었어요.' : 'AI Chat이 Canvas를 수정했어요.');
-  }, [finishDirectEditBatch, markdownDraft, onFeedback, onRecordWorkspaceAction]);
+  }, [activeNote, currentSnapshot, finishDirectEditBatch, onRecordWorkspaceAction, setDraftSnapshot, setTransientError]);
+
+  const completeCanvasOperations = useCallback(async (requestId: number, applied: boolean) => {
+    const pendingRequest = pendingCanvasOperations;
+    if (!pendingRequest || pendingRequest.id !== requestId) return;
+    setPendingCanvasOperations(null);
+    if (!applied) {
+      setTransientError('Canvas 수정 적용 실패');
+      onFeedback('Canvas 수정 적용 실패');
+      if (pendingRequest.action === 'canvas_create') {
+        try {
+          await deleteBackendAiCanvasNote(pendingRequest.canvasNoteId);
+          const nextNotes = notes.filter((note) => note.id !== pendingRequest.canvasNoteId);
+          setNotes(nextNotes);
+          if (activeNoteIdRef.current === pendingRequest.canvasNoteId) {
+            const nextActive = nextNotes[0] ?? null;
+            if (nextActive) {
+              await loadCanvasNoteDetail(nextActive.id);
+            } else {
+              applyActiveNote(null);
+            }
+          }
+        } catch {
+          setTransientError('Canvas 수정 적용 실패');
+        }
+      }
+      return;
+    }
+    onFeedback('AI updated the Canvas.');
+  }, [applyActiveNote, loadCanvasNoteDetail, notes, onFeedback, pendingCanvasOperations, setTransientError]);
 
   const undoCanvasEdit = useCallback(() => {
     if (!canUndo) return;
     const previous = undoStack[undoStack.length - 1];
     finishDirectEditBatch();
     setUndoStack((current) => current.slice(0, -1));
-    setRedoStack((current) => appendUndoSnapshot(current, markdownDraft));
-    setMarkdownDraft(previous);
-  }, [canUndo, finishDirectEditBatch, markdownDraft, undoStack]);
+    setRedoStack((current) => appendUndoSnapshot(current, currentSnapshot()));
+    setDraftSnapshot(previous);
+  }, [canUndo, currentSnapshot, finishDirectEditBatch, setDraftSnapshot, undoStack]);
 
   const redoCanvasEdit = useCallback(() => {
     if (!canRedo) return;
     const next = redoStack[redoStack.length - 1];
     finishDirectEditBatch();
     setRedoStack((current) => current.slice(0, -1));
-    setUndoStack((current) => appendUndoSnapshot(current, markdownDraft));
-    setMarkdownDraft(next);
-  }, [canRedo, finishDirectEditBatch, markdownDraft, redoStack]);
+    setUndoStack((current) => appendUndoSnapshot(current, currentSnapshot()));
+    setDraftSnapshot(next);
+  }, [canRedo, currentSnapshot, finishDirectEditBatch, redoStack, setDraftSnapshot]);
 
   return {
     isOpen,
     notes,
     activeNote,
     activeNoteId,
+    documentDraft,
     markdownDraft,
+    pendingCanvasOperations,
     loading,
     saving,
     error,
@@ -444,16 +679,15 @@ export function useAiCanvasNotes({
     close: () => setIsOpen(false),
     toggle: () => setIsOpen((current) => !current),
     selectNote,
-    setMarkdownDraft: changeMarkdownDraft,
+    setDocumentDraft: changeDocumentDraft,
+    completeCanvasOperations,
     createNote,
-    saveNote,
     renameNote,
-    renameActiveNote,
     deleteNote,
-    deleteActiveNote,
     ensureNoteForChatEdit,
     applyChatCanvasEdit,
     undoCanvasEdit,
     redoCanvasEdit,
+    showFeedback: onFeedback,
   };
 }

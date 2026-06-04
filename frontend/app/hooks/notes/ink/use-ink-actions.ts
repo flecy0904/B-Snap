@@ -3,7 +3,7 @@ import type { Dispatch, SetStateAction } from 'react';
 import type { DocumentPageView, GeneratedWorkspacePage, StudyDocumentEntry } from '../../../types';
 import type { InkEraserMode, InkImageAnnotation, InkPoint, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { doesRectIntersectPolygon, findHitInkStrokeId, findInkStrokesInLasso, findInkStrokesInRect, scaleInkStrokeToPageSize } from '../../../ui-helpers';
-import { findLastIndex, isInkStrokeOnPage, scopeInkStrokeToPage } from './ink-helpers';
+import { isInkStrokeOnPage, scopeInkStrokeToPage } from './ink-helpers';
 
 type SetState<T> = Dispatch<SetStateAction<T>>;
 
@@ -136,7 +136,31 @@ export function useInkActions(params: {
   };
 
   const getPageImageAnnotationsForSelection = (): InkImageAnnotation[] => {
-    return [];
+    if (!params.studyDocumentId) return [];
+    const annotations = params.imageAnnotationsByDocument[params.studyDocumentId] ?? [];
+    const selectionScope = getSelectionPageScope();
+    return annotations.filter((annotation) => (
+      selectionScope.generatedPageId
+        ? annotation.generatedPageId === selectionScope.generatedPageId
+        : (
+            !annotation.generatedPageId &&
+            (typeof selectionScope.pageNumber === 'number'
+              ? (
+                  params.studyDocument?.type === 'blank'
+                    ? (annotation.pageNumber ?? 1) === selectionScope.pageNumber
+                    : annotation.pageNumber === selectionScope.pageNumber
+                )
+              : (
+                  params.currentDocumentPage?.kind === 'generated'
+                    ? annotation.generatedPageId === params.currentDocumentPage.pageId
+                    : (
+                        params.studyDocument?.type === 'blank'
+                          ? (annotation.pageNumber ?? 1) === params.currentPdfPage
+                          : annotation.pageNumber === params.currentPdfPage
+                      )
+                ))
+          )
+    ));
   };
 
   const scaleRectToSelection = (rect: SelectionRect): SelectionRect => {
@@ -508,31 +532,6 @@ export function useInkActions(params: {
       return;
     }
 
-    params.setInkByDocument((current) => {
-      const currentStrokes = current[params.studyDocumentId!] ?? [];
-      const lastStrokeIndex = findLastIndex(currentStrokes, isStrokeOnCurrentPage);
-      if (lastStrokeIndex < 0) return current;
-
-      const lastStroke = currentStrokes[lastStrokeIndex];
-      const historyGroupId = lastStroke.historyGroupId;
-      const removedStrokes = historyGroupId
-        ? currentStrokes.filter((stroke) => stroke.historyGroupId === historyGroupId && isStrokeOnCurrentPage(stroke))
-        : [lastStroke];
-      const removedStrokeIds = new Set(removedStrokes.map((stroke) => stroke.id));
-
-      params.setRedoInkByDocument((redoCurrent) => ({
-        ...redoCurrent,
-        [params.studyDocumentId!]: [...(redoCurrent[params.studyDocumentId!] ?? []), ...removedStrokes],
-      }));
-
-      return {
-        ...current,
-        [params.studyDocumentId!]: currentStrokes.filter((stroke, index) => (
-          historyGroupId ? !removedStrokeIds.has(stroke.id) : index !== lastStrokeIndex
-        )),
-      };
-    });
-    markCurrentPageDirty();
   };
 
   const redoInk = () => {
@@ -555,31 +554,6 @@ export function useInkActions(params: {
       return;
     }
 
-    params.setRedoInkByDocument((current) => {
-      const currentRedoStrokes = current[params.studyDocumentId!] ?? [];
-      const lastRedoStrokeIndex = findLastIndex(currentRedoStrokes, isStrokeOnCurrentPage);
-      if (lastRedoStrokeIndex < 0) return current;
-
-      const lastRedoStroke = currentRedoStrokes[lastRedoStrokeIndex];
-      const historyGroupId = lastRedoStroke.historyGroupId;
-      const redoStrokes = historyGroupId
-        ? currentRedoStrokes.filter((stroke) => stroke.historyGroupId === historyGroupId && isStrokeOnCurrentPage(stroke))
-        : [lastRedoStroke];
-      const redoStrokeIds = new Set(redoStrokes.map((stroke) => stroke.id));
-
-      params.setInkByDocument((inkCurrent) => ({
-        ...inkCurrent,
-        [params.studyDocumentId!]: [...(inkCurrent[params.studyDocumentId!] ?? []), ...redoStrokes],
-      }));
-
-      return {
-        ...current,
-        [params.studyDocumentId!]: currentRedoStrokes.filter((stroke, index) => (
-          historyGroupId ? !redoStrokeIds.has(stroke.id) : index !== lastRedoStrokeIndex
-        )),
-      };
-    });
-    markCurrentPageDirty();
   };
 
   const commitInkStroke = (stroke: InkStroke) => {

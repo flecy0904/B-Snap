@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Keyboard } from 'react-native';
+import { Keyboard, Platform } from 'react-native';
 import {
   getBackendClassInsight,
   isBackendApiEnabled,
@@ -34,7 +34,6 @@ import { useDocumentPageActions } from './document/use-document-page-actions';
 import { normalizeDocumentFile } from './document/document-file-utils';
 import { useBackendNotePageSync } from './document/use-backend-note-page-sync';
 import { useInkActions, type WorkspaceEditSnapshot } from './ink/use-ink-actions';
-import { isInkStrokeOnPage } from './ink/ink-helpers';
 import { useCaptureAssetActions } from './capture/use-capture-asset-actions';
 import { usePageCaptureReferenceActions } from './capture/use-page-capture-references';
 import { useIncomingAssetSubscription } from './workspace/use-incoming-asset-subscription';
@@ -114,6 +113,7 @@ export function useStudyWorkspace(props: {
   const [focusedWorkspaceTarget, setFocusedWorkspaceTarget] = useState<WorkspaceFocusTarget | null>(null);
   const [workspaceActionHistory, setWorkspaceActionHistory] = useState<WorkspaceFocusTarget[]>([]);
   const [workspaceRedoActionHistory, setWorkspaceRedoActionHistory] = useState<WorkspaceFocusTarget[]>([]);
+  const previousStudyDocumentIdRef = useRef<number | null>(null);
   const [selectionByDocument, setSelectionByDocument] = useState<Record<number, SelectionRect | null>>({});
   const [copiedSelectionImageByDocument, setCopiedSelectionImageByDocument] = useState<Record<number, string | null>>({});
   const [aiQuestion, setAiQuestion] = useState('');
@@ -132,6 +132,7 @@ export function useStudyWorkspace(props: {
   const [incomingBannerQueue, setIncomingBannerQueue] = useState<CaptureAsset[]>([]);
   const [aiAnswer, setAiAnswer] = useState<AiAnswer | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
+  const [aiCanvasRequestBusy, setAiCanvasRequestBusy] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const [selectionPreviewByDocument, setSelectionPreviewByDocument] = useState<Record<number, string | null>>({});
   const [selectionPreviewAttachedByDocument, setSelectionPreviewAttachedByDocument] = useState<Record<number, boolean>>({});
@@ -327,6 +328,19 @@ export function useStudyWorkspace(props: {
     studyDocumentId,
     workspaceHydrated,
   ]);
+  useEffect(() => {
+    if (previousStudyDocumentIdRef.current === studyDocumentId) return;
+    previousStudyDocumentIdRef.current = studyDocumentId;
+    setWorkspaceActionHistory([]);
+    setWorkspaceRedoActionHistory([]);
+    setFocusedWorkspaceTarget(null);
+
+    if (studyDocumentId === null) {
+      setInkHistoryByDocument({});
+      setRedoInkHistoryByDocument({});
+      setRedoInkByDocument({});
+    }
+  }, [studyDocumentId]);
   const studyDocumentBackendNoteId = getStudyDocumentBackendNoteId(studyDocument);
   const scheduleClassInsightRefresh = useCallback((documentId: number) => {
     const existingTimer = classInsightRefreshTimerRef.current[documentId];
@@ -417,6 +431,13 @@ export function useStudyWorkspace(props: {
     studyDocument,
     subject,
   ]);
+  const applyCanvasEditFromChat = useCallback((
+    payload: Parameters<typeof aiCanvas.applyChatCanvasEdit>[0],
+  ) => {
+    aiCanvas.applyChatCanvasEdit(payload);
+    setAppRightSidebarPanel('canvas');
+    if (appChatMode === 'sidebar') setAiPanelOpen(false);
+  }, [aiCanvas.applyChatCanvasEdit, appChatMode]);
   const currentBackendNoteId = getStudyDocumentBackendNoteId(studyDocument);
 
   useEffect(() => {
@@ -937,6 +958,7 @@ export function useStudyWorkspace(props: {
     setAiQuestion,
     setAiError,
     setAiLoading,
+    setAiCanvasRequestBusy,
     setSelectionPreviewByDocument,
     setChatSessionByDocument,
     setViewingAiChatSessionId,
@@ -945,7 +967,9 @@ export function useStudyWorkspace(props: {
     setAllChatSessions,
     setAiMessagesBySession,
     activeCanvasNoteId: aiCanvas.activeNoteId,
-    onApplyCanvasEditFromChat: aiCanvas.applyChatCanvasEdit,
+    activeCanvasMarkdown: aiCanvas.markdownDraft,
+    activeCanvasDocumentJson: aiCanvas.documentDraft,
+    onApplyCanvasEditFromChat: applyCanvasEditFromChat,
     clearSelection: clearSelectionForCurrentDocument,
     buildContextHint: async (question) => buildClassInsightContext({
       question,
@@ -962,12 +986,21 @@ export function useStudyWorkspace(props: {
     selectionRect,
     selectionPreviewUri: rawSelectionPreviewUri,
     setAiPanelOpen,
-    setAiPanelMode,
-    setAppChatMode,
-    setAppRightSidebarPanel,
     setAiQuestion,
     setViewingAiChatSessionId,
     setWorkspaceFeedback,
+    openAiChatForSelection: () => {
+      setAiPanelOpen(true);
+      if (Platform.OS !== 'web' && props.wide) {
+        if (appChatMode === 'sidebar') {
+          setAiPanelMode('sidebar');
+          setAppRightSidebarPanel('chat');
+        } else {
+          setAiPanelMode('floating');
+          setAppRightSidebarPanel(null);
+        }
+      }
+    },
     attachSelectionPreviewToAi: (selectionPreviewUri?: string | null) => {
       if (!studyDocumentId) return;
       if (selectionPreviewUri !== undefined) {
@@ -1098,8 +1131,10 @@ export function useStudyWorkspace(props: {
       question: command,
       source: 'canvas-mini',
       selectionImageUri: options?.selectionImageUri ?? null,
+      canvasMarkdown: aiCanvas.markdownDraft,
+      canvasDocumentJson: aiCanvas.documentDraft,
     })
-  ), [requestAiAnswer]);
+  ), [aiCanvas.documentDraft, aiCanvas.markdownDraft, requestAiAnswer]);
 
   const {
     acceptIncomingAsset,
@@ -1326,26 +1361,8 @@ export function useStudyWorkspace(props: {
 
   const documentInkHistory = studyDocumentId ? inkHistoryByDocument[studyDocumentId] ?? [] : [];
   const documentRedoHistory = studyDocumentId ? redoInkHistoryByDocument[studyDocumentId] ?? [] : [];
-  const documentPageStrokes = useMemo(() => {
-    if (!studyDocumentId) return [];
-    return (inkByDocument[studyDocumentId] ?? []).filter((stroke) => isInkStrokeOnPage({
-      stroke,
-      currentDocumentPage,
-      currentPdfPage,
-      studyDocumentType: studyDocument?.type,
-    }));
-  }, [currentDocumentPage, currentPdfPage, inkByDocument, studyDocument?.type, studyDocumentId]);
-  const documentRedoPageStrokes = useMemo(() => {
-    if (!studyDocumentId) return [];
-    return (redoInkByDocument[studyDocumentId] ?? []).filter((stroke) => isInkStrokeOnPage({
-      stroke,
-      currentDocumentPage,
-      currentPdfPage,
-      studyDocumentType: studyDocument?.type,
-    }));
-  }, [currentDocumentPage, currentPdfPage, redoInkByDocument, studyDocument?.type, studyDocumentId]);
-  const canUndoDocumentAction = documentInkHistory.length > 0 || documentPageStrokes.length > 0;
-  const canRedoDocumentAction = documentRedoHistory.length > 0 || documentRedoPageStrokes.length > 0;
+  const canUndoDocumentAction = documentInkHistory.length > 0;
+  const canRedoDocumentAction = documentRedoHistory.length > 0;
   const canUndoWorkspaceTarget = (target: WorkspaceFocusTarget) => (target === 'document' ? canUndoDocumentAction : aiCanvas.canUndo);
   const canRedoWorkspaceTarget = (target: WorkspaceFocusTarget) => (target === 'document' ? canRedoDocumentAction : aiCanvas.canRedo);
   const lastUndoWorkspaceTarget = [...workspaceActionHistory].reverse().find(canUndoWorkspaceTarget)
@@ -1491,6 +1508,7 @@ export function useStudyWorkspace(props: {
     activeAiChatSessionId,
     aiChatReadOnly,
     aiLoading,
+    aiCanvasRequestBusy,
     aiError,
     aiCanvas,
     classInsight: currentClassInsight,

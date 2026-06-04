@@ -24,6 +24,8 @@ export type DesktopNotesWorkspaceContextValue = {
   aiFloatingPanelSize: AiFloatingPanelSize;
   appSidebarPosition: AppSidebarPosition;
   studyInteractionMode: StudyInteractionMode;
+  webChatSidebarWidth: number;
+  webAiCanvasPanelWidth: number;
   focusedWorkspaceTarget: WorkspaceFocusTarget | null;
   canUndoFocusedWorkspaceAction: boolean;
   canRedoFocusedWorkspaceAction: boolean;
@@ -44,6 +46,7 @@ export type DesktopNotesWorkspaceContextValue = {
   activeAiChatSessionId: number | null;
   aiChatReadOnly: boolean;
   aiLoading: boolean;
+  aiCanvasRequestBusy: boolean;
   aiError: string | null;
   aiCanvas: UseAiCanvasNotesResult;
   classInsight: BackendClassInsight | null;
@@ -116,6 +119,8 @@ export type DesktopNotesWorkspaceContextValue = {
   onChangeAppSidebarPosition: (position: AppSidebarPosition) => void;
   onToggleAppSidebarPosition: () => void;
   onToggleStudyInteractionMode: () => void;
+  onResizeWebChatSidebar: (width: number) => void;
+  onResizeWebAiCanvasPanel: (width: number) => void;
   onFocusWorkspaceTarget: (target: WorkspaceFocusTarget | null) => void;
   onUndoFocusedWorkspaceAction: () => void;
   onRedoFocusedWorkspaceAction: () => void;

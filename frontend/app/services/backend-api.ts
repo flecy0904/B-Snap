@@ -1,5 +1,11 @@
 import { resolveBackendHttpUrl } from '../root/backend-url';
 import { Platform } from 'react-native';
+import {
+  EMPTY_AI_CANVAS_DOCUMENT,
+  normalizeAiCanvasDocumentJson,
+  type AiCanvasDocumentJson,
+  type CanvasOperation,
+} from '../types/ai-canvas';
 
 type RequestOptions = {
   method?: 'GET' | 'POST' | 'PATCH' | 'DELETE';
@@ -85,6 +91,7 @@ export type BackendChatMessage = {
   session_id: number;
   role: 'user' | 'assistant' | string;
   content: string;
+  source: string;
   selection_image_url?: string | null;
   model: string | null;
   created_at: string;
@@ -103,6 +110,7 @@ export type BackendAiCanvasNoteSummary = {
   folder_id: number;
   note_id: number;
   title: string;
+  revision: number;
   source_page_start: number | null;
   source_page_end: number | null;
   created_at: string;
@@ -111,6 +119,7 @@ export type BackendAiCanvasNoteSummary = {
 
 export type BackendAiCanvasNote = BackendAiCanvasNoteSummary & {
   markdown: string;
+  documentJson: AiCanvasDocumentJson;
 };
 
 export type BackendClassInsightPageSignal = {
@@ -142,6 +151,7 @@ export type BackendAiMessageResponse = {
     session_id: number;
     role: 'assistant';
     content: string;
+    source: string;
     model: string | null;
     created_at: string;
   };
@@ -149,9 +159,9 @@ export type BackendAiMessageResponse = {
   canvas_edit?: {
     action: 'canvas_edit' | 'canvas_create';
     canvas_note_id: number;
-    markdown: string;
     title: string;
     canvas_note: BackendAiCanvasNote;
+    operations: CanvasOperation[];
   } | null;
 };
 
@@ -254,6 +264,27 @@ function normalizeBackendNote(note: BackendNote): BackendNote {
     ...note,
     file_url: resolveBackendAssetUrl(note.file_url) ?? note.file_url,
     thumbnail_url: resolveBackendAssetUrl(note.thumbnail_url) ?? note.thumbnail_url,
+  };
+}
+
+function normalizeBackendAiCanvasNote(note: any): BackendAiCanvasNote {
+  const { document_json: documentJsonWire, documentJson, ...rest } = note ?? {};
+  return {
+    ...rest,
+    markdown: typeof rest.markdown === 'string' ? rest.markdown : '',
+    documentJson: normalizeAiCanvasDocumentJson(documentJson ?? documentJsonWire ?? EMPTY_AI_CANVAS_DOCUMENT),
+  } as BackendAiCanvasNote;
+}
+
+function normalizeBackendAiMessageResponse(response: BackendAiMessageResponse): BackendAiMessageResponse {
+  if (!response.canvas_edit) return response;
+  return {
+    ...response,
+    canvas_edit: {
+      ...response.canvas_edit,
+      operations: Array.isArray(response.canvas_edit.operations) ? response.canvas_edit.operations : [],
+      canvas_note: normalizeBackendAiCanvasNote(response.canvas_edit.canvas_note),
+    },
   };
 }
 
@@ -681,43 +712,49 @@ export function listBackendAiCanvasNotesByFolder(folderId: number) {
 }
 
 export function getBackendAiCanvasNote(canvasNoteId: number) {
-  return request<BackendAiCanvasNote>(`/ai-canvas-notes/${canvasNoteId}`);
+  return request<any>(`/ai-canvas-notes/${canvasNoteId}`).then(normalizeBackendAiCanvasNote);
 }
 
 export async function createBackendAiCanvasNote(payload: {
   noteId: number;
   title: string;
   markdown?: string;
+  documentJson?: AiCanvasDocumentJson;
   sourcePageStart?: number | null;
   sourcePageEnd?: number | null;
 }) {
-  return request<BackendAiCanvasNote>(`/notes/${payload.noteId}/ai-canvas-notes`, {
+  return request<any>(`/notes/${payload.noteId}/ai-canvas-notes`, {
     method: 'POST',
     body: {
       title: payload.title,
       markdown: payload.markdown ?? '',
+      document_json: payload.documentJson ?? EMPTY_AI_CANVAS_DOCUMENT,
       source_page_start: payload.sourcePageStart ?? null,
       source_page_end: payload.sourcePageEnd ?? null,
     },
-  });
+  }).then(normalizeBackendAiCanvasNote);
 }
 
 export async function updateBackendAiCanvasNote(payload: {
   canvasNoteId: number;
   title?: string;
   markdown?: string;
+  documentJson?: AiCanvasDocumentJson;
+  expectedRevision?: number;
   sourcePageStart?: number | null;
   sourcePageEnd?: number | null;
 }) {
-  return request<BackendAiCanvasNote>(`/ai-canvas-notes/${payload.canvasNoteId}`, {
+  return request<any>(`/ai-canvas-notes/${payload.canvasNoteId}`, {
     method: 'PATCH',
     body: {
       title: payload.title,
       markdown: payload.markdown,
+      document_json: payload.documentJson,
+      expected_revision: payload.expectedRevision,
       source_page_start: payload.sourcePageStart,
       source_page_end: payload.sourcePageEnd,
     },
-  });
+  }).then(normalizeBackendAiCanvasNote);
 }
 
 export function deleteBackendAiCanvasNote(canvasNoteId: number) {
@@ -789,9 +826,12 @@ export async function sendBackendAiMessage(payload: {
   pageNumber?: number | null;
   selectionImageUri?: string | null;
   contextHint?: string | null;
+  source?: 'chat' | 'canvas-mini';
   canvasNoteId?: number | null;
   canvasAction?: 'auto' | 'chat_only' | 'canvas_edit' | 'canvas_create';
   canvasNoteNeedsTitle?: boolean;
+  canvasMarkdown?: string | null;
+  canvasDocumentJson?: AiCanvasDocumentJson | null;
 }) {
   return request<BackendAiMessageResponse>(`/chat-sessions/${payload.sessionId}/ai-messages`, {
     method: 'POST',
@@ -804,9 +844,12 @@ export async function sendBackendAiMessage(payload: {
       page_number: payload.pageNumber ?? null,
       selection_image_url: payload.selectionImageUri ?? null,
       context_hint: payload.contextHint ?? null,
+      source: payload.source ?? 'chat',
       canvas_note_id: payload.canvasNoteId ?? null,
       canvas_action: payload.canvasAction ?? 'auto',
       canvas_note_needs_title: payload.canvasNoteNeedsTitle ?? false,
+      canvas_markdown: payload.canvasMarkdown ?? null,
+      canvas_document_json: payload.canvasDocumentJson ?? null,
     },
-  });
+  }).then(normalizeBackendAiMessageResponse);
 }

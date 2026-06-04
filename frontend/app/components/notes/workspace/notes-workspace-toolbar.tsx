@@ -1,5 +1,5 @@
 import React from 'react';
-import { Pressable, ScrollView, Text, View } from 'react-native';
+import { Platform, Pressable, ScrollView, Text, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useDocumentContext } from './document-context';
 import { useCanvasContext } from '../canvas/canvas-context';
@@ -138,6 +138,7 @@ export const NotesWorkspaceToolbar = React.memo(function NotesWorkspaceToolbar()
   const canvasContext = useCanvasContext();
   const [blankTemplateMenuOpen, setBlankTemplateMenuOpen] = React.useState(false);
   const usesAppAiPanelLayout = Boolean(workspaceContext.usesAppAiPanelLayout);
+  const useWebAttachedToolbar = Platform.OS === 'web' && !usesAppAiPanelLayout;
   const chatToolActive = usesAppAiPanelLayout
     ? workspaceContext.appRightSidebarPanel === 'chat' || (workspaceContext.appChatMode === 'floating' && workspaceContext.aiPanelOpen)
     : workspaceContext.aiPanelOpen;
@@ -156,7 +157,11 @@ export const NotesWorkspaceToolbar = React.memo(function NotesWorkspaceToolbar()
 
   return (
     <View style={workspaceContext.styles.inkToolbarWrap}>
-      <View style={[workspaceContext.styles.inkToolbar, readMode && workspaceContext.styles.inkToolbarReadMode]}>
+      <View style={[
+        workspaceContext.styles.inkToolbar,
+        useWebAttachedToolbar && workspaceContext.styles.inkToolbarWebAttached,
+        readMode && workspaceContext.styles.inkToolbarReadMode,
+      ]}>
         {readMode ? (
           <View pointerEvents="none" style={workspaceContext.styles.inkToolbarReadModeRail}>
             <View style={workspaceContext.styles.inkToolbarReadModeRailSoft} />
