@@ -50,7 +50,18 @@ export function useDocumentPageActions(params: {
   setBookmarksByDocument: SetState<Record<number, BookmarkedPage[]>>;
   clearCurrentSelection: () => void;
   pushWorkspaceHistorySnapshot: () => void;
+  onMarkPageDirty?: (documentId: number, pageNumber: number) => void;
 }) {
+  const markPdfPageDirty = (pageNumber: number | null | undefined) => {
+    if (!params.studyDocumentId || !pageNumber) return;
+    params.onMarkPageDirty?.(params.studyDocumentId, pageNumber);
+  };
+
+  const markMemoSignalDirty = (page: GeneratedWorkspacePage | null | undefined) => {
+    if (page?.pageKind !== 'memo') return;
+    markPdfPageDirty(page.insertAfterPage);
+  };
+
   const getInsertAfterPage = (preferredPage?: number) => {
     if (preferredPage && Number.isFinite(preferredPage)) {
       return Math.max(1, Math.min(params.studyDocument?.pageCount ?? preferredPage, Math.floor(preferredPage)));
@@ -358,6 +369,7 @@ export function useDocumentPageActions(params: {
       ...current,
       [params.studyDocumentId!]: { kind: 'generated', pageId: generatedPageId },
     }));
+    markPdfPageDirty(insertAfterPage);
     params.setInkTool('pen');
     params.setWorkspaceFeedback(`${insertAfterPage}페이지 뒤에 메모를 추가했어요.`);
   };
@@ -422,6 +434,7 @@ export function useDocumentPageActions(params: {
       ...current,
       [params.studyDocumentId!]: (current[params.studyDocumentId!] ?? []).filter((bookmark) => bookmark.page.kind !== 'generated' || bookmark.page.pageId !== pageId),
     }));
+    markMemoSignalDirty(target);
     const activePage = params.activePageByDocument[params.studyDocumentId];
     if (activePage?.kind === 'generated' && activePage.pageId === pageId) {
       params.setActivePageByDocument((current) => ({
@@ -486,6 +499,7 @@ export function useDocumentPageActions(params: {
       ...current,
       [params.studyDocumentId!]: { kind: 'generated', pageId: nextPageId },
     }));
+    markMemoSignalDirty(target);
     params.setWorkspaceFeedback('페이지를 복제 했어요.');
   };
 
@@ -511,6 +525,8 @@ export function useDocumentPageActions(params: {
           : page,
       ),
     }));
+    markMemoSignalDirty(target);
+    if (target.pageKind === 'memo') markPdfPageDirty(nextInsertAfterPage);
     params.clearCurrentSelection();
     params.setWorkspaceFeedback(delta < 0 ? '페이지를 위로 이동했어요.' : '페이지를 아래로 이동했어요.');
   };
@@ -677,6 +693,7 @@ export function useDocumentPageActions(params: {
         [params.studyDocumentId!]: nextBookmarks,
       };
     });
+    if (params.currentDocumentPage.kind === 'pdf') markPdfPageDirty(params.currentDocumentPage.pageNumber);
 
     params.setWorkspaceFeedback(params.currentPageBookmarked ? '중요 페이지에서 해제 할게요.' : '중요 페이지로 저장할게요.');
   };
@@ -702,10 +719,12 @@ export function useDocumentPageActions(params: {
 
   const removeBookmark = (bookmarkId: string) => {
     if (!params.studyDocumentId) return;
+    const bookmark = (params.bookmarksByDocument[params.studyDocumentId] ?? []).find((value) => value.id === bookmarkId);
     params.setBookmarksByDocument((current) => ({
       ...current,
       [params.studyDocumentId!]: (current[params.studyDocumentId!] ?? []).filter((bookmark) => bookmark.id !== bookmarkId),
     }));
+    if (bookmark?.page.kind === 'pdf') markPdfPageDirty(bookmark.page.pageNumber);
     params.setWorkspaceFeedback('중요 페이지를 삭제했어요.');
   };
 

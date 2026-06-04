@@ -27,7 +27,7 @@ import { getAiBackendErrorMessage } from './ai/ai-errors';
 import { useAiChatActions } from './ai/use-ai-chat-actions';
 import { useAiChatDerivedState } from './ai/use-ai-chat-derived-state';
 import { useAiCanvasNotes } from './ai-canvas/use-ai-canvas-notes';
-import { buildClassInsightContext, buildImportantPageRecommendations } from './class-insight';
+import { buildClassInsightContext, buildImportantPageRecommendations, isClassInsightQuestion, isClassInsightTargetDocument } from './class-insight';
 import { getStudyDocumentBackendNoteId } from './document/backend-sync';
 import { useStudyDocumentActions } from './document/use-study-document-actions';
 import { useDocumentPageActions } from './document/use-document-page-actions';
@@ -141,6 +141,7 @@ export function useStudyWorkspace(props: {
   const [chatSessionsByDocument, setChatSessionsByDocument] = useState<Record<number, BackendChatSession[]>>({});
   const [classInsightByDocument, setClassInsightByDocument] = useState<Record<number, BackendClassInsight | null>>({});
   const classInsightFetchKeyRef = useRef<Record<number, string>>({});
+  const classInsightRefreshTimerRef = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
   const [allChatSessions, setAllChatSessions] = useState<BackendChatSession[]>([]);
   const [aiChatScope, setAiChatScope] = useState<'note' | 'all'>('note');
   const [aiChatSearchQuery, setAiChatSearchQuery] = useState('');
@@ -327,6 +328,21 @@ export function useStudyWorkspace(props: {
     workspaceHydrated,
   ]);
   const studyDocumentBackendNoteId = getStudyDocumentBackendNoteId(studyDocument);
+  const scheduleClassInsightRefresh = useCallback((documentId: number) => {
+    const existingTimer = classInsightRefreshTimerRef.current[documentId];
+    if (existingTimer) clearTimeout(existingTimer);
+    classInsightRefreshTimerRef.current[documentId] = setTimeout(() => {
+      delete classInsightRefreshTimerRef.current[documentId];
+      delete classInsightFetchKeyRef.current[documentId];
+      setClassInsightByDocument((current) => ({ ...current, [documentId]: null }));
+    }, 1200);
+  }, []);
+
+  useEffect(() => () => {
+    Object.values(classInsightRefreshTimerRef.current).forEach((timer) => clearTimeout(timer));
+    classInsightRefreshTimerRef.current = {};
+  }, []);
+
   const {
     backendPageIdsByDocument,
     setBackendPageIdsByDocument,
@@ -344,11 +360,15 @@ export function useStudyWorkspace(props: {
     inkByDocument,
     textAnnotationsByDocument,
     imageAnnotationsByDocument,
+    bookmarksByDocument,
+    pageCaptureReferencesByDocument,
+    generatedPagesByDocument,
     setUserStudyDocuments,
     setInkByDocument,
     setTextAnnotationsByDocument,
     setImageAnnotationsByDocument,
     setWorkspaceFeedback,
+    onPageSaveSuccess: scheduleClassInsightRefresh,
   });
   const {
     activeAiChatSessionId,
@@ -390,23 +410,12 @@ export function useStudyWorkspace(props: {
   const importantPageRecommendations = useMemo(() => buildImportantPageRecommendations({
     studyDocument,
     subject,
-    inkStrokes: studyDocumentId ? inkByDocument[studyDocumentId] ?? [] : [],
-    textAnnotations: studyDocumentId ? textAnnotationsByDocument[studyDocumentId] ?? [] : [],
-    bookmarks: currentDocumentBookmarks,
-    pageCaptureReferences,
-    generatedPages: generatedWorkspacePages,
     classInsight: currentClassInsight,
     limit: 5,
   }), [
     currentClassInsight,
-    currentDocumentBookmarks,
-    generatedWorkspacePages,
-    inkByDocument,
-    pageCaptureReferences,
     studyDocument,
-    studyDocumentId,
     subject,
-    textAnnotationsByDocument,
   ]);
   const currentBackendNoteId = getStudyDocumentBackendNoteId(studyDocument);
 
@@ -452,6 +461,31 @@ export function useStudyWorkspace(props: {
       mounted = false;
     };
   }, [classInsightByDocument, currentBackendNoteId, currentDocumentHasBackendPages, studyDocumentId, workspaceHydrated]);
+
+  const refreshClassInsightForQuestion = useCallback(async (question: string) => {
+    if (!isClassInsightQuestion(question)) return currentClassInsight;
+    if (!isClassInsightTargetDocument(studyDocument, subject)) return currentClassInsight;
+    if (!workspaceHydrated || !isBackendApiEnabled() || !studyDocumentId || !currentDocumentHasBackendPages || !currentBackendNoteId) {
+      return currentClassInsight;
+    }
+
+    try {
+      const insight = await getBackendClassInsight(currentBackendNoteId, 12);
+      classInsightFetchKeyRef.current[studyDocumentId] = `${studyDocumentId}:${currentBackendNoteId}`;
+      setClassInsightByDocument((current) => ({ ...current, [studyDocumentId]: insight }));
+      return insight;
+    } catch {
+      return currentClassInsight;
+    }
+  }, [
+    currentBackendNoteId,
+    currentClassInsight,
+    currentDocumentHasBackendPages,
+    studyDocument,
+    studyDocumentId,
+    subject,
+    workspaceHydrated,
+  ]);
 
   useEffect(() => {
     if (!workspaceHydrated || !isBackendApiEnabled()) return;
@@ -913,16 +947,11 @@ export function useStudyWorkspace(props: {
     activeCanvasNoteId: aiCanvas.activeNoteId,
     onApplyCanvasEditFromChat: aiCanvas.applyChatCanvasEdit,
     clearSelection: clearSelectionForCurrentDocument,
-    buildContextHint: (question) => buildClassInsightContext({
+    buildContextHint: async (question) => buildClassInsightContext({
       question,
       studyDocument,
       subject,
-      inkStrokes: studyDocumentId ? inkByDocument[studyDocumentId] ?? [] : [],
-      textAnnotations: studyDocumentId ? textAnnotationsByDocument[studyDocumentId] ?? [] : [],
-      bookmarks: currentDocumentBookmarks,
-      pageCaptureReferences,
-      generatedPages: generatedWorkspacePages,
-      classInsight: currentClassInsight,
+      classInsight: await refreshClassInsightForQuestion(question),
     }),
   });
 
@@ -1062,6 +1091,7 @@ export function useStudyWorkspace(props: {
     createImageNoteFromAsset,
     openStudyDocument,
     requestAiAnswerForQuestion,
+    onMarkPageDirty: markBackendPageDirty,
   });
   const requestAiCanvasCommand = useCallback(async (command: string, options?: { selectionImageUri?: string | null }) => (
     requestAiAnswer({
@@ -1284,6 +1314,7 @@ export function useStudyWorkspace(props: {
     setBookmarksByDocument,
     clearCurrentSelection,
     pushWorkspaceHistorySnapshot,
+    onMarkPageDirty: markBackendPageDirty,
   });
   const { effectiveWorkspaceFeedback, documentSaveStatus } = useWorkspaceSaveStatus({
     workspaceFeedback,

@@ -6,6 +6,7 @@ import { BlankNoteCanvas } from '../canvas/blank-note-canvas';
 import { NoteSummaryContent } from '../shared/notes-shared';
 import { PhotoViewerModal } from './photo-viewer-modal';
 import { MobileAiSheet } from './mobile-ai-sheet';
+import type { ImportantPageRecommendation } from '../../../hooks/notes/class-insight';
 import {
   formatCaptureDate,
   getCaptureImageSource,
@@ -96,6 +97,7 @@ export type MobileNotesViewProps = {
   aiLoading: boolean;
   aiError: string | null;
   classInsight: BackendClassInsight | null;
+  importantPageRecommendations: ImportantPageRecommendation[];
   incomingAssetSuggestion: CaptureAsset | null;
   inboxHint: string | null;
   inboxPendingCount: number;
@@ -463,6 +465,7 @@ export function MobileNotesView(props: MobileNotesViewProps) {
               style={props.styles.documentRenameInput}
               returnKeyType="done"
               onSubmitEditing={saveDocumentRename}
+              showSoftInputOnFocus
             />
             <Pressable style={props.styles.documentRenameButton} onPress={() => setDocumentRenameOpen(false)}>
               <Text style={props.styles.documentRenameButtonText}>취소</Text>
