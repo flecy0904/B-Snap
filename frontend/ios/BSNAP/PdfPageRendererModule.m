@@ -487,8 +487,12 @@ RCT_EXPORT_METHOD(renderSelectionPreview:(NSString *)fileUri
     UIColor *color = [self colorFromHex:stroke[@"color"] ?: @"#111827"];
     NSString *style = [stroke[@"style"] isKindOfClass:NSString.class] ? stroke[@"style"] : @"pen";
     CGFloat width = MAX(1.0, [stroke[@"width"] doubleValue] * [self logicalScaleForSource:stroke logicalPageWidth:logicalPageWidth logicalPageHeight:logicalPageHeight]);
+    CGFloat sourceAlpha = CGColorGetAlpha(color.CGColor);
+    CGFloat strokeAlpha = [style isEqualToString:@"highlight"]
+      ? (sourceAlpha < 0.999 ? sourceAlpha : 0.36)
+      : sourceAlpha;
     CGContextSaveGState(context);
-    CGContextSetStrokeColorWithColor(context, [color colorWithAlphaComponent:[style isEqualToString:@"highlight"] ? 0.36 : 1.0].CGColor);
+    CGContextSetStrokeColorWithColor(context, [color colorWithAlphaComponent:strokeAlpha].CGColor);
     CGContextSetLineWidth(context, width);
     CGContextSetLineCap(context, kCGLineCapRound);
     CGContextSetLineJoin(context, kCGLineJoinRound);
@@ -595,7 +599,32 @@ RCT_EXPORT_METHOD(renderSelectionPreview:(NSString *)fileUri
 
 - (UIColor *)colorFromHex:(NSString *)hex
 {
-  NSString *clean = [[hex stringByReplacingOccurrencesOfString:@"#" withString:@""] uppercaseString];
+  if (![hex isKindOfClass:NSString.class]) return UIColor.blackColor;
+  NSString *trimmed = [hex stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+  NSString *lowercase = trimmed.lowercaseString;
+  if ([lowercase hasPrefix:@"rgba("] || [lowercase hasPrefix:@"rgb("]) {
+    NSRange open = [trimmed rangeOfString:@"("];
+    NSRange close = [trimmed rangeOfString:@")" options:NSBackwardsSearch];
+    if (open.location != NSNotFound && close.location != NSNotFound && close.location > open.location) {
+      NSString *body = [trimmed substringWithRange:NSMakeRange(open.location + 1, close.location - open.location - 1)];
+      NSArray<NSString *> *parts = [body componentsSeparatedByString:@","];
+      if (parts.count >= 3) {
+        CGFloat red = MIN(255.0, MAX(0.0, [parts[0] doubleValue])) / 255.0;
+        CGFloat green = MIN(255.0, MAX(0.0, [parts[1] doubleValue])) / 255.0;
+        CGFloat blue = MIN(255.0, MAX(0.0, [parts[2] doubleValue])) / 255.0;
+        CGFloat alpha = parts.count >= 4 ? MIN(1.0, MAX(0.0, [parts[3] doubleValue])) : 1.0;
+        return [UIColor colorWithRed:red green:green blue:blue alpha:alpha];
+      }
+    }
+  }
+
+  NSString *clean = [[[trimmed stringByReplacingOccurrencesOfString:@"#" withString:@""] stringByReplacingOccurrencesOfString:@" " withString:@""] uppercaseString];
+  if (clean.length == 3) {
+    NSString *red = [clean substringWithRange:NSMakeRange(0, 1)];
+    NSString *green = [clean substringWithRange:NSMakeRange(1, 1)];
+    NSString *blue = [clean substringWithRange:NSMakeRange(2, 1)];
+    clean = [NSString stringWithFormat:@"%@%@%@%@%@%@", red, red, green, green, blue, blue];
+  }
   if (clean.length != 6) return UIColor.blackColor;
   unsigned int rgb = 0;
   [[NSScanner scannerWithString:clean] scanHexInt:&rgb];

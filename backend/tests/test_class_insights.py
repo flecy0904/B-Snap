@@ -5,7 +5,10 @@ from backend.app.routes.class_insights import (
     PageInsightAccumulator,
     _apply_chat_question_signals,
     _apply_page_state,
+    _collect_active_signal_sources,
+    _is_other_user_signal,
 )
+from backend.app.services.note_page_content import merge_page_state_content, parse_page_state
 
 
 class ClassInsightSignalTest(unittest.TestCase):
@@ -37,7 +40,7 @@ class ClassInsightSignalTest(unittest.TestCase):
         self.assertEqual(accumulator.memo_page_count, 2)
         self.assertIn(7, accumulator.participant_ids)
         self.assertGreater(accumulator.score(), 0)
-        self.assertIn("중요 표시가 남은 페이지", accumulator.reason_tags())
+        self.assertIn("중요 표시가 반복된 페이지", accumulator.reason_tags())
 
     def test_chat_question_signals_use_explicit_page_references(self):
         accumulators = defaultdict(lambda: PageInsightAccumulator(page_number=0))
@@ -49,6 +52,46 @@ class ClassInsightSignalTest(unittest.TestCase):
 
         self.assertEqual(accumulators[13].ai_question_count, 1)
         self.assertNotIn(21, accumulators)
+
+    def test_active_signal_sources_ignore_empty_uploads(self):
+        accumulators = {
+            1: PageInsightAccumulator(page_number=1),
+            2: PageInsightAccumulator(page_number=2),
+        }
+        accumulators[2].add_activity(user_id=7, note_id=11)
+
+        participant_ids, note_ids = _collect_active_signal_sources(accumulators)
+
+        self.assertEqual(participant_ids, {7})
+        self.assertEqual(note_ids, {11})
+
+    def test_current_user_signals_are_not_used_for_class_insights(self):
+        self.assertFalse(_is_other_user_signal({"user_id": 7}, 7))
+        self.assertTrue(_is_other_user_signal({"user_id": 8}, 7))
+
+    def test_page_state_merge_preserves_importance_signal_summary(self):
+        content = merge_page_state_content(
+            None,
+            """
+            {
+              "kind": "bsnap-page-state",
+              "version": 1,
+              "inkStrokes": [],
+              "textAnnotations": [],
+              "bookmarked": true,
+              "photoReferenceCount": 2,
+              "memoPageCount": 1
+            }
+            """,
+            pdf_text="network core",
+        )
+        state = parse_page_state(content)
+
+        self.assertIsNotNone(state)
+        self.assertTrue(state["bookmarked"])
+        self.assertEqual(state["photoReferenceCount"], 2)
+        self.assertEqual(state["memoPageCount"], 1)
+        self.assertEqual(state["pdfText"], "network core")
 
 
 if __name__ == "__main__":

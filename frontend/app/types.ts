@@ -87,6 +87,7 @@ export interface StudyDocumentEntry {
   thumbnailUrl?: string;
   backendSyncStatus?: StudyDocumentBackendSyncStatus;
   backendSyncError?: string;
+  blankTemplate?: NotebookPageTemplate;
 }
 
 export interface CaptureAsset {

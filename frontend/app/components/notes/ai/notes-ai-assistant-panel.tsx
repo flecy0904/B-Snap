@@ -1,7 +1,7 @@
 import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { ActivityIndicator, Animated, Image, PanResponder, Platform, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
-import { isClassInsightQuestion, isClassInsightTargetDocument } from '../../../hooks/notes/class-insight';
+import { hasEnoughClassInsightData, isClassInsightTargetDocument } from '../../../hooks/notes/class-insight';
 import { useDelayedTooltip } from '../../../hooks/notes/use-delayed-tooltip';
 import { AiResponseContent } from './ai-response-content';
 import { useNotesGlobalContext } from '../workspace/notes-global-context';
@@ -10,6 +10,10 @@ const FLOATING_PANEL_WIDTH = 300;
 const FLOATING_PANEL_HEIGHT = 620;
 const FLOATING_PANEL_TOP = 66;
 const FLOATING_PANEL_MARGIN = 8;
+const FLOATING_PANEL_MIN_WIDTH = 300;
+const FLOATING_PANEL_MAX_WIDTH = 560;
+const FLOATING_PANEL_MIN_HEIGHT = 360;
+const FLOATING_PANEL_MAX_HEIGHT = 760;
 const APP_DETACHED_PANEL_WIDTH = 380;
 const APP_DETACHED_PANEL_TOP = 60;
 const SIDEBAR_MIN_WIDTH = 300;
@@ -50,10 +54,6 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
-function getFloatingPanelHeight(windowHeight: number, panelY: number) {
-  return Math.min(FLOATING_PANEL_HEIGHT, Math.max(360, windowHeight - panelY - FLOATING_PANEL_MARGIN));
-}
-
 function handleWebSubmitKeyPress(event: any, submit: () => void) {
   if (Platform.OS !== 'web') return;
   const key = event?.key ?? event?.nativeEvent?.key;
@@ -63,15 +63,13 @@ function handleWebSubmitKeyPress(event: any, submit: () => void) {
   submit();
 }
 
-function formatPriorityLabel(priority: string) {
-  if (priority === 'very-high') return '매우 높음';
-  if (priority === 'high') return '높음';
-  return '중간';
+function getFloatingPanelHeight(windowHeight: number, panelY: number, requestedHeight = FLOATING_PANEL_HEIGHT) {
+  return Math.min(requestedHeight, Math.max(FLOATING_PANEL_MIN_HEIGHT, windowHeight - panelY - FLOATING_PANEL_MARGIN));
 }
 
 const CLASS_INSIGHT_QUICK_PROMPTS = [
+  { label: '시험 부분', question: '시험에 나올만한 부분 알려줘' },
   { label: '중요 페이지', question: '시험에 나올만한 중요 페이지 추천해줘' },
-  { label: '다음 순위', question: '다음 순위 중요 페이지도 더 알려줘' },
   { label: '복습 순서', question: '이 PDF에서 먼저 복습할 순서 알려줘' },
 ] as const;
 
@@ -108,25 +106,16 @@ export function NotesAiAssistantPanel() {
   const hasChatHistory = workspace.aiMessages.length > 0;
   const quickPrompts = React.useMemo(() => (
     isClassInsightTargetDocument(workspace.studyDocument, workspace.subject)
+    && hasEnoughClassInsightData(workspace.classInsight)
       ? CLASS_INSIGHT_QUICK_PROMPTS
       : []
-  ), [workspace.studyDocument, workspace.subject]);
+  ), [workspace.classInsight, workspace.studyDocument, workspace.subject]);
   const showQuickPrompts = Boolean(
     !workspace.aiChatReadOnly
     && !workspace.aiLoading
     && quickPrompts.length
     && !workspace.aiQuestion.trim()
-    && !hasChatHistory,
   );
-  const shouldShowClassInsightPages = React.useMemo(() => (
-    isClassInsightQuestion(workspace.aiQuestion)
-    || isClassInsightQuestion(workspace.aiAnswer?.question ?? '')
-  ), [workspace.aiAnswer?.question, workspace.aiQuestion]);
-  const classInsightPages = React.useMemo(() => {
-    if (!shouldShowClassInsightPages) return [];
-    if (!isClassInsightTargetDocument(workspace.studyDocument, workspace.subject)) return [];
-    return (workspace.classInsight?.pages ?? []).slice(0, 3);
-  }, [shouldShowClassInsightPages, workspace.classInsight?.pages, workspace.studyDocument, workspace.subject]);
   const activeSession = workspace.activeAiChatSessionId
     ? workspace.allAiChatSessions.find((session: any) => session.id === workspace.activeAiChatSessionId)
       ?? workspace.noteAiChatSessions.find((session: any) => session.id === workspace.activeAiChatSessionId)
@@ -143,10 +132,24 @@ export function NotesAiAssistantPanel() {
     && workspace.aiPanelMode === 'floating',
   );
   const appChatSidebar = Boolean(workspace.isAppChatSidebarPanel);
-  const floatingPanelWidth = appFloatingChat ? APP_DETACHED_PANEL_WIDTH : FLOATING_PANEL_WIDTH;
-  const floatingPanelHeight = getFloatingPanelHeight(height, floatingPosition.y);
+  const requestedFloatingPanelSize = workspace.aiFloatingPanelSize ?? {
+    width: appFloatingChat ? APP_DETACHED_PANEL_WIDTH : FLOATING_PANEL_WIDTH,
+    height: FLOATING_PANEL_HEIGHT,
+  };
+  const floatingPanelMaxWidth = Math.max(
+    FLOATING_PANEL_MIN_WIDTH,
+    Math.min(FLOATING_PANEL_MAX_WIDTH, width - FLOATING_PANEL_MARGIN * 2),
+  );
+  const floatingPanelMaxHeight = Math.max(
+    FLOATING_PANEL_MIN_HEIGHT,
+    Math.min(FLOATING_PANEL_MAX_HEIGHT, height - FLOATING_PANEL_TOP - FLOATING_PANEL_MARGIN),
+  );
+  const floatingPanelWidth = clamp(requestedFloatingPanelSize.width, FLOATING_PANEL_MIN_WIDTH, floatingPanelMaxWidth);
+  const floatingPanelHeight = clamp(requestedFloatingPanelSize.height, FLOATING_PANEL_MIN_HEIGHT, floatingPanelMaxHeight);
+  const floatingPanelSizeRef = React.useRef({ width: floatingPanelWidth, height: floatingPanelHeight });
+  const floatingResizeStartSizeRef = React.useRef(floatingPanelSizeRef.current);
   const floatingMaxX = Math.max(FLOATING_PANEL_MARGIN, width - floatingPanelWidth - FLOATING_PANEL_MARGIN);
-  const floatingMaxY = Math.max(FLOATING_PANEL_TOP, height - 360 - FLOATING_PANEL_MARGIN);
+  const floatingMaxY = Math.max(FLOATING_PANEL_TOP, height - floatingPanelHeight - FLOATING_PANEL_MARGIN);
   const sidebarMaxWidth = Math.max(SIDEBAR_MIN_WIDTH, Math.floor(width * 0.5));
   const useWebFloatingDrag = Platform.OS === 'web' && !appChatSidebar && workspace.aiPanelMode === 'floating';
   const useWebSidebarResize = Platform.OS === 'web' && !workspace.usesAppAiPanelLayout && workspace.aiPanelMode === 'sidebar';
@@ -282,7 +285,7 @@ export function NotesAiAssistantPanel() {
     floatingPositionRef.current = next;
     setFloatingPosition(next);
     floatingAnimatedPosition.setValue(next);
-    floatingAnimatedHeight.setValue(getFloatingPanelHeight(height, next.y));
+    floatingAnimatedHeight.setValue(floatingPanelHeight);
   }, [appFloatingChat, floatingAnimatedHeight, floatingAnimatedPosition, height, width]);
 
   React.useEffect(() => {
@@ -297,6 +300,25 @@ export function NotesAiAssistantPanel() {
     floatingAnimatedPosition.setValue(floatingPosition);
     floatingAnimatedHeight.setValue(floatingPanelHeight);
   }, [floatingAnimatedHeight, floatingAnimatedPosition, floatingPanelHeight, floatingPosition]);
+
+  React.useEffect(() => {
+    const next = { width: floatingPanelWidth, height: floatingPanelHeight };
+    floatingPanelSizeRef.current = next;
+    floatingAnimatedHeight.setValue(next.height);
+    if (
+      next.width !== workspace.aiFloatingPanelSize?.width
+      || next.height !== workspace.aiFloatingPanelSize?.height
+    ) {
+      workspace.onChangeAiFloatingPanelSize(next);
+    }
+  }, [
+    floatingAnimatedHeight,
+    floatingPanelHeight,
+    floatingPanelWidth,
+    workspace.aiFloatingPanelSize?.height,
+    workspace.aiFloatingPanelSize?.width,
+    workspace.onChangeAiFloatingPanelSize,
+  ]);
 
   React.useEffect(() => {
     setSidebarWidth((current) => {
@@ -337,11 +359,10 @@ export function NotesAiAssistantPanel() {
           x: clamp(start.x + gesture.dx, FLOATING_PANEL_MARGIN, floatingMaxX),
           y: clamp(start.y + gesture.dy, FLOATING_PANEL_TOP, floatingMaxY),
         };
-        const nextHeight = getFloatingPanelHeight(height, next.y);
         floatingPositionRef.current = next;
         setFloatingPosition(next);
         floatingAnimatedPosition.setValue(next);
-        floatingAnimatedHeight.setValue(nextHeight);
+        floatingAnimatedHeight.setValue(floatingPanelHeight);
       },
       onPanResponderTerminate: (_, gesture) => {
         const start = floatingPositionRef.current;
@@ -349,14 +370,82 @@ export function NotesAiAssistantPanel() {
           x: clamp(start.x + gesture.dx, FLOATING_PANEL_MARGIN, floatingMaxX),
           y: clamp(start.y + gesture.dy, FLOATING_PANEL_TOP, floatingMaxY),
         };
-        const nextHeight = getFloatingPanelHeight(height, next.y);
         floatingPositionRef.current = next;
         setFloatingPosition(next);
         floatingAnimatedPosition.setValue(next);
-        floatingAnimatedHeight.setValue(nextHeight);
+        floatingAnimatedHeight.setValue(floatingPanelHeight);
       },
     }),
-    [floatingAnimatedHeight, floatingAnimatedPosition, floatingMaxX, floatingMaxY, floatingPanelHeight, height, workspace.aiPanelMode],
+    [floatingAnimatedHeight, floatingAnimatedPosition, floatingMaxX, floatingMaxY, floatingPanelHeight, workspace.aiPanelMode],
+  );
+
+  const changeFloatingPanelSize = React.useCallback((size: { width: number; height: number }) => {
+    const position = floatingPositionRef.current;
+    const next = {
+      width: clamp(size.width, FLOATING_PANEL_MIN_WIDTH, floatingPanelMaxWidth),
+      height: clamp(size.height, FLOATING_PANEL_MIN_HEIGHT, floatingPanelMaxHeight),
+    };
+    const nextPosition = {
+      x: clamp(position.x, FLOATING_PANEL_MARGIN, Math.max(FLOATING_PANEL_MARGIN, width - next.width - FLOATING_PANEL_MARGIN)),
+      y: clamp(position.y, FLOATING_PANEL_TOP, Math.max(FLOATING_PANEL_TOP, height - next.height - FLOATING_PANEL_MARGIN)),
+    };
+    floatingPanelSizeRef.current = next;
+    floatingPositionRef.current = nextPosition;
+    setFloatingPosition(nextPosition);
+    floatingAnimatedPosition.setValue(nextPosition);
+    workspace.onChangeAiFloatingPanelSize(next);
+    floatingAnimatedHeight.setValue(next.height);
+  }, [
+    floatingAnimatedHeight,
+    floatingAnimatedPosition,
+    floatingPanelMaxHeight,
+    floatingPanelMaxWidth,
+    height,
+    width,
+    workspace.onChangeAiFloatingPanelSize,
+  ]);
+
+  const floatingResizePanResponder = React.useMemo(
+    () => PanResponder.create({
+      onStartShouldSetPanResponderCapture: () => workspace.aiPanelMode === 'floating' && !appChatSidebar,
+      onStartShouldSetPanResponder: () => workspace.aiPanelMode === 'floating' && !appChatSidebar,
+      onMoveShouldSetPanResponderCapture: (_, gesture) => (
+        workspace.aiPanelMode === 'floating'
+        && !appChatSidebar
+        && Math.abs(gesture.dx) + Math.abs(gesture.dy) > 2
+      ),
+      onMoveShouldSetPanResponder: (_, gesture) => (
+        workspace.aiPanelMode === 'floating'
+        && !appChatSidebar
+        && Math.abs(gesture.dx) + Math.abs(gesture.dy) > 2
+      ),
+      onPanResponderGrant: () => {
+        closeOpenMenus();
+        floatingResizeStartSizeRef.current = floatingPanelSizeRef.current;
+      },
+      onPanResponderMove: (_, gesture) => {
+        const start = floatingResizeStartSizeRef.current;
+        changeFloatingPanelSize({
+          width: start.width + gesture.dx,
+          height: start.height + gesture.dy,
+        });
+      },
+      onPanResponderRelease: (_, gesture) => {
+        const start = floatingResizeStartSizeRef.current;
+        changeFloatingPanelSize({
+          width: start.width + gesture.dx,
+          height: start.height + gesture.dy,
+        });
+      },
+      onPanResponderTerminate: (_, gesture) => {
+        const start = floatingResizeStartSizeRef.current;
+        changeFloatingPanelSize({
+          width: start.width + gesture.dx,
+          height: start.height + gesture.dy,
+        });
+      },
+    }),
+    [appChatSidebar, changeFloatingPanelSize, workspace.aiPanelMode],
   );
 
   const finishWebFloatingDrag = React.useCallback((clientX: number, clientY: number) => {
@@ -367,7 +456,7 @@ export function NotesAiAssistantPanel() {
       x: clamp(drag.startPanelX + clientX - drag.startClientX, FLOATING_PANEL_MARGIN, bounds.maxX),
       y: clamp(drag.startPanelY + clientY - drag.startClientY, FLOATING_PANEL_TOP, bounds.maxY),
     };
-    const nextHeight = getFloatingPanelHeight(bounds.windowHeight, next.y);
+    const nextHeight = getFloatingPanelHeight(bounds.windowHeight, next.y, floatingPanelSizeRef.current.height);
     webFloatingDragRef.current = null;
     floatingPositionRef.current = next;
     setFloatingPosition(next);
@@ -384,7 +473,7 @@ export function NotesAiAssistantPanel() {
       y: clamp(drag.startPanelY + event.clientY - drag.startClientY, FLOATING_PANEL_TOP, bounds.maxY),
     };
     floatingAnimatedPosition.setValue(next);
-    floatingAnimatedHeight.setValue(getFloatingPanelHeight(bounds.windowHeight, next.y));
+    floatingAnimatedHeight.setValue(getFloatingPanelHeight(bounds.windowHeight, next.y, floatingPanelSizeRef.current.height));
   }, [floatingAnimatedHeight, floatingAnimatedPosition]);
 
   const handleWebFloatingPointerUp = React.useCallback((event: PointerEvent) => {
@@ -424,7 +513,11 @@ export function NotesAiAssistantPanel() {
       startPanelY: floatingPositionRef.current.y,
     };
     floatingAnimatedPosition.setValue(floatingPositionRef.current);
-    floatingAnimatedHeight.setValue(getFloatingPanelHeight(floatingBoundsRef.current.windowHeight, floatingPositionRef.current.y));
+    floatingAnimatedHeight.setValue(getFloatingPanelHeight(
+      floatingBoundsRef.current.windowHeight,
+      floatingPositionRef.current.y,
+      floatingPanelSizeRef.current.height,
+    ));
     nativeEvent.preventDefault?.();
     nativeEvent.stopPropagation?.();
   }, [floatingAnimatedHeight, floatingAnimatedPosition, useWebFloatingDrag]);
@@ -596,7 +689,7 @@ export function NotesAiAssistantPanel() {
       ? [
           workspace.styles.aiPanel,
           workspace.styles.appFloatingAiChatPanel,
-          { left: floatingAnimatedPosition.x, top: floatingAnimatedPosition.y, right: undefined, bottom: undefined, height: floatingAnimatedHeight },
+          { left: floatingAnimatedPosition.x, top: floatingAnimatedPosition.y, right: undefined, bottom: undefined, width: floatingPanelWidth, height: floatingAnimatedHeight },
         ]
     : webSidebarAttachedPanel
       ? [
@@ -606,7 +699,7 @@ export function NotesAiAssistantPanel() {
           { width: workspace.webChatSidebarWidth },
         ]
     : workspace.aiPanelMode === 'floating'
-      ? [workspace.styles.aiPanel, { left: floatingAnimatedPosition.x, top: floatingAnimatedPosition.y, bottom: undefined, height: floatingAnimatedHeight }]
+      ? [workspace.styles.aiPanel, { left: floatingAnimatedPosition.x, top: floatingAnimatedPosition.y, bottom: undefined, width: floatingPanelWidth, height: floatingAnimatedHeight }]
       : [workspace.styles.aiPanel, workspace.styles.aiPanelSidebar, { width: sidebarWidth }];
   const renderAiTooltip = (id: string, label: string, placement: 'above' | 'below' = 'below') => (
     activeTooltipId === id ? (
@@ -860,7 +953,7 @@ export function NotesAiAssistantPanel() {
               horizontal
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={workspace.styles.aiComposerQuickRow}
-              keyboardShouldPersistTaps="handled"
+              keyboardShouldPersistTaps="always"
             >
               {quickPrompts.map((prompt) => (
                 <Pressable
@@ -874,27 +967,6 @@ export function NotesAiAssistantPanel() {
               ))}
             </ScrollView>
           ) : null}
-          {classInsightPages.length ? (
-            <View style={workspace.styles.aiClassInsightStrip}>
-              <View style={workspace.styles.aiClassInsightHeader}>
-                <Text style={workspace.styles.aiClassInsightTitle}>추천 페이지</Text>
-                <Text style={workspace.styles.aiClassInsightMeta}>수업 필기 흐름 기준</Text>
-              </View>
-              <View style={workspace.styles.aiClassInsightChipRow}>
-                {classInsightPages.map((page: any) => (
-                  <Pressable
-                    key={page.page_number}
-                    style={workspace.styles.aiClassInsightChip}
-                    onPress={() => openLinkedPdfPage(page.page_number)}
-                    disabled={workspace.aiLoading}
-                  >
-                    <Text style={workspace.styles.aiClassInsightPage}>{page.page_number}p</Text>
-                    <Text style={workspace.styles.aiClassInsightPriority}>{formatPriorityLabel(page.priority)}</Text>
-                  </Pressable>
-                ))}
-              </View>
-            </View>
-          ) : null}
           <View style={workspace.styles.aiComposerInputShell}>
             <TextInput
               value={workspace.aiQuestion}
@@ -904,6 +976,7 @@ export function NotesAiAssistantPanel() {
               placeholderTextColor="#8F96A3"
               multiline
               editable={!workspace.aiChatReadOnly && !workspace.aiLoading}
+              showSoftInputOnFocus
               style={workspace.styles.aiComposerInput}
               submitBehavior="submit"
               blurOnSubmit={false}
@@ -953,6 +1026,11 @@ export function NotesAiAssistantPanel() {
           />
         </View>
       ) : null}
+      {workspace.aiPanelMode === 'floating' && !appChatSidebar ? (
+        <View style={workspace.styles.aiPanelFloatingResizeHandle} {...floatingResizePanResponder.panHandlers}>
+          <MaterialCommunityIcons name="resize-bottom-right" size={16} color="#687386" />
+        </View>
+      ) : null}
       {editingSessionId !== null ? (
         <Pressable style={workspace.styles.aiPanelDialogOverlay} onPress={cancelEditingSession}>
           <Pressable style={workspace.styles.aiRenameModalCard} onPress={(event) => event.stopPropagation()}>
@@ -969,6 +1047,7 @@ export function NotesAiAssistantPanel() {
               returnKeyType="done"
               onSubmitEditing={saveEditingSession}
               autoFocus
+              showSoftInputOnFocus
             />
             {editingTitleError ? <Text style={workspace.styles.aiRenameModalError}>{editingTitleError}</Text> : null}
             <View style={workspace.styles.aiRenameModalActions}>

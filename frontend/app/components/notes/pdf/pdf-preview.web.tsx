@@ -267,6 +267,14 @@ type ScrollbarDragState = {
   pointerOffset: number;
 };
 
+type ViewPanDragState = {
+  pointerId: number;
+  startClientX: number;
+  startClientY: number;
+  startPanX: number;
+  startPanY: number;
+};
+
 function isPrimaryDomPointer(event: React.PointerEvent<HTMLElement>) {
   if (!event.isPrimary) return false;
   if (event.pointerType === 'mouse') return event.button === 0 || event.buttons === 1;
@@ -287,6 +295,11 @@ function shouldCaptureDomPointer(tool: InkTool, event: React.PointerEvent<HTMLEl
     return Boolean(fingerDrawingEnabled);
   }
   return false;
+}
+
+function shouldIgnoreViewPanTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false;
+  return Boolean(target.closest('button,a,input,textarea,select,[contenteditable="true"],[role="button"],[role="scrollbar"]'));
 }
 
 function drawPath(context: CanvasRenderingContext2D, stroke: InkStroke, opacity = 1) {
@@ -815,6 +828,7 @@ export function PdfPreview(props: {
   onDismissIncomingAsset?: () => void;
   onOpenPageCaptureReference?: (referenceId: string) => void;
   onAskAiAboutPageCaptureReference?: (referenceId: string) => void;
+  onViewportDoubleTap?: () => void;
   styles: any;
 }) {
   const [currentStroke, setCurrentStroke] = useState<InkStroke | null>(null);
@@ -833,6 +847,7 @@ export function PdfPreview(props: {
   const textTapRef = useRef<InkPoint | null>(null);
   const selectionPreviewRequestRef = useRef(0);
   const scrollbarDragRef = useRef<ScrollbarDragState | null>(null);
+  const viewPanDragRef = useRef<ViewPanDragState | null>(null);
   const verticalScrollbarTrackRef = useRef<HTMLDivElement | null>(null);
   const horizontalScrollbarTrackRef = useRef<HTMLDivElement | null>(null);
   const [scrollbarTrackSizes, setScrollbarTrackSizes] = useState({ vertical: 0, horizontal: 0 });
@@ -1022,6 +1037,45 @@ export function PdfPreview(props: {
     scrollbarDragRef.current = null;
     event.currentTarget.releasePointerCapture?.(event.pointerId);
   }, []);
+  const handleViewPanPointerDown = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (props.inkTool !== 'view') return;
+    if (!isPrimaryDomPointer(event) || shouldIgnoreViewPanTarget(event.target)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    viewPanDragRef.current = {
+      pointerId: event.pointerId,
+      startClientX: event.clientX,
+      startClientY: event.clientY,
+      startPanX: snapshot.panX,
+      startPanY: snapshot.panY,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }, [props.inkTool, snapshot.panX, snapshot.panY]);
+  const handleViewPanPointerMove = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = viewPanDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    engine.panTo(
+      drag.startPanX - (event.clientX - drag.startClientX),
+      drag.startPanY - (event.clientY - drag.startClientY),
+    );
+  }, [engine]);
+  const finishViewPanDrag = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = viewPanDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    event.preventDefault();
+    event.stopPropagation();
+    viewPanDragRef.current = null;
+    event.currentTarget.releasePointerCapture?.(event.pointerId);
+  }, []);
+  const clearViewPanDrag = useCallback(() => {
+    viewPanDragRef.current = null;
+  }, []);
+
+  useEffect(() => {
+    if (props.inkTool !== 'view') clearViewPanDrag();
+  }, [clearViewPanDrag, props.inkTool]);
 
   useEffect(() => {
     if (typeof ResizeObserver === 'undefined') return undefined;
@@ -1628,8 +1682,13 @@ export function PdfPreview(props: {
           touchAction: 'none',
           boxSizing: 'border-box',
           position: 'relative',
-          cursor: props.inkTool === 'view' ? 'default' : 'crosshair',
+          cursor: props.inkTool === 'view' ? 'grab' : 'crosshair',
         }}
+        onPointerDown={handleViewPanPointerDown}
+        onPointerMove={handleViewPanPointerMove}
+        onPointerUp={finishViewPanDrag}
+        onPointerCancel={finishViewPanDrag}
+        onLostPointerCapture={clearViewPanDrag}
       >
         {pageItems.map(renderPage)}
         {snapshot.isLoading ? (

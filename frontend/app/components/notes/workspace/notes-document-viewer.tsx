@@ -36,7 +36,13 @@ export const NotesDocumentViewer = React.memo(function NotesDocumentViewer() {
     );
   }
 
-  if (documentContext.studyDocument?.type === 'pdf' && documentContext.studyDocument?.file) {
+  const pdfSurfaceFile = documentContext.studyDocument?.file;
+  const usePdfSurfaceDocument = (
+    (documentContext.studyDocument?.type === 'pdf' || documentContext.studyDocument?.type === 'blank')
+    && pdfSurfaceFile
+  );
+
+  if (usePdfSurfaceDocument && pdfSurfaceFile) {
     const documentInkStrokes = documentContext.studyDocument?.id
       ? (canvasContext.inkByDocument[documentContext.studyDocument.id] ?? []).filter((stroke) => !stroke.generatedPageId || documentContext.notebookPages.some((page) => page.generatedPageId === stroke.generatedPageId))
       : canvasContext.inkStrokes;
@@ -46,13 +52,15 @@ export const NotesDocumentViewer = React.memo(function NotesDocumentViewer() {
     const documentImageAnnotations = documentContext.studyDocument?.id
       ? (canvasContext.imageAnnotationsByDocument[documentContext.studyDocument.id] ?? []).filter((annotation) => !annotation.generatedPageId || documentContext.notebookPages.some((page) => page.generatedPageId === annotation.generatedPageId))
       : canvasContext.imageAnnotations;
+    const readMode = globalContext.studyInteractionMode === 'read';
+    const effectiveInkTool = readMode ? 'view' : canvasContext.inkTool;
 
     return (
       <PdfPreview
-        file={documentContext.studyDocument?.file}
+        file={pdfSurfaceFile}
         page={documentContext.currentPdfPage}
-        inkTool={canvasContext.inkTool}
-        fingerDrawingEnabled={globalContext.fingerDrawingEnabled}
+        inkTool={effectiveInkTool}
+        fingerDrawingEnabled={readMode ? false : globalContext.fingerDrawingEnabled}
         penColor={canvasContext.penColor}
         penWidth={canvasContext.penWidth}
         brushType={canvasContext.brushType}
@@ -64,6 +72,7 @@ export const NotesDocumentViewer = React.memo(function NotesDocumentViewer() {
         inkStrokes={documentInkStrokes}
         textAnnotations={documentTextAnnotations}
         imageAnnotations={documentImageAnnotations}
+        readOnly={readMode}
         notebookPages={documentContext.notebookPages}
         activeGeneratedPageId={documentContext.currentDocumentPage?.kind === 'generated' ? documentContext.currentDocumentPage.pageId : null}
         pageCaptureReferences={globalContext.pageCaptureReferences}
@@ -73,7 +82,7 @@ export const NotesDocumentViewer = React.memo(function NotesDocumentViewer() {
         onDismissIncomingAsset={globalContext.onDismissIncomingAsset}
         onOpenPageCaptureReference={globalContext.onOpenPageCaptureReference}
         onAskAiAboutPageCaptureReference={globalContext.onAskAiAboutPageCaptureReference}
-        selectionRect={canvasContext.selectionRect}
+        selectionRect={readMode ? null : canvasContext.selectionRect}
         onCommitInkStroke={canvasContext.commitInkStroke}
         onRemoveInkStroke={canvasContext.removeInkStroke}
         onReplaceInkStrokes={canvasContext.replaceInkStrokes}
@@ -96,6 +105,7 @@ export const NotesDocumentViewer = React.memo(function NotesDocumentViewer() {
         onPageChanged={documentContext.onSetCurrentPdfPage}
         onOpenGeneratedPage={documentContext.onOpenGeneratedPage}
         onDocumentLoaded={documentContext.onUpdateStudyDocumentPageCount}
+        onViewportDoubleTap={globalContext.onToggleFocusMode}
         styles={globalContext.styles}
       />
     );
@@ -106,6 +116,8 @@ export const NotesDocumentViewer = React.memo(function NotesDocumentViewer() {
       return (
         <BlankNoteCanvas
           styles={globalContext.styles}
+          generatedPageId={documentContext.activeGeneratedPage.id}
+          readOnly={globalContext.studyInteractionMode === 'read'}
         />
       );
     }
@@ -161,5 +173,15 @@ export const NotesDocumentViewer = React.memo(function NotesDocumentViewer() {
       ? documentContext.studyDocument?.file.uri
       : null;
 
-  return <BlankNoteCanvas backgroundImageUri={backgroundImageUri} styles={globalContext.styles} />;
+  return (
+    <BlankNoteCanvas
+      backgroundImageUri={backgroundImageUri}
+      styles={globalContext.styles}
+      pageCount={documentContext.studyDocument?.type === 'blank' ? documentContext.studyDocument.pageCount : 1}
+      currentPage={documentContext.currentPdfPage}
+      template={documentContext.studyDocument?.blankTemplate ?? 'plain'}
+      onPageChange={documentContext.studyDocument?.type === 'blank' ? documentContext.onSetCurrentPdfPage : undefined}
+      readOnly={globalContext.studyInteractionMode === 'read'}
+    />
+  );
 });

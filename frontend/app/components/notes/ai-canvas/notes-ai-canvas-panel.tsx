@@ -426,6 +426,7 @@ export function NotesAiCanvasPanel() {
                 });
               }}
               autoFocus
+              showSoftInputOnFocus
             />
             <View style={workspace.styles.aiTooltipAnchor}>
               <Pressable
@@ -749,6 +750,7 @@ export function NotesAiCanvasPanel() {
               onSubmitEditing={saveRename}
               editable={!canvasManagementDisabled}
               autoFocus
+              showSoftInputOnFocus
             />
             {renameError ? <Text style={workspace.styles.aiRenameModalError}>{renameError}</Text> : null}
             <View style={workspace.styles.aiRenameModalActions}>

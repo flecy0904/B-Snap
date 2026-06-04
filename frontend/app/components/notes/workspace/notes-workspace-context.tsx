@@ -2,8 +2,9 @@ import React from 'react';
 import type { BackendChatMessage, BackendChatSession, BackendClassInsight } from '../../../services/backend-api';
 import type { UseAiCanvasNotesResult } from '../../../hooks/notes/ai-canvas/use-ai-canvas-notes';
 import type { AiCanvasBlockContext } from '../../../types/ai-canvas';
-import type { AppChatMode, AppRightSidebarPanel, WorkspaceFocusTarget } from '../../../hooks/notes/use-study-workspace';
-import { AiAnswer, NoteSummarySection, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NotebookPage, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../../types';
+import type { ImportantPageRecommendation } from '../../../hooks/notes/class-insight';
+import type { AiFloatingPanelSize, AppChatMode, AppRightSidebarPanel, AppSidebarPosition, StudyInteractionMode, WorkspaceFocusTarget } from '../../../hooks/notes/use-study-workspace';
+import { AiAnswer, NoteSummarySection, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NotebookPage, NotebookPageTemplate, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../../types';
 import { InkBrush, InkBrushSettings, InkEraserMode, InkImageAnnotation, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { CanvasProvider } from '../canvas/canvas-context';
 import { DocumentProvider } from './document-context';
@@ -21,6 +22,9 @@ export type DesktopNotesWorkspaceContextValue = {
   appRightSidebarPanel: AppRightSidebarPanel;
   appChatMode: AppChatMode;
   appRightSidebarWidth: number;
+  aiFloatingPanelSize: AiFloatingPanelSize;
+  appSidebarPosition: AppSidebarPosition;
+  studyInteractionMode: StudyInteractionMode;
   webChatSidebarWidth: number;
   webAiCanvasPanelWidth: number;
   focusedWorkspaceTarget: WorkspaceFocusTarget | null;
@@ -47,6 +51,7 @@ export type DesktopNotesWorkspaceContextValue = {
   aiError: string | null;
   aiCanvas: UseAiCanvasNotesResult;
   classInsight: BackendClassInsight | null;
+  importantPageRecommendations: ImportantPageRecommendation[];
   inkTool: InkTool;
   fingerDrawingEnabled: boolean;
   penColor: string;
@@ -111,6 +116,10 @@ export type DesktopNotesWorkspaceContextValue = {
   onFloatAppAiChatPanel: () => void;
   onDockAppAiChatPanel: () => void;
   onChangeAppRightSidebarWidth: (width: number) => void;
+  onChangeAiFloatingPanelSize: (size: AiFloatingPanelSize) => void;
+  onChangeAppSidebarPosition: (position: AppSidebarPosition) => void;
+  onToggleAppSidebarPosition: () => void;
+  onToggleStudyInteractionMode: () => void;
   onResizeWebChatSidebar: (width: number) => void;
   onResizeWebAiCanvasPanel: (width: number) => void;
   onFocusWorkspaceTarget: (target: WorkspaceFocusTarget | null) => void;
@@ -171,6 +180,7 @@ export type DesktopNotesWorkspaceContextValue = {
   onRemovePdfPage: (pageNumber?: number) => void;
   onMovePdfPage: (pageNumber: number | undefined, delta: -1 | 1) => void;
   onCreateMemoPage: (insertAfterPage?: number) => void;
+  onChangeBlankNoteTemplate: (template: NotebookPageTemplate) => void;
   onInsertInboxAsset: (assetId: string) => void;
   onRemoveInboxAsset: (assetId: string) => void;
   onLinkCaptureAssetToPage: (assetId: string, documentId: number, pageNumber: number) => boolean;
@@ -187,6 +197,7 @@ export type DesktopNotesWorkspaceContextValue = {
   onReplaceInkStrokes: (removedStrokeIds: string[], addedStrokes: InkStroke[]) => void;
   onAddTextAnnotation: (point: InkPoint) => void;
   onAddImageAnnotation: (annotation: Partial<InkImageAnnotation> & Pick<InkImageAnnotation, 'uri'>) => void;
+  onInsertImageFromLibrary: () => void;
   onUpdateTextAnnotation: (id: string, text: string) => void;
   onRemoveTextAnnotation: (id: string) => void;
   onMoveTextAnnotation: (id: string, x: number, y: number) => void;

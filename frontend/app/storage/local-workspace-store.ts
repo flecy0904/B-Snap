@@ -8,6 +8,11 @@ const STUDY_WORKSPACE_KEY = 'study-workspace-state';
 const SCHEDULE_WORKSPACE_KEY = 'schedule-workspace-state';
 let workspaceOwnerKey = 'anonymous';
 
+export type AiFloatingPanelSize = {
+  width: number;
+  height: number;
+};
+
 export type PersistedStudyWorkspaceState = {
   version: 1;
   userStudyDocuments: StudyDocumentEntry[];
@@ -24,7 +29,11 @@ export type PersistedStudyWorkspaceState = {
   activePageByDocument: Record<number, DocumentPageView>;
   bookmarksByDocument: Record<number, BookmarkedPage[]>;
   lastChatSessionByDocument?: Record<number, number>;
+  chatSidebarOpenByDocument?: Record<number, boolean>;
   aiPanelMode?: 'floating' | 'sidebar';
+  aiFloatingPanelSize?: AiFloatingPanelSize;
+  appSidebarPosition?: 'left' | 'right';
+  studyInteractionMode?: 'edit' | 'read';
 };
 
 export type PersistedScheduleWorkspaceState = {
@@ -80,7 +89,11 @@ export function buildEmptyStudyWorkspaceState(): PersistedStudyWorkspaceState {
     activePageByDocument: {},
     bookmarksByDocument: {},
     lastChatSessionByDocument: {},
-    aiPanelMode: 'sidebar',
+    chatSidebarOpenByDocument: {},
+    aiPanelMode: 'floating',
+    aiFloatingPanelSize: { width: 380, height: 620 },
+    appSidebarPosition: 'right',
+    studyInteractionMode: 'edit',
   };
 }
 

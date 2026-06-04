@@ -14,6 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from backend.app.core.auth import hash_password
 from backend.app.core.config import get_settings
 from backend.app.db.session import get_database_url
+from backend.app.services.document_matching import build_document_match_key, normalize_subject_key
 
 
 SUBJECT_NAME = "컴퓨터네트워크"
@@ -250,18 +251,52 @@ def _upsert_note(cursor, user_id: int, folder_id: int, *, with_demo_signals: boo
     if row:
         note_id = int(row["id"])
         cursor.execute(
-            "UPDATE notes SET summary = %s, updated_at = now() WHERE id = %s",
-            (summary, note_id),
+            """
+            UPDATE notes
+            SET summary = %s,
+                page_count = %s,
+                original_filename = %s,
+                subject_match_key = %s,
+                document_match_key = %s,
+                updated_at = now()
+            WHERE id = %s
+            """,
+            (
+                summary,
+                PAGE_COUNT,
+                DOCUMENT_TITLE,
+                normalize_subject_key(SUBJECT_NAME),
+                build_document_match_key(DOCUMENT_TITLE, PAGE_COUNT),
+                note_id,
+            ),
         )
         return note_id
 
     cursor.execute(
         """
-        INSERT INTO notes (user_id, folder_id, title, summary)
-        VALUES (%s, %s, %s, %s)
+        INSERT INTO notes (
+            user_id,
+            folder_id,
+            title,
+            summary,
+            page_count,
+            original_filename,
+            subject_match_key,
+            document_match_key
+        )
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
         RETURNING id
         """,
-        (user_id, folder_id, DOCUMENT_TITLE, summary),
+        (
+            user_id,
+            folder_id,
+            DOCUMENT_TITLE,
+            summary,
+            PAGE_COUNT,
+            DOCUMENT_TITLE,
+            normalize_subject_key(SUBJECT_NAME),
+            build_document_match_key(DOCUMENT_TITLE, PAGE_COUNT),
+        ),
     )
     return int(cursor.fetchone()["id"])
 

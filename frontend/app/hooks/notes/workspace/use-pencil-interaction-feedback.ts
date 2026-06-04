@@ -11,8 +11,10 @@ function isPrimaryPencilAction(event: PencilInteractionEvent) {
 export function usePencilInteractionFeedback(params: {
   enabled: boolean;
   onFeedback: Feedback;
+  onPrimaryAction?: (event: PencilInteractionEvent) => void;
+  getFeedbackMessage?: (event: PencilInteractionEvent) => string | null;
 }) {
-  const { enabled, onFeedback } = params;
+  const { enabled, getFeedbackMessage, onFeedback, onPrimaryAction } = params;
   const lastFeedbackAtRef = useRef(0);
 
   useEffect(() => {
@@ -22,16 +24,20 @@ export function usePencilInteractionFeedback(params: {
 
     const subscription = addPencilInteractionListener((event) => {
       if (!isPrimaryPencilAction(event)) return;
+      onPrimaryAction?.(event);
 
       const now = Date.now();
       if (now - lastFeedbackAtRef.current < 900) return;
       lastFeedbackAtRef.current = now;
 
-      onFeedback(event.type === 'squeeze'
-        ? 'Apple Pencil squeeze로 도구 팔레트를 열었습니다.'
-        : 'Apple Pencil double tap으로 도구 팔레트를 열었습니다.');
+      const message = getFeedbackMessage?.(event) ?? (
+        event.type === 'squeeze'
+          ? 'Apple Pencil squeeze 입력을 감지했습니다.'
+          : 'Apple Pencil double tap 입력을 감지했습니다.'
+      );
+      if (message) onFeedback(message);
     });
 
     return () => subscription.remove();
-  }, [enabled, onFeedback]);
+  }, [enabled, getFeedbackMessage, onFeedback, onPrimaryAction]);
 }

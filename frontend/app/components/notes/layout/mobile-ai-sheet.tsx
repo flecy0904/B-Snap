@@ -2,13 +2,13 @@ import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import BottomSheet, { BottomSheetBackdrop, BottomSheetScrollView, BottomSheetTextInput, type BottomSheetBackdropProps } from '@gorhom/bottom-sheet';
 import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
-import { isClassInsightQuestion, isClassInsightTargetDocument } from '../../../hooks/notes/class-insight';
+import { hasEnoughClassInsightData, isClassInsightTargetDocument } from '../../../hooks/notes/class-insight';
 import { AiResponseContent } from '../ai/ai-response-content';
 import type { MobileNotesViewProps } from './mobile-notes-view';
 
 const CLASS_INSIGHT_QUICK_PROMPTS = [
+  { label: '시험 부분', question: '시험에 나올만한 부분 알려줘' },
   { label: '중요 페이지', question: '시험에 나올만한 중요 페이지 추천해줘' },
-  { label: '다음 순위', question: '다음 순위 중요 페이지도 더 알려줘' },
   { label: '복습 순서', question: '이 PDF에서 먼저 복습할 순서 알려줘' },
   { label: '예상 문제', question: '이 내용에서 시험 예상 문제를 만들어줘' },
   { label: '암기 포인트', question: '시험 전에 외워야 할 핵심 포인트만 정리해줘' },
@@ -20,12 +20,6 @@ const DEFAULT_AI_QUICK_PROMPTS = [
   { label: '시험 관점', question: '시험 대비 관점으로 설명해줘' },
   { label: '요약', question: '현재 페이지를 짧게 요약해줘' },
 ] as const;
-
-function formatClassInsightPriority(priority: string) {
-  if (priority === 'very-high') return '매우 높음';
-  if (priority === 'high') return '높음';
-  return '중간';
-}
 
 export function MobileAiSheet(props: MobileNotesViewProps) {
   const aiSheetSnapPoints = React.useMemo(() => ['44%', '78%'], []);
@@ -40,23 +34,15 @@ export function MobileAiSheet(props: MobileNotesViewProps) {
   const aiResponse = props.aiAnswer?.response ?? (props.selectionRect ? '응답 생성을 누르면 선택 영역 기준으로 AI 답변을 요청합니다.' : '먼저 선택 모드로 문서 영역을 드래그해 주세요.');
   const aiSuggestionPrompts = React.useMemo(() => (
     isClassInsightTargetDocument(props.studyDocument, props.subject)
+    && hasEnoughClassInsightData(props.classInsight)
       ? CLASS_INSIGHT_QUICK_PROMPTS
       : DEFAULT_AI_QUICK_PROMPTS
-  ), [props.studyDocument, props.subject]);
+  ), [props.classInsight, props.studyDocument, props.subject]);
   const showAiSuggestionPrompts = Boolean(
     aiSuggestionPrompts.length
     && !props.aiQuestion.trim()
-    && !props.aiChatReadOnly,
+    && !props.aiChatReadOnly
   );
-  const shouldShowClassInsightPages = React.useMemo(() => (
-    isClassInsightQuestion(props.aiQuestion)
-    || isClassInsightQuestion(props.aiAnswer?.question ?? '')
-  ), [props.aiAnswer?.question, props.aiQuestion]);
-  const classInsightPages = React.useMemo(() => {
-    if (!shouldShowClassInsightPages) return [];
-    if (!isClassInsightTargetDocument(props.studyDocument, props.subject)) return [];
-    return (props.classInsight?.pages ?? []).slice(0, 3);
-  }, [props.classInsight?.pages, props.studyDocument, props.subject, shouldShowClassInsightPages]);
   const activeSession = props.aiChatSessions.find((session) => session.id === props.activeAiChatSessionId) ?? null;
 
   if (!props.aiPanelOpen) return null;
@@ -142,29 +128,13 @@ export function MobileAiSheet(props: MobileNotesViewProps) {
           </Text>
         </View>
         {showAiSuggestionPrompts ? (
-          <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="always">
             {aiSuggestionPrompts.map((prompt) => (
               <Pressable key={prompt.label} style={props.styles.aiSuggestionChip} onPress={() => props.onChangeAiQuestion(prompt.question)}>
                 <Text style={props.styles.aiSuggestionText}>{prompt.label}</Text>
               </Pressable>
             ))}
           </ScrollView>
-        ) : null}
-        {classInsightPages.length ? (
-          <View style={props.styles.aiClassInsightStrip}>
-            <View style={props.styles.aiClassInsightHeader}>
-              <Text style={props.styles.aiClassInsightTitle}>추천 페이지</Text>
-              <Text style={props.styles.aiClassInsightMeta}>수업 필기 흐름 기준</Text>
-            </View>
-            <View style={props.styles.aiClassInsightChipRow}>
-              {classInsightPages.map((page) => (
-                <Pressable key={page.page_number} style={props.styles.aiClassInsightChip} onPress={() => props.onSetCurrentPdfPage(page.page_number)}>
-                  <Text style={props.styles.aiClassInsightPage}>{page.page_number}p</Text>
-                  <Text style={props.styles.aiClassInsightPriority}>{formatClassInsightPriority(page.priority)}</Text>
-                </Pressable>
-              ))}
-            </View>
-          </View>
         ) : null}
         {props.aiChatReadOnly ? (
           <View style={props.styles.aiReadOnlyNotice}>
@@ -179,6 +149,7 @@ export function MobileAiSheet(props: MobileNotesViewProps) {
             placeholder={props.selectionRect ? '선택한 영역에 대해 물어보세요' : '현재 페이지에 대해 물어보세요'}
             placeholderTextColor="#A2AAB8"
             multiline
+            showSoftInputOnFocus
             style={props.styles.aiComposerInput}
           />
           <Pressable

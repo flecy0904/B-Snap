@@ -68,11 +68,16 @@ export function shouldActivateNativeInkGesture(
   tool: InkTool,
   event: NativeInkTouchEvent | NativeInkGestureEvent,
   fingerDrawingEnabled: boolean | undefined,
+  allowUnknownPointerAsStylus = false,
 ) {
   'worklet';
   const pointerCount = (event as NativeInkTouchEvent).numberOfTouches ?? (event as NativeInkGestureEvent).numberOfPointers;
   if ((pointerCount ?? 1) > 1) return false;
-  if (tool === 'select') return isNativeStylusEvent(event);
-  if (isNativeStylusOnlyTool(tool)) return Boolean(fingerDrawingEnabled) || isNativeStylusEvent(event);
-  return tool === 'text' && isNativeStylusEvent(event);
+  const pointerType = event.pointerType;
+  const hasPointerType = pointerType !== undefined && pointerType !== null && String(pointerType).length > 0;
+  const stylusEvent = isNativeStylusEvent(event)
+    || (allowUnknownPointerAsStylus && !hasPointerType && !hasNativeStylusData(event.stylusData));
+  if (tool === 'select') return stylusEvent;
+  if (isNativeStylusOnlyTool(tool)) return Boolean(fingerDrawingEnabled) || stylusEvent;
+  return tool === 'text' && stylusEvent;
 }

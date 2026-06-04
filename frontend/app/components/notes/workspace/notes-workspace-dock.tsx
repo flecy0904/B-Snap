@@ -49,6 +49,12 @@ export function NotesWorkspaceDock() {
     null
   );
   const previewIsIncoming = Boolean(globalContext.previewedIncoming);
+  const importantRecommendations = globalContext.importantPageRecommendations ?? [];
+  const getPriorityText = (priority: string) => {
+    if (priority === 'very-high') return '최상';
+    if (priority === 'high') return '높음';
+    return '중간';
+  };
 
   React.useEffect(() => {
     startPositionRef.current = position;
@@ -162,6 +168,36 @@ export function NotesWorkspaceDock() {
                 </Pressable>
               </View>
             ) : null}
+          </View>
+        ) : null}
+        {importantRecommendations.length ? (
+          <View style={globalContext.styles.workspaceDockSection}>
+            <View style={globalContext.styles.workspaceDockSectionHeader}>
+              <Text style={globalContext.styles.workspaceDockSectionTitle}>복습 우선 페이지</Text>
+              <Text style={globalContext.styles.workspaceDockSectionMeta}>추천</Text>
+            </View>
+            {importantRecommendations.map((signal: any, index: number) => (
+              <View key={`${signal.pageNumber}-${index}`} style={globalContext.styles.workspaceDockRow}>
+                <Pressable style={globalContext.styles.workspaceDockRowMeta} onPress={() => documentContext.onSetCurrentPdfPage(signal.pageNumber)}>
+                  <Text style={globalContext.styles.workspaceDockRowTitle} numberOfLines={1}>
+                    {index + 1}. {signal.pageNumber}p · {getPriorityText(signal.priority)}
+                  </Text>
+                  <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>
+                    {(signal.reasonTags ?? []).slice(0, 2).join(' · ') || '복습 우선도가 높은 구간'}
+                  </Text>
+                  <View style={globalContext.styles.workspaceDockSignalChipRow}>
+                    <View style={globalContext.styles.workspaceDockSignalChip}>
+                      <Text style={globalContext.styles.workspaceDockSignalChipText}>복습 우선도 {getPriorityText(signal.priority)}</Text>
+                    </View>
+                  </View>
+                </Pressable>
+                <View style={globalContext.styles.workspaceDockRowButtons}>
+                  <Pressable style={globalContext.styles.workspaceDockInlineAction} onPress={() => documentContext.onSetCurrentPdfPage(signal.pageNumber)}>
+                    <Text style={globalContext.styles.workspaceDockInlineActionText}>이동</Text>
+                  </Pressable>
+                </View>
+              </View>
+            ))}
           </View>
         ) : null}
         <View style={globalContext.styles.workspaceDockSection}>

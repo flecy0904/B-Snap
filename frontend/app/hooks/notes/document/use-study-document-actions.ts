@@ -23,6 +23,7 @@ import type {
   WorkspaceAttachment,
 } from '../../../types';
 import { getStudyDocumentBackendNoteId } from './backend-sync';
+import { persistBlankPdfDocument } from './blank-pdf-local';
 import { addUniqueId, removeId } from './collection-helpers';
 import { createLocalStudyDocumentId, persistPickedPdfAsset, readPdfPageCount } from './pdf-local-import';
 import { serializeNotePageContent } from './note-page-content';
@@ -38,7 +39,9 @@ type StudyDocumentActionsParams = {
   allStudyDocuments: StudyDocumentEntry[];
   deletedStudyDocuments: StudyDocumentEntry[];
   currentPdfPageByDocument: Record<number, number>;
+  activePageByDocument: Record<number, DocumentPageView>;
   lastChatSessionByDocument: Record<number, number>;
+  chatSidebarOpenByDocument: Record<number, boolean>;
   onOpenNotesTab: () => void;
   syncPdfDocumentToBackend: (document: StudyDocumentEntry, subject: Subject) => void | Promise<void>;
   setSubjectId: SetState<number | null>;
@@ -49,7 +52,11 @@ type StudyDocumentActionsParams = {
   setStudyDocumentId: SetState<number | null>;
   setInkTool: SetState<InkTool>;
   setAiPanelOpen: SetState<boolean>;
+  setAiPanelMode: SetState<'floating' | 'sidebar'>;
+  setAppChatMode: SetState<'sidebar' | 'floating'>;
+  setAppRightSidebarPanel: SetState<'chat' | 'canvas' | null>;
   setViewingAiChatSessionId: SetState<number | null>;
+  setChatSidebarOpenByDocument: SetState<Record<number, boolean>>;
   setChatSessionByDocument: SetState<Record<number, number>>;
   setLastChatSessionByDocument: SetState<Record<number, number>>;
   setChatSessionsByDocument: SetState<Record<number, BackendChatSession[]>>;
@@ -77,6 +84,19 @@ type StudyDocumentActionsParams = {
 };
 
 export function useStudyDocumentActions(params: StudyDocumentActionsParams) {
+  const applyChatSidebarPreference = (documentId: number) => {
+    if (params.chatSidebarOpenByDocument[documentId]) {
+      params.setAppChatMode('sidebar');
+      params.setAppRightSidebarPanel('chat');
+      params.setAiPanelMode('sidebar');
+      params.setAiPanelOpen(true);
+      return;
+    }
+
+    params.setAppRightSidebarPanel(null);
+    params.setAiPanelOpen(false);
+  };
+
   const clearOpenDocumentState = (documentId: number) => {
     params.setUserStudyDocuments((current) => current.filter((document) => document.id !== documentId));
     params.setBackendPageIdsByDocument((current) => {
@@ -144,6 +164,11 @@ export function useStudyDocumentActions(params: StudyDocumentActionsParams) {
       delete next[documentId];
       return next;
     });
+    params.setChatSidebarOpenByDocument((current) => {
+      const next = { ...current };
+      delete next[documentId];
+      return next;
+    });
   };
 
   const closeCurrentDocumentIfNeeded = (documentId: number) => {
@@ -167,11 +192,23 @@ export function useStudyDocumentActions(params: StudyDocumentActionsParams) {
 
     const selected = params.allStudyDocuments.find((value) => value.id === id);
     if (!selected) return;
+    const storedActivePage = params.activePageByDocument[id];
+    const restoredPdfPage = Math.max(
+      1,
+      Math.min(
+        selected.pageCount,
+        params.currentPdfPageByDocument[id] ?? (storedActivePage?.kind === 'pdf' ? storedActivePage.pageNumber : 1),
+      ),
+    );
+    const restoredActivePage: DocumentPageView = storedActivePage?.kind === 'generated'
+      ? storedActivePage
+      : { kind: 'pdf', pageNumber: restoredPdfPage };
 
     params.onOpenNotesTab();
     params.setSubjectId(selected.subjectId);
     params.setNoteId(null);
     params.setStudyDocumentId(id);
+    applyChatSidebarPreference(id);
     params.setViewingAiChatSessionId(null);
     params.setChatSessionByDocument((current) => {
       const next = { ...current };
@@ -181,9 +218,14 @@ export function useStudyDocumentActions(params: StudyDocumentActionsParams) {
       return next;
     });
     params.setInkTool('pen');
+    params.setCurrentPdfPageByDocument((current) => (
+      current[id] === restoredPdfPage
+        ? current
+        : { ...current, [id]: restoredPdfPage }
+    ));
     params.setActivePageByDocument((current) => ({
       ...current,
-      [id]: current[id] ?? { kind: 'pdf', pageNumber: params.currentPdfPageByDocument[id] ?? 1 },
+      [id]: restoredActivePage,
     }));
   };
 
@@ -196,6 +238,8 @@ export function useStudyDocumentActions(params: StudyDocumentActionsParams) {
     params.setNoteWorkspaceMode('note');
     params.setInkTool('pen');
     params.setAiPanelOpen(false);
+    params.setAppRightSidebarPanel(null);
+    params.setChatSidebarOpenByDocument((current) => ({ ...current, [document.id]: false }));
     if (feedback) params.setWorkspaceFeedback(feedback);
     params.setCurrentPdfPageByDocument((current) => ({
       ...current,
@@ -234,6 +278,16 @@ export function useStudyDocumentActions(params: StudyDocumentActionsParams) {
             1: backendPage.id,
           },
         }));
+        let localBlankPdfUri: string | null = null;
+        try {
+          localBlankPdfUri = await persistBlankPdfDocument({
+            documentId: backendNote.id,
+            pageCount: 1,
+            template: 'plain',
+          });
+        } catch {
+          localBlankPdfUri = null;
+        }
         const document: StudyDocumentEntry = {
           id: backendNote.id,
           backendNoteId: backendNote.id,
@@ -243,7 +297,10 @@ export function useStudyDocumentActions(params: StudyDocumentActionsParams) {
           updatedAt: '방금 전',
           pageCount: 1,
           preview: backendNote.summary ?? '새 빈 노트입니다.',
+          file: localBlankPdfUri ? { uri: localBlankPdfUri } : undefined,
+          localFileUri: localBlankPdfUri ?? undefined,
           backendSyncStatus: 'synced',
+          blankTemplate: 'plain',
         };
         openCreatedStudyDocument(document, '새 노트를 만들었어요.');
         return;
@@ -252,15 +309,29 @@ export function useStudyDocumentActions(params: StudyDocumentActionsParams) {
       }
     }
 
+    const localDocumentId = Date.now();
+    let localBlankPdfUri: string | null = null;
+    try {
+      localBlankPdfUri = await persistBlankPdfDocument({
+        documentId: localDocumentId,
+        pageCount: 1,
+        template: 'plain',
+      });
+    } catch {
+      localBlankPdfUri = null;
+    }
     const document: StudyDocumentEntry = {
-      id: Date.now(),
+      id: localDocumentId,
       subjectId: targetSubjectId,
       title: `${targetSubject?.name ?? '수업'} 새 노트`,
       type: 'blank',
       updatedAt: '방금 전',
       pageCount: 1,
       preview: '새로 만든 빈 필기 노트입니다.',
+      file: localBlankPdfUri ? { uri: localBlankPdfUri } : undefined,
+      localFileUri: localBlankPdfUri ?? undefined,
       backendSyncStatus: 'local',
+      blankTemplate: 'plain',
     };
 
     openCreatedStudyDocument(document, '새 노트를 만들었어요.');
@@ -393,9 +464,11 @@ export function useStudyDocumentActions(params: StudyDocumentActionsParams) {
     params.setCurrentPdfPageByDocument(emptyState.currentPdfPageByDocument);
     params.setActivePageByDocument(emptyState.activePageByDocument);
     params.setBookmarksByDocument(emptyState.bookmarksByDocument ?? {});
+    params.setChatSidebarOpenByDocument(emptyState.chatSidebarOpenByDocument ?? {});
     params.setIncomingAssetSuggestion(null);
     params.setIncomingBannerQueue([]);
     params.setStudyDocumentId(null);
+    params.setAppRightSidebarPanel(null);
     params.setAiAnswer(null);
     params.setAiError(null);
     params.setAiLoading(false);
@@ -407,6 +480,7 @@ export function useStudyDocumentActions(params: StudyDocumentActionsParams) {
     params.setNoteId(null);
     params.setStudyDocumentId(null);
     params.setAiPanelOpen(false);
+    params.setAppRightSidebarPanel(null);
     params.setInkTool('view');
     params.setIncomingAssetSuggestion(null);
   };
