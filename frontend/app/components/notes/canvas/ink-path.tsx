@@ -24,6 +24,23 @@ export function InkPath({ stroke, draft = false }: { stroke: InkStroke; draft?: 
     );
   }
 
+  if (stroke.style === 'highlight' && draft) {
+    const centerlinePath = getInkCenterlinePath(stroke.points);
+    if (!centerlinePath) return null;
+    return (
+      <Path
+        key={`${stroke.id}-draft`}
+        d={centerlinePath}
+        fill="none"
+        stroke={stroke.color}
+        strokeWidth={stroke.width}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        opacity={0.58}
+      />
+    );
+  }
+
   const path = getInkStrokeSvgPath(stroke, !draft);
   if (!path) return null;
 

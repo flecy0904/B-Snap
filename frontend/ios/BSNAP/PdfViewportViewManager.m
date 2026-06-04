@@ -806,7 +806,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
     self.opaque = NO;
     self.userInteractionEnabled = NO;
     self.contentMode = UIViewContentModeRedraw;
-    self.clearsContextBeforeDrawing = NO;
+    self.clearsContextBeforeDrawing = YES;
   }
   return self;
 }
@@ -1184,9 +1184,11 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   if (touch == nil || ![touches containsObject:touch]) return;
   NSArray<UITouch *> *samples = [event coalescedTouchesForTouch:touch] ?: @[touch];
   [self moveWithTouchSamples:samples predicted:NO];
-  NSArray<UITouch *> *predictedSamples = [event predictedTouchesForTouch:touch];
-  if (predictedSamples.count > 0) {
-    [self moveWithTouchSamples:predictedSamples predicted:YES];
+  if (![self.owner.inkTool isEqualToString:@"highlight"]) {
+    NSArray<UITouch *> *predictedSamples = [event predictedTouchesForTouch:touch];
+    if (predictedSamples.count > 0) {
+      [self moveWithTouchSamples:predictedSamples predicted:YES];
+    }
   }
   self.state = UIGestureRecognizerStateChanged;
 }
@@ -6465,8 +6467,12 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   UIColor *color = [self colorFromHex:[RCTConvert NSString:stroke[@"color"]] ?: @"#111827"];
   CGFloat width = MAX(1.0, [stroke[@"width"] doubleValue]);
   NSString *style = [RCTConvert NSString:stroke[@"style"]] ?: @"pen";
+  CGFloat sourceAlpha = CGColorGetAlpha(color.CGColor);
+  CGFloat strokeAlpha = [style isEqualToString:@"highlight"]
+    ? (sourceAlpha < 0.999 ? sourceAlpha : 0.36)
+    : sourceAlpha;
   CGContextSaveGState(context);
-  CGContextSetStrokeColorWithColor(context, [color colorWithAlphaComponent:[style isEqualToString:@"highlight"] ? 0.36 : 1.0].CGColor);
+  CGContextSetStrokeColorWithColor(context, [color colorWithAlphaComponent:strokeAlpha].CGColor);
   CGContextSetLineWidth(context, width);
   CGContextSetLineCap(context, kCGLineCapRound);
   CGContextSetLineJoin(context, kCGLineJoinRound);
@@ -6908,7 +6914,7 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
   if (![points isKindOfClass:NSArray.class] || points.count == 0) return CGRectNull;
 
   NSString *style = [RCTConvert NSString:stroke[@"style"]] ?: @"pen";
-  if ([style isEqualToString:@"shape"] || points.count <= 2) {
+  if ([style isEqualToString:@"highlight"] || [style isEqualToString:@"shape"] || points.count <= 2) {
     return [self dirtyRectForStroke:stroke];
   }
 
@@ -7010,7 +7016,32 @@ static NSMutableDictionary<NSString *, NSDictionary *> *BsnPdfSavedViewportAncho
 
 - (UIColor *)colorFromHex:(NSString *)hex
 {
-  NSString *clean = [[hex stringByReplacingOccurrencesOfString:@"#" withString:@""] uppercaseString];
+  if (![hex isKindOfClass:NSString.class]) return UIColor.blackColor;
+  NSString *trimmed = [hex stringByTrimmingCharactersInSet:NSCharacterSet.whitespaceAndNewlineCharacterSet];
+  NSString *lowercase = trimmed.lowercaseString;
+  if ([lowercase hasPrefix:@"rgba("] || [lowercase hasPrefix:@"rgb("]) {
+    NSRange open = [trimmed rangeOfString:@"("];
+    NSRange close = [trimmed rangeOfString:@")" options:NSBackwardsSearch];
+    if (open.location != NSNotFound && close.location != NSNotFound && close.location > open.location) {
+      NSString *body = [trimmed substringWithRange:NSMakeRange(open.location + 1, close.location - open.location - 1)];
+      NSArray<NSString *> *parts = [body componentsSeparatedByString:@","];
+      if (parts.count >= 3) {
+        CGFloat red = MIN(255.0, MAX(0.0, [parts[0] doubleValue])) / 255.0;
+        CGFloat green = MIN(255.0, MAX(0.0, [parts[1] doubleValue])) / 255.0;
+        CGFloat blue = MIN(255.0, MAX(0.0, [parts[2] doubleValue])) / 255.0;
+        CGFloat alpha = parts.count >= 4 ? MIN(1.0, MAX(0.0, [parts[3] doubleValue])) : 1.0;
+        return [UIColor colorWithRed:red green:green blue:blue alpha:alpha];
+      }
+    }
+  }
+
+  NSString *clean = [[[trimmed stringByReplacingOccurrencesOfString:@"#" withString:@""] stringByReplacingOccurrencesOfString:@" " withString:@""] uppercaseString];
+  if (clean.length == 3) {
+    NSString *red = [clean substringWithRange:NSMakeRange(0, 1)];
+    NSString *green = [clean substringWithRange:NSMakeRange(1, 1)];
+    NSString *blue = [clean substringWithRange:NSMakeRange(2, 1)];
+    clean = [NSString stringWithFormat:@"%@%@%@%@%@%@", red, red, green, green, blue, blue];
+  }
   if (clean.length != 6) return UIColor.blackColor;
   unsigned int rgb = 0;
   [[NSScanner scannerWithString:clean] scanHexInt:&rgb];
