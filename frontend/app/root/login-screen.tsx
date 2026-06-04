@@ -83,8 +83,7 @@ export function LoginScreen(props: {
         <KeyboardAvoidingView style={S.loginScreen} behavior={Platform.OS === 'ios' ? 'padding' : undefined} keyboardVerticalOffset={Platform.OS === 'ios' ? 8 : 0}>
           <ScrollView
             contentContainerStyle={S.loginScreenContent}
-            keyboardShouldPersistTaps="handled"
-            keyboardDismissMode="on-drag"
+            keyboardShouldPersistTaps="always"
             showsVerticalScrollIndicator={false}
           >
             <View style={[S.loginCard, isWeb && S.webLoginCard]}>
@@ -128,6 +127,7 @@ export function LoginScreen(props: {
                       autoCorrect={false}
                       autoCapitalize="words"
                       returnKeyType="next"
+                      showSoftInputOnFocus
                       style={S.loginInput}
                     />
                   </View>
@@ -144,6 +144,7 @@ export function LoginScreen(props: {
                     placeholder="ID"
                     placeholderTextColor="#9FA7B5"
                     returnKeyType="next"
+                    showSoftInputOnFocus
                     style={S.loginInput}
                   />
                 </View>
@@ -160,12 +161,19 @@ export function LoginScreen(props: {
                     placeholderTextColor="#9FA7B5"
                     returnKeyType="done"
                     onSubmitEditing={submit}
+                    showSoftInputOnFocus
                     style={S.loginInput}
                   />
                   <Text style={S.loginFieldHelp}>개인정보 보호를 위해 8자 이상, 영문과 숫자 조합을 권장합니다.</Text>
                 </View>
 
                 {error ? <Text style={S.loginError}>{error}</Text> : null}
+
+                {mode === 'register' ? (
+                  <Text style={S.loginFieldHelp}>
+                    회원가입 시 학습 품질 향상과 중요 페이지 추천을 위해 자료명, 페이지 정보, 필기·하이라이트·북마크·질문 등 학습 활동 데이터가 비식별화 및 집계된 형태로 활용될 수 있음에 동의합니다.
+                  </Text>
+                ) : null}
 
                 <Pressable style={S.loginButton} onPress={submit} disabled={loading}>
                   <Text style={S.loginButtonText}>{loading ? '처리 중...' : mode === 'register' ? '회원가입' : '로그인'}</Text>

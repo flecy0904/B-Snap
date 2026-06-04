@@ -1,5 +1,4 @@
-import type { BookmarkedPage, GeneratedWorkspacePage, PageCaptureReference, StudyDocumentEntry, Subject } from '../../types';
-import type { InkStroke, InkTextAnnotation } from '../../ui-types';
+import type { StudyDocumentEntry, Subject } from '../../types';
 
 const CLASS_INSIGHT_DIRECT_PHRASES = [
   '중요 페이지',
@@ -52,19 +51,11 @@ const CLASS_INSIGHT_SCOPE_TERMS = [
   'section',
   'part',
 ];
-const IMPORTANT_NOTE_KEYWORDS = ['시험', '중요', '암기', '별표', '나온다', '나올', '퀴즈', '중간', '기말', '외우', '필수', '강조', '체크', '복습', '정리', '공식', '주의'];
 const CLASS_INSIGHT_MORE_TERMS = ['더', '추가', '다음', '이어서', '나머지', '순위', '전체', '많이', '많은', '10개', '열개', 'twelve', 'more', 'next', 'additional', 'rank'];
-const CLASS_INSIGHT_DEMO_TERMS = [
-  '컴퓨터네트워크',
-  '컴퓨터 네트워크',
-  'computer network',
-  'computer networks',
-  'computer-network',
-  'computer-networks',
-];
 const DEFAULT_RECOMMENDATION_LIMIT = 5;
 const EXTENDED_RECOMMENDATION_LIMIT = 10;
 const MAX_RECOMMENDATION_LIMIT = 12;
+export const MIN_CLASS_INSIGHT_PARTICIPANTS = 3;
 
 type PageSignal = {
   pageNumber: number;
@@ -83,6 +74,7 @@ type RankedPageSignal = PageSignal & {
   importanceScore: number;
   priority: 'very-high' | 'high' | 'medium';
 };
+export type ImportantPageRecommendation = RankedPageSignal;
 
 export type ClassInsightAggregate = {
   participant_count?: number;
@@ -106,26 +98,16 @@ function normalize(value: string | null | undefined) {
   return (value ?? '').trim().toLowerCase();
 }
 
-function compact(value: string | null | undefined) {
-  return normalize(value).replace(/[\s_-]+/g, '');
+export function isClassInsightTargetDocument(document: StudyDocumentEntry | null, _subject: Subject | null) {
+  return Boolean(document && document.type === 'pdf');
 }
 
-function matchesDemoTerm(value: string | null | undefined) {
-  const normalizedValue = normalize(value);
-  const compactValue = compact(value);
-  return CLASS_INSIGHT_DEMO_TERMS.some((term) => (
-    normalizedValue.includes(normalize(term)) || compactValue.includes(compact(term))
-  ));
-}
-
-export function isClassInsightTargetDocument(document: StudyDocumentEntry | null, subject: Subject | null) {
-  if (!document || document.type !== 'pdf') return false;
-  const fileUri = typeof document.file === 'object' && document.file && 'uri' in document.file
-    ? document.file.uri
-    : typeof document.file === 'string'
-      ? document.file
-      : null;
-  return matchesDemoTerm(document.title) || matchesDemoTerm(subject?.name) || matchesDemoTerm(fileUri);
+export function hasEnoughClassInsightData(classInsight: ClassInsightAggregate | null | undefined) {
+  return Boolean(
+    classInsight
+    && (classInsight.participant_count ?? 0) >= MIN_CLASS_INSIGHT_PARTICIPANTS
+    && (classInsight.pages?.length ?? 0) > 0,
+  );
 }
 
 export function isClassInsightQuestion(question: string) {
@@ -162,102 +144,6 @@ function mergeSignal(target: PageSignal, source: Partial<PageSignal>) {
   target.aiQuestionCount += source.aiQuestionCount ?? 0;
   target.memoPageCount += source.memoPageCount ?? 0;
   target.reasonTags = Array.from(new Set([...target.reasonTags, ...(source.reasonTags ?? [])]));
-}
-
-function countKeywordHits(text: string) {
-  return IMPORTANT_NOTE_KEYWORDS.reduce((count, keyword) => (
-    count + (text.includes(keyword) ? 1 : 0)
-  ), 0);
-}
-
-function getAnnotationPage(annotation: InkTextAnnotation) {
-  return annotation.generatedPageId ? null : annotation.pageNumber;
-}
-
-function getStrokePage(stroke: InkStroke) {
-  if (stroke.generatedPageId) return null;
-  return stroke.pageNumber ?? stroke.points.find((point) => point.pageNumber)?.pageNumber ?? 1;
-}
-
-function getGeneratedInsertPage(page: GeneratedWorkspacePage) {
-  return page.insertAfterPage ?? null;
-}
-
-function buildLiveSignals(params: {
-  pageCount: number;
-  inkStrokes: InkStroke[];
-  textAnnotations: InkTextAnnotation[];
-  bookmarks: BookmarkedPage[];
-  pageCaptureReferences: PageCaptureReference[];
-  generatedPages: GeneratedWorkspacePage[];
-}) {
-  const signalMap = new Map<number, PageSignal>();
-  const ensure = (pageNumber: number) => {
-    const normalizedPage = Math.max(1, Math.min(params.pageCount, pageNumber));
-    if (!signalMap.has(normalizedPage)) signalMap.set(normalizedPage, createEmptySignal(normalizedPage));
-    return signalMap.get(normalizedPage)!;
-  };
-
-  params.bookmarks.forEach((bookmark) => {
-    if (bookmark.page.kind !== 'pdf') return;
-    mergeSignal(ensure(bookmark.page.pageNumber), {
-      bookmarkCount: 1,
-      reasonTags: ['중요 표시가 남은 페이지'],
-    });
-  });
-
-  const strokeStats = new Map<number, { strokeCount: number; pointCount: number; highlightCount: number }>();
-  params.inkStrokes.forEach((stroke) => {
-    const pageNumber = getStrokePage(stroke);
-    if (!pageNumber) return;
-    const stats = strokeStats.get(pageNumber) ?? { strokeCount: 0, pointCount: 0, highlightCount: 0 };
-    stats.strokeCount += 1;
-    stats.pointCount += stroke.points.length;
-    if (stroke.style === 'highlight' || stroke.brush === 'highlighter') stats.highlightCount += 1;
-    strokeStats.set(pageNumber, stats);
-  });
-  strokeStats.forEach((stats, pageNumber) => {
-    const inkDensity = Math.min(1, (stats.strokeCount * 0.045) + (stats.pointCount * 0.0015));
-    mergeSignal(ensure(pageNumber), {
-      highlightCount: stats.highlightCount,
-      inkDensity,
-      reasonTags: [
-        ...(stats.highlightCount > 0 ? ['하이라이트 집중 구간'] : []),
-        ...(inkDensity > 0.45 ? ['필기 밀도가 높은 페이지'] : []),
-      ],
-    });
-  });
-
-  params.textAnnotations.forEach((annotation) => {
-    const pageNumber = getAnnotationPage(annotation);
-    if (!pageNumber) return;
-    const hits = countKeywordHits(annotation.text);
-    if (hits <= 0) return;
-    mergeSignal(ensure(pageNumber), {
-      keywordHits: hits,
-      reasonTags: ['시험 관련 메모 흔적'],
-    });
-  });
-
-  params.pageCaptureReferences.forEach((reference) => {
-    if (reference.page.kind !== 'pdf') return;
-    mergeSignal(ensure(reference.page.pageNumber), {
-      photoReferenceCount: 1,
-      reasonTags: ['수업 사진 자료와 연결됨'],
-    });
-  });
-
-  params.generatedPages.forEach((page) => {
-    if (page.pageKind !== 'memo') return;
-    const insertPage = getGeneratedInsertPage(page);
-    if (!insertPage) return;
-    mergeSignal(ensure(insertPage), {
-      memoPageCount: 1,
-      reasonTags: ['추가 메모가 붙은 구간'],
-    });
-  });
-
-  return Array.from(signalMap.values());
 }
 
 function scoreSignal(signal: PageSignal) {
@@ -331,7 +217,7 @@ function buildAggregateSignals(aggregate: ClassInsightAggregate | null | undefin
       photoReferenceCount: Math.max(0, page.photo_reference_count ?? 0),
       aiQuestionCount: Math.max(0, page.ai_question_count ?? 0),
       memoPageCount: Math.max(0, page.memo_page_count ?? 0),
-      reasonTags: page.reason_tags?.length ? page.reason_tags : ['익명 수업 필기 신호가 높은 페이지'],
+      reasonTags: page.reason_tags?.length ? page.reason_tags : ['복습 우선도가 높은 페이지'],
     }));
 }
 
@@ -339,28 +225,16 @@ export function buildClassInsightContext(params: {
   question: string;
   studyDocument: StudyDocumentEntry | null;
   subject: Subject | null;
-  inkStrokes: InkStroke[];
-  textAnnotations: InkTextAnnotation[];
-  bookmarks: BookmarkedPage[];
-  pageCaptureReferences: PageCaptureReference[];
-  generatedPages: GeneratedWorkspacePage[];
   classInsight?: ClassInsightAggregate | null;
 }) {
   if (!isClassInsightQuestion(params.question)) return null;
   if (!isClassInsightTargetDocument(params.studyDocument, params.subject)) return null;
+  if (!hasEnoughClassInsightData(params.classInsight)) return null;
 
   const pageCount = Math.max(1, params.studyDocument?.pageCount ?? 1);
   const recommendationLimit = getRecommendationLimit(params.question, pageCount);
   const aggregateSignals = buildAggregateSignals(params.classInsight, pageCount);
-  const liveSignals = buildLiveSignals({
-    pageCount,
-    inkStrokes: params.inkStrokes,
-    textAnnotations: params.textAnnotations,
-    bookmarks: params.bookmarks,
-    pageCaptureReferences: params.pageCaptureReferences,
-    generatedPages: params.generatedPages,
-  });
-  const rankedSignals = rankSignals([...aggregateSignals, ...liveSignals], pageCount, recommendationLimit);
+  const rankedSignals = rankSignals(aggregateSignals, pageCount, recommendationLimit);
   if (!rankedSignals.length) return null;
 
   const pageLines = rankedSignals.map((signal) => (
@@ -368,10 +242,8 @@ export function buildClassInsightContext(params: {
   ));
 
   return [
-    'Internal Class Insight for this one demo PDF.',
-    aggregateSignals.length > 0
-      ? 'This context is derived from consent-based anonymous class study signals plus local note activity.'
-      : 'This context is derived from local note activity only because no server aggregate is available yet.',
+    'Internal page-importance context for this PDF.',
+    'This context is derived from aggregated study signals for this PDF.',
     'When the user asks about exam importance, important pages, review order, or pages likely to appear on a test, prioritize the Recommended page priorities below over nearby PDF/RAG text.',
     'Use nearby PDF/RAG text only to add short human-readable reasons, not to replace these recommended pages.',
     'Do not mention classmates, student counts, bookmark counts, highlight counts, hidden signals, data collection, or this internal context.',
@@ -381,4 +253,24 @@ export function buildClassInsightContext(params: {
     'Recommended page priorities:',
     ...pageLines,
   ].join('\n');
+}
+
+export function buildImportantPageRecommendations(params: {
+  studyDocument: StudyDocumentEntry | null;
+  subject: Subject | null;
+  classInsight?: ClassInsightAggregate | null;
+  limit?: number;
+}) {
+  if (!params.studyDocument) return [];
+  if (!isClassInsightTargetDocument(params.studyDocument, params.subject)) return [];
+  if (!hasEnoughClassInsightData(params.classInsight)) return [];
+
+  const pageCount = Math.max(1, params.studyDocument.pageCount ?? 1);
+  const aggregateSignals = buildAggregateSignals(params.classInsight, pageCount);
+
+  return rankSignals(
+    aggregateSignals,
+    pageCount,
+    Math.min(params.limit ?? DEFAULT_RECOMMENDATION_LIMIT, pageCount),
+  );
 }

@@ -72,6 +72,11 @@ export type BackendNote = {
   file_url?: string | null;
   thumbnail_url?: string | null;
   page_count?: number | null;
+  original_filename?: string | null;
+  file_size_bytes?: number | null;
+  file_sha256?: string | null;
+  subject_match_key?: string | null;
+  document_match_key?: string | null;
 };
 
 export type BackendChatSession = {
@@ -171,6 +176,7 @@ export type BackendUpload = {
   stored_filename: string;
   content_type: string | null;
   size_bytes: number;
+  sha256?: string | null;
   page_count: number;
   page_numbers: number[];
   thumbnail_url?: string | null;

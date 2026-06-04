@@ -358,6 +358,7 @@ export function NotesAiCanvasPanel() {
               editable={!recommendationBusy}
               onSubmitEditing={submitMiniCommand}
               autoFocus
+              showSoftInputOnFocus
             />
             <Pressable
               style={[
@@ -616,6 +617,7 @@ export function NotesAiCanvasPanel() {
               onSubmitEditing={saveRename}
               editable={!canvasManagementDisabled}
               autoFocus
+              showSoftInputOnFocus
             />
             {renameError ? <Text style={workspace.styles.aiRenameModalError}>{renameError}</Text> : null}
             <View style={workspace.styles.aiRenameModalActions}>

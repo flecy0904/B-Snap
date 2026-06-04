@@ -23,6 +23,11 @@ class NoteRead(BaseModel):
     file_url: str | None = None
     thumbnail_url: str | None = None
     page_count: int | None = None
+    original_filename: str | None = None
+    file_size_bytes: int | None = None
+    file_sha256: str | None = None
+    subject_match_key: str | None = None
+    document_match_key: str | None = None
     created_at: datetime
     updated_at: datetime
 

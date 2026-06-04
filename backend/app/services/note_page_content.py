@@ -12,6 +12,10 @@ def _empty_page_state() -> dict[str, Any]:
         "version": PAGE_STATE_VERSION,
         "inkStrokes": [],
         "textAnnotations": [],
+        "imageAnnotations": [],
+        "bookmarked": False,
+        "photoReferenceCount": 0,
+        "memoPageCount": 0,
     }
 
 
@@ -57,6 +61,13 @@ def merge_page_state_content(
     merged["textAnnotations"] = (
         merged.get("textAnnotations") if isinstance(merged.get("textAnnotations"), list) else []
     )
+    merged["imageAnnotations"] = (
+        merged.get("imageAnnotations") if isinstance(merged.get("imageAnnotations"), list) else []
+    )
+    merged["bookmarked"] = bool(merged.get("bookmarked", False))
+    for count_key in ("photoReferenceCount", "memoPageCount"):
+        value = merged.get(count_key, 0)
+        merged[count_key] = max(0, int(value)) if isinstance(value, (int, float)) else 0
 
     return json.dumps(merged, ensure_ascii=False, separators=(",", ":"))
 

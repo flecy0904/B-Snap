@@ -7,10 +7,11 @@ import { runOnJS } from 'react-native-reanimated';
 import Svg, { Path } from 'react-native-svg';
 import { captureRef } from 'react-native-view-shot';
 import { InkPath } from '../canvas/ink-path';
+import { PencilHoverOverlay } from '../canvas/pencil-hover-overlay';
 import { SelectionContextMenu } from '../canvas/selection-context-menu';
 import { getSelectedObjectIdsForSelection } from '../canvas/selection-move-preview';
 import { TextAnnotationLayer } from '../canvas/text-annotation-layer';
-import { getPencilHoverPoint, getPencilHoverSize, getPencilHoverToolLabel, isStylusHoverEvent, shouldPreviewPencilHover, type PencilHoverPoint } from '../canvas/native-pencil-hover';
+import { getPencilHoverPoint, getPencilHoverSize, isPencilHoverFarEnough, isStylusHoverEvent, shouldPreviewPencilHover, type PencilHoverPoint } from '../canvas/native-pencil-hover';
 import { shouldActivateNativeInkGesture, type NativeGestureStateManager, type NativeInkGestureEvent, type NativeInkTouchEvent } from '../canvas/native-ink-gesture-policy';
 import { getCaptureOriginalImageSource, getPageCaptureReferenceImageSource } from '../shared/capture-assets';
 import { AndroidNativePdfViewport } from './android-native-pdf-viewport';
@@ -251,6 +252,7 @@ export function PdfPreview(props: {
   inkStrokes: InkStroke[];
   textAnnotations: InkTextAnnotation[];
   imageAnnotations?: InkImageAnnotation[];
+  readOnly?: boolean;
   textAnnotationVariant?: 'floating' | 'marker';
   selectionRect: SelectionRect | null;
   onCommitInkStroke: (stroke: InkStroke) => void;
@@ -284,6 +286,7 @@ export function PdfPreview(props: {
   onOpenPageCaptureReference?: (referenceId: string) => void;
   onAskAiAboutPageCaptureReference?: (referenceId: string) => void;
   onChangeInkTool?: (tool: InkTool) => void;
+  onViewportDoubleTap?: () => void;
   styles: any;
 }) {
   const useNativeViewport = Platform.OS === 'android' || (Platform.OS === 'ios' && USE_IOS_NATIVE_PDF_ENGINE);
@@ -307,6 +310,7 @@ export function PdfPreview(props: {
           inkStrokes={props.inkStrokes}
           textAnnotations={props.textAnnotations}
           imageAnnotations={props.imageAnnotations ?? []}
+          readOnly={props.readOnly}
           textAnnotationVariant={props.textAnnotationVariant}
           selectionRect={props.selectionRect}
           notebookPages={props.notebookPages}
@@ -336,6 +340,9 @@ export function PdfPreview(props: {
           onDismissIncomingAsset={props.onDismissIncomingAsset}
           onOpenPageCaptureReference={props.onOpenPageCaptureReference}
           onAskAiAboutPageCaptureReference={props.onAskAiAboutPageCaptureReference}
+          onOpenGeneratedPage={props.onOpenGeneratedPage}
+          onChangeInkTool={props.onChangeInkTool}
+          onViewportDoubleTap={props.onViewportDoubleTap}
           onPageChanged={props.onPageChanged}
           onDocumentLoaded={props.onDocumentLoaded}
           styles={props.styles}
@@ -1456,6 +1463,7 @@ export function PdfPreview(props: {
 
     const gestureInkTool = props.inkTool;
     const gestureFingerDrawingEnabled = props.fingerDrawingEnabled;
+    const allowUnknownPointerAsStylus = Platform.OS === 'ios';
     const inkGesture = Gesture.Pan()
       .enabled(gestureInkTool !== 'view')
       .manualActivation(true)
@@ -1464,7 +1472,7 @@ export function PdfPreview(props: {
       .cancelsTouchesInView(true)
       .onTouchesDown((event: NativeInkTouchEvent, state: NativeGestureStateManager) => {
         'worklet';
-        if (shouldActivateNativeInkGesture(gestureInkTool, event, gestureFingerDrawingEnabled)) {
+        if (shouldActivateNativeInkGesture(gestureInkTool, event, gestureFingerDrawingEnabled, allowUnknownPointerAsStylus)) {
           state.activate();
         } else {
           state.fail();
@@ -1487,7 +1495,10 @@ export function PdfPreview(props: {
         if (!success) runOnJS(handleInkGestureCancel)();
       });
     const handlePencilHoverMove = (event: unknown) => {
-      if (!shouldPreviewPencilHover(props.inkTool) || !isStylusHoverEvent(event)) return;
+      if (!shouldPreviewPencilHover(props.inkTool) || !isStylusHoverEvent(event) || !isPencilHoverFarEnough(event)) {
+        setPencilHover((current) => (current?.pageKey === pageKey ? null : current));
+        return;
+      }
       const point = getPencilHoverPoint(event);
       if (!point || !isPointInsidePage(point.x, point.y)) return;
       setPencilHover({ pageKey, ...point });
@@ -1504,7 +1515,6 @@ export function PdfPreview(props: {
       props.eraserMode,
     );
     const hoverVisible = pencilHover?.pageKey === pageKey && shouldPreviewPencilHover(props.inkTool);
-    const hoverToolLabel = getPencilHoverToolLabel(props.inkTool);
 
     return (
       <View
@@ -1664,37 +1674,16 @@ export function PdfPreview(props: {
           <View {...hoverHandlers} pointerEvents={props.inkTool === 'view' ? 'none' : 'auto'} style={props.styles.inkOverlay} />
         </GestureDetector>
         {hoverVisible ? (
-          <>
-            <View
-              pointerEvents="none"
-              style={[
-                props.styles.pencilHoverPreview,
-                props.inkTool === 'erase' && props.styles.pencilHoverPreviewEraser,
-                {
-                  left: pencilHover.x - hoverSize / 2,
-                  top: pencilHover.y - hoverSize / 2,
-                  width: hoverSize,
-                  height: hoverSize,
-                  borderRadius: hoverSize / 2,
-                  borderColor: props.inkTool === 'erase' ? '#EF4444' : props.penColor,
-                },
-              ]}
-            />
-            {hoverToolLabel ? (
-              <View
-                pointerEvents="none"
-                style={[
-                  props.styles.pencilHoverLabel,
-                  {
-                    left: Math.min(Math.max(6, pencilHover.x + hoverSize / 2 + 8), Math.max(6, viewerWidth - 76)),
-                    top: Math.min(Math.max(6, pencilHover.y - hoverSize / 2 - 2), Math.max(6, viewerHeight - 30)),
-                  },
-                ]}
-              >
-                <Text style={props.styles.pencilHoverLabelText}>{hoverToolLabel}</Text>
-              </View>
-            ) : null}
-          </>
+          <PencilHoverOverlay
+            x={pencilHover.x}
+            y={pencilHover.y}
+            size={hoverSize}
+            pageWidth={viewerWidth}
+            pageHeight={viewerHeight}
+            borderColor={props.inkTool === 'erase' ? '#EF4444' : props.penColor}
+            isEraser={props.inkTool === 'erase'}
+            styles={props.styles}
+          />
         ) : null}
       </View>
     );

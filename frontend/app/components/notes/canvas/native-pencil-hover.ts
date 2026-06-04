@@ -2,8 +2,10 @@ import { InkEraserMode, InkTool } from '../../../ui-types';
 
 export type PencilHoverPoint = { x: number; y: number };
 
+const PENCIL_HOVER_PREVIEW_ENABLED = false;
+
 export function shouldPreviewPencilHover(tool: InkTool) {
-  return tool !== 'view' && tool !== 'text';
+  return PENCIL_HOVER_PREVIEW_ENABLED && tool !== 'view' && tool !== 'text';
 }
 
 export function isStylusHoverEvent(event: unknown) {
@@ -17,6 +19,13 @@ export function isStylusHoverEvent(event: unknown) {
     || typeof nativeEvent.tiltX === 'number'
     || typeof nativeEvent.tiltY === 'number'
     || typeof nativeEvent.tangentialPressure === 'number';
+}
+
+export function isPencilHoverFarEnough(event: unknown) {
+  const nativeEvent = (event as { nativeEvent?: Record<string, unknown> } | null)?.nativeEvent ?? {};
+  const phase = String(nativeEvent.phase ?? '').toLowerCase();
+  if (phase === 'ended' || phase === 'cancelled') return false;
+  return true;
 }
 
 export function getPencilHoverPoint(event: unknown): PencilHoverPoint | null {
@@ -37,17 +46,7 @@ export function getPencilEraserRadius(penWidth: number, mode: InkEraserMode = 'p
 
 export function getPencilHoverSize(tool: InkTool, penWidth: number, eraserMode: InkEraserMode = 'partial') {
   if (tool === 'erase') return getPencilEraserRadius(penWidth, eraserMode) * 2;
-  if (tool === 'highlight') return Math.max(18, penWidth * 2.2);
-  if (tool === 'select') return 18;
-  return Math.max(10, penWidth * 3);
-}
-
-export function getPencilHoverToolLabel(tool: InkTool, eraserMode: InkEraserMode = 'partial') {
-  if (tool === 'pen') return '필기';
-  if (tool === 'highlight') return '형광펜';
-  if (tool === 'erase') return eraserMode === 'stroke' ? '획 지우개' : '부분 지우개';
-  if (tool === 'select') return '선택';
-  if (tool === 'text') return '텍스트';
-  if (tool === 'line' || tool === 'arrow' || tool === 'rect' || tool === 'ellipse') return '도형';
-  return '';
+  if (tool === 'highlight') return 10;
+  if (tool === 'select') return 10;
+  return Math.max(8, Math.min(12, penWidth * 1.2));
 }

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Text, View } from 'react-native';
+import { Image, Text, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import Svg from 'react-native-svg';
 import { doesRectIntersectPolygon, findInkStrokesInLasso, findInkStrokesInRect } from '../../../ui-helpers';
@@ -97,6 +97,14 @@ function translateTextAnnotation(annotation: InkTextAnnotation, dx: number, dy: 
   };
 }
 
+function translateImageAnnotation(annotation: InkImageAnnotation, dx: number, dy: number): InkImageAnnotation {
+  return {
+    ...annotation,
+    x: annotation.x + dx,
+    y: annotation.y + dy,
+  };
+}
+
 export function getSelectionMovePreview(
   selection: SelectionRect | null,
   draftSelection: SelectionRect | null,
@@ -121,6 +129,9 @@ export function getSelectionMovePreview(
     movedTextAnnotations: textAnnotations
       .filter((annotation) => textAnnotationIds.has(annotation.id))
       .map((annotation) => translateTextAnnotation(annotation, dx, dy)),
+    movedImageAnnotations: imageAnnotations
+      .filter((annotation) => imageAnnotationIds.has(annotation.id))
+      .map((annotation) => translateImageAnnotation(annotation, dx, dy)),
   };
 }
 
@@ -195,6 +206,23 @@ export function SelectionMovePreview(props: {
             </Text>
           </View>
         )
+      ))}
+      {props.preview.movedImageAnnotations.map((annotation) => (
+        <View
+          key={`moving-image-${annotation.id}`}
+          pointerEvents="none"
+          style={[
+            props.styles.imageAnnotationCard,
+            {
+              left: annotation.x,
+              top: annotation.y,
+              width: annotation.width,
+              height: annotation.height,
+            },
+          ]}
+        >
+          <Image source={{ uri: annotation.uri }} style={props.styles.imageAnnotationImage} resizeMode="contain" fadeDuration={0} />
+        </View>
       ))}
     </View>
   );

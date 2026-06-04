@@ -10,6 +10,7 @@ const DEFAULT_TEXT_FONT_SIZE = 17;
 const MIN_TEXT_FONT_SIZE = 12;
 const MAX_TEXT_FONT_SIZE = 40;
 const TEXT_TOOLBAR_WIDTH = 220;
+type TextKeyboardPanelMode = 'fixed' | 'floating';
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
@@ -25,6 +26,8 @@ function MovableTextAnnotationBox(props: {
   onResize?: (id: string, width: number, height: number) => void;
   onChangeFontSize?: (id: string, fontSize: number) => void;
   onRemove: (id: string) => void;
+  keyboardPanelMode: TextKeyboardPanelMode;
+  onToggleKeyboardPanelMode: () => void;
 }) {
   const inputRef = React.useRef<TextInput | null>(null);
   const annotationRef = React.useRef(props.annotation);
@@ -238,11 +241,13 @@ function MovableTextAnnotationBox(props: {
     onShouldBlockNativeResponder: () => true,
   }), [effectiveActive, props.annotation.id, props.onActivate, props.onResize, shouldEditFrame, updateDraftFrame]);
 
-  const pageWidth = props.annotation.pageWidth ?? effectiveFrame.x + effectiveFrame.width + TEXT_TOOLBAR_WIDTH + 24;
+  const floatingKeyboardPanel = props.keyboardPanelMode === 'floating';
+  const toolbarWidth = floatingKeyboardPanel ? 188 : TEXT_TOOLBAR_WIDTH;
+  const pageWidth = props.annotation.pageWidth ?? effectiveFrame.x + effectiveFrame.width + toolbarWidth + 24;
   const toolbarLeft = clamp(
-    (effectiveFrame.width - TEXT_TOOLBAR_WIDTH) / 2,
+    (effectiveFrame.width - toolbarWidth) / 2,
     -effectiveFrame.x + 8,
-    Math.max(-effectiveFrame.x + 8, pageWidth - effectiveFrame.x - TEXT_TOOLBAR_WIDTH - 8),
+    Math.max(-effectiveFrame.x + 8, pageWidth - effectiveFrame.x - toolbarWidth - 8),
   );
   const toolbarTop = effectiveFrame.y > 64 ? -54 : height + 10;
 
@@ -265,6 +270,7 @@ function MovableTextAnnotationBox(props: {
         <View
           style={[
             props.styles.textAnnotationToolbar,
+            floatingKeyboardPanel && props.styles.textAnnotationToolbarFloating,
             { left: toolbarLeft, top: toolbarTop },
           ]}
           onStartShouldSetResponder={() => true}
@@ -280,6 +286,13 @@ function MovableTextAnnotationBox(props: {
             }}
           >
             <MaterialCommunityIcons name="keyboard-close-outline" size={18} color="#FFFFFF" />
+          </Pressable>
+          <Pressable
+            hitSlop={6}
+            style={props.styles.textAnnotationToolbarButton}
+            onPress={props.onToggleKeyboardPanelMode}
+          >
+            <MaterialCommunityIcons name={floatingKeyboardPanel ? 'keyboard-outline' : 'keyboard-settings-outline'} size={18} color="#FFFFFF" />
           </Pressable>
           <View style={props.styles.textAnnotationToolbarDivider} />
           <Pressable
@@ -337,9 +350,16 @@ function MovableTextAnnotationBox(props: {
           },
         ]}
       />
-      {Platform.OS === 'ios' ? (
+      {Platform.OS === 'ios' && props.keyboardPanelMode === 'fixed' ? (
         <InputAccessoryView nativeID={inputAccessoryViewID}>
           <View style={props.styles.textAnnotationKeyboardAccessory}>
+            <Pressable
+              hitSlop={8}
+              style={props.styles.textAnnotationKeyboardAccessoryButton}
+              onPress={props.onToggleKeyboardPanelMode}
+            >
+              <MaterialCommunityIcons name="keyboard-outline" size={18} color="#4F63D7" />
+            </Pressable>
             <Pressable
               hitSlop={8}
               style={props.styles.textAnnotationKeyboardAccessoryButton}
@@ -407,6 +427,7 @@ export function TextAnnotationLayer(props: {
   hiddenAnnotationIds?: Set<string>;
 }) {
   const [activeAnnotationId, setActiveAnnotationId] = React.useState<string | null>(null);
+  const [keyboardPanelMode, setKeyboardPanelMode] = React.useState<TextKeyboardPanelMode>('fixed');
   const variant = props.variant ?? 'floating';
 
   React.useEffect(() => {
@@ -473,6 +494,8 @@ export function TextAnnotationLayer(props: {
             onResize={props.onResize}
             onChangeFontSize={props.onChangeFontSize}
             onRemove={props.onRemove}
+            keyboardPanelMode={keyboardPanelMode}
+            onToggleKeyboardPanelMode={() => setKeyboardPanelMode((current) => (current === 'fixed' ? 'floating' : 'fixed'))}
           />
         );
       })}

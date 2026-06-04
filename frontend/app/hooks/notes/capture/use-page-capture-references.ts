@@ -42,6 +42,7 @@ type PageCaptureReferenceActionsParams = {
     pageNumber?: number | null;
     source?: 'general' | 'selection' | 'photo' | 'class-insight';
   }) => Promise<boolean>;
+  onMarkPageDirty?: (documentId: number, pageNumber: number) => void;
 };
 
 function clampPdfPage(rawPageNumber: number, pageCount: number) {
@@ -65,6 +66,11 @@ function buildPageCaptureReferenceQuestion(reference: PageCaptureReference) {
 }
 
 export function usePageCaptureReferenceActions(params: PageCaptureReferenceActionsParams) {
+  const markReferencePageDirty = useCallback((documentId: number | null | undefined, page: DocumentPageView | null | undefined) => {
+    if (!documentId || page?.kind !== 'pdf') return;
+    params.onMarkPageDirty?.(documentId, page.pageNumber);
+  }, [params]);
+
   const markAssetAccepted = useCallback((assetId: string) => {
     params.updateAssetStatus(assetId, 'accepted');
     params.setIncomingAssetSuggestion((current) => (current?.id === assetId ? null : current));
@@ -122,9 +128,10 @@ export function usePageCaptureReferenceActions(params: PageCaptureReferenceActio
     });
 
     markAssetAccepted(asset.id);
+    if (!alreadyLinked) markReferencePageDirty(documentId, page);
     params.setWorkspaceFeedback(alreadyLinked ? `${pageLabel}에 이미 연결된 사진입니다.` : `${targetDocument.title} ${pageLabel}에 사진을 연결했습니다.`);
     return !alreadyLinked;
-  }, [getReferencePageLabelForDocument, markAssetAccepted, params]);
+  }, [getReferencePageLabelForDocument, markAssetAccepted, markReferencePageDirty, params]);
 
   const linkCaptureAssetToCurrentPage = useCallback(async (asset: CaptureAsset) => {
     if (!params.studyDocumentId || !params.studyDocument) {
@@ -155,12 +162,13 @@ export function usePageCaptureReferenceActions(params: PageCaptureReferenceActio
     }
 
     markAssetAccepted(asset.id);
+    if (!alreadyLinked) markReferencePageDirty(params.studyDocumentId, page);
     params.setWorkspaceFeedback(
       alreadyLinked
         ? `${pageLabel}에 이미 연결된 자료입니다.`
         : `${pageLabel}에 ${asset.type === 'image' ? '사진' : 'PDF'} 자료를 연결했습니다.`,
     );
-  }, [getReferencePageLabel, markAssetAccepted, params]);
+  }, [getReferencePageLabel, markAssetAccepted, markReferencePageDirty, params]);
 
   const openPageCaptureReference = useCallback((referenceId: string) => {
     let targetDocumentId = params.studyDocumentId;
@@ -199,6 +207,8 @@ export function usePageCaptureReferenceActions(params: PageCaptureReferenceActio
   const movePageCaptureReference = useCallback((referenceId: string, delta: -1 | 1) => {
     if (!params.studyDocumentId || !params.studyDocument) return;
     const maxPage = Math.max(1, params.studyDocument.pageCount);
+    const previousReference = (params.pageCaptureReferencesByDocument[params.studyDocumentId] ?? []).find((reference) => reference.id === referenceId);
+    let nextPage: DocumentPageView | null = null;
 
     params.setPageCaptureReferencesByDocument((current) => ({
       ...current,
@@ -206,20 +216,26 @@ export function usePageCaptureReferenceActions(params: PageCaptureReferenceActio
         if (reference.id !== referenceId) return reference;
         const basePage = reference.page.kind === 'pdf' ? reference.page.pageNumber : params.currentPdfPage;
         const nextPageNumber = Math.min(maxPage, Math.max(1, basePage + delta));
-        const nextPage: DocumentPageView = { kind: 'pdf', pageNumber: nextPageNumber };
+        const updatedPage: DocumentPageView = { kind: 'pdf', pageNumber: nextPageNumber };
+        nextPage = updatedPage;
         return {
           ...reference,
-          page: nextPage,
-          pageLabel: getReferencePageLabel(nextPage),
+          page: updatedPage,
+          pageLabel: getReferencePageLabel(updatedPage),
         };
       }),
     }));
+    markReferencePageDirty(params.studyDocumentId, previousReference?.page);
+    markReferencePageDirty(params.studyDocumentId, nextPage);
     params.setWorkspaceFeedback('자료 연결 위치를 이동했습니다.');
-  }, [getReferencePageLabel, params]);
+  }, [getReferencePageLabel, markReferencePageDirty, params]);
 
   const movePageCaptureReferenceToPage = useCallback((referenceId: string, rawPageNumber: number) => {
     let moved = false;
     let targetLabel = '';
+    let movedDocumentId: number | null = null;
+    let previousPage: DocumentPageView | null = null;
+    let nextPage: DocumentPageView | null = null;
 
     params.setPageCaptureReferencesByDocument((current) => {
       const matchedEntry = Object.entries(current).find(([, references]) => references.some((reference) => reference.id === referenceId));
@@ -230,17 +246,20 @@ export function usePageCaptureReferenceActions(params: PageCaptureReferenceActio
       if (!targetDocument) return current;
 
       const pageNumber = clampPdfPage(rawPageNumber, targetDocument.pageCount);
-      const nextPage: DocumentPageView = { kind: 'pdf', pageNumber };
-      targetLabel = getReferencePageLabelForDocument(documentId, nextPage);
+      const targetPage: DocumentPageView = { kind: 'pdf', pageNumber };
+      nextPage = targetPage;
+      targetLabel = getReferencePageLabelForDocument(documentId, targetPage);
 
       return {
         ...current,
         [documentId]: (current[documentId] ?? []).map((reference) => {
           if (reference.id !== referenceId) return reference;
           moved = true;
+          movedDocumentId = documentId;
+          previousPage = reference.page;
           return {
             ...reference,
-            page: nextPage,
+            page: targetPage,
             pageLabel: targetLabel,
           };
         }),
@@ -248,18 +267,22 @@ export function usePageCaptureReferenceActions(params: PageCaptureReferenceActio
     });
 
     if (moved) {
+      markReferencePageDirty(movedDocumentId, previousPage);
+      markReferencePageDirty(movedDocumentId, nextPage);
       params.setWorkspaceFeedback(`${targetLabel}로 자료 연결 위치를 옮겼습니다.`);
     }
-  }, [getReferencePageLabelForDocument, params]);
+  }, [getReferencePageLabelForDocument, markReferencePageDirty, params]);
 
   const removePageCaptureReference = useCallback((referenceId: string) => {
     if (!params.studyDocumentId) return;
+    const reference = (params.pageCaptureReferencesByDocument[params.studyDocumentId] ?? []).find((value) => value.id === referenceId);
     params.setPageCaptureReferencesByDocument((current) => ({
       ...current,
       [params.studyDocumentId!]: (current[params.studyDocumentId!] ?? []).filter((reference) => reference.id !== referenceId),
     }));
+    markReferencePageDirty(params.studyDocumentId, reference?.page);
     params.setWorkspaceFeedback('페이지에서 사진 자료 연결을 제거했습니다.');
-  }, [params]);
+  }, [markReferencePageDirty, params]);
 
   const prepareAiQuestionForPageCaptureReference = useCallback((referenceId: string) => {
     if (!params.studyDocumentId) return;

@@ -828,6 +828,7 @@ export function PdfPreview(props: {
   onDismissIncomingAsset?: () => void;
   onOpenPageCaptureReference?: (referenceId: string) => void;
   onAskAiAboutPageCaptureReference?: (referenceId: string) => void;
+  onViewportDoubleTap?: () => void;
   styles: any;
 }) {
   const [currentStroke, setCurrentStroke] = useState<InkStroke | null>(null);

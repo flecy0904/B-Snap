@@ -21,6 +21,7 @@ from pypdf import PdfReader
 from backend.app.core.auth import get_current_user
 from backend.app.core.config import Settings, get_settings
 from backend.app.db.session import get_db_connection
+from backend.app.services.document_matching import build_document_match_key, normalize_subject_key, sha256_file
 from backend.app.services.openai_service import generate_capture_image_analysis
 
 try:
@@ -35,6 +36,10 @@ EMPTY_PAGE_CONTENT = json.dumps({
     "version": 1,
     "inkStrokes": [],
     "textAnnotations": [],
+    "imageAnnotations": [],
+    "bookmarked": False,
+    "photoReferenceCount": 0,
+    "memoPageCount": 0,
 }, separators=(",", ":"))
 
 ALLOWED_CONTENT_TYPES = {
@@ -74,6 +79,7 @@ class StoredUpload:
     stored_filename: str
     content_type: str
     size_bytes: int
+    sha256: str
     url: str
     page_numbers: list[int]
     thumbnail_url: str | None = None
@@ -812,6 +818,7 @@ async def _store_upload(file: UploadFile, settings: Settings, *, analyze_images:
         await file.close()
 
     page_numbers = _build_page_numbers(content_type, target)
+    file_sha256 = sha256_file(target)
     thumbnail_url = _render_pdf_first_page_thumbnail(target, upload_root, stored_name) if content_type == "application/pdf" else None
 
     upload = StoredUpload(
@@ -819,6 +826,7 @@ async def _store_upload(file: UploadFile, settings: Settings, *, analyze_images:
         stored_filename=stored_name,
         content_type=content_type,
         size_bytes=total_bytes,
+        sha256=file_sha256,
         url=f"/uploads/{stored_name}",
         page_numbers=page_numbers,
         thumbnail_url=thumbnail_url,
@@ -834,6 +842,7 @@ def _upload_response(upload: StoredUpload) -> dict:
         "stored_filename": upload.stored_filename,
         "content_type": upload.content_type,
         "size_bytes": upload.size_bytes,
+        "sha256": upload.sha256,
         "page_count": len(upload.page_numbers),
         "page_numbers": upload.page_numbers,
         "thumbnail_url": upload.thumbnail_url,
@@ -926,26 +935,50 @@ async def upload_pdf_note(
     try:
         with connection.cursor(row_factory=dict_row) as cursor:
             cursor.execute(
-                "SELECT id FROM folders WHERE id = %s AND user_id = %s",
+                "SELECT id, name FROM folders WHERE id = %s AND user_id = %s",
                 (folder_id, current_user["id"]),
             )
-            if cursor.fetchone() is None:
+            folder = cursor.fetchone()
+            if folder is None:
                 raise HTTPException(status_code=404, detail="folder not found")
+            note_title = title.strip() or upload.filename
+            subject_match_key = normalize_subject_key(folder["name"])
+            document_match_key = build_document_match_key(upload.filename, len(upload.page_numbers))
 
             cursor.execute(
                 """
-                INSERT INTO notes (user_id, folder_id, title, summary, file_url, thumbnail_url, page_count)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                RETURNING id, folder_id, title, summary, file_url, thumbnail_url, page_count, created_at, updated_at
+                INSERT INTO notes (
+                    user_id,
+                    folder_id,
+                    title,
+                    summary,
+                    file_url,
+                    thumbnail_url,
+                    page_count,
+                    original_filename,
+                    file_size_bytes,
+                    file_sha256,
+                    subject_match_key,
+                    document_match_key
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id, folder_id, title, summary, file_url, thumbnail_url, page_count,
+                          original_filename, file_size_bytes, file_sha256, subject_match_key, document_match_key,
+                          created_at, updated_at
                 """,
                 (
                     current_user["id"],
                     folder_id,
-                    title.strip() or upload.filename,
+                    note_title,
                     summary,
                     upload.url,
                     upload.thumbnail_url,
                     len(upload.page_numbers),
+                    upload.filename,
+                    upload.size_bytes,
+                    upload.sha256,
+                    subject_match_key,
+                    document_match_key,
                 ),
             )
             note = cursor.fetchone()

@@ -132,7 +132,7 @@ export function useAiChatActions(params: {
     operations: CanvasOperation[];
   }) => void;
   clearSelection?: () => void;
-  buildContextHint?: (question: string) => string | null;
+  buildContextHint?: (question: string) => string | null | Promise<string | null>;
 }) {
   const getCurrentBackendNoteId = () => getStudyDocumentBackendNoteId(params.studyDocument);
   const getSessionDocumentKey = (session: BackendChatSession) => {
@@ -153,6 +153,15 @@ export function useAiChatActions(params: {
       return `data:image/png;base64,${base64}`;
     } catch {
       params.setAiError('선택하신 이미지를 첨부하지 못했어요.');
+      return null;
+    }
+  };
+
+  const resolveContextHint = async (question: string) => {
+    if (!params.buildContextHint) return null;
+    try {
+      return await params.buildContextHint(question);
+    } catch {
       return null;
     }
   };
@@ -421,7 +430,6 @@ export function useAiChatActions(params: {
       ? `${canvasAction === 'canvas_create' ? '새 Canvas' : 'Canvas 수정'}: ${question}`
       : question;
     const messageSource = override?.source === 'canvas-mini' ? 'canvas-mini' : 'chat';
-    const contextHint = params.buildContextHint?.(question) ?? null;
     params.setAiLoading(true);
     if (shouldLockCanvas) params.setAiCanvasRequestBusy?.(true);
     params.setAiError(null);
@@ -451,6 +459,7 @@ export function useAiChatActions(params: {
         params.setAiError('서버와 동기화 중이에요. 잠시 후 다시 시도해 주세요.');
         return false;
       }
+      const contextHint = await resolveContextHint(question);
 
       let sessionId = params.chatSessionByDocument[params.studyDocumentId];
       if (!sessionId) {
