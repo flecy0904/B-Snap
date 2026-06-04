@@ -173,8 +173,8 @@ export function NotesWorkspaceDock() {
         {importantRecommendations.length ? (
           <View style={globalContext.styles.workspaceDockSection}>
             <View style={globalContext.styles.workspaceDockSectionHeader}>
-              <Text style={globalContext.styles.workspaceDockSectionTitle}>추천 Top</Text>
-              <Text style={globalContext.styles.workspaceDockSectionMeta}>필기 신호</Text>
+              <Text style={globalContext.styles.workspaceDockSectionTitle}>복습 우선 페이지</Text>
+              <Text style={globalContext.styles.workspaceDockSectionMeta}>추천</Text>
             </View>
             {importantRecommendations.map((signal: any, index: number) => (
               <View key={`${signal.pageNumber}-${index}`} style={globalContext.styles.workspaceDockRow}>
@@ -183,22 +183,12 @@ export function NotesWorkspaceDock() {
                     {index + 1}. {signal.pageNumber}p · {getPriorityText(signal.priority)}
                   </Text>
                   <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>
-                    {(signal.reasonTags ?? []).slice(0, 2).join(' · ') || `신호 점수 ${signal.importanceScore}`}
+                    {(signal.reasonTags ?? []).slice(0, 2).join(' · ') || '복습 우선도가 높은 구간'}
                   </Text>
                   <View style={globalContext.styles.workspaceDockSignalChipRow}>
                     <View style={globalContext.styles.workspaceDockSignalChip}>
-                      <Text style={globalContext.styles.workspaceDockSignalChipText}>score {signal.importanceScore}</Text>
+                      <Text style={globalContext.styles.workspaceDockSignalChipText}>복습 우선도 {getPriorityText(signal.priority)}</Text>
                     </View>
-                    {signal.bookmarkCount ? (
-                      <View style={globalContext.styles.workspaceDockSignalChip}>
-                        <Text style={globalContext.styles.workspaceDockSignalChipText}>star {signal.bookmarkCount}</Text>
-                      </View>
-                    ) : null}
-                    {signal.highlightCount ? (
-                      <View style={globalContext.styles.workspaceDockSignalChip}>
-                        <Text style={globalContext.styles.workspaceDockSignalChipText}>highlight {signal.highlightCount}</Text>
-                      </View>
-                    ) : null}
                   </View>
                 </Pressable>
                 <View style={globalContext.styles.workspaceDockRowButtons}>

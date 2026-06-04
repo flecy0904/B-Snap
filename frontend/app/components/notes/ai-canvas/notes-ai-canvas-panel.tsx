@@ -149,6 +149,7 @@ export function NotesAiCanvasPanel() {
               editable={!workspace.aiLoading}
               onSubmitEditing={submitMiniCommand}
               autoFocus
+              showSoftInputOnFocus
             />
             <Pressable
               style={[
@@ -307,6 +308,7 @@ export function NotesAiCanvasPanel() {
                 multiline
                 scrollEnabled
                 textAlignVertical="top"
+                showSoftInputOnFocus
                 style={workspace.styles.aiCanvasMarkdownInput}
               />
               {renderMiniCommandInput()}
@@ -339,6 +341,7 @@ export function NotesAiCanvasPanel() {
               returnKeyType="done"
               onSubmitEditing={saveRename}
               autoFocus
+              showSoftInputOnFocus
             />
             {renameError ? <Text style={workspace.styles.aiRenameModalError}>{renameError}</Text> : null}
             <View style={workspace.styles.aiRenameModalActions}>
