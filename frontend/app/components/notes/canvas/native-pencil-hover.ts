@@ -2,8 +2,10 @@ import { InkEraserMode, InkTool } from '../../../ui-types';
 
 export type PencilHoverPoint = { x: number; y: number };
 
+const PENCIL_HOVER_PREVIEW_ENABLED = false;
+
 export function shouldPreviewPencilHover(tool: InkTool) {
-  return tool !== 'view' && tool !== 'text';
+  return PENCIL_HOVER_PREVIEW_ENABLED && tool !== 'view' && tool !== 'text';
 }
 
 export function isStylusHoverEvent(event: unknown) {

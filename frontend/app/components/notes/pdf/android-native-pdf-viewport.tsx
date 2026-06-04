@@ -1790,7 +1790,7 @@ export function AndroidNativePdfViewport(props: {
         onSelectionAction={handleNativeSelectionAction}
         {...(Platform.OS === 'ios' ? { onImageAnnotationAction: handleNativeImageAnnotationAction } : {})}
         {...(Platform.OS === 'ios' ? { onViewportDoubleTap: props.onViewportDoubleTap } : {})}
-        {...(Platform.OS === 'ios' ? { onPencilHover: handleNativePencilHover } : {})}
+        {...(Platform.OS === 'ios' && shouldPreviewPencilHover(props.inkTool) ? { onPencilHover: handleNativePencilHover } : {})}
         onTextAnnotationAdd={handleNativeTextAnnotationAdd}
         onTextAnnotationChange={(event) => {
           const payload = event.nativeEvent;
