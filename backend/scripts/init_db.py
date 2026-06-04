@@ -4,6 +4,7 @@ from sqlalchemy import text
 from backend.app.core.auth import hash_password
 from backend.app.core.config import get_settings
 from backend.app.db.base import Base
+from backend.app.services.document_matching import build_document_match_key, normalize_subject_key
 from backend.app import models
 
 
@@ -33,13 +34,51 @@ def apply_auth_migration(engine) -> None:
         connection.execute(text("ALTER TABLE notes ADD COLUMN IF NOT EXISTS file_url TEXT"))
         connection.execute(text("ALTER TABLE notes ADD COLUMN IF NOT EXISTS thumbnail_url TEXT"))
         connection.execute(text("ALTER TABLE notes ADD COLUMN IF NOT EXISTS page_count INTEGER"))
+        connection.execute(text("ALTER TABLE notes ADD COLUMN IF NOT EXISTS original_filename TEXT"))
+        connection.execute(text("ALTER TABLE notes ADD COLUMN IF NOT EXISTS file_size_bytes INTEGER"))
+        connection.execute(text("ALTER TABLE notes ADD COLUMN IF NOT EXISTS file_sha256 VARCHAR(64)"))
+        connection.execute(text("ALTER TABLE notes ADD COLUMN IF NOT EXISTS subject_match_key VARCHAR(160)"))
+        connection.execute(text("ALTER TABLE notes ADD COLUMN IF NOT EXISTS document_match_key VARCHAR(260)"))
         connection.execute(text("UPDATE folders SET user_id = :user_id WHERE user_id IS NULL"), {"user_id": legacy_user_id})
         connection.execute(text("UPDATE notes SET user_id = folders.user_id FROM folders WHERE notes.folder_id = folders.id AND notes.user_id IS NULL"))
         connection.execute(text("UPDATE notes SET user_id = :user_id WHERE user_id IS NULL"), {"user_id": legacy_user_id})
+        rows = connection.execute(
+            text(
+                """
+                SELECT n.id, n.title, n.original_filename, n.page_count, f.name AS folder_name
+                FROM notes n
+                JOIN folders f ON f.id = n.folder_id
+                WHERE n.subject_match_key IS NULL
+                   OR n.document_match_key IS NULL
+                   OR n.original_filename IS NULL
+                """
+            )
+        ).mappings().all()
+        for row in rows:
+            original_filename = row["original_filename"] or row["title"]
+            connection.execute(
+                text(
+                    """
+                    UPDATE notes
+                    SET original_filename = COALESCE(original_filename, :original_filename),
+                        subject_match_key = COALESCE(subject_match_key, :subject_match_key),
+                        document_match_key = COALESCE(document_match_key, :document_match_key)
+                    WHERE id = :id
+                    """
+                ),
+                {
+                    "id": row["id"],
+                    "original_filename": original_filename,
+                    "subject_match_key": normalize_subject_key(row["folder_name"]),
+                    "document_match_key": build_document_match_key(original_filename, row["page_count"]),
+                },
+            )
         connection.execute(text("ALTER TABLE folders ALTER COLUMN user_id SET NOT NULL"))
         connection.execute(text("ALTER TABLE notes ALTER COLUMN user_id SET NOT NULL"))
         connection.execute(text("CREATE INDEX IF NOT EXISTS ix_folders_user_id ON folders(user_id)"))
         connection.execute(text("CREATE INDEX IF NOT EXISTS ix_notes_user_id ON notes(user_id)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_notes_subject_match_key ON notes(subject_match_key)"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_notes_document_match_key ON notes(document_match_key)"))
 
 
 def main() -> None:

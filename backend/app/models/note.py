@@ -17,6 +17,11 @@ class Note(Base):
     file_url: Mapped[str] = mapped_column(Text, nullable=True)
     thumbnail_url: Mapped[str] = mapped_column(Text, nullable=True)
     page_count: Mapped[int] = mapped_column(Integer, nullable=True)
+    original_filename: Mapped[str] = mapped_column(Text, nullable=True)
+    file_size_bytes: Mapped[int] = mapped_column(Integer, nullable=True)
+    file_sha256: Mapped[str] = mapped_column(String(64), nullable=True)
+    subject_match_key: Mapped[str] = mapped_column(String(160), nullable=True, index=True)
+    document_match_key: Mapped[str] = mapped_column(String(260), nullable=True, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 

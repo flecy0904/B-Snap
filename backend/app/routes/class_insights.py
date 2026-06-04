@@ -10,6 +10,7 @@ from backend.app.core.auth import get_current_user
 from backend.app.db.crud import fetch_all, fetch_one, require_row
 from backend.app.db.session import get_db_connection
 from backend.app.schemas.class_insights import ClassInsightPageSignalRead, ClassInsightRead
+from backend.app.services.document_matching import documents_match, normalize_subject_key, subjects_match
 from backend.app.services.note_page_content import parse_page_state
 
 
@@ -35,17 +36,6 @@ IMPORTANT_NOTE_KEYWORDS = (
     "주의",
 )
 PAGE_REFERENCE_PATTERN = re.compile(r"(\d{1,3})\s*(?:페이지|쪽|p(?:age)?\.?)", re.IGNORECASE)
-COMPUTER_NETWORK_DEMO_FOLDER_KEYS = {"컴퓨터네트워크", "computernetwork", "computernetworks"}
-COMPUTER_NETWORK_DEMO_DOCUMENT_KEYS = {
-    "computernetworksch1wide",
-    "lecturenotechapter1computernetworksandtheinternetwide",
-}
-COMPUTER_NETWORK_DEMO_DOCUMENT_MARKERS = (
-    "computernetworksch1",
-    "computernetworkschapter1",
-    "computernetworksandtheinternet",
-)
-
 
 @dataclass
 class PageInsightAccumulator:
@@ -98,11 +88,11 @@ class PageInsightAccumulator:
     def reason_tags(self) -> list[str]:
         tags: list[str] = []
         if len(self.participant_ids) >= 4:
-            tags.append("여러 수강생 신호가 강하게 겹친 페이지")
+            tags.append("복습 우선도가 높게 잡힌 페이지")
         elif len(self.participant_ids) >= 2:
-            tags.append("여러 수강생의 필기 흔적이 겹친 페이지")
+            tags.append("복습 신호가 겹친 페이지")
         if self.bookmark_count > 0:
-            tags.append("중요 표시가 남은 페이지")
+            tags.append("중요 표시가 반복된 페이지")
         if self.highlight_count > 0:
             tags.append("하이라이트가 집중된 구간")
         if self.keyword_hits > 0:
@@ -114,35 +104,19 @@ class PageInsightAccumulator:
         if self.memo_page_count > 0:
             tags.append("추가 정리/메모가 붙은 구간")
         if self.ink_density > 0.45:
-            tags.append("필기 밀도가 높은 페이지")
-        return tags or ["수업 필기 활동이 감지된 페이지"]
+            tags.append("표시가 밀집된 페이지")
+        return tags or ["복습 우선도가 감지된 페이지"]
 
 
-def _normalize_match_key(value: str | None) -> str:
-    text = (value or "").strip().lower()
-    text = re.sub(r"\.pdf$", "", text)
-    return re.sub(r"[^0-9a-z가-힣]+", "", text)
-
-
-def _is_computer_network_demo_document(document_key: str, folder_key: str) -> bool:
-    if not document_key:
+def _is_same_class_document(row: dict[str, Any], current_note: dict[str, Any]) -> bool:
+    if not subjects_match(
+        current_note.get("folder_name"),
+        row.get("folder_name"),
+        current_note.get("subject_match_key"),
+        row.get("subject_match_key"),
+    ):
         return False
-    if document_key in COMPUTER_NETWORK_DEMO_DOCUMENT_KEYS:
-        return True
-    if folder_key not in COMPUTER_NETWORK_DEMO_FOLDER_KEYS:
-        return False
-    return any(marker in document_key for marker in COMPUTER_NETWORK_DEMO_DOCUMENT_MARKERS)
-
-
-def _is_same_class_document(row: dict[str, Any], current_document_key: str, current_folder_key: str) -> bool:
-    document_key = _normalize_match_key(row.get("title"))
-    folder_key = _normalize_match_key(row.get("folder_name"))
-    if document_key and document_key == current_document_key:
-        return True
-    return (
-        _is_computer_network_demo_document(current_document_key, current_folder_key)
-        and _is_computer_network_demo_document(document_key, folder_key)
-    )
+    return documents_match(current_note, row)
 
 
 def _count_keyword_hits(text: str) -> int:
@@ -281,6 +255,24 @@ def _priority(score: int) -> str:
     return "medium"
 
 
+def _collect_active_signal_sources(
+    accumulators: dict[int, PageInsightAccumulator],
+) -> tuple[set[int], set[int]]:
+    active_participant_ids: set[int] = set()
+    active_note_ids: set[int] = set()
+    for accumulator in accumulators.values():
+        active_participant_ids.update(accumulator.participant_ids)
+        active_note_ids.update(accumulator.note_ids)
+    return active_participant_ids, active_note_ids
+
+
+def _is_other_user_signal(row: dict[str, Any], current_user_id: int) -> bool:
+    try:
+        return int(row["user_id"]) != int(current_user_id)
+    except (KeyError, TypeError, ValueError):
+        return False
+
+
 @router.get("/notes/{note_id}/class-insights", response_model=ClassInsightRead)
 def get_class_insights(
     note_id: int,
@@ -292,7 +284,15 @@ def get_class_insights(
         fetch_one(
             connection,
             """
-            SELECT n.id, n.title, f.name AS folder_name
+            SELECT n.id,
+                   n.title,
+                   n.page_count,
+                   n.original_filename,
+                   n.file_size_bytes,
+                   n.file_sha256,
+                   n.subject_match_key,
+                   n.document_match_key,
+                   f.name AS folder_name
             FROM notes n
             JOIN folders f ON f.id = n.folder_id
             WHERE n.id = %s AND n.user_id = %s
@@ -301,63 +301,48 @@ def get_class_insights(
         ),
         "note not found",
     )
-    current_document_key = _normalize_match_key(current_note["title"])
-    current_folder_key = _normalize_match_key(current_note["folder_name"])
+    current_note["subject_match_key"] = current_note.get("subject_match_key") or normalize_subject_key(current_note.get("folder_name"))
 
-    if _is_computer_network_demo_document(current_document_key, current_folder_key):
-        candidate_rows = fetch_all(
-            connection,
-            """
-            SELECT n.id AS note_id,
-                   n.user_id,
-                   n.title,
-                   f.name AS folder_name,
-                   p.page_number,
-                   p.content
-            FROM notes n
-            JOIN folders f ON f.id = n.folder_id
-            JOIN note_pages p ON p.note_id = n.id
-            WHERE lower(n.title) = lower(%s)
-               OR lower(f.name) = lower(%s)
-               OR n.title ILIKE '%%computer%%network%%'
-               OR n.title ILIKE '%%lecture note%%chapter 1%%'
-               OR n.title ILIKE '%%computer-networks-ch1%%'
-               OR f.name ILIKE '%%컴퓨터네트워크%%'
-               OR f.name ILIKE '%%computer%%network%%'
-            ORDER BY p.page_number ASC, p.id ASC
-            """,
-            (current_note["title"], current_note["folder_name"]),
-        )
-    else:
-        candidate_rows = fetch_all(
-            connection,
-            """
-            SELECT n.id AS note_id,
-                   n.user_id,
-                   n.title,
-                   f.name AS folder_name,
-                   p.page_number,
-                   p.content
-            FROM notes n
-            JOIN folders f ON f.id = n.folder_id
-            JOIN note_pages p ON p.note_id = n.id
-            WHERE lower(n.title) = lower(%s)
-               OR lower(f.name) = lower(%s)
-            ORDER BY p.page_number ASC, p.id ASC
-            """,
-            (current_note["title"], current_note["folder_name"]),
-        )
+    candidate_rows = fetch_all(
+        connection,
+        """
+        SELECT n.id AS note_id,
+               n.user_id,
+               n.title,
+               n.page_count,
+               n.original_filename,
+               n.file_size_bytes,
+               n.file_sha256,
+               n.subject_match_key,
+               n.document_match_key,
+               f.name AS folder_name,
+               p.page_number,
+               p.content
+        FROM notes n
+        JOIN folders f ON f.id = n.folder_id
+        JOIN note_pages p ON p.note_id = n.id
+        WHERE COALESCE(n.page_count, 0) = COALESCE(%s, 0)
+           OR n.document_match_key = %s
+           OR lower(n.title) = lower(%s)
+        ORDER BY p.page_number ASC, p.id ASC
+        """,
+        (
+            current_note.get("page_count"),
+            current_note.get("document_match_key"),
+            current_note["title"],
+        ),
+    )
 
     accumulators: dict[int, PageInsightAccumulator] = defaultdict(lambda: PageInsightAccumulator(page_number=0))
     matched_note_ids: set[int] = set()
-    participant_ids: set[int] = set()
     valid_page_numbers: set[int] = set()
 
     for row in candidate_rows:
-        if not _is_same_class_document(row, current_document_key, current_folder_key):
+        if not _is_other_user_signal(row, int(current_user["id"])):
+            continue
+        if not _is_same_class_document(row, current_note):
             continue
         matched_note_ids.add(int(row["note_id"]))
-        participant_ids.add(int(row["user_id"]))
 
         page_number = int(row["page_number"])
         valid_page_numbers.add(page_number)
@@ -423,10 +408,11 @@ def get_class_insights(
         if (score := accumulator.score()) >= 18
     ]
     pages.sort(key=lambda page: page.importance_score, reverse=True)
+    active_participant_ids, active_note_ids = _collect_active_signal_sources(accumulators)
 
     return ClassInsightRead(
         note_id=note_id,
-        matched_note_count=len(matched_note_ids),
-        participant_count=len(participant_ids),
+        matched_note_count=len(active_note_ids),
+        participant_count=len(active_participant_ids),
         pages=pages[:limit],
     )
