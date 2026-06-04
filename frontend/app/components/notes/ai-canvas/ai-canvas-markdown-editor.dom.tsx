@@ -1544,8 +1544,8 @@ export default function AiCanvasMarkdownEditor({
           min-height: 100%;
           padding: 3px var(--ai-canvas-right-rail-width) 64px var(--ai-canvas-left-content-padding);
           outline: none;
-          font-size: 14px;
-          line-height: 21px;
+          font-size: 15px;
+          line-height: 23px;
           font-weight: 400;
           letter-spacing: 0;
           white-space: pre-wrap;
@@ -1562,10 +1562,10 @@ export default function AiCanvasMarkdownEditor({
         }
 
         .ai-canvas-prosemirror p {
-          margin: 0 0 10px;
+          margin: 0 0 12px;
           font-family: inherit;
-          font-size: 14px;
-          line-height: 21px;
+          font-size: 15px;
+          line-height: 23px;
           font-weight: 400;
         }
 
@@ -1624,32 +1624,32 @@ export default function AiCanvasMarkdownEditor({
         }
 
         .ai-canvas-prosemirror h1 {
-          margin: 0 0 12px;
-          font-size: 22px;
-          line-height: 29px;
+          margin: 0 0 14px;
+          font-size: 24px;
+          line-height: 32px;
           font-weight: 900;
           color: #1f2937;
         }
 
         .ai-canvas-prosemirror h2 {
-          margin: 14px 0 8px;
-          font-size: 18px;
-          line-height: 25px;
+          margin: 16px 0 10px;
+          font-size: 20px;
+          line-height: 28px;
           font-weight: 900;
           color: #263144;
         }
 
         .ai-canvas-prosemirror h3 {
-          margin: 12px 0 7px;
-          font-size: 15px;
-          line-height: 22px;
+          margin: 14px 0 8px;
+          font-size: 17px;
+          line-height: 25px;
           font-weight: 900;
           color: #31405b;
         }
 
         .ai-canvas-prosemirror ul,
         .ai-canvas-prosemirror ol {
-          margin: 0 0 10px;
+          margin: 0 0 12px;
           padding-left: 25px;
         }
 
@@ -1660,20 +1660,20 @@ export default function AiCanvasMarkdownEditor({
         .ai-canvas-prosemirror ul > li::marker {
           content: "●  ";
           color: #455166;
-          font-size: 12px;
+          font-size: 13px;
         }
 
         .ai-canvas-prosemirror ul ul > li::marker {
           content: "○  ";
           color: #344158;
-          font-size: 8px;
+          font-size: 10px;
           font-weight: 900;
         }
 
         .ai-canvas-prosemirror ul ul ul > li::marker {
           content: "■  ";
           color: #5c687c;
-          font-size: 7px;
+          font-size: 9px;
         }
 
         .ai-canvas-prosemirror li[data-markerless="true"]::marker {
@@ -1681,11 +1681,11 @@ export default function AiCanvasMarkdownEditor({
         }
 
         .ai-canvas-prosemirror li {
-          margin: 2px 0;
+          margin: 3px 0;
           padding-left: 2px;
           font-family: inherit;
-          font-size: 14px;
-          line-height: 21px;
+          font-size: 15px;
+          line-height: 23px;
           font-weight: 400;
         }
 
@@ -1730,8 +1730,8 @@ export default function AiCanvasMarkdownEditor({
           color: #253044;
           overflow-x: auto;
           font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-          font-size: 12px;
-          line-height: 18px;
+          font-size: 13px;
+          line-height: 20px;
           font-weight: 500;
           tab-size: 3;
         }
@@ -1750,7 +1750,7 @@ export default function AiCanvasMarkdownEditor({
           border-radius: 5px;
           background: #f3f6fb;
           color: #27364c;
-          font-size: 12px;
+          font-size: 13px;
           font-weight: 500;
         }
 
@@ -1773,8 +1773,8 @@ export default function AiCanvasMarkdownEditor({
           right: var(--ai-canvas-right-rail-width);
           color: #a2aab8;
           pointer-events: none;
-          font-size: 14px;
-          line-height: 21px;
+          font-size: 15px;
+          line-height: 23px;
           font-weight: 400;
         }
 
