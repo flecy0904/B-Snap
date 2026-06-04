@@ -173,11 +173,9 @@ function getActiveListItemInfo(editor: Editor) {
   const { selection } = editor.state;
   const { $from } = selection;
   let listItemDepth: number | null = null;
-  let listDepth = 0;
 
   for (let depth = 1; depth <= $from.depth; depth += 1) {
     if ($from.node(depth).type.name === 'listItem') {
-      listDepth += 1;
       listItemDepth = depth;
     }
   }
@@ -190,7 +188,6 @@ function getActiveListItemInfo(editor: Editor) {
     parentListPos: $from.before(listItemDepth - 1),
     parentListNode: $from.node(listItemDepth - 1),
     listItemIndex: $from.index(listItemDepth - 1),
-    listDepth,
     isPrimaryTextblock: $from.index(listItemDepth) === 0,
     parentListType: $from.node(listItemDepth - 1).type.name,
     isMarkerless: $from.node(listItemDepth).attrs.markerless === true,
@@ -278,39 +275,11 @@ function adjustActiveParagraphIndentLevel(editor: Editor, delta: number) {
   return setActiveParagraphIndentLevel(editor, nextIndentLevel);
 }
 
-function removeActiveListMarkerPreservingIndent(editor: Editor) {
+function outdentActiveListItemAtStart(editor: Editor) {
   const listItem = getActiveListItemInfo(editor);
   if (!listItem?.isAtTextblockStart || !listItem.isPrimaryTextblock) return false;
 
-  if (listItem.isMarkerless) return liftActiveMarkerlessListItem(editor);
-  return setActiveListItemMarkerless(editor, true);
-}
-
-function liftActiveMarkerlessListItem(editor: Editor) {
-  const listItem = getActiveListItemInfo(editor);
-  if (!listItem?.isMarkerless || !listItem.isAtTextblockStart || !listItem.isPrimaryTextblock) return false;
-  if (listItem.listDepth <= 1) return true;
-
-  const lifted = liftActiveListItem(editor);
-  if (!lifted) return true;
-
-  const liftedListItem = getActiveListItemInfo(editor);
-  if (liftedListItem && !liftedListItem.isMarkerless) {
-    setActiveListItemMarkerless(editor, true);
-  }
-  return true;
-}
-
-function setActiveListItemMarkerless(editor: Editor, markerless: boolean) {
-  const listItem = getActiveListItemInfo(editor);
-  if (!listItem?.isPrimaryTextblock) return false;
-
-  const { state, view } = editor;
-  const nextAttrs = buildNodeAttrsWithMarkerless(listItem.listItemNode.attrs, markerless);
-  const tr = state.tr.setNodeMarkup(listItem.listItemPos, undefined, nextAttrs);
-  tr.setSelection(TextSelection.create(tr.doc, Math.min(state.selection.from, tr.doc.content.size)));
-  view.dispatch(tr.scrollIntoView());
-  return true;
+  return liftActiveListItem(editor);
 }
 
 function restoreActiveMarkerlessListItem(editor: Editor, listTypeName: 'bulletList' | 'orderedList', markerText: string, orderedStart?: number) {
@@ -514,7 +483,7 @@ const AiCanvasEditingKeymap = Extension.create({
       Backspace: () => {
         if (deleteSelectedHorizontalRule(this.editor)) return true;
         const listItem = getActiveListItemInfo(this.editor);
-        if (listItem?.isAtTextblockStart && listItem.isPrimaryTextblock) return removeActiveListMarkerPreservingIndent(this.editor);
+        if (listItem?.isAtTextblockStart && listItem.isPrimaryTextblock) return outdentActiveListItemAtStart(this.editor);
 
         const textblock = getActiveTextblockInfo(this.editor);
         if (!listItem && textblock?.typeName === 'paragraph' && textblock.isAtStart && normalizeIndentLevel(textblock.node.attrs.indentLevel) > 0) {
