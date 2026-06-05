@@ -368,7 +368,11 @@ export function useBackendNotePageSync({
     return () => clearTimeout(timer);
   }, [pendingPageSaves, savingPageKeys]);
 
-  const syncPdfDocumentToBackend = useCallback(async (document: StudyDocumentEntry, targetSubject: Subject) => {
+  const syncPdfDocumentToBackend = useCallback(async (
+    document: StudyDocumentEntry,
+    targetSubject: Subject,
+    uploadBlob?: Blob | null,
+  ) => {
     if (!isBackendApiEnabled() || document.type !== 'pdf' || document.backendNoteId || pdfSyncInFlightRef.current[document.id]) {
       return;
     }
@@ -391,6 +395,7 @@ export function useBackendNotePageSync({
           uri: sourceUri,
           name: document.title || `${targetSubject.name} PDF`,
           type: 'application/pdf',
+          blob: uploadBlob ?? null,
         },
         folderId: folder.id,
         title: document.title || `${targetSubject.name} PDF`,
@@ -403,6 +408,7 @@ export function useBackendNotePageSync({
         ...current,
         [document.id]: pagesByNumber,
       }));
+      const remotePdfUrl = result.note.file_url ?? result.upload.url;
       setUserStudyDocuments((current) => current.map((item) => (
         item.id === document.id
           ? {
@@ -412,7 +418,9 @@ export function useBackendNotePageSync({
             updatedAt: 'DB 저장됨',
             pageCount: Math.max(item.pageCount, result.note.page_count ?? result.upload.page_count),
             preview: result.note.summary ?? '업로드한 PDF 문서입니다.',
-            remoteFileUrl: result.note.file_url ?? result.upload.url,
+            file: remotePdfUrl ? { uri: remotePdfUrl } : item.file,
+            localFileUri: item.localFileUri?.startsWith('blob:') ? undefined : item.localFileUri,
+            remoteFileUrl: remotePdfUrl,
             thumbnailUrl: result.note.thumbnail_url ?? result.upload.thumbnail_url ?? undefined,
             backendSyncStatus: 'synced',
             backendSyncError: undefined,
