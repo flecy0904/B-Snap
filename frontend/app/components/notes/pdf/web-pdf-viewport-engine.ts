@@ -262,6 +262,7 @@ export class WebPdfViewportEngine {
   private pageGap: number;
   private pageAlign: WebPdfPageAlign = 'center';
   private viewStateKey: string | null = null;
+  private snapshotViewStateKey: string | null = null;
 
   constructor(notifySnapshot: (snapshot: WebPdfViewportSnapshot) => void, pageGap: number) {
     this.notifySnapshot = notifySnapshot;
@@ -403,6 +404,7 @@ export class WebPdfViewportEngine {
     this.document = null;
     this.loadTask = null;
     this.naturalPages = {};
+    this.snapshotViewStateKey = null;
     this.snapshot = {
       ...makeDefaultSnapshot(),
       currentPage: Math.max(1, this.snapshot.currentPage),
@@ -454,6 +456,7 @@ export class WebPdfViewportEngine {
         pages: {},
         loadError: null,
       };
+      this.snapshotViewStateKey = this.viewStateKey;
       if (restoredViewState?.zoomMode === 'manual') {
         this.manualScale = clampZoom(restoredViewState.scale);
       }
@@ -474,6 +477,7 @@ export class WebPdfViewportEngine {
         isLoading: false,
         loadError: 'Failed to load PDF.',
       };
+      this.snapshotViewStateKey = null;
       this.emitSnapshotNow();
     }
   }
@@ -1321,7 +1325,12 @@ export class WebPdfViewportEngine {
   }
 
   private persistViewState() {
-    if (!this.viewStateKey || this.snapshot.isLoading || this.snapshot.pageCount <= 0) return;
+    if (
+      !this.viewStateKey
+      || this.snapshotViewStateKey !== this.viewStateKey
+      || this.snapshot.isLoading
+      || this.snapshot.pageCount <= 0
+    ) return;
     webPdfViewStateCache.delete(this.viewStateKey);
     webPdfViewStateCache.set(this.viewStateKey, {
       currentPage: this.snapshot.currentPage,
