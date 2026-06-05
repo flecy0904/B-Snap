@@ -21,7 +21,7 @@ const createDefaultTimeSlot = (): EditableTimeSlot => ({ id: 1, day: 'MON', star
 export function DesktopScheduleView(props: DesktopScheduleProps) {
   const { height } = useWindowDimensions();
   const hours = visibleHours(props.semester.entries);
-  const reservedHeight = props.compact ? 170 : 196;
+  const reservedHeight = props.isWeb ? 190 : props.compact ? 170 : 196;
   const rowHeight = Math.max(props.compact ? 44 : 50, Math.min(props.compact ? 62 : 68, Math.floor((height - reservedHeight) / hours.length)));
 
   const [newSubjectName, setNewSubjectName] = useState('');
@@ -55,7 +55,14 @@ export function DesktopScheduleView(props: DesktopScheduleProps) {
   };
 
   return (
-    <ScrollView style={props.styles.main} contentContainerStyle={[props.styles.desktopPage, props.compact && props.styles.desktopPageCompact]}>
+    <ScrollView
+      style={props.styles.main}
+      contentContainerStyle={[
+        props.styles.desktopPage,
+        props.compact && props.styles.desktopPageCompact,
+        props.isWeb && props.styles.webSchedulePage,
+      ]}
+    >
       {props.addModalOpen ? (
         <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 100, justifyContent: 'center', alignItems: 'center' }}>
           <View style={{ width: 440, maxHeight: '85%', backgroundColor: '#fff', borderRadius: 16, padding: 32, shadowColor: '#000', shadowOffset: { width: 0, height: 8 }, shadowOpacity: 0.15, shadowRadius: 24, elevation: 12 }}>
@@ -139,7 +146,14 @@ export function DesktopScheduleView(props: DesktopScheduleProps) {
         </View>
       ) : null}
 
-      <View style={[props.styles.desktopHeader, props.compact && props.styles.desktopHeaderCompact, { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }]}>
+      <View
+        style={[
+          props.styles.desktopHeader,
+          props.compact && props.styles.desktopHeaderCompact,
+          props.isWeb && props.styles.webScheduleHeader,
+          { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+        ]}
+      >
         <View>
           <Text style={props.styles.desktopCaption}>{props.semester.label}</Text>
           <Text style={[props.styles.desktopTitle, props.compact && props.styles.desktopTitleCompact]}>시간표</Text>
@@ -164,6 +178,7 @@ export function DesktopScheduleView(props: DesktopScheduleProps) {
         onOpenSubject={props.onOpenSubject}
         onRemoveSubject={props.onRemoveSubject}
         styles={props.styles}
+        isWeb={props.isWeb}
       />
     </ScrollView>
   );

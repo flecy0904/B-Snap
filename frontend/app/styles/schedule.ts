@@ -48,7 +48,10 @@ export const scheduleStyles = {
   semesterMeta: { fontSize: 12, color: '#A0A7B4', fontWeight: '600' as const },
   chevron: { fontSize: 22, color: '#C0C6D2' },
 
+  webSchedulePage: { flexGrow: 1, width: '100%' as const, padding: 28, paddingBottom: 34 },
+  webScheduleHeader: { marginBottom: 22 },
   desktopBoard: { backgroundColor: '#FFFFFF', borderRadius: 24, borderWidth: 1, borderColor: '#E9ECF3', overflow: 'hidden' as const },
+  webDesktopBoard: { width: '100%' as const, alignSelf: 'stretch' as const },
   desktopBoardCompact: { borderRadius: 20 },
   desktopDayHeader: { fontSize: 15, fontWeight: '800' as const, color: '#6D7483' },
   desktopTimeText: { fontSize: 12, color: '#ADB4C2', fontWeight: '700' as const },
