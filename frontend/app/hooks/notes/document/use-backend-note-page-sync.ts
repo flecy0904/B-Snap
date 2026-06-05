@@ -47,6 +47,12 @@ const EMPTY_PAGE_CONTENT = serializeNotePageContent({ inkStrokes: [], textAnnota
 
 const getPageSaveKey = (documentId: number, pageNumber: number) => `${documentId}:${pageNumber}`;
 
+function isTransientWebPdfUri(uri: string | null | undefined) {
+  if (typeof uri !== 'string') return false;
+  const normalizedUri = uri.toLowerCase();
+  return normalizedUri.startsWith('blob:') || normalizedUri.startsWith('data:application/pdf');
+}
+
 export function useBackendNotePageSync({
   workspaceHydrated,
   studyDocumentId,
@@ -412,7 +418,7 @@ export function useBackendNotePageSync({
       setUserStudyDocuments((current) => current.map((item) => (
         item.id === document.id
           ? (() => {
-            const hasTransientLocalFileUri = item.localFileUri?.startsWith('blob:') ?? false;
+            const hasTransientLocalFileUri = isTransientWebPdfUri(item.localFileUri);
             const shouldUseRemotePdf = Boolean(remotePdfUrl) && (!item.localFileUri || hasTransientLocalFileUri);
             return {
               ...item,
