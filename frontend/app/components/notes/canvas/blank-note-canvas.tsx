@@ -39,6 +39,7 @@ type BlankNotePageCanvasProps = {
 
 const BLANK_NOTE_ASPECT_RATIO = 0.68;
 const BLANK_NOTE_PAGE_GAP = 26;
+const BLANK_NOTE_WEB_VERTICAL_FIT_INSET = 42;
 
 function isStrokeOnBlankCanvasPage(stroke: InkStroke, pageNumber?: number, generatedPageId?: string) {
   if (generatedPageId) return stroke.generatedPageId === generatedPageId;
@@ -230,6 +231,7 @@ function BlankNotePageCanvas(props: BlankNotePageCanvasProps) {
     [pageRenderHeight, pageRenderWidth, rawPageSelectionRect],
   );
   const allowUnknownPointerAsStylus = Platform.OS === 'ios';
+  const allowMousePointerAsInput = Platform.OS === 'web';
 
   const [currentStroke, setCurrentStroke] = useState<InkStroke | null>(null);
   const [draftSelection, setDraftSelection] = useState<SelectionRect | null>(null);
@@ -263,6 +265,7 @@ function BlankNotePageCanvas(props: BlankNotePageCanvasProps) {
     [pageImageAnnotations, selectionMovePreview],
   );
   const currentStrokeRef = useRef<InkStroke | null>(null);
+  const currentStrokeRenderFrameRef = useRef<number | null>(null);
   const selectionOriginRef = useRef<InkPoint | null>(null);
   const selectionMoveOriginRef = useRef<InkPoint | null>(null);
   const selectionMoveStartRectRef = useRef<SelectionRect | null>(null);
@@ -271,10 +274,72 @@ function BlankNotePageCanvas(props: BlankNotePageCanvasProps) {
   const selectionResizeStartPointRef = useRef<InkPoint | null>(null);
   const draftSelectionRef = useRef<SelectionRect | null>(null);
   const draftSelectionPathRef = useRef<InkPoint[]>([]);
+  const draftSelectionRenderFrameRef = useRef<number | null>(null);
+  const draftSelectionPathRenderFrameRef = useRef<number | null>(null);
   const selectionPreviewTokenRef = useRef(0);
   const textTapRef = useRef<InkPoint | null>(null);
   const captureTargetRef = useRef<View | null>(null);
   const eraserSnapshotPushedRef = useRef(false);
+
+  const flushCurrentStrokeRender = useCallback((stroke: InkStroke | null) => {
+    if (currentStrokeRenderFrameRef.current !== null) {
+      cancelAnimationFrame(currentStrokeRenderFrameRef.current);
+      currentStrokeRenderFrameRef.current = null;
+    }
+    currentStrokeRef.current = stroke;
+    setCurrentStroke(stroke);
+  }, []);
+
+  const scheduleCurrentStrokeRender = useCallback((stroke: InkStroke | null) => {
+    currentStrokeRef.current = stroke;
+    if (currentStrokeRenderFrameRef.current !== null) return;
+    currentStrokeRenderFrameRef.current = requestAnimationFrame(() => {
+      currentStrokeRenderFrameRef.current = null;
+      setCurrentStroke(currentStrokeRef.current);
+    });
+  }, []);
+
+  const flushDraftSelectionRender = useCallback((rect: SelectionRect | null) => {
+    if (draftSelectionRenderFrameRef.current !== null) {
+      cancelAnimationFrame(draftSelectionRenderFrameRef.current);
+      draftSelectionRenderFrameRef.current = null;
+    }
+    draftSelectionRef.current = rect;
+    setDraftSelection(rect);
+  }, []);
+
+  const scheduleDraftSelectionRender = useCallback((rect: SelectionRect | null) => {
+    draftSelectionRef.current = rect;
+    if (draftSelectionRenderFrameRef.current !== null) return;
+    draftSelectionRenderFrameRef.current = requestAnimationFrame(() => {
+      draftSelectionRenderFrameRef.current = null;
+      setDraftSelection(draftSelectionRef.current);
+    });
+  }, []);
+
+  const flushDraftSelectionPathRender = useCallback((path: InkPoint[]) => {
+    if (draftSelectionPathRenderFrameRef.current !== null) {
+      cancelAnimationFrame(draftSelectionPathRenderFrameRef.current);
+      draftSelectionPathRenderFrameRef.current = null;
+    }
+    draftSelectionPathRef.current = path;
+    setDraftSelectionPath(path);
+  }, []);
+
+  const scheduleDraftSelectionPathRender = useCallback((path: InkPoint[]) => {
+    draftSelectionPathRef.current = path;
+    if (draftSelectionPathRenderFrameRef.current !== null) return;
+    draftSelectionPathRenderFrameRef.current = requestAnimationFrame(() => {
+      draftSelectionPathRenderFrameRef.current = null;
+      setDraftSelectionPath(draftSelectionPathRef.current);
+    });
+  }, []);
+
+  useEffect(() => () => {
+    if (currentStrokeRenderFrameRef.current !== null) cancelAnimationFrame(currentStrokeRenderFrameRef.current);
+    if (draftSelectionRenderFrameRef.current !== null) cancelAnimationFrame(draftSelectionRenderFrameRef.current);
+    if (draftSelectionPathRenderFrameRef.current !== null) cancelAnimationFrame(draftSelectionPathRenderFrameRef.current);
+  }, []);
 
   const scaleDisplayedRectToSelectionSpace = useCallback((rect: SelectionRect) => (
     rawPageSelectionRect?.pageWidth && rawPageSelectionRect.pageHeight
@@ -386,8 +451,7 @@ function BlankNotePageCanvas(props: BlankNotePageCanvasProps) {
         pageHeight: pageSize.height || 1000,
         points: [point],
       };
-      currentStrokeRef.current = stroke;
-      setCurrentStroke(stroke);
+      flushCurrentStrokeRender(stroke);
       return;
     }
 
@@ -398,10 +462,8 @@ function BlankNotePageCanvas(props: BlankNotePageCanvasProps) {
       if (currentSelection && resizeCorner) {
         selectionResizeCornerRef.current = resizeCorner;
         selectionResizeStartRectRef.current = currentSelection;
-        draftSelectionRef.current = currentSelection;
-        draftSelectionPathRef.current = [];
-        setDraftSelectionPath([]);
-        setDraftSelection(currentSelection);
+        flushDraftSelectionPathRender([]);
+        flushDraftSelectionRender(currentSelection);
         return;
       }
       if (
@@ -413,10 +475,8 @@ function BlankNotePageCanvas(props: BlankNotePageCanvasProps) {
       ) {
         selectionMoveOriginRef.current = point;
         selectionMoveStartRectRef.current = currentSelection;
-        draftSelectionRef.current = currentSelection;
-        draftSelectionPathRef.current = [];
-        setDraftSelectionPath([]);
-        setDraftSelection(currentSelection);
+        flushDraftSelectionPathRender([]);
+        flushDraftSelectionRender(currentSelection);
         return;
       }
       selectionPreviewTokenRef.current += 1;
@@ -424,8 +484,7 @@ function BlankNotePageCanvas(props: BlankNotePageCanvasProps) {
       onSelectionPreviewChange?.(null);
       selectionOriginRef.current = point;
       const initialPath = selectionMode === 'lasso' ? [point] : [];
-      draftSelectionPathRef.current = initialPath;
-      setDraftSelectionPath(initialPath);
+      flushDraftSelectionPathRender(initialPath);
       const rect = {
         x: point.x,
         y: point.y,
@@ -437,8 +496,7 @@ function BlankNotePageCanvas(props: BlankNotePageCanvasProps) {
         pageWidth: point.pageWidth,
         pageHeight: point.pageHeight,
       };
-      draftSelectionRef.current = rect;
-      setDraftSelection(rect);
+      flushDraftSelectionRender(rect);
       return;
     }
 
@@ -462,6 +520,9 @@ function BlankNotePageCanvas(props: BlankNotePageCanvasProps) {
     selectionMode,
     pageSelectionRect,
     eraseAtPoint,
+    flushCurrentStrokeRender,
+    flushDraftSelectionPathRender,
+    flushDraftSelectionRender,
     reportPageFocus,
   ]);
 
@@ -479,15 +540,13 @@ function BlankNotePageCanvas(props: BlankNotePageCanvasProps) {
       if (!stroke) return;
       if (stroke.style === 'shape') {
         const nextStroke = { ...stroke, points: [stroke.points[0], point] };
-        currentStrokeRef.current = nextStroke;
-        setCurrentStroke(nextStroke);
+        scheduleCurrentStrokeRender(nextStroke);
         return;
       }
       if (!shouldAppendInkPoint(stroke, point)) return;
 
       const nextStroke = { ...stroke, points: [...stroke.points, point] };
-      currentStrokeRef.current = nextStroke;
-      setCurrentStroke(nextStroke);
+      scheduleCurrentStrokeRender(nextStroke);
       return;
     }
 
@@ -496,8 +555,7 @@ function BlankNotePageCanvas(props: BlankNotePageCanvasProps) {
       const resizeStartRect = selectionResizeStartRectRef.current;
       if (resizeCorner && resizeStartRect) {
         const nextRect = resizeRectFromCorner(resizeStartRect, resizeCorner, point);
-        draftSelectionRef.current = nextRect;
-        setDraftSelection(nextRect);
+        scheduleDraftSelectionRender(nextRect);
         return;
       }
       const moveOrigin = selectionMoveOriginRef.current;
@@ -519,16 +577,14 @@ function BlankNotePageCanvas(props: BlankNotePageCanvasProps) {
           pageWidth: point.pageWidth,
           pageHeight: point.pageHeight,
         };
-        draftSelectionRef.current = nextRect;
-        setDraftSelection(nextRect);
+        scheduleDraftSelectionRender(nextRect);
         return;
       }
       const origin = selectionOriginRef.current;
       if (!origin) return;
       if (selectionMode === 'rect') {
         const nextRect = buildSelectionRectFromDrag(origin, point);
-        draftSelectionRef.current = nextRect;
-        setDraftSelection(nextRect);
+        scheduleDraftSelectionRender(nextRect);
         return;
       }
       const currentPath = draftSelectionPathRef.current;
@@ -536,13 +592,11 @@ function BlankNotePageCanvas(props: BlankNotePageCanvasProps) {
       const nextPath = !lastPoint || Math.hypot(lastPoint.x - point.x, lastPoint.y - point.y) > 5
         ? [...currentPath, point]
         : currentPath;
-      draftSelectionPathRef.current = nextPath;
-      setDraftSelectionPath(nextPath);
+      scheduleDraftSelectionPathRender(nextPath);
       const nextRect = buildSelectionRectFromPoints(nextPath) ?? buildSelectionRectFromDrag(origin, point);
-      draftSelectionRef.current = nextRect;
-      setDraftSelection(nextRect);
+      scheduleDraftSelectionRender(nextRect);
     }
-  }, [effectiveInkTool, eraseAtPoint, pageSize, selectionMode]);
+  }, [effectiveInkTool, eraseAtPoint, pageSize, scheduleCurrentStrokeRender, scheduleDraftSelectionPathRender, scheduleDraftSelectionRender, selectionMode]);
 
   const handleInkGestureEnd = useCallback(() => {
     const stroke = currentStrokeRef.current;
@@ -559,9 +613,8 @@ function BlankNotePageCanvas(props: BlankNotePageCanvasProps) {
       selectionResizeCornerRef.current = null;
       selectionResizeStartRectRef.current = null;
       selectionResizeStartPointRef.current = null;
-      draftSelectionPathRef.current = [];
-      setDraftSelection(null);
-      setDraftSelectionPath([]);
+      flushDraftSelectionRender(null);
+      flushDraftSelectionPathRender([]);
       if (resized && rect && rect.width > 24 && rect.height > 24) {
         canvasCtx.resizeSelectedStrokesToRect(scaleDisplayedRectToSelectionSpace(rect));
         onSelectionPreviewChange?.(null);
@@ -590,9 +643,9 @@ function BlankNotePageCanvas(props: BlankNotePageCanvasProps) {
     currentStrokeRef.current = null;
     eraserSnapshotPushedRef.current = false;
     textTapRef.current = null;
-    setCurrentStroke(null);
+    flushCurrentStrokeRender(null);
     setPencilHover(null);
-  }, [buildSelectionPreview, canvasCtx, effectiveInkTool, onAddTextAnnotation, onCommitInkStroke, onSelectionChange, onSelectionPreviewChange, scaleDisplayedDeltaToSelectionSpace, scaleDisplayedRectToSelectionSpace]);
+  }, [buildSelectionPreview, canvasCtx, effectiveInkTool, flushCurrentStrokeRender, flushDraftSelectionPathRender, flushDraftSelectionRender, onAddTextAnnotation, onCommitInkStroke, onSelectionChange, onSelectionPreviewChange, scaleDisplayedDeltaToSelectionSpace, scaleDisplayedRectToSelectionSpace]);
 
   const handleInkGestureCancel = useCallback(() => {
     const stroke = currentStrokeRef.current;
@@ -608,11 +661,11 @@ function BlankNotePageCanvas(props: BlankNotePageCanvasProps) {
     selectionResizeStartRectRef.current = null;
     selectionResizeStartPointRef.current = null;
     textTapRef.current = null;
-    setDraftSelection(null);
-    setDraftSelectionPath([]);
-    setCurrentStroke(null);
+    flushDraftSelectionRender(null);
+    flushDraftSelectionPathRender([]);
+    flushCurrentStrokeRender(null);
     setPencilHover(null);
-  }, [onCommitInkStroke]);
+  }, [flushCurrentStrokeRender, flushDraftSelectionPathRender, flushDraftSelectionRender, onCommitInkStroke]);
 
   const inkGesture = useMemo(
     () => Gesture.Pan()
@@ -623,7 +676,7 @@ function BlankNotePageCanvas(props: BlankNotePageCanvasProps) {
       .cancelsTouchesInView(false)
       .onTouchesDown((event: NativeInkTouchEvent, state: NativeGestureStateManager) => {
         'worklet';
-        if (shouldActivateNativeInkGesture(effectiveInkTool, event, fingerDrawingEnabled, allowUnknownPointerAsStylus)) {
+        if (shouldActivateNativeInkGesture(effectiveInkTool, event, fingerDrawingEnabled, allowUnknownPointerAsStylus, allowMousePointerAsInput)) {
           state.activate();
         } else {
           state.fail();
@@ -645,7 +698,7 @@ function BlankNotePageCanvas(props: BlankNotePageCanvasProps) {
         'worklet';
         if (!success) runOnJS(handleInkGestureCancel)();
       }),
-    [allowUnknownPointerAsStylus, effectiveInkTool, fingerDrawingEnabled, handleInkGestureCancel, handleInkGestureEnd, handleInkGestureMove, handleInkGestureStart],
+    [allowMousePointerAsInput, allowUnknownPointerAsStylus, effectiveInkTool, fingerDrawingEnabled, handleInkGestureCancel, handleInkGestureEnd, handleInkGestureMove, handleInkGestureStart],
   );
   const selectionMovePanResponder = useMemo(() => PanResponder.create({
     onStartShouldSetPanResponder: () => effectiveInkTool === 'select' && Boolean(pageSelectionRect),
@@ -669,10 +722,8 @@ function BlankNotePageCanvas(props: BlankNotePageCanvasProps) {
         selectionMoveStartRectRef.current = pageSelectionRect;
         selectionMoveOriginRef.current = startPoint;
       }
-      draftSelectionRef.current = pageSelectionRect;
-      draftSelectionPathRef.current = [];
-      setDraftSelectionPath([]);
-      setDraftSelection(pageSelectionRect);
+      flushDraftSelectionPathRender([]);
+      flushDraftSelectionRender(pageSelectionRect);
     },
     onPanResponderMove: (_event, gesture) => {
       const resizeCorner = selectionResizeCornerRef.current;
@@ -681,15 +732,13 @@ function BlankNotePageCanvas(props: BlankNotePageCanvasProps) {
       if (resizeCorner && resizeStartRect && resizeStartPoint) {
         const nextPoint = clampPointToPage(resizeStartPoint.x + gesture.dx, resizeStartPoint.y + gesture.dy);
         const nextRect = resizeRectFromCorner(resizeStartRect, resizeCorner, nextPoint);
-        draftSelectionRef.current = nextRect;
-        setDraftSelection(nextRect);
+        scheduleDraftSelectionRender(nextRect);
         return;
       }
       const startRect = selectionMoveStartRectRef.current;
       if (!startRect) return;
       const nextRect = translateSelectionRect(startRect, gesture.dx, gesture.dy, pageSize.width || 1000, pageSize.height || 1000);
-      draftSelectionRef.current = nextRect;
-      setDraftSelection(nextRect);
+      scheduleDraftSelectionRender(nextRect);
     },
     onPanResponderRelease: (_event, gesture) => {
       const resizeCorner = selectionResizeCornerRef.current;
@@ -701,10 +750,8 @@ function BlankNotePageCanvas(props: BlankNotePageCanvasProps) {
       selectionResizeCornerRef.current = null;
       selectionResizeStartRectRef.current = null;
       selectionResizeStartPointRef.current = null;
-      draftSelectionRef.current = null;
-      draftSelectionPathRef.current = [];
-      setDraftSelection(null);
-      setDraftSelectionPath([]);
+      flushDraftSelectionRender(null);
+      flushDraftSelectionPathRender([]);
       if (resizeCorner && resizeStartRect && resizeStartPoint) {
         const nextPoint = clampPointToPage(resizeStartPoint.x + gesture.dx, resizeStartPoint.y + gesture.dy);
         const nextRect = resizeRectFromCorner(resizeStartRect, resizeCorner, nextPoint);
@@ -732,13 +779,11 @@ function BlankNotePageCanvas(props: BlankNotePageCanvasProps) {
       selectionResizeCornerRef.current = null;
       selectionResizeStartRectRef.current = null;
       selectionResizeStartPointRef.current = null;
-      draftSelectionRef.current = null;
-      draftSelectionPathRef.current = [];
-      setDraftSelection(null);
-      setDraftSelectionPath([]);
+      flushDraftSelectionRender(null);
+      flushDraftSelectionPathRender([]);
     },
     onPanResponderTerminationRequest: () => false,
-  }), [canvasCtx, effectiveInkTool, onSelectionPreviewChange, pageSelectionRect, pageSize.height, pageSize.width, scaleDisplayedDeltaToSelectionSpace, scaleDisplayedRectToSelectionSpace]);
+  }), [canvasCtx, effectiveInkTool, flushDraftSelectionPathRender, flushDraftSelectionRender, onSelectionPreviewChange, pageSelectionRect, pageSize.height, pageSize.width, scaleDisplayedDeltaToSelectionSpace, scaleDisplayedRectToSelectionSpace, scheduleDraftSelectionRender]);
   const handlePencilHoverMove = useCallback((event: unknown) => {
     if (currentStrokeRef.current || !shouldPreviewPencilHover(effectiveInkTool) || !isStylusHoverEvent(event) || !isPencilHoverFarEnough(event)) {
       setPencilHover(null);
@@ -901,9 +946,9 @@ export function BlankNoteCanvas(props: {
 }) {
   const canvasCtx = useCanvasContext();
   const documentContext = useDocumentContext();
-  const { width: windowWidth } = useWindowDimensions();
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const scrollRef = useRef<ScrollView | null>(null);
-  const [containerWidth, setContainerWidth] = useState(0);
+  const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const documentId = documentContext.studyDocument?.id ?? null;
   const singleGeneratedPage = Boolean(props.generatedPageId);
   const pageCount = singleGeneratedPage
@@ -928,9 +973,18 @@ export function BlankNoteCanvas(props: {
   const allInkStrokes = documentId ? canvasCtx.inkByDocument[documentId] ?? [] : canvasCtx.inkStrokes;
   const allTextAnnotations = documentId ? canvasCtx.textAnnotationsByDocument[documentId] ?? [] : canvasCtx.textAnnotations;
   const allImageAnnotations = documentId ? canvasCtx.imageAnnotationsByDocument[documentId] ?? [] : canvasCtx.imageAnnotations;
-  const horizontalInset = windowWidth >= 900 ? 24 : 16;
-  const availableWidth = Math.max(320, (containerWidth || windowWidth || 780) - horizontalInset);
-  const pageWidth = Math.round(Math.max(360, Math.min(availableWidth, 1320)));
+  const horizontalInset = Platform.OS === 'web' ? 0 : windowWidth >= 900 ? 24 : 16;
+  const availableWidth = Math.max(320, (containerSize.width || windowWidth || 780) - horizontalInset);
+  const availableHeight = Math.max(360, containerSize.height || windowHeight || 640);
+  const webHeightFitWidth = Math.max(
+    360,
+    Math.floor((availableHeight - BLANK_NOTE_WEB_VERTICAL_FIT_INSET) / BLANK_NOTE_ASPECT_RATIO),
+  );
+  const maxBlankPageWidth = Platform.OS === 'web' ? availableWidth : 1320;
+  const pageWidth = Math.round(Math.max(
+    360,
+    Math.min(availableWidth, maxBlankPageWidth, Platform.OS === 'web' ? webHeightFitWidth : maxBlankPageWidth),
+  ));
   const pageHeight = Math.round(Math.max(300, pageWidth * BLANK_NOTE_ASPECT_RATIO));
   const template = props.template ?? documentContext.studyDocument?.blankTemplate ?? 'plain';
   const selectionScrollLocked = !props.readOnly && canvasCtx.inkTool === 'select' && Boolean(canvasCtx.selectionRect);
@@ -1091,7 +1145,14 @@ export function BlankNoteCanvas(props: {
   return (
     <View
       style={[props.styles.blankNoteCanvasCard, { paddingVertical: 0, borderWidth: 0 }]}
-      onLayout={(event) => setContainerWidth(event.nativeEvent.layout.width)}
+      onLayout={(event) => {
+        const { width, height } = event.nativeEvent.layout;
+        setContainerSize((current) => (
+          Math.abs(current.width - width) < 1 && Math.abs(current.height - height) < 1
+            ? current
+            : { width, height }
+        ));
+      }}
     >
       <ScrollView
         key={singleGeneratedPage ? `generated:${props.generatedPageId ?? 'single'}` : `blank:${documentId ?? 'none'}:${pageCount}`}

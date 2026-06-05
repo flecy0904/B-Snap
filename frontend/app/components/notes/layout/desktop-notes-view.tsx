@@ -45,8 +45,8 @@ const WEB_CHAT_SIDEBAR_MIN_WIDTH = 300;
 const WEB_CHAT_SIDEBAR_DEFAULT_WIDTH = 340;
 const WEB_AI_CANVAS_MIN_WIDTH = 360;
 const WEB_AI_CANVAS_DEFAULT_WIDTH = 420;
-const WEB_PDF_VIEWER_MIN_WIDTH = 520;
-const WEB_DOCUMENT_PANEL_GAP = 10;
+const WEB_PDF_VIEWER_MIN_WIDTH = 360;
+const WEB_DOCUMENT_PANEL_GAP = 0;
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
@@ -334,8 +334,11 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
   const [focusMode, setFocusMode] = React.useState(false);
   const focusRestorePageRef = React.useRef<number | null>(null);
   const lastViewerPdfPageRef = React.useRef<number | null>(props.currentPdfPage);
+  const documentPageCacheRef = React.useRef<Record<number, number>>({});
   const suppressPageChangeUntilRef = React.useRef(0);
+  const focusSidebarRestoreTimerRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
   const isNativeWideApp = props.isWeb === false;
+  const useLightDocumentChrome = true;
   const showAppRightSidebar = isNativeWideApp && props.appRightSidebarPanel !== null;
   const appSidebarOnLeft = props.appSidebarPosition === 'left';
   const showFloatingChat = !focusMode && (
@@ -343,8 +346,8 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
       ? props.appChatMode === 'floating' && props.aiPanelOpen
       : props.aiPanelMode === 'floating' && props.aiPanelOpen
   );
-  const showWebChatSidebarPanel = !focusMode && !isNativeWideApp && props.aiPanelOpen && props.aiPanelMode === 'sidebar';
-  const showWebAiCanvasPanel = !focusMode && !isNativeWideApp && props.aiCanvas.isOpen;
+  const showWebChatSidebarPanel = !isNativeWideApp && props.aiPanelOpen && props.aiPanelMode === 'sidebar';
+  const showWebAiCanvasPanel = !isNativeWideApp && props.aiCanvas.isOpen;
   const [webDocumentRowWidth, setWebDocumentRowWidth] = React.useState(0);
   const [webPanelWidths, setWebPanelWidths] = React.useState({
     chat: WEB_CHAT_SIDEBAR_DEFAULT_WIDTH,
@@ -447,7 +450,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
       return next.chat === current.chat && next.canvas === current.canvas ? current : next;
     });
   }, [normalizeWebPanelWidths]);
-  const webPdfViewerMinWidth = !isNativeWideApp && !focusMode
+  const webPdfViewerMinWidth = !isNativeWideApp
     ? getEffectiveWebPdfMinWidth(webDocumentRowWidth)
     : undefined;
 
@@ -472,7 +475,8 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
   }, [props.allStudyDocuments]);
 
   React.useEffect(() => {
-    lastViewerPdfPageRef.current = props.currentPdfPage;
+    const cachedPage = props.studyDocument?.id ? documentPageCacheRef.current[props.studyDocument.id] : undefined;
+    lastViewerPdfPageRef.current = cachedPage ?? props.currentPdfPage;
   }, [props.studyDocument?.id]);
 
   React.useEffect(() => {
@@ -484,8 +488,19 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
     ) {
       return;
     }
-    if (props.currentPdfPage > 0) lastViewerPdfPageRef.current = props.currentPdfPage;
-  }, [props.currentPdfPage]);
+    if (props.currentPdfPage > 0) {
+      lastViewerPdfPageRef.current = props.currentPdfPage;
+      if (props.studyDocument?.id) documentPageCacheRef.current[props.studyDocument.id] = props.currentPdfPage;
+    }
+  }, [props.currentPdfPage, props.studyDocument?.id]);
+
+  const preservePageForDocumentTransition = React.useCallback((documentId: number) => {
+    const cachedPage = documentPageCacheRef.current[documentId];
+    if (!cachedPage || cachedPage <= 1) return;
+    focusRestorePageRef.current = cachedPage;
+    lastViewerPdfPageRef.current = cachedPage;
+    suppressPageChangeUntilRef.current = Date.now() + 900;
+  }, []);
 
   const getCurrentPdfPageToPreserve = React.useCallback(() => (
     lastViewerPdfPageRef.current
@@ -494,15 +509,37 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
         : props.currentPdfPage)
   ), [props.currentDocumentPage, props.currentPdfPage]);
 
+  React.useEffect(() => () => {
+    if (focusSidebarRestoreTimerRef.current) clearTimeout(focusSidebarRestoreTimerRef.current);
+  }, []);
+
+  const restoreAppSidebarPanelAfterFocusToggle = React.useCallback((panel: AppRightSidebarPanel) => {
+    if (!isNativeWideApp || !panel) return;
+    if (focusSidebarRestoreTimerRef.current) clearTimeout(focusSidebarRestoreTimerRef.current);
+    focusSidebarRestoreTimerRef.current = setTimeout(() => {
+      focusSidebarRestoreTimerRef.current = null;
+      if (panel === 'chat') {
+        props.onOpenAppChatSidebar();
+        return;
+      }
+      props.onOpenAppAiCanvasSidebar();
+    }, 80);
+  }, [isNativeWideApp, props.onOpenAppAiCanvasSidebar, props.onOpenAppChatSidebar]);
+
   const toggleFocusMode = React.useCallback(() => {
     const pageToPreserve = getCurrentPdfPageToPreserve();
+    const sidebarPanelToRestore = isNativeWideApp ? props.appRightSidebarPanel : null;
     focusRestorePageRef.current = pageToPreserve;
     suppressPageChangeUntilRef.current = Date.now() + 1400;
     props.onSetCurrentPdfPage(pageToPreserve);
     setPageListOpen(false);
     setRenameOpen(false);
-    setFocusMode((current) => !current);
-  }, [getCurrentPdfPageToPreserve, props.onSetCurrentPdfPage]);
+    setFocusMode((current) => {
+      const next = !current;
+      if (next) restoreAppSidebarPanelAfterFocusToggle(sidebarPanelToRestore);
+      return next;
+    });
+  }, [getCurrentPdfPageToPreserve, isNativeWideApp, props.appRightSidebarPanel, props.onSetCurrentPdfPage, restoreAppSidebarPanelAfterFocusToggle]);
 
   const setCurrentPdfPageFromViewer = React.useCallback((pageNumber: number) => {
     const preservedPage = focusRestorePageRef.current;
@@ -795,9 +832,9 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
       >
         <View style={props.styles.fill}>
           {!focusMode ? (
-            <View style={props.styles.notebookBrowserBar}>
-              <Pressable style={props.styles.notebookBrowserHomeButton} onPress={() => props.onOpenStudyDocument(null)}>
-                <MaterialCommunityIcons name="home-outline" size={20} color="#D8E4FF" />
+            <View style={[props.styles.notebookBrowserBar, useLightDocumentChrome && props.styles.notebookBrowserBarLight]}>
+              <Pressable style={[props.styles.notebookBrowserHomeButton, useLightDocumentChrome && props.styles.notebookBrowserHomeButtonLight]} onPress={() => props.onOpenStudyDocument(null)}>
+                <MaterialCommunityIcons name="home-outline" size={20} color={useLightDocumentChrome ? '#526078' : '#D8E4FF'} />
               </Pressable>
               <ScrollView
                 horizontal
@@ -811,45 +848,61 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
                   return (
                     <Pressable
                       key={document.id}
-                      style={[props.styles.notebookBrowserTab, active && props.styles.notebookBrowserTabActive]}
-                      onPress={() => props.onOpenStudyDocument(document.id)}
+                      style={[
+                        props.styles.notebookBrowserTab,
+                        useLightDocumentChrome && props.styles.notebookBrowserTabLight,
+                        active && props.styles.notebookBrowserTabActive,
+                        useLightDocumentChrome && active && props.styles.notebookBrowserTabActiveLight,
+                      ]}
+                      onPress={() => {
+                        if (document.id !== props.studyDocument?.id) preservePageForDocumentTransition(document.id);
+                        props.onOpenStudyDocument(document.id);
+                      }}
                     >
-                      <MaterialCommunityIcons name={getDocumentTabIcon(document.type)} size={17} color={active ? '#FFFFFF' : '#BFD0EC'} />
-                      <Text style={[props.styles.notebookBrowserTabText, active && props.styles.notebookBrowserTabTextActive]} numberOfLines={1}>
+                      <MaterialCommunityIcons name={getDocumentTabIcon(document.type)} size={17} color={useLightDocumentChrome ? (active ? '#4F68D2' : '#6B778A') : (active ? '#FFFFFF' : '#BFD0EC')} />
+                      <Text
+                        style={[
+                          props.styles.notebookBrowserTabText,
+                          useLightDocumentChrome && props.styles.notebookBrowserTabTextLight,
+                          active && props.styles.notebookBrowserTabTextActive,
+                          useLightDocumentChrome && active && props.styles.notebookBrowserTabTextActiveLight,
+                        ]}
+                        numberOfLines={1}
+                      >
                         {document.title}
                       </Text>
                       {active ? (
                         <Pressable
-                          style={props.styles.notebookBrowserTabClose}
+                          style={[props.styles.notebookBrowserTabClose, useLightDocumentChrome && props.styles.notebookBrowserTabCloseLight]}
                           hitSlop={6}
                           onPress={(event) => {
                             event.stopPropagation();
                             closeDocumentTab(document.id);
                           }}
                         >
-                          <MaterialCommunityIcons name="close" size={15} color="#D8E4FF" />
+                          <MaterialCommunityIcons name="close" size={15} color={useLightDocumentChrome ? '#6B778A' : '#D8E4FF'} />
                         </Pressable>
                       ) : null}
                     </Pressable>
                   );
                 })}
               </ScrollView>
-              <Pressable style={props.styles.notebookBrowserAddButton} onPress={props.onUploadPdf}>
-                <MaterialCommunityIcons name="plus" size={19} color="#D8E4FF" />
+              <Pressable style={[props.styles.notebookBrowserAddButton, useLightDocumentChrome && props.styles.notebookBrowserAddButtonLight]} onPress={props.onUploadPdf}>
+                <MaterialCommunityIcons name="plus" size={19} color={useLightDocumentChrome ? '#526078' : '#D8E4FF'} />
               </Pressable>
               <View style={props.styles.notebookBrowserActions}>
-                <View style={props.styles.notebookBrowserSaveStatus}>
-                  <MaterialCommunityIcons name="cloud-check-outline" size={14} color="#D8E4FF" />
-                  <Text style={props.styles.notebookBrowserSaveStatusText} numberOfLines={1}>{props.documentSaveStatus}</Text>
+                <View style={[props.styles.notebookBrowserSaveStatus, useLightDocumentChrome && props.styles.notebookBrowserSaveStatusLight]}>
+                  <MaterialCommunityIcons name="cloud-check-outline" size={14} color={useLightDocumentChrome ? '#4F68D2' : '#D8E4FF'} />
+                  <Text style={[props.styles.notebookBrowserSaveStatusText, useLightDocumentChrome && props.styles.notebookBrowserSaveStatusTextLight]} numberOfLines={1}>{props.documentSaveStatus}</Text>
                 </View>
-                <Pressable style={props.styles.notebookBrowserIconButton} onPress={toggleFocusMode}>
-                  <MaterialCommunityIcons name="fullscreen" size={18} color="#D8E4FF" />
+                <Pressable style={[props.styles.notebookBrowserIconButton, useLightDocumentChrome && props.styles.notebookBrowserIconButtonLight]} onPress={props.onExportCurrentDocument}>
+                  <MaterialCommunityIcons name="share-variant-outline" size={18} color={useLightDocumentChrome ? '#526078' : '#D8E4FF'} />
                 </Pressable>
-                <Pressable style={props.styles.notebookBrowserIconButton} onPress={startRename}>
-                  <MaterialCommunityIcons name="pencil-outline" size={18} color="#D8E4FF" />
+                <Pressable style={[props.styles.notebookBrowserIconButton, useLightDocumentChrome && props.styles.notebookBrowserIconButtonLight]} onPress={toggleFocusMode}>
+                  <MaterialCommunityIcons name="fullscreen" size={18} color={useLightDocumentChrome ? '#526078' : '#D8E4FF'} />
                 </Pressable>
-                <Pressable style={[props.styles.notebookBrowserIconButton, props.styles.notebookBrowserDangerButton]} onPress={() => props.onDeleteStudyDocument(props.studyDocument!.id)}>
-                  <MaterialCommunityIcons name="trash-can-outline" size={18} color="#FCA5A5" />
+                <Pressable style={[props.styles.notebookBrowserIconButton, useLightDocumentChrome && props.styles.notebookBrowserIconButtonLight]} onPress={startRename}>
+                  <MaterialCommunityIcons name="pencil-outline" size={18} color={useLightDocumentChrome ? '#526078' : '#D8E4FF'} />
                 </Pressable>
               </View>
             </View>
@@ -873,29 +926,30 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
               </Pressable>
             </View>
           ) : null}
-          <View style={[props.styles.desktopDocumentDetailBody, focusMode && props.styles.desktopDocumentDetailBodyFocus]}>
+          <View style={[props.styles.desktopDocumentDetailBody, useLightDocumentChrome && props.styles.desktopDocumentDetailBodyLight, focusMode && props.styles.desktopDocumentDetailBodyFocus]}>
             {showFloatingChat ? <NotesAiAssistantPanel /> : null}
             <NotesWorkspaceToolbar />
             <View
               style={[
                 props.styles.desktopDocumentSidebarContentRow,
-                !isNativeWideApp && !focusMode && props.styles.desktopDocumentSidebarContentRowGapped,
-                !isNativeWideApp && !focusMode && props.aiCanvas.isOpen && props.styles.desktopDocumentSidebarContentRowWebPanels,
+                !isNativeWideApp && props.styles.desktopDocumentSidebarContentRowGapped,
+                !isNativeWideApp && props.aiCanvas.isOpen && props.styles.desktopDocumentSidebarContentRowWebPanels,
                 focusMode && props.styles.desktopDocumentSidebarContentRowFocus,
               ]}
               onLayout={(event) => {
-                if (isNativeWideApp || focusMode) return;
+                if (isNativeWideApp) return;
                 const nextWidth = Math.floor(event.nativeEvent.layout.width);
                 setWebDocumentRowWidth((current) => (current === nextWidth ? current : nextWidth));
               }}
             >
               {showWebChatSidebarPanel ? <NotesAiAssistantPanel /> : null}
-              {!focusMode && showAppRightSidebar && appSidebarOnLeft ? (
+              {showAppRightSidebar && appSidebarOnLeft ? (
                 <AppRightSidebar />
               ) : null}
               <View
                 style={[
                   props.styles.desktopDocumentViewerPane,
+                  useLightDocumentChrome && props.styles.desktopDocumentViewerPaneLight,
                   webPdfViewerMinWidth ? { minWidth: webPdfViewerMinWidth } : null,
                   focusMode && props.styles.desktopDocumentViewerPaneFocus,
                 ]}
@@ -903,7 +957,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
               >
                 <NotesDocumentViewer />
               </View>
-              {!focusMode && showAppRightSidebar && !appSidebarOnLeft ? (
+              {showAppRightSidebar && !appSidebarOnLeft ? (
                 <AppRightSidebar />
               ) : showWebAiCanvasPanel ? (
                 <NotesAiCanvasPanel />
@@ -958,6 +1012,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
       onOpenPageCaptureReference={props.onOpenPageCaptureReference}
       onAskAiAboutPageCaptureReference={props.onAskAiAboutPageCaptureReference}
       onRemoveCaptureAsset={props.onRemoveCaptureAsset}
+      isWeb={props.isWeb}
     />
   );
 }

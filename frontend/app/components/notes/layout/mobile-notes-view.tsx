@@ -594,7 +594,7 @@ export function MobileNotesView(props: MobileNotesViewProps) {
                 <>
                   <Pressable style={props.styles.mobileDocToolButton} onPress={props.onUndoInk}><MaterialCommunityIcons name="undo-variant" size={18} color="#7D8797" /></Pressable>
                   <Pressable style={props.styles.mobileDocToolButton} onPress={props.onRedoInk}><MaterialCommunityIcons name="redo-variant" size={18} color="#7D8797" /></Pressable>
-                  <Pressable style={props.styles.mobileDocToolButton} onPress={props.onClearInk}><MaterialCommunityIcons name="trash-can-outline" size={18} color="#7D8797" /></Pressable>
+                  <View style={props.styles.mobileInkToolDivider} />
                 </>
               )}
               <Pressable style={[props.styles.mobileDocToolButton, props.currentPageBookmarked && props.styles.inkToolButtonActive]} onPress={props.onToggleBookmarkCurrentPage}>

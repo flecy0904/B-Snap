@@ -3,7 +3,7 @@ import { C } from '../shared';
 export const aiPanelStyles = {
   aiPanel: { position: 'absolute' as const, top: 66, bottom: 8, left: 8, width: 300, borderRadius: 20, backgroundColor: '#FFFFFF', padding: 18, borderWidth: 1, borderColor: '#E2E8F2', shadowColor: '#AAB4C5', shadowOpacity: 0.18, shadowRadius: 20, shadowOffset: { width: 0, height: 10 }, elevation: 6, zIndex: 20, overflow: 'visible' as const },
   aiPanelSidebar: { position: 'relative' as const, top: undefined, bottom: undefined, left: undefined, alignSelf: 'stretch' as const, minHeight: 0, height: '100%' as const, borderRadius: 18, zIndex: 10 },
-  aiPanelWebAttached: { position: 'relative' as const, top: 0, right: undefined, bottom: 0, left: 0, height: '100%' as const, borderRadius: 0, borderTopWidth: 0, shadowOpacity: 0, shadowRadius: 0, shadowOffset: { width: 0, height: 0 }, elevation: 0, marginTop: 0, marginBottom: 0, marginLeft: 0, paddingRight: 8 },
+  aiPanelWebAttached: { position: 'relative' as const, top: 0, right: undefined, bottom: 0, left: 0, height: '100%' as const, borderRadius: 0, borderTopWidth: 0, shadowOpacity: 0, shadowRadius: 0, shadowOffset: { width: 0, height: 0 }, elevation: 0, marginTop: 0, marginBottom: 0, marginLeft: 0, paddingRight: 0 },
   aiPanelSidebarResizeHandle: { position: 'absolute' as const, top: 0, right: -3, bottom: 0, width: 6, cursor: 'ew-resize' as const, zIndex: 130, alignItems: 'center' as const, justifyContent: 'center' as const },
   aiPanelSidebarResizeHandleLeft: { left: -3, right: undefined },
   aiPanelResizeRail: { width: 2, height: '100%' as const, backgroundColor: 'transparent', borderRadius: 999 },
@@ -209,7 +209,7 @@ export const aiCanvasStyles = {
   aiCanvasToolbarButton: { backgroundColor: '#F7F9FE', borderColor: '#E4EAF8' },
   aiCanvasToolbarButtonActive: { backgroundColor: '#EEF1FD', borderColor: '#D8E0FB' },
   aiCanvasPanel: { width: 360, alignSelf: 'stretch' as const, minHeight: 0, borderRadius: 18, backgroundColor: '#FFFFFF', borderWidth: 1, borderColor: '#E2E8F2', padding: 18, shadowColor: '#AAB4C5', shadowOpacity: 0.12, shadowRadius: 14, shadowOffset: { width: 0, height: 8 }, elevation: 4, overflow: 'visible' as const },
-  aiCanvasWebAttachedPanel: { height: '100%' as const, alignSelf: 'stretch' as const, borderRadius: 0, borderTopWidth: 0, borderRightWidth: 0, shadowOpacity: 0, shadowRadius: 0, shadowOffset: { width: 0, height: 0 }, elevation: 0, marginTop: 0, marginRight: 0, marginBottom: 0, paddingRight: 8 },
+  aiCanvasWebAttachedPanel: { height: '100%' as const, alignSelf: 'stretch' as const, borderRadius: 0, borderTopWidth: 0, borderRightWidth: 0, shadowOpacity: 0, shadowRadius: 0, shadowOffset: { width: 0, height: 0 }, elevation: 0, marginTop: 0, marginRight: 0, marginBottom: 0, paddingRight: 0 },
   aiCanvasMenuDismissLayer: { position: 'absolute' as const, top: 0, right: 0, bottom: 0, left: 0, zIndex: 10 },
   aiCanvasHeader: { minHeight: 32, flexDirection: 'row' as const, alignItems: 'center' as const, gap: 8, paddingRight: 184, marginBottom: 10, position: 'relative' as const, zIndex: 70 },
   aiCanvasHeaderWeb: { paddingRight: 140 },
