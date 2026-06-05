@@ -69,7 +69,9 @@ function normalizeAiFloatingPanelSize(size?: AiFloatingPanelSize | null): AiFloa
 }
 
 function isTransientWebFileUri(uri: string | null | undefined) {
-  return typeof uri === 'string' && uri.startsWith('blob:');
+  if (typeof uri !== 'string') return false;
+  const normalizedUri = uri.toLowerCase();
+  return normalizedUri.startsWith('blob:') || normalizedUri.startsWith('data:application/pdf');
 }
 
 export function useStudyWorkspace(props: {
