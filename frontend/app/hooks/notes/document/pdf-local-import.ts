@@ -56,6 +56,27 @@ function countPdfPagesInBinaryChunk(chunk: string, carry: string) {
   };
 }
 
+function countPdfPagesInBinaryString(binary: string) {
+  let pageCount = 0;
+  let carry = '';
+  for (let position = 0; position < binary.length; position += PDF_PAGE_COUNT_CHUNK_BYTES) {
+    const result = countPdfPagesInBinaryChunk(binary.slice(position, position + PDF_PAGE_COUNT_CHUNK_BYTES), carry);
+    pageCount += result.count;
+    carry = result.carry;
+  }
+  return Math.max(1, pageCount);
+}
+
+function arrayBufferToBinary(buffer: ArrayBuffer) {
+  const bytes = new Uint8Array(buffer);
+  let output = '';
+  const chunkSize = 8192;
+  for (let position = 0; position < bytes.length; position += chunkSize) {
+    output += String.fromCharCode(...bytes.subarray(position, position + chunkSize));
+  }
+  return output;
+}
+
 export function createLocalStudyDocumentId() {
   return Date.now();
 }
@@ -82,12 +103,23 @@ export async function persistPickedPdfAsset(picked: DocumentPicker.DocumentPicke
 export async function readPdfPageCount(picked: DocumentPicker.DocumentPickerAsset, pdfUri: string) {
   try {
     if (Platform.OS === 'web') {
+      if (picked.file) {
+        return countPdfPagesInBinaryString(arrayBufferToBinary(await picked.file.arrayBuffer()));
+      }
+
       const base64 = pdfUri.startsWith('data:application/pdf')
         ? pdfUri.split(',')[1] ?? ''
         : picked.base64 ?? '';
-      if (!base64) return 1;
-      const binary = decodeBase64ToBinary(base64);
-      return Math.max(1, countPdfPagesInBinaryChunk(binary, '').count);
+      if (base64) {
+        return countPdfPagesInBinaryString(decodeBase64ToBinary(base64));
+      }
+
+      if (pdfUri) {
+        const response = await fetch(pdfUri);
+        return countPdfPagesInBinaryString(arrayBufferToBinary(await response.arrayBuffer()));
+      }
+
+      return 1;
     }
 
     const fileInfo = await FileSystem.getInfoAsync(pdfUri);
