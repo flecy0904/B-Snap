@@ -68,6 +68,12 @@ function normalizeAiFloatingPanelSize(size?: AiFloatingPanelSize | null): AiFloa
   };
 }
 
+function isTransientWebFileUri(uri: string | null | undefined) {
+  if (typeof uri !== 'string') return false;
+  const normalizedUri = uri.toLowerCase();
+  return normalizedUri.startsWith('blob:') || normalizedUri.startsWith('data:application/pdf');
+}
+
 export function useStudyWorkspace(props: {
   wide: boolean;
   subjects: Subject[];
@@ -562,8 +568,10 @@ export function useStudyWorkspace(props: {
             return {
               ...backendDocument,
               id: document.id,
-              localFileUri: document.localFileUri,
-              file: document.localFileUri ? { uri: document.localFileUri } : normalizeDocumentFile(backendDocument.file),
+              localFileUri: isTransientWebFileUri(document.localFileUri) ? undefined : document.localFileUri,
+              file: document.localFileUri && !isTransientWebFileUri(document.localFileUri)
+                ? { uri: document.localFileUri }
+                : normalizeDocumentFile(backendDocument.file),
             };
           });
           const existingBackendNoteIds = new Set(

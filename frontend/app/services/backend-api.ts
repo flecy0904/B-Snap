@@ -355,12 +355,20 @@ function normalizeBackendCaptureUploadJob(job: BackendCaptureUploadJob): Backend
   };
 }
 
-async function appendUploadFile(formData: FormData, fieldName: string, file: {
+type BackendUploadFilePayload = {
   uri: string;
   name: string;
   type: string;
-}) {
+  blob?: Blob | null;
+};
+
+async function appendUploadFile(formData: FormData, fieldName: string, file: BackendUploadFilePayload) {
   if (Platform.OS === 'web') {
+    if (file.blob) {
+      formData.append(fieldName, file.blob, file.name);
+      return;
+    }
+
     try {
       const response = await fetch(file.uri);
       const blob = await response.blob();
@@ -468,6 +476,7 @@ export async function uploadBackendPdfNote(payload: {
     uri: string;
     name: string;
     type: string;
+    blob?: Blob | null;
   };
   folderId: number;
   title: string;
