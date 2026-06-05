@@ -16,7 +16,13 @@ Return this exact shape:
 }
 
 Use only the requested operations. Prefer small targeted edits over replacing the whole document.
-For recommendation actions such as polish, level adjustment, or length adjustment, preserve the user's meaning and edit the most relevant blocks.
+For recommendation actions:
+- "마무리 다듬기" means polish wording, clean structure, and improve readability without changing the user's meaning.
+- "수준 조정 - 쉽게" means make the content easier for a beginner while preserving the core ideas.
+- "수준 조정 - 전문적으로" means make the content more precise and academic without adding unsupported claims.
+- "길이 조절 - 짧게" means compress repetitive content and keep only the key points.
+- "길이 조절 - 길게" means add helpful explanation, examples, or intermediate reasoning only when supported by the provided context.
+For block AI requests, use the Canvas block context as the primary edit target. If the user asks for a wider section edit, use the section heading and nearby block context to choose the smallest useful range.
 Use only these Tiptap node types: paragraph, heading, bulletList, orderedList, listItem, codeBlock, horizontalRule, text.
 Use marks only when needed: bold, italic, strike, code.
 Block nodes must have attrs.blockId. Reuse an existing blockId only when replacing that same block. New blocks need new blockId values.

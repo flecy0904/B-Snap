@@ -2,6 +2,7 @@ import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { ActivityIndicator, Animated, Image, PanResponder, Platform, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { hasEnoughClassInsightData, isClassInsightTargetDocument } from '../../../hooks/notes/class-insight';
+import { useDelayedTooltip } from '../../../hooks/notes/use-delayed-tooltip';
 import { AiResponseContent } from './ai-response-content';
 import { useNotesGlobalContext } from '../workspace/notes-global-context';
 
@@ -53,6 +54,15 @@ function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
 
+function handleWebSubmitKeyPress(event: any, submit: () => void) {
+  if (Platform.OS !== 'web') return;
+  const key = event?.key ?? event?.nativeEvent?.key;
+  const shiftKey = Boolean(event?.shiftKey ?? event?.nativeEvent?.shiftKey);
+  if (key !== 'Enter' || shiftKey) return;
+  event.preventDefault?.();
+  submit();
+}
+
 function getFloatingPanelHeight(windowHeight: number, panelY: number, requestedHeight = FLOATING_PANEL_HEIGHT) {
   return Math.min(requestedHeight, Math.max(FLOATING_PANEL_MIN_HEIGHT, windowHeight - panelY - FLOATING_PANEL_MARGIN));
 }
@@ -65,6 +75,7 @@ const CLASS_INSIGHT_QUICK_PROMPTS = [
 
 export function NotesAiAssistantPanel() {
   const workspace = useNotesGlobalContext();
+  const { activeTooltipId, hoveredTooltipId, getTooltipTriggerProps, hideTooltip } = useDelayedTooltip();
   const { width, height } = useWindowDimensions();
   const [floatingPosition, setFloatingPosition] = React.useState({ x: FLOATING_PANEL_MARGIN, y: FLOATING_PANEL_TOP });
   const floatingPositionRef = React.useRef(floatingPosition);
@@ -690,6 +701,23 @@ export function NotesAiAssistantPanel() {
     : workspace.aiPanelMode === 'floating'
       ? [workspace.styles.aiPanel, { left: floatingAnimatedPosition.x, top: floatingAnimatedPosition.y, bottom: undefined, width: floatingPanelWidth, height: floatingAnimatedHeight }]
       : [workspace.styles.aiPanel, workspace.styles.aiPanelSidebar, { width: sidebarWidth }];
+  const renderAiTooltip = (id: string, label: string, placement: 'above' | 'below' = 'below') => (
+    activeTooltipId === id ? (
+      <View
+        pointerEvents="none"
+        style={[
+          workspace.styles.aiTooltipBubble,
+          placement === 'above' ? workspace.styles.aiTooltipAbove : workspace.styles.aiTooltipBelow,
+        ]}
+      >
+        <Text style={workspace.styles.aiTooltipText} numberOfLines={1}>{label}</Text>
+      </View>
+    ) : null
+  );
+  const getAiHeaderButtonStyle = (id: string) => [
+    workspace.styles.aiHeaderIconButton,
+    hoveredTooltipId === id && workspace.styles.aiHeaderIconButtonHover,
+  ];
 
   return (
     <Animated.View style={panelStyle} {...webFloatingDragProps}>
@@ -722,19 +750,39 @@ export function NotesAiAssistantPanel() {
           </View>
 
           <View style={workspace.styles.aiHeaderActions}>
-            <Pressable
-              style={workspace.styles.aiHeaderIconButton}
-              onPress={togglePanelMode}
-            >
-              <MaterialCommunityIcons name={workspace.aiPanelMode === 'floating' ? 'dock-left' : 'window-restore'} size={18} color="#303744" />
-            </Pressable>
-            <Pressable style={workspace.styles.aiHeaderIconButton} onPress={startNewChat} disabled={workspace.aiLoading}>
-              <MaterialCommunityIcons name="square-edit-outline" size={18} color="#303744" />
-            </Pressable>
+            <View style={workspace.styles.aiTooltipAnchor}>
+              <Pressable
+                {...getTooltipTriggerProps('ai-chat-panel-mode', workspace.aiPanelMode === 'floating' ? '사이드바로 보기' : '플로팅으로 보기')}
+                style={getAiHeaderButtonStyle('ai-chat-panel-mode')}
+                onPress={() => {
+                  hideTooltip('ai-chat-panel-mode');
+                  togglePanelMode();
+                }}
+              >
+                <MaterialCommunityIcons name={workspace.aiPanelMode === 'floating' ? 'dock-left' : 'window-restore'} size={18} color="#303744" />
+              </Pressable>
+              {renderAiTooltip('ai-chat-panel-mode', workspace.aiPanelMode === 'floating' ? '사이드바로 보기' : '플로팅으로 보기')}
+            </View>
+            <View style={workspace.styles.aiTooltipAnchor}>
+              <Pressable
+                {...getTooltipTriggerProps('ai-chat-new', '새 채팅')}
+                style={getAiHeaderButtonStyle('ai-chat-new')}
+                onPress={() => {
+                  hideTooltip('ai-chat-new');
+                  startNewChat();
+                }}
+                disabled={workspace.aiLoading}
+              >
+                <MaterialCommunityIcons name="square-edit-outline" size={18} color="#303744" />
+              </Pressable>
+              {renderAiTooltip('ai-chat-new', '새 채팅')}
+            </View>
             <View style={workspace.styles.aiHeaderMenuWrap}>
               <Pressable
-                style={workspace.styles.aiHeaderIconButton}
+                {...getTooltipTriggerProps('ai-chat-list', '목록')}
+                style={getAiHeaderButtonStyle('ai-chat-list')}
                 onPress={() => {
+                  hideTooltip('ai-chat-list');
                   workspace.onLoadAllAiChatSessions();
                   setHeaderMenuOpen((current) => !current);
                 }}
@@ -742,6 +790,7 @@ export function NotesAiAssistantPanel() {
               >
                 <MaterialCommunityIcons name="dots-vertical" size={20} color="#303744" />
               </Pressable>
+              {renderAiTooltip('ai-chat-list', '목록')}
               {headerMenuOpen ? (
                 <View {...webFloatingDragExcludeProps} style={workspace.styles.aiHeaderRecentMenu}>
                   {recentSessions.length ? recentSessions.map((session: any) => {
@@ -785,9 +834,19 @@ export function NotesAiAssistantPanel() {
                 </View>
               ) : null}
             </View>
-            <Pressable style={workspace.styles.aiHeaderIconButton} onPress={closeChatPanel}>
-              <MaterialCommunityIcons name="close" size={20} color="#303744" />
-            </Pressable>
+            <View style={workspace.styles.aiTooltipAnchor}>
+              <Pressable
+                {...getTooltipTriggerProps('ai-chat-close', '닫기')}
+                style={getAiHeaderButtonStyle('ai-chat-close')}
+                onPress={() => {
+                  hideTooltip('ai-chat-close');
+                  closeChatPanel();
+                }}
+              >
+                <MaterialCommunityIcons name="close" size={20} color="#303744" />
+              </Pressable>
+              {renderAiTooltip('ai-chat-close', '닫기')}
+            </View>
           </View>
         </View>
 
@@ -919,10 +978,31 @@ export function NotesAiAssistantPanel() {
               editable={!workspace.aiChatReadOnly && !workspace.aiLoading}
               showSoftInputOnFocus
               style={workspace.styles.aiComposerInput}
+              submitBehavior="submit"
+              blurOnSubmit={false}
+              onSubmitEditing={() => {
+                void workspace.onRequestAiAnswer();
+              }}
+              onKeyPress={(event) => {
+                handleWebSubmitKeyPress(event, () => {
+                  void workspace.onRequestAiAnswer();
+                });
+              }}
             />
-            <Pressable style={[workspace.styles.aiSendButton, workspace.aiChatReadOnly && workspace.styles.aiSendButtonDisabled]} onPress={workspace.onRequestAiAnswer} disabled={workspace.aiLoading || workspace.aiChatReadOnly}>
-              {workspace.aiLoading ? <ActivityIndicator size="small" color="#FFFFFF" /> : <MaterialCommunityIcons name="arrow-up" size={18} color="#FFFFFF" />}
-            </Pressable>
+            <View style={workspace.styles.aiTooltipAnchor}>
+              <Pressable
+                {...getTooltipTriggerProps('ai-chat-send', '전송')}
+                style={[workspace.styles.aiSendButton, workspace.aiChatReadOnly && workspace.styles.aiSendButtonDisabled]}
+                onPress={() => {
+                  hideTooltip('ai-chat-send');
+                  void workspace.onRequestAiAnswer();
+                }}
+                disabled={workspace.aiLoading || workspace.aiChatReadOnly}
+              >
+                {workspace.aiLoading ? <ActivityIndicator size="small" color="#FFFFFF" /> : <MaterialCommunityIcons name="arrow-up" size={18} color="#FFFFFF" />}
+              </Pressable>
+              {renderAiTooltip('ai-chat-send', '전송', 'above')}
+            </View>
           </View>
         </View>
       </View>

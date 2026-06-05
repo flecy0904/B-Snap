@@ -4,9 +4,10 @@ import React from 'react';
 import { EditorContent, useEditor } from '@tiptap/react';
 import { Markdown } from '@tiptap/markdown';
 import { Strike } from '@tiptap/extension-strike';
-import { Extension, nodeInputRule, renderNestedMarkdownContent, textblockTypeInputRule, type Editor, wrappingInputRule } from '@tiptap/core';
+import { createDocument, Extension, nodeInputRule, renderNestedMarkdownContent, textblockTypeInputRule, type Editor, type JSONContent, wrappingInputRule } from '@tiptap/core';
 import { Fragment, type Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { NodeSelection, Selection, TextSelection } from '@tiptap/pm/state';
+import { history, isHistoryTransaction, redo as redoHistory, redoDepth, undo as undoHistory, undoDepth } from '@tiptap/pm/history';
 import { Bold } from '@tiptap/extension-bold';
 import { BulletList, ListItem, ListKeymap, OrderedList } from '@tiptap/extension-list';
 import { Code } from '@tiptap/extension-code';
@@ -24,7 +25,9 @@ import {
   normalizeAiCanvasDocumentJson,
   stringifyAiCanvasDocument,
   type AiCanvasDocumentJson,
+  type AiCanvasBlockContext,
   type AiCanvasEditorChange,
+  type AiCanvasSelection,
   type CanvasOperation,
   type CanvasOperationRequest,
   type TiptapJsonNode,
@@ -36,25 +39,77 @@ type AiCanvasMarkdownEditorProps = {
   editable: boolean;
   placeholder: string;
   pendingOperations?: CanvasOperationRequest | null;
+  selectionToRestore?: AiCanvasSelection | null;
   onChangeDocument: (change: AiCanvasEditorChange) => Promise<void>;
+  onChangeSelection?: (selection: AiCanvasSelection | null) => Promise<void> | void;
+  onChangeHistoryState?: (state: { canUndo: boolean; canRedo: boolean }) => void;
+  onRegisterHistoryControls?: (controls: { undo: () => boolean; redo: () => boolean } | null) => void;
   onFocusEditor: () => Promise<void>;
-  canUndoShortcut?: boolean;
-  canRedoShortcut?: boolean;
-  onUndoShortcut?: () => void;
-  onRedoShortcut?: () => void;
   onApplyOperationsResult?: (requestId: number, applied: boolean) => Promise<void>;
+  resetUiKey?: string | number | null;
+  enableWebBlockLayers?: boolean;
+  aiRequestBusy?: boolean;
+  onRequestBlockAi?: (command: string, canvasBlockContext: AiCanvasBlockContext) => Promise<boolean>;
   dom?: import('expo/dom').DOMProps;
 };
 
 const BLOCK_NODE_TYPES = ['paragraph', 'heading', 'codeBlock', 'horizontalRule', 'bulletList', 'orderedList', 'listItem'];
 const BLOCK_NODE_TYPE_SET = new Set(BLOCK_NODE_TYPES);
 const EMPTY_TEXTBLOCK_TYPES = new Set(['paragraph', 'heading', 'codeBlock']);
+const AI_CANVAS_TEXT_CONTEXT_TYPES = new Set(['paragraph', 'heading', 'codeBlock', 'listItem']);
 const MIN_INDENT_LEVEL = 0;
 const MAX_INDENT_LEVEL = 6;
 const AI_CANVAS_BULLET_LIST_INPUT_REGEX = /^\s*([-*])\s$/;
 const AI_CANVAS_ORDERED_LIST_INPUT_REGEX = /^(\d+)\.\s$/;
 const AI_CANVAS_CODE_BLOCK_INPUT_REGEX = /^```([a-z]+)?$/;
 const INLINE_TAB = '\t';
+const AI_CANVAS_LEFT_CONTENT_PADDING = 13;
+const AI_CANVAS_RIGHT_RAIL_WIDTH = 54;
+const AI_CANVAS_RIGHT_TRIGGER_BLOCK_RATIO = 0.25;
+const AI_CANVAS_BLOCK_AI_BUTTON_SIZE = 26;
+const AI_CANVAS_BLOCK_AI_BUTTON_RIGHT = AI_CANVAS_RIGHT_RAIL_WIDTH - AI_CANVAS_BLOCK_AI_BUTTON_SIZE - 12;
+const AI_CANVAS_EDITOR_HISTORY_DEPTH = 50;
+const AI_CANVAS_EDITOR_HISTORY_GROUP_DELAY_MS = 700;
+const AI_CANVAS_SLASH_MENU_WIDTH = 230;
+const AI_CANVAS_SLASH_MENU_MAX_HEIGHT = 260;
+const AI_CANVAS_SLASH_MENU_VIEWPORT_MARGIN = 8;
+const AI_CANVAS_SLASH_MENU_CURSOR_GAP = 6;
+
+type SlashMenuState = {
+  query: string;
+  from: number;
+  to: number;
+  top: number;
+  left: number;
+  maxHeight: number;
+};
+
+type BlockOverlayState = {
+  blockId: string;
+  top: number;
+  height: number;
+  context: AiCanvasBlockContext;
+};
+
+type BlockRecord = {
+  blockId: string;
+  type: string;
+  text: string;
+  markdown: string;
+  headingLevel: number | null;
+  pos: number;
+};
+
+const SLASH_MENU_ITEMS = [
+  { key: 'paragraph', label: '본문', hint: '기본 문장', icon: 'T' },
+  { key: 'heading1', label: '제목 1', hint: '큰 단락 제목', icon: 'H1' },
+  { key: 'heading2', label: '제목 2', hint: '중간 제목', icon: 'H2' },
+  { key: 'heading3', label: '제목 3', hint: '작은 제목', icon: 'H3' },
+  { key: 'bulletList', label: '글머리 목록', hint: '핵심을 점으로 정리', icon: '•' },
+  { key: 'orderedList', label: '번호 목록', hint: '순서대로 정리', icon: '1.' },
+  { key: 'horizontalRule', label: '구분선', hint: '내용을 나누기', icon: '—' },
+  { key: 'codeBlock', label: '코드', hint: '코드나 수식 메모', icon: '</>' },
+] as const;
 
 function normalizeIndentLevel(value: unknown) {
   const numeric = typeof value === 'number' || typeof value === 'string' ? Number(value) : 0;
@@ -95,15 +150,32 @@ const AiCanvasBlockId = Extension.create({
   },
 });
 
+const AiCanvasHistory = Extension.create({
+  name: 'aiCanvasHistory',
+  addProseMirrorPlugins() {
+    return [
+      history({
+        depth: AI_CANVAS_EDITOR_HISTORY_DEPTH,
+        newGroupDelay: AI_CANVAS_EDITOR_HISTORY_GROUP_DELAY_MS,
+      }),
+    ];
+  },
+  addKeyboardShortcuts() {
+    return {
+      'Mod-z': () => undoHistory(this.editor.state, this.editor.view.dispatch, this.editor.view),
+      'Mod-y': () => redoHistory(this.editor.state, this.editor.view.dispatch, this.editor.view),
+      'Shift-Mod-z': () => redoHistory(this.editor.state, this.editor.view.dispatch, this.editor.view),
+    };
+  },
+});
+
 function getActiveListItemInfo(editor: Editor) {
   const { selection } = editor.state;
   const { $from } = selection;
   let listItemDepth: number | null = null;
-  let listDepth = 0;
 
   for (let depth = 1; depth <= $from.depth; depth += 1) {
     if ($from.node(depth).type.name === 'listItem') {
-      listDepth += 1;
       listItemDepth = depth;
     }
   }
@@ -116,7 +188,6 @@ function getActiveListItemInfo(editor: Editor) {
     parentListPos: $from.before(listItemDepth - 1),
     parentListNode: $from.node(listItemDepth - 1),
     listItemIndex: $from.index(listItemDepth - 1),
-    listDepth,
     isPrimaryTextblock: $from.index(listItemDepth) === 0,
     parentListType: $from.node(listItemDepth - 1).type.name,
     isMarkerless: $from.node(listItemDepth).attrs.markerless === true,
@@ -204,39 +275,11 @@ function adjustActiveParagraphIndentLevel(editor: Editor, delta: number) {
   return setActiveParagraphIndentLevel(editor, nextIndentLevel);
 }
 
-function removeActiveListMarkerPreservingIndent(editor: Editor) {
+function outdentActiveListItemAtStart(editor: Editor) {
   const listItem = getActiveListItemInfo(editor);
   if (!listItem?.isAtTextblockStart || !listItem.isPrimaryTextblock) return false;
 
-  if (listItem.isMarkerless) return liftActiveMarkerlessListItem(editor);
-  return setActiveListItemMarkerless(editor, true);
-}
-
-function liftActiveMarkerlessListItem(editor: Editor) {
-  const listItem = getActiveListItemInfo(editor);
-  if (!listItem?.isMarkerless || !listItem.isAtTextblockStart || !listItem.isPrimaryTextblock) return false;
-  if (listItem.listDepth <= 1) return true;
-
-  const lifted = liftActiveListItem(editor);
-  if (!lifted) return true;
-
-  const liftedListItem = getActiveListItemInfo(editor);
-  if (liftedListItem && !liftedListItem.isMarkerless) {
-    setActiveListItemMarkerless(editor, true);
-  }
-  return true;
-}
-
-function setActiveListItemMarkerless(editor: Editor, markerless: boolean) {
-  const listItem = getActiveListItemInfo(editor);
-  if (!listItem?.isPrimaryTextblock) return false;
-
-  const { state, view } = editor;
-  const nextAttrs = buildNodeAttrsWithMarkerless(listItem.listItemNode.attrs, markerless);
-  const tr = state.tr.setNodeMarkup(listItem.listItemPos, undefined, nextAttrs);
-  tr.setSelection(TextSelection.create(tr.doc, Math.min(state.selection.from, tr.doc.content.size)));
-  view.dispatch(tr.scrollIntoView());
-  return true;
+  return liftActiveListItem(editor);
 }
 
 function restoreActiveMarkerlessListItem(editor: Editor, listTypeName: 'bulletList' | 'orderedList', markerText: string, orderedStart?: number) {
@@ -440,7 +483,7 @@ const AiCanvasEditingKeymap = Extension.create({
       Backspace: () => {
         if (deleteSelectedHorizontalRule(this.editor)) return true;
         const listItem = getActiveListItemInfo(this.editor);
-        if (listItem?.isAtTextblockStart && listItem.isPrimaryTextblock) return removeActiveListMarkerPreservingIndent(this.editor);
+        if (listItem?.isAtTextblockStart && listItem.isPrimaryTextblock) return outdentActiveListItemAtStart(this.editor);
 
         const textblock = getActiveTextblockInfo(this.editor);
         if (!listItem && textblock?.typeName === 'paragraph' && textblock.isAtStart && normalizeIndentLevel(textblock.node.attrs.indentLevel) > 0) {
@@ -615,6 +658,7 @@ function createBlockId() {
 function createEditorExtensions() {
   return [
     AiCanvasBlockId,
+    AiCanvasHistory,
     AiCanvasListIndent,
     AiCanvasEditingKeymap,
     Document,
@@ -778,7 +822,7 @@ function ensureEditorBlockIds(editor: Editor) {
     seenBlockIds.add(nextBlockId);
   });
   if (!tr.docChanged) return false;
-  editor.view.dispatch(tr);
+  editor.view.dispatch(tr.setMeta('addToHistory', false));
   return true;
 }
 
@@ -878,15 +922,64 @@ function applyCanvasOperations(editor: Editor, operations: CanvasOperation[]) {
     }
   }
   if (!tr.docChanged) return false;
-  editor.view.dispatch(tr.scrollIntoView());
+  editor.view.dispatch(tr.setMeta('addToHistory', false).scrollIntoView());
   return true;
 }
 
-function readEditorChange(editor: Editor): AiCanvasEditorChange {
+function readEditorChange(editor: Editor, source: AiCanvasEditorChange['source'] = 'editor'): AiCanvasEditorChange {
   return {
     documentJson: getEditorDocumentJson(editor),
     markdown: getEditorMarkdown(editor),
+    selection: readEditorSelection(editor),
+    source,
   };
+}
+
+function readEditorSelection(editor: Editor): AiCanvasSelection | null {
+  return readProseMirrorSelection(editor.state.selection);
+}
+
+function readProseMirrorSelection(selection: Selection): AiCanvasSelection | null {
+  if (typeof selection.from !== 'number' || typeof selection.to !== 'number') return null;
+  return {
+    from: selection.from,
+    to: selection.to,
+  };
+}
+
+function restoreEditorSelection(editor: Editor, selection: AiCanvasSelection | null | undefined) {
+  if (!selection) return;
+  const { doc } = editor.state;
+  const maxPosition = doc.content.size;
+  const from = Math.max(0, Math.min(selection.from, maxPosition));
+  const to = Math.max(0, Math.min(selection.to, maxPosition));
+
+  try {
+    const nextSelection = TextSelection.create(doc, from, to);
+    editor.view.dispatch(editor.state.tr.setSelection(nextSelection).setMeta('addToHistory', false).scrollIntoView());
+    editor.view.focus();
+  } catch {
+    try {
+      const position = Math.max(0, Math.min(from, editor.state.doc.content.size));
+      const fallbackSelection = Selection.near(editor.state.doc.resolve(position), 1);
+      editor.view.dispatch(editor.state.tr.setSelection(fallbackSelection).setMeta('addToHistory', false).scrollIntoView());
+      editor.view.focus();
+    } catch {
+      // Keep the editor's default selection if the saved position no longer maps to the document.
+    }
+  }
+}
+
+function setEditorJsonContentWithoutHistory(editor: Editor, documentJson: AiCanvasDocumentJson) {
+  const nextDocument = createDocument(documentJson as JSONContent, editor.schema, {}, {
+    errorOnInvalidContent: editor.options.enableContentCheck,
+  });
+  editor.view.dispatch(
+    editor.state.tr
+      .replaceWith(0, editor.state.doc.content.size, nextDocument)
+      .setMeta('preventUpdate', true)
+      .setMeta('addToHistory', false),
+  );
 }
 
 function isEmptyAiCanvasDocument(documentJson: AiCanvasDocumentJson) {
@@ -901,13 +994,171 @@ function syncEditorEmptyState(editor: Editor, setEditorEmpty: React.Dispatch<Rea
   setEditorEmpty(shouldShowEditorPlaceholder(editor));
 }
 
-function getEditorHistoryShortcut(event: KeyboardEvent): 'undo' | 'redo' | null {
-  if (!event.ctrlKey && !event.metaKey) return null;
-  if (event.altKey) return null;
-  const key = event.key.toLowerCase();
-  if (key === 'y' && !event.shiftKey) return 'redo';
-  if (key !== 'z') return null;
-  return event.shiftKey ? 'redo' : 'undo';
+function readEditorHistoryState(editor: Editor) {
+  return {
+    canUndo: undoDepth(editor.state) > 0,
+    canRedo: redoDepth(editor.state) > 0,
+  };
+}
+
+function getHeadingLevelFromElement(element: Element) {
+  const match = element.tagName.match(/^H([1-3])$/i);
+  return match ? Number(match[1]) : null;
+}
+
+function getElementBlockId(element: Element | null) {
+  return element?.getAttribute('data-block-id') || null;
+}
+
+function isCanvasOverlayElement(target: EventTarget | null) {
+  if (!(target instanceof Element)) return false;
+  return Boolean(
+    target.closest('.ai-canvas-block-ai-button')
+    || target.closest('.ai-canvas-block-composer')
+    || target.closest('.ai-canvas-slash-menu'),
+  );
+}
+
+function getEditorRootElement(root: HTMLElement | null) {
+  return root?.querySelector('.ai-canvas-prosemirror') ?? null;
+}
+
+function getVisibleElementAtY(elements: Element[], clientY: number) {
+  return elements.find((element) => {
+    const rect = element.getBoundingClientRect();
+    return rect.height > 0 && clientY >= rect.top && clientY <= rect.bottom;
+  }) ?? null;
+}
+
+function getAiBlockElementAtY(root: HTMLElement | null, clientY: number) {
+  const editorRoot = getEditorRootElement(root);
+  if (!editorRoot) return null;
+  const listItem = getVisibleElementAtY(Array.from(editorRoot.querySelectorAll('li[data-block-id]')), clientY);
+  if (listItem) return listItem;
+  return getVisibleElementAtY(
+    Array.from(editorRoot.querySelectorAll('p[data-block-id], h1[data-block-id], h2[data-block-id], h3[data-block-id], pre[data-block-id]')),
+    clientY,
+  );
+}
+
+function getContextTypeFromElement(element: Element) {
+  if (element.tagName === 'LI') return 'listItem';
+  if (element.tagName === 'P') return 'paragraph';
+  if (element.tagName === 'PRE') return 'codeBlock';
+  if (getHeadingLevelFromElement(element) !== null) return 'heading';
+  return null;
+}
+
+function collectBlockRecords(doc: ProseMirrorNode): BlockRecord[] {
+  const records: BlockRecord[] = [];
+  doc.descendants((node, pos) => {
+    if (!AI_CANVAS_TEXT_CONTEXT_TYPES.has(node.type.name)) return undefined;
+    const blockId = typeof node.attrs?.blockId === 'string' ? node.attrs.blockId : null;
+    if (!blockId) return undefined;
+    records.push({
+      blockId,
+      type: node.type.name,
+      text: node.textContent.trim(),
+      markdown: node.textContent.trim(),
+      headingLevel: node.type.name === 'heading' ? normalizeHeadingLevel(node.attrs?.level) : null,
+      pos,
+    });
+    if (node.type.name === 'listItem') return false;
+    return undefined;
+  });
+  records.sort((left, right) => left.pos - right.pos);
+  return records;
+}
+
+function normalizeHeadingLevel(value: unknown) {
+  const numeric = Number(value);
+  return numeric === 1 || numeric === 2 || numeric === 3 ? numeric : 2;
+}
+
+function buildBlockContext(editor: Editor, blockId: string): AiCanvasBlockContext | null {
+  const records = collectBlockRecords(editor.state.doc);
+  const targetIndex = records.findIndex((record) => record.blockId === blockId);
+  if (targetIndex < 0) return null;
+
+  const target = records[targetIndex];
+  let sectionHeading: BlockRecord | null = null;
+  for (let index = targetIndex; index >= 0; index -= 1) {
+    if (records[index].type === 'heading') {
+      sectionHeading = records[index];
+      break;
+    }
+  }
+
+  const sectionRecords: BlockRecord[] = [];
+  if (sectionHeading) {
+    const headingIndex = records.indexOf(sectionHeading);
+    const headingLevel = sectionHeading.headingLevel ?? 2;
+    for (let index = headingIndex + 1; index < records.length; index += 1) {
+      const record = records[index];
+      if (record.type === 'heading' && (record.headingLevel ?? 2) <= headingLevel) break;
+      sectionRecords.push(record);
+    }
+  }
+
+  return {
+    blockId: target.blockId,
+    type: target.type,
+    text: target.text,
+    markdown: target.markdown,
+    sectionHeading: sectionHeading?.text ?? null,
+    sectionExcerpt: sectionRecords.map((record) => record.text).filter(Boolean).join('\n').slice(0, 1800),
+    beforeText: records[targetIndex - 1]?.text || null,
+    afterText: records[targetIndex + 1]?.text || null,
+  };
+}
+
+function getSlashMenuState(editor: Editor, root: HTMLElement | null): SlashMenuState | null {
+  if (!root) return null;
+  const { selection } = editor.state;
+  if (selection.from !== selection.to) return null;
+  const { $from } = selection;
+  if (!$from.parent.isTextblock) return null;
+  const textBeforeCursor = $from.parent.textBetween(0, $from.parentOffset, '\n', '\n');
+  const match = textBeforeCursor.match(/^\/([^\s/]*)$/);
+  if (!match) return null;
+  const from = selection.from - match[0].length;
+  const to = selection.from;
+  try {
+    const coords = editor.view.coordsAtPos(selection.from);
+    const viewportWidth = window.innerWidth || document.documentElement.clientWidth;
+    const viewportHeight = window.innerHeight || document.documentElement.clientHeight;
+    const margin = AI_CANVAS_SLASH_MENU_VIEWPORT_MARGIN;
+    const spaceBelow = viewportHeight - coords.bottom - margin - AI_CANVAS_SLASH_MENU_CURSOR_GAP;
+    const spaceAbove = coords.top - margin - AI_CANVAS_SLASH_MENU_CURSOR_GAP;
+    const openAbove = spaceBelow < Math.min(AI_CANVAS_SLASH_MENU_MAX_HEIGHT, spaceAbove) && spaceAbove > spaceBelow;
+    const maxHeight = Math.max(120, Math.min(AI_CANVAS_SLASH_MENU_MAX_HEIGHT, openAbove ? spaceAbove : spaceBelow));
+    const preferredTop = openAbove
+      ? coords.top - maxHeight - AI_CANVAS_SLASH_MENU_CURSOR_GAP
+      : coords.bottom + AI_CANVAS_SLASH_MENU_CURSOR_GAP;
+    const maxLeft = Math.max(margin, viewportWidth - AI_CANVAS_SLASH_MENU_WIDTH - margin);
+    return {
+      query: match[1].toLowerCase(),
+      from,
+      to,
+      top: Math.max(margin, Math.min(preferredTop, viewportHeight - maxHeight - margin)),
+      left: Math.max(margin, Math.min(coords.left, maxLeft)),
+      maxHeight,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function runSlashMenuCommand(editor: Editor, itemKey: typeof SLASH_MENU_ITEMS[number]['key'], range: { from: number; to: number }) {
+  const chain = editor.chain().focus().deleteRange(range);
+  if (itemKey === 'paragraph') return chain.setParagraph().run();
+  if (itemKey === 'heading1') return chain.setHeading({ level: 1 }).run();
+  if (itemKey === 'heading2') return chain.setHeading({ level: 2 }).run();
+  if (itemKey === 'heading3') return chain.setHeading({ level: 3 }).run();
+  if (itemKey === 'bulletList') return chain.toggleBulletList().run();
+  if (itemKey === 'orderedList') return chain.toggleOrderedList().run();
+  if (itemKey === 'codeBlock') return chain.setCodeBlock().run();
+  return chain.setHorizontalRule().run();
 }
 
 export default function AiCanvasMarkdownEditor({
@@ -916,45 +1167,81 @@ export default function AiCanvasMarkdownEditor({
   editable,
   placeholder,
   pendingOperations,
+  selectionToRestore,
   onChangeDocument,
+  onChangeSelection,
+  onChangeHistoryState,
+  onRegisterHistoryControls,
   onFocusEditor,
-  canUndoShortcut,
-  canRedoShortcut,
-  onUndoShortcut,
-  onRedoShortcut,
   onApplyOperationsResult,
+  resetUiKey,
+  enableWebBlockLayers,
+  aiRequestBusy,
+  onRequestBlockAi,
 }: AiCanvasMarkdownEditorProps) {
+  const rootRef = React.useRef<HTMLDivElement | null>(null);
   const applyingExternalUpdateRef = React.useRef(false);
+  const applyingCanvasOperationsRef = React.useRef(false);
   const lastDocumentStringRef = React.useRef(stringifyAiCanvasDocument(documentJson));
   const lastMarkdownRef = React.useRef(fallbackMarkdown ?? '');
   const appliedOperationRequestIdRef = React.useRef<number | null>(null);
   const onChangeDocumentRef = React.useRef(onChangeDocument);
+  const onChangeSelectionRef = React.useRef(onChangeSelection);
+  const onChangeHistoryStateRef = React.useRef(onChangeHistoryState);
+  const onRegisterHistoryControlsRef = React.useRef(onRegisterHistoryControls);
   const onApplyOperationsResultRef = React.useRef(onApplyOperationsResult);
-  const shortcutRef = React.useRef({
-    canUndoShortcut,
-    canRedoShortcut,
-    onUndoShortcut,
-    onRedoShortcut,
-  });
+  const onRequestBlockAiRef = React.useRef(onRequestBlockAi);
+  const selectionToRestoreRef = React.useRef(selectionToRestore);
+  const editableRef = React.useRef(editable);
   const editorExtensions = React.useMemo(() => createEditorExtensions(), []);
   const [editorEmpty, setEditorEmpty] = React.useState(() => shouldShowInitialPlaceholder(documentJson, fallbackMarkdown));
+  const [slashMenu, setSlashMenu] = React.useState<SlashMenuState | null>(null);
+  const [blockOverlay, setBlockOverlay] = React.useState<BlockOverlayState | null>(null);
+  const [blockComposer, setBlockComposer] = React.useState<BlockOverlayState | null>(null);
+  const [blockAiDraft, setBlockAiDraft] = React.useState('');
 
   React.useEffect(() => {
     onChangeDocumentRef.current = onChangeDocument;
   }, [onChangeDocument]);
 
   React.useEffect(() => {
+    onChangeSelectionRef.current = onChangeSelection;
+  }, [onChangeSelection]);
+
+  React.useEffect(() => {
+    selectionToRestoreRef.current = selectionToRestore;
+  }, [selectionToRestore]);
+
+  React.useEffect(() => {
+    onChangeHistoryStateRef.current = onChangeHistoryState;
+  }, [onChangeHistoryState]);
+
+  React.useEffect(() => {
+    onRegisterHistoryControlsRef.current = onRegisterHistoryControls;
+  }, [onRegisterHistoryControls]);
+
+  React.useEffect(() => {
     onApplyOperationsResultRef.current = onApplyOperationsResult;
   }, [onApplyOperationsResult]);
 
   React.useEffect(() => {
-    shortcutRef.current = {
-      canUndoShortcut,
-      canRedoShortcut,
-      onUndoShortcut,
-      onRedoShortcut,
-    };
-  }, [canRedoShortcut, canUndoShortcut, onRedoShortcut, onUndoShortcut]);
+    onRequestBlockAiRef.current = onRequestBlockAi;
+  }, [onRequestBlockAi]);
+
+  React.useEffect(() => {
+    editableRef.current = editable;
+    if (!editable) {
+      setSlashMenu(null);
+      setBlockComposer(null);
+      setBlockAiDraft('');
+    }
+  }, [editable]);
+
+  React.useEffect(() => {
+    setBlockOverlay(null);
+    setBlockComposer(null);
+    setSlashMenu(null);
+  }, [resetUiKey]);
 
   const initialDocument = React.useMemo(() => normalizeAiCanvasDocumentJson(documentJson ?? EMPTY_AI_CANVAS_DOCUMENT), []);
   const initialUsesMarkdown = isEmptyAiCanvasDocument(initialDocument) && !isMeaningfullyEmptyMarkdown(fallbackMarkdown);
@@ -967,6 +1254,9 @@ export default function AiCanvasMarkdownEditor({
     editorProps: {
       attributes: {
         class: 'ai-canvas-prosemirror',
+        spellcheck: 'false',
+        autocorrect: 'off',
+        autocapitalize: 'off',
       },
       handleClickOn: (view, pos, node) => {
         if (node.type.name !== 'horizontalRule') return false;
@@ -974,37 +1264,49 @@ export default function AiCanvasMarkdownEditor({
         return true;
       },
       handleDOMEvents: {
-        focus: () => {
+        focus: (view) => {
+          const nextSelection = readProseMirrorSelection(view.state.selection);
+          void onChangeSelectionRef.current?.(nextSelection);
           void onFocusEditor();
           return false;
         },
         keydown: (_view, event) => {
-          const shortcut = getEditorHistoryShortcut(event);
-          if (!shortcut) return false;
-          const shortcutState = shortcutRef.current;
-          const canRun = shortcut === 'undo' ? shortcutState.canUndoShortcut : shortcutState.canRedoShortcut;
-          const runShortcut = shortcut === 'undo' ? shortcutState.onUndoShortcut : shortcutState.onRedoShortcut;
-          if (!canRun || !runShortcut) return false;
-          event.preventDefault();
-          event.stopPropagation();
-          runShortcut();
-          return true;
+          if (event.key === 'Escape') {
+            setSlashMenu(null);
+            setBlockComposer(null);
+            setBlockAiDraft('');
+            return false;
+          }
+          return false;
         },
       },
     },
-    onUpdate: ({ editor: currentEditor }) => {
+    onUpdate: ({ editor: currentEditor, transaction }) => {
       if (applyingExternalUpdateRef.current) return;
       if (ensureEditorBlockIds(currentEditor)) return;
-      const nextChange = readEditorChange(currentEditor);
+      const changeSource = isHistoryTransaction(transaction)
+        ? 'editor-history'
+        : applyingCanvasOperationsRef.current
+          ? 'external'
+          : 'editor';
+      const nextChange = readEditorChange(currentEditor, changeSource);
       const nextDocumentString = stringifyAiCanvasDocument(nextChange.documentJson);
       if (nextDocumentString === lastDocumentStringRef.current && nextChange.markdown === lastMarkdownRef.current) {
         syncEditorEmptyState(currentEditor, setEditorEmpty);
+        onChangeHistoryStateRef.current?.(readEditorHistoryState(currentEditor));
         return;
       }
       lastDocumentStringRef.current = nextDocumentString;
       lastMarkdownRef.current = nextChange.markdown;
       syncEditorEmptyState(currentEditor, setEditorEmpty);
+      setSlashMenu(editableRef.current ? getSlashMenuState(currentEditor, rootRef.current) : null);
+      onChangeHistoryStateRef.current?.(readEditorHistoryState(currentEditor));
       void onChangeDocumentRef.current(nextChange);
+    },
+    onSelectionUpdate: ({ editor: currentEditor }) => {
+      setSlashMenu(editableRef.current ? getSlashMenuState(currentEditor, rootRef.current) : null);
+      const nextSelection = readEditorSelection(currentEditor);
+      void onChangeSelectionRef.current?.(nextSelection);
     },
   });
 
@@ -1014,11 +1316,36 @@ export default function AiCanvasMarkdownEditor({
   }, [editable, editor]);
 
   React.useEffect(() => {
+    if (!editor) {
+      onRegisterHistoryControlsRef.current?.(null);
+      onChangeHistoryStateRef.current?.({ canUndo: false, canRedo: false });
+      return undefined;
+    }
+    const runUndo = () => {
+      const applied = undoHistory(editor.state, editor.view.dispatch, editor.view);
+      if (applied) onChangeHistoryStateRef.current?.(readEditorHistoryState(editor));
+      return applied;
+    };
+    const runRedo = () => {
+      const applied = redoHistory(editor.state, editor.view.dispatch, editor.view);
+      if (applied) onChangeHistoryStateRef.current?.(readEditorHistoryState(editor));
+      return applied;
+    };
+    onRegisterHistoryControlsRef.current?.({ undo: runUndo, redo: runRedo });
+    onChangeHistoryStateRef.current?.(readEditorHistoryState(editor));
+    return () => {
+      onRegisterHistoryControlsRef.current?.(null);
+      onChangeHistoryStateRef.current?.({ canUndo: false, canRedo: false });
+    };
+  }, [editor]);
+
+  React.useEffect(() => {
     if (!editor) return;
     if (ensureEditorBlockIds(editor)) return;
     const nextChange = readEditorChange(editor);
     lastDocumentStringRef.current = stringifyAiCanvasDocument(nextChange.documentJson);
     lastMarkdownRef.current = nextChange.markdown;
+    onChangeHistoryStateRef.current?.(readEditorHistoryState(editor));
     syncEditorEmptyState(editor, setEditorEmpty);
     if (
       stringifyAiCanvasDocument(nextChange.documentJson) !== stringifyAiCanvasDocument(documentJson)
@@ -1037,14 +1364,21 @@ export default function AiCanvasMarkdownEditor({
 
     applyingExternalUpdateRef.current = true;
     try {
-      editor.commands.setContent((shouldUseMarkdown ? fallbackMarkdown ?? '' : nextDocument) as any, {
-        contentType: shouldUseMarkdown ? 'markdown' : undefined,
-        emitUpdate: false,
-      });
+      if (shouldUseMarkdown) {
+        editor.commands.setContent(fallbackMarkdown ?? '', {
+          contentType: 'markdown',
+          emitUpdate: false,
+        });
+      } else {
+        setEditorJsonContentWithoutHistory(editor, nextDocument);
+      }
       ensureEditorBlockIds(editor);
+      restoreEditorSelection(editor, selectionToRestoreRef.current);
       const nextChange = readEditorChange(editor);
       lastDocumentStringRef.current = stringifyAiCanvasDocument(nextChange.documentJson);
       lastMarkdownRef.current = nextChange.markdown;
+      void onChangeSelectionRef.current?.(nextChange.selection);
+      onChangeHistoryStateRef.current?.(readEditorHistoryState(editor));
       syncEditorEmptyState(editor, setEditorEmpty);
     } finally {
       applyingExternalUpdateRef.current = false;
@@ -1055,16 +1389,92 @@ export default function AiCanvasMarkdownEditor({
     if (!editor || !pendingOperations) return;
     if (appliedOperationRequestIdRef.current === pendingOperations.id) return;
     appliedOperationRequestIdRef.current = pendingOperations.id;
+    applyingCanvasOperationsRef.current = true;
     try {
       const applied = applyCanvasOperations(editor, pendingOperations.operations);
       void onApplyOperationsResultRef.current?.(pendingOperations.id, applied);
     } catch {
       void onApplyOperationsResultRef.current?.(pendingOperations.id, false);
+    } finally {
+      applyingCanvasOperationsRef.current = false;
+      onChangeHistoryStateRef.current?.(readEditorHistoryState(editor));
     }
   }, [editor, pendingOperations]);
 
+  const updateBlockLayerFromEvent = React.useCallback((event: React.MouseEvent<HTMLDivElement>) => {
+    if (!editor || !enableWebBlockLayers) return;
+    const root = rootRef.current;
+    if (!root) return;
+    if (isCanvasOverlayElement(event.target)) return;
+    if (blockComposer) return;
+    const rootRect = root.getBoundingClientRect();
+    const rightDistance = rootRect.right - event.clientX;
+    const blockWidth = Math.max(0, rootRect.width - AI_CANVAS_LEFT_CONTENT_PADDING - AI_CANVAS_RIGHT_RAIL_WIDTH);
+    const rightTriggerWidth = AI_CANVAS_RIGHT_RAIL_WIDTH + (blockWidth * AI_CANVAS_RIGHT_TRIGGER_BLOCK_RATIO);
+    const inRightRail = rightDistance >= 0 && rightDistance <= rightTriggerWidth;
+
+    if (!inRightRail) {
+      setBlockOverlay(null);
+      return;
+    }
+
+    const blockElement = getAiBlockElementAtY(root, event.clientY);
+    const blockId = getElementBlockId(blockElement);
+    const contextType = blockElement ? getContextTypeFromElement(blockElement) : null;
+    if (!blockElement || !blockId || !contextType || !AI_CANVAS_TEXT_CONTEXT_TYPES.has(contextType)) {
+      setBlockOverlay(null);
+      return;
+    }
+    const context = buildBlockContext(editor, blockId);
+    if (!context) {
+      setBlockOverlay(null);
+      return;
+    }
+    const blockRect = blockElement.getBoundingClientRect();
+    setBlockOverlay({
+      blockId,
+      top: blockRect.top - rootRect.top + root.scrollTop,
+      height: blockRect.height,
+      context,
+    });
+  }, [blockComposer, editor, enableWebBlockLayers]);
+
+  const openBlockComposer = React.useCallback((overlay: BlockOverlayState) => {
+    setBlockComposer(overlay);
+    setBlockOverlay(overlay);
+    setBlockAiDraft('');
+  }, []);
+
+  const submitBlockComposer = React.useCallback(async () => {
+    const command = blockAiDraft.trim();
+    const target = blockComposer;
+    if (!command || !target || aiRequestBusy) return;
+    const sent = await onRequestBlockAiRef.current?.(command, target.context);
+    if (sent) {
+      setBlockComposer(null);
+      setBlockOverlay(null);
+      setBlockAiDraft('');
+    }
+  }, [aiRequestBusy, blockAiDraft, blockComposer]);
+
+  const visibleSlashItems = React.useMemo(() => {
+    if (!slashMenu) return [];
+    if (!slashMenu.query) return SLASH_MENU_ITEMS;
+    return SLASH_MENU_ITEMS.filter((item) => (
+      item.label.toLowerCase().includes(slashMenu.query)
+      || item.hint.toLowerCase().includes(slashMenu.query)
+      || item.key.toLowerCase().includes(slashMenu.query)
+    ));
+  }, [slashMenu]);
   return (
-    <div className={`ai-canvas-editor-root ${editable ? 'is-editable' : 'is-readonly'}`}>
+    <div
+      ref={rootRef}
+      className={`ai-canvas-editor-root ${editable ? 'is-editable' : 'is-readonly'}`}
+      onMouseMove={updateBlockLayerFromEvent}
+      onMouseLeave={() => {
+        if (!blockComposer) setBlockOverlay(null);
+      }}
+    >
       <style>{`
         html,
         body,
@@ -1082,6 +1492,8 @@ export default function AiCanvasMarkdownEditor({
         }
 
         .ai-canvas-editor-root {
+          --ai-canvas-left-content-padding: ${AI_CANVAS_LEFT_CONTENT_PADDING}px;
+          --ai-canvas-right-rail-width: ${AI_CANVAS_RIGHT_RAIL_WIDTH}px;
           position: relative;
           height: 100%;
           width: 100%;
@@ -1099,10 +1511,10 @@ export default function AiCanvasMarkdownEditor({
 
         .ai-canvas-prosemirror {
           min-height: 100%;
-          padding: 3px 13px 64px;
+          padding: 3px var(--ai-canvas-right-rail-width) 64px var(--ai-canvas-left-content-padding);
           outline: none;
-          font-size: 14px;
-          line-height: 21px;
+          font-size: 15px;
+          line-height: 23px;
           font-weight: 400;
           letter-spacing: 0;
           white-space: pre-wrap;
@@ -1119,10 +1531,10 @@ export default function AiCanvasMarkdownEditor({
         }
 
         .ai-canvas-prosemirror p {
-          margin: 0 0 10px;
+          margin: 0 0 12px;
           font-family: inherit;
-          font-size: 14px;
-          line-height: 21px;
+          font-size: 15px;
+          line-height: 23px;
           font-weight: 400;
         }
 
@@ -1181,32 +1593,32 @@ export default function AiCanvasMarkdownEditor({
         }
 
         .ai-canvas-prosemirror h1 {
-          margin: 0 0 12px;
-          font-size: 22px;
-          line-height: 29px;
+          margin: 0 0 14px;
+          font-size: 24px;
+          line-height: 32px;
           font-weight: 900;
           color: #1f2937;
         }
 
         .ai-canvas-prosemirror h2 {
-          margin: 14px 0 8px;
-          font-size: 18px;
-          line-height: 25px;
+          margin: 16px 0 10px;
+          font-size: 20px;
+          line-height: 28px;
           font-weight: 900;
           color: #263144;
         }
 
         .ai-canvas-prosemirror h3 {
-          margin: 12px 0 7px;
-          font-size: 15px;
-          line-height: 22px;
+          margin: 14px 0 8px;
+          font-size: 17px;
+          line-height: 25px;
           font-weight: 900;
           color: #31405b;
         }
 
         .ai-canvas-prosemirror ul,
         .ai-canvas-prosemirror ol {
-          margin: 0 0 10px;
+          margin: 0 0 12px;
           padding-left: 25px;
         }
 
@@ -1217,20 +1629,20 @@ export default function AiCanvasMarkdownEditor({
         .ai-canvas-prosemirror ul > li::marker {
           content: "●  ";
           color: #455166;
-          font-size: 12px;
+          font-size: 13px;
         }
 
         .ai-canvas-prosemirror ul ul > li::marker {
           content: "○  ";
           color: #344158;
-          font-size: 8px;
+          font-size: 10px;
           font-weight: 900;
         }
 
         .ai-canvas-prosemirror ul ul ul > li::marker {
           content: "■  ";
           color: #5c687c;
-          font-size: 7px;
+          font-size: 9px;
         }
 
         .ai-canvas-prosemirror li[data-markerless="true"]::marker {
@@ -1238,11 +1650,11 @@ export default function AiCanvasMarkdownEditor({
         }
 
         .ai-canvas-prosemirror li {
-          margin: 2px 0;
+          margin: 3px 0;
           padding-left: 2px;
           font-family: inherit;
-          font-size: 14px;
-          line-height: 21px;
+          font-size: 15px;
+          line-height: 23px;
           font-weight: 400;
         }
 
@@ -1287,8 +1699,8 @@ export default function AiCanvasMarkdownEditor({
           color: #253044;
           overflow-x: auto;
           font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
-          font-size: 12px;
-          line-height: 18px;
+          font-size: 13px;
+          line-height: 20px;
           font-weight: 500;
           tab-size: 3;
         }
@@ -1307,7 +1719,7 @@ export default function AiCanvasMarkdownEditor({
           border-radius: 5px;
           background: #f3f6fb;
           color: #27364c;
-          font-size: 12px;
+          font-size: 13px;
           font-weight: 500;
         }
 
@@ -1326,17 +1738,284 @@ export default function AiCanvasMarkdownEditor({
         .ai-canvas-placeholder {
           position: absolute;
           top: 3px;
-          left: 13px;
-          right: 13px;
+          left: var(--ai-canvas-left-content-padding);
+          right: var(--ai-canvas-right-rail-width);
           color: #a2aab8;
           pointer-events: none;
-          font-size: 14px;
-          line-height: 21px;
+          font-size: 15px;
+          line-height: 23px;
           font-weight: 400;
+        }
+
+        .ai-canvas-block-ai-button {
+          position: absolute;
+          z-index: 20;
+          border: 1px solid transparent;
+          background: transparent;
+          color: #647084;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-family: inherit;
+          transition: background 120ms ease, border-color 120ms ease, color 120ms ease;
+        }
+
+        .ai-canvas-block-ai-button:hover {
+          border-color: transparent;
+          background: #f1f3f6;
+          color: #263144;
+        }
+
+        .ai-canvas-block-ai-button {
+          right: ${AI_CANVAS_BLOCK_AI_BUTTON_RIGHT}px;
+          width: 26px;
+          height: 26px;
+          border-radius: 8px;
+          font-size: 15px;
+          font-weight: 900;
+        }
+
+        .ai-canvas-block-ai-button:disabled {
+          opacity: 0.48;
+          cursor: default;
+        }
+
+        .ai-canvas-block-ai-button::after {
+          content: "AI";
+          position: absolute;
+          top: 32px;
+          left: 50%;
+          transform: translateX(-50%);
+          min-width: 42px;
+          height: 24px;
+          border-radius: 5px;
+          padding: 0 8px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          background: #334155;
+          color: #ffffff;
+          font-size: 11px;
+          line-height: 14px;
+          font-weight: 800;
+          opacity: 0;
+          visibility: hidden;
+          pointer-events: none;
+          transition: opacity 100ms ease, visibility 0s linear 100ms;
+        }
+
+        .ai-canvas-block-ai-button:hover::after,
+        .ai-canvas-block-ai-button:focus-visible::after {
+          opacity: 1;
+          visibility: visible;
+          transition-delay: 600ms, 600ms;
+        }
+
+        .ai-canvas-block-composer {
+          position: absolute;
+          right: var(--ai-canvas-right-rail-width);
+          z-index: 30;
+          width: min(280px, calc(100% - var(--ai-canvas-left-content-padding) - var(--ai-canvas-right-rail-width) - 8px));
+          border: 1px solid #dce4ff;
+          border-radius: 12px;
+          background: #ffffff;
+          box-shadow: 0 12px 28px rgba(16, 24, 40, 0.16);
+          padding: 8px;
+        }
+
+        .ai-canvas-block-composer textarea {
+          width: 100%;
+          min-height: 54px;
+          max-height: 120px;
+          resize: vertical;
+          border: 0;
+          outline: none;
+          color: #263144;
+          font: 600 13px/18px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+
+        .ai-canvas-block-composer-actions {
+          display: flex;
+          justify-content: flex-end;
+          gap: 6px;
+          margin-top: 6px;
+        }
+
+        .ai-canvas-block-composer-actions button {
+          min-height: 28px;
+          border: 0;
+          border-radius: 8px;
+          padding: 0 10px;
+          cursor: pointer;
+          font: 800 12px/16px -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        }
+
+        .ai-canvas-block-composer-cancel {
+          background: #eef2f7;
+          color: #303744;
+        }
+
+        .ai-canvas-block-composer-send {
+          background: #303744;
+          color: #ffffff;
+        }
+
+        .ai-canvas-block-composer-send:disabled {
+          opacity: 0.45;
+          cursor: default;
+        }
+
+        .ai-canvas-slash-menu {
+          position: fixed;
+          z-index: 140;
+          width: ${AI_CANVAS_SLASH_MENU_WIDTH}px;
+          overflow-y: auto;
+          border: 1px solid #dce4f0;
+          border-radius: 12px;
+          background: #ffffff;
+          box-shadow: 0 14px 32px rgba(16, 24, 40, 0.16);
+          padding: 5px;
+        }
+
+        .ai-canvas-slash-item {
+          width: 100%;
+          min-height: 42px;
+          border: 0;
+          border-radius: 9px;
+          background: transparent;
+          color: #263144;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          gap: 9px;
+          padding: 6px 8px;
+          text-align: left;
+          font-family: inherit;
+        }
+
+        .ai-canvas-slash-item:hover {
+          background: #f2f5ff;
+        }
+
+        .ai-canvas-slash-icon {
+          width: 30px;
+          height: 28px;
+          border-radius: 8px;
+          background: #eef2ff;
+          color: #4f68d2;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          font-size: 11px;
+          font-weight: 900;
+          flex-shrink: 0;
+        }
+
+        .ai-canvas-slash-label {
+          display: block;
+          font-size: 13px;
+          line-height: 17px;
+          font-weight: 900;
+        }
+
+        .ai-canvas-slash-hint {
+          display: block;
+          margin-top: 1px;
+          font-size: 11px;
+          line-height: 14px;
+          font-weight: 700;
+          color: #7a8394;
         }
       `}</style>
       {editorEmpty ? <div className="ai-canvas-placeholder">{placeholder}</div> : null}
       <EditorContent editor={editor} />
+      {enableWebBlockLayers && blockOverlay ? (
+        <button
+          type="button"
+          className="ai-canvas-block-ai-button"
+          aria-label="AI"
+          style={{ top: blockOverlay.top + Math.max(0, (blockOverlay.height - AI_CANVAS_BLOCK_AI_BUTTON_SIZE) / 2) }}
+          disabled={!editable || aiRequestBusy}
+          onMouseDown={(event) => {
+            event.preventDefault();
+            event.stopPropagation();
+            openBlockComposer(blockOverlay);
+          }}
+        >
+          ✦
+        </button>
+      ) : null}
+      {enableWebBlockLayers && blockComposer ? (
+        <div
+          className="ai-canvas-block-composer"
+          style={{ top: blockComposer.top + blockComposer.height + 4 }}
+          onMouseDown={(event) => {
+            event.stopPropagation();
+          }}
+        >
+          <textarea
+            value={blockAiDraft}
+            placeholder="이 block에 대해 질문하거나 수정 요청"
+            disabled={aiRequestBusy}
+            onChange={(event) => setBlockAiDraft(event.currentTarget.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault();
+                void submitBlockComposer();
+              }
+            }}
+            autoFocus
+          />
+          <div className="ai-canvas-block-composer-actions">
+            <button
+              type="button"
+              className="ai-canvas-block-composer-cancel"
+              onClick={() => {
+                setBlockComposer(null);
+                setBlockAiDraft('');
+              }}
+            >
+              취소
+            </button>
+            <button
+              type="button"
+              className="ai-canvas-block-composer-send"
+              disabled={!blockAiDraft.trim() || aiRequestBusy}
+              onClick={() => {
+                void submitBlockComposer();
+              }}
+            >
+              보내기
+            </button>
+          </div>
+        </div>
+      ) : null}
+      {slashMenu && visibleSlashItems.length > 0 ? (
+        <div className="ai-canvas-slash-menu" style={{ top: slashMenu.top, left: slashMenu.left, maxHeight: slashMenu.maxHeight }}>
+          {visibleSlashItems.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              className="ai-canvas-slash-item"
+              onMouseDown={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                if (editor) {
+                  runSlashMenuCommand(editor, item.key, { from: slashMenu.from, to: slashMenu.to });
+                }
+                setSlashMenu(null);
+              }}
+            >
+              <span className="ai-canvas-slash-icon">{item.icon}</span>
+              <span>
+                <span className="ai-canvas-slash-label">{item.label}</span>
+                <span className="ai-canvas-slash-hint">{item.hint}</span>
+              </span>
+            </button>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -1,6 +1,7 @@
 import React from 'react';
 import type { BackendChatMessage, BackendChatSession, BackendClassInsight } from '../../../services/backend-api';
 import type { UseAiCanvasNotesResult } from '../../../hooks/notes/ai-canvas/use-ai-canvas-notes';
+import type { AiCanvasBlockContext } from '../../../types/ai-canvas';
 import type { ImportantPageRecommendation } from '../../../hooks/notes/class-insight';
 import type { AiFloatingPanelSize, AppChatMode, AppRightSidebarPanel, AppSidebarPosition, StudyInteractionMode, WorkspaceFocusTarget } from '../../../hooks/notes/use-study-workspace';
 import { AiAnswer, NoteSummarySection, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NotebookPage, NotebookPageTemplate, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../../types';
@@ -124,6 +125,8 @@ export type DesktopNotesWorkspaceContextValue = {
   onFocusWorkspaceTarget: (target: WorkspaceFocusTarget | null) => void;
   onUndoFocusedWorkspaceAction: () => void;
   onRedoFocusedWorkspaceAction: () => void;
+  onUndoAiCanvasAction: () => void;
+  onRedoAiCanvasAction: () => void;
   onChangeAiQuestion: (value: string) => void;
   onChangeAiChatScope: (scope: 'note' | 'all') => void;
   onLoadAllAiChatSessions: () => void;
@@ -135,7 +138,12 @@ export type DesktopNotesWorkspaceContextValue = {
   onCreateAiChatSession: () => void;
   onRequestAiAnswer: () => void;
   onAskAiAboutSelection: (selectionPreviewUri?: string | null) => void;
-  onRequestAiCanvasCommand: (command: string, options?: { selectionImageUri?: string | null }) => Promise<boolean>;
+  onRequestAiCanvasCommand: (command: string, options?: {
+    selectionImageUri?: string | null;
+    canvasAction?: 'auto' | 'chat_only' | 'canvas_edit';
+    source?: 'canvas-mini' | 'canvas-block';
+    canvasBlockContext?: AiCanvasBlockContext | null;
+  }) => Promise<boolean>;
   onInsertAiAnswerPage: () => void;
   onGoToPreviousDocumentPage: () => void;
   onGoToNextDocumentPage: () => void;

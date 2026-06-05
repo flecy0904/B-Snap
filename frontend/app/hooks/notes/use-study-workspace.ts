@@ -26,6 +26,7 @@ import {
 import { getAiBackendErrorMessage } from './ai/ai-errors';
 import { useAiChatActions } from './ai/use-ai-chat-actions';
 import { useAiChatDerivedState } from './ai/use-ai-chat-derived-state';
+import { isCanvasCreateRequest } from './ai-canvas/canvas-command-intent';
 import { useAiCanvasNotes } from './ai-canvas/use-ai-canvas-notes';
 import { buildClassInsightContext, buildImportantPageRecommendations, isClassInsightQuestion, isClassInsightTargetDocument } from './class-insight';
 import { getStudyDocumentBackendNoteId } from './document/backend-sync';
@@ -46,6 +47,7 @@ import { useWorkspaceCaptureIntents } from './workspace/use-workspace-capture-in
 import { useWorkspaceAiIntents } from './workspace/use-workspace-ai-intents';
 import { isSameDocumentPage, isShapeTool } from '../../ui-helpers';
 import type { InkBrush, InkBrushSettings, InkEraserMode, InkImageAnnotation, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../ui-types';
+import type { AiCanvasBlockContext } from '../../types/ai-canvas';
 import type { AiAnswer, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../types';
 
 export type WorkspaceFocusTarget = 'document' | 'aiCanvas';
@@ -64,6 +66,12 @@ function normalizeAiFloatingPanelSize(size?: AiFloatingPanelSize | null): AiFloa
     width: Math.max(300, Math.min(640, width)),
     height: Math.max(360, Math.min(760, height)),
   };
+}
+
+function isTransientWebFileUri(uri: string | null | undefined) {
+  if (typeof uri !== 'string') return false;
+  const normalizedUri = uri.toLowerCase();
+  return normalizedUri.startsWith('blob:') || normalizedUri.startsWith('data:application/pdf');
 }
 
 export function useStudyWorkspace(props: {
@@ -560,8 +568,10 @@ export function useStudyWorkspace(props: {
             return {
               ...backendDocument,
               id: document.id,
-              localFileUri: document.localFileUri,
-              file: document.localFileUri ? { uri: document.localFileUri } : normalizeDocumentFile(backendDocument.file),
+              localFileUri: isTransientWebFileUri(document.localFileUri) ? undefined : document.localFileUri,
+              file: document.localFileUri && !isTransientWebFileUri(document.localFileUri)
+                ? { uri: document.localFileUri }
+                : normalizeDocumentFile(backendDocument.file),
             };
           });
           const existingBackendNoteIds = new Set(
@@ -970,6 +980,21 @@ export function useStudyWorkspace(props: {
     activeCanvasMarkdown: aiCanvas.markdownDraft,
     activeCanvasDocumentJson: aiCanvas.documentDraft,
     onApplyCanvasEditFromChat: applyCanvasEditFromChat,
+    onOpenChatForCanvasAnswer: () => {
+      setViewingAiChatSessionId(null);
+      setAiPanelOpen(true);
+      if (Platform.OS !== 'web' && props.wide) {
+        if (appChatMode === 'sidebar') {
+          setAiPanelMode('sidebar');
+          setAppRightSidebarPanel('chat');
+        } else {
+          setAiPanelMode('floating');
+          setAppRightSidebarPanel(null);
+        }
+      } else {
+        setAiPanelMode('sidebar');
+      }
+    },
     clearSelection: clearSelectionForCurrentDocument,
     buildContextHint: async (question) => buildClassInsightContext({
       question,
@@ -1126,15 +1151,30 @@ export function useStudyWorkspace(props: {
     requestAiAnswerForQuestion,
     onMarkPageDirty: markBackendPageDirty,
   });
-  const requestAiCanvasCommand = useCallback(async (command: string, options?: { selectionImageUri?: string | null }) => (
-    requestAiAnswer({
+  const requestAiCanvasCommand = useCallback(async (command: string, options?: {
+    selectionImageUri?: string | null;
+    canvasAction?: 'auto' | 'chat_only' | 'canvas_edit';
+    source?: 'canvas-mini' | 'canvas-block';
+    canvasBlockContext?: AiCanvasBlockContext | null;
+  }) => {
+    if (isCanvasCreateRequest(command)) {
+      setWorkspaceFeedback('현재 Canvas 수정만 도와드릴 수 있어요.');
+      return false;
+    }
+    if (!aiCanvas.activeNoteId) {
+      setWorkspaceFeedback('먼저 Canvas를 만들어 주세요.');
+      return false;
+    }
+    return requestAiAnswer({
       question: command,
-      source: 'canvas-mini',
+      source: options?.source ?? 'canvas-mini',
+      canvasAction: options?.canvasAction ?? 'auto',
       selectionImageUri: options?.selectionImageUri ?? null,
       canvasMarkdown: aiCanvas.markdownDraft,
       canvasDocumentJson: aiCanvas.documentDraft,
-    })
-  ), [aiCanvas.documentDraft, aiCanvas.markdownDraft, requestAiAnswer]);
+      canvasBlockContext: options?.canvasBlockContext ?? null,
+    });
+  }, [aiCanvas.activeNoteId, aiCanvas.documentDraft, aiCanvas.markdownDraft, requestAiAnswer, setWorkspaceFeedback]);
 
   const {
     acceptIncomingAsset,
@@ -1376,9 +1416,8 @@ export function useStudyWorkspace(props: {
     if (index < 0) return items;
     return [...items.slice(0, index), ...items.slice(index + 1)];
   };
-  const undoFocusedWorkspaceAction = () => {
-    const target = lastUndoWorkspaceTarget;
-    if (!target) return;
+  const undoWorkspaceActionTarget = (target: WorkspaceFocusTarget) => {
+    if (!canUndoWorkspaceTarget(target)) return;
     setWorkspaceActionHistory((current) => removeLastWorkspaceTarget(current, target));
     setWorkspaceRedoActionHistory((current) => [...current, target].slice(-100));
     setFocusedWorkspaceTarget(target);
@@ -1388,9 +1427,8 @@ export function useStudyWorkspace(props: {
     }
     aiCanvas.undoCanvasEdit();
   };
-  const redoFocusedWorkspaceAction = () => {
-    const target = lastRedoWorkspaceTarget;
-    if (!target) return;
+  const redoWorkspaceActionTarget = (target: WorkspaceFocusTarget) => {
+    if (!canRedoWorkspaceTarget(target)) return;
     setWorkspaceRedoActionHistory((current) => removeLastWorkspaceTarget(current, target));
     setWorkspaceActionHistory((current) => [...current, target].slice(-100));
     setFocusedWorkspaceTarget(target);
@@ -1399,6 +1437,16 @@ export function useStudyWorkspace(props: {
       return;
     }
     aiCanvas.redoCanvasEdit();
+  };
+  const undoFocusedWorkspaceAction = () => {
+    const target = lastUndoWorkspaceTarget;
+    if (!target) return;
+    undoWorkspaceActionTarget(target);
+  };
+  const redoFocusedWorkspaceAction = () => {
+    const target = lastRedoWorkspaceTarget;
+    if (!target) return;
+    redoWorkspaceActionTarget(target);
   };
   const changeAppSidebarPosition = (position: AppSidebarPosition) => {
     setAppSidebarPosition(position);
@@ -1585,6 +1633,8 @@ export function useStudyWorkspace(props: {
     dockAppAiChatPanel,
     undoFocusedWorkspaceAction,
     redoFocusedWorkspaceAction,
+    undoAiCanvasAction: () => undoWorkspaceActionTarget('aiCanvas'),
+    redoAiCanvasAction: () => redoWorkspaceActionTarget('aiCanvas'),
     setAiQuestion,
     setAiChatScope: changeAiChatScope,
     onChangeAiChatScope: changeAiChatScope,

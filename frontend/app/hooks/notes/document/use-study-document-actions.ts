@@ -43,7 +43,7 @@ type StudyDocumentActionsParams = {
   lastChatSessionByDocument: Record<number, number>;
   chatSidebarOpenByDocument: Record<number, boolean>;
   onOpenNotesTab: () => void;
-  syncPdfDocumentToBackend: (document: StudyDocumentEntry, subject: Subject) => void | Promise<void>;
+  syncPdfDocumentToBackend: (document: StudyDocumentEntry, subject: Subject, uploadBlob?: Blob | null) => void | Promise<void>;
   setSubjectId: SetState<number | null>;
   setNoteId: SetState<number | null>;
   setQuery: SetState<string>;
@@ -432,7 +432,7 @@ export function useStudyDocumentActions(params: StudyDocumentActionsParams) {
       );
 
       if (isBackendApiEnabled()) {
-        void params.syncPdfDocumentToBackend(localDocument, targetSubject);
+        void params.syncPdfDocumentToBackend(localDocument, targetSubject, picked.file ?? null);
       }
     } catch {
       params.setWorkspaceFeedback('PDF 파일을 가져오지 못했습니다. Google Drive 파일이면 한 번 더 선택하거나 기기에 저장 후 열어주세요.');

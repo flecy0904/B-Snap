@@ -5,7 +5,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from backend.app.schemas.ai_canvas_notes import AiCanvasNoteRead
 
-ChatMessageSource = Literal["chat", "canvas-mini"]
+ChatMessageSource = Literal["chat", "canvas-mini", "canvas-block"]
 
 
 class ChatSessionCreate(BaseModel):
@@ -58,6 +58,7 @@ class ChatAiMessageCreate(BaseModel):
     canvas_note_needs_title: bool = False
     canvas_markdown: str | None = None
     canvas_document_json: dict[str, Any] | None = None
+    canvas_block_context: dict[str, Any] | None = None
     use_rag: bool = False
     top_k: int = Field(default=5, ge=1, le=20)
     selection_image: str | None = None

@@ -18,6 +18,7 @@ import {
   stringifyAiCanvasDocument,
   type AiCanvasDocumentJson,
   type AiCanvasEditorChange,
+  type AiCanvasSelection,
   type CanvasOperation,
   type CanvasOperationRequest,
 } from '../../../types/ai-canvas';
@@ -25,6 +26,12 @@ import {
 type CanvasSnapshot = {
   documentJson: AiCanvasDocumentJson;
   markdown: string;
+  selection: AiCanvasSelection | null;
+};
+
+type AiCanvasEditorHistoryControls = {
+  undo: () => boolean;
+  redo: () => boolean;
 };
 
 export type UseAiCanvasNotesResult = {
@@ -34,6 +41,7 @@ export type UseAiCanvasNotesResult = {
   activeNoteId: number | null;
   documentDraft: AiCanvasDocumentJson;
   markdownDraft: string;
+  selectionDraft: AiCanvasSelection | null;
   pendingCanvasOperations: CanvasOperationRequest | null;
   loading: boolean;
   saving: boolean;
@@ -49,6 +57,9 @@ export type UseAiCanvasNotesResult = {
   toggle: () => void;
   selectNote: (noteId: number) => void;
   setDocumentDraft: (change: AiCanvasEditorChange) => void;
+  setSelectionDraft: (selection: AiCanvasSelection | null) => void;
+  setEditorHistoryState: (state: { canUndo: boolean; canRedo: boolean }) => void;
+  registerEditorHistoryControls: (controls: AiCanvasEditorHistoryControls | null) => void;
   completeCanvasOperations: (requestId: number, applied: boolean) => Promise<void>;
   createNote: () => Promise<void>;
   renameNote: (title: string, noteId?: number) => Promise<boolean>;
@@ -67,7 +78,6 @@ export type UseAiCanvasNotesResult = {
 const DEFAULT_CANVAS_TITLE = 'Canvas Note';
 const DEFAULT_CANVAS_MARKDOWN = '';
 const MAX_AI_CANVAS_NOTES_PER_NOTE = 3;
-const DIRECT_EDIT_BATCH_DELAY_MS = 1200;
 const TRANSIENT_ERROR_DELAY_MS = 3000;
 const MAX_UNDO_STACK_SIZE = 50;
 
@@ -75,6 +85,7 @@ function createEmptyCanvasSnapshot(): CanvasSnapshot {
   return {
     documentJson: cloneAiCanvasDocument(EMPTY_AI_CANVAS_DOCUMENT),
     markdown: DEFAULT_CANVAS_MARKDOWN,
+    selection: null,
   };
 }
 
@@ -83,6 +94,7 @@ function snapshotFromNote(note: BackendAiCanvasNote | null): CanvasSnapshot {
   return {
     documentJson: normalizeAiCanvasDocumentJson(note.documentJson),
     markdown: note.markdown ?? '',
+    selection: null,
   };
 }
 
@@ -127,12 +139,14 @@ export function useAiCanvasNotes({
   const [activeNoteId, setActiveNoteId] = useState<number | null>(null);
   const [documentDraft, setDocumentDraftState] = useState<AiCanvasDocumentJson>(() => cloneAiCanvasDocument(EMPTY_AI_CANVAS_DOCUMENT));
   const [markdownDraft, setMarkdownDraft] = useState('');
+  const [selectionDraft, setSelectionDraft] = useState<AiCanvasSelection | null>(null);
   const [pendingCanvasOperations, setPendingCanvasOperations] = useState<CanvasOperationRequest | null>(null);
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [undoStack, setUndoStack] = useState<CanvasSnapshot[]>([]);
   const [redoStack, setRedoStack] = useState<CanvasSnapshot[]>([]);
+  const [editorHistoryState, setEditorHistoryState] = useState({ canUndo: false, canRedo: false });
   const detailRequestIdRef = useRef(0);
   const autosaveRequestIdRef = useRef(0);
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -141,8 +155,8 @@ export function useAiCanvasNotes({
   const activeNoteRevisionRef = useRef<number | null>(null);
   const documentDraftRef = useRef<AiCanvasDocumentJson>(cloneAiCanvasDocument(EMPTY_AI_CANVAS_DOCUMENT));
   const markdownDraftRef = useRef('');
-  const directEditBaselineRef = useRef<CanvasSnapshot | null>(null);
-  const directEditTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const selectionDraftRef = useRef<AiCanvasSelection | null>(null);
+  const editorHistoryControlsRef = useRef<AiCanvasEditorHistoryControls | null>(null);
   const transientErrorTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const operationRequestIdRef = useRef(0);
 
@@ -159,15 +173,8 @@ export function useAiCanvasNotes({
   const currentSnapshot = useCallback((): CanvasSnapshot => ({
     documentJson: documentDraft,
     markdown: markdownDraft,
+    selection: selectionDraftRef.current,
   }), [documentDraft, markdownDraft]);
-
-  const finishDirectEditBatch = useCallback(() => {
-    if (directEditTimerRef.current) {
-      clearTimeout(directEditTimerRef.current);
-      directEditTimerRef.current = null;
-    }
-    directEditBaselineRef.current = null;
-  }, []);
 
   const setTransientError = useCallback((message: string) => {
     if (transientErrorTimerRef.current) {
@@ -182,7 +189,6 @@ export function useAiCanvasNotes({
   }, []);
 
   useEffect(() => () => {
-    finishDirectEditBatch();
     if (autosaveTimerRef.current) {
       clearTimeout(autosaveTimerRef.current);
       autosaveTimerRef.current = null;
@@ -191,32 +197,35 @@ export function useAiCanvasNotes({
       clearTimeout(transientErrorTimerRef.current);
       transientErrorTimerRef.current = null;
     }
-  }, [finishDirectEditBatch]);
+  }, []);
 
   const activeSnapshot = snapshotFromNote(activeNote);
   const draftSnapshot = currentSnapshot();
   const hasUnsavedChanges = !!activeNote && !snapshotEquals(draftSnapshot, activeSnapshot);
   const canCreateNote = notes.length < MAX_AI_CANVAS_NOTES_PER_NOTE;
-  const canUndo = undoStack.length > 0;
-  const canRedo = redoStack.length > 0;
+  const canUndo = editorHistoryState.canUndo || undoStack.length > 0;
+  const canRedo = editorHistoryState.canRedo || redoStack.length > 0;
 
   const setDraftSnapshot = useCallback((snapshot: CanvasSnapshot) => {
     const nextDocument = normalizeAiCanvasDocumentJson(snapshot.documentJson);
     setDocumentDraftState(nextDocument);
     setMarkdownDraft(snapshot.markdown);
+    setSelectionDraft(snapshot.selection ?? null);
     documentDraftRef.current = nextDocument;
     markdownDraftRef.current = snapshot.markdown;
+    selectionDraftRef.current = snapshot.selection ?? null;
   }, []);
 
   const applyActiveNote = useCallback((note: BackendAiCanvasNote | null) => {
-    finishDirectEditBatch();
     setActiveNote(note);
     setActiveNoteId(note?.id ?? null);
     setDraftSnapshot(snapshotFromNote(note));
     setPendingCanvasOperations(null);
     setUndoStack([]);
     setRedoStack([]);
-  }, [finishDirectEditBatch, setDraftSnapshot]);
+    setEditorHistoryState({ canUndo: false, canRedo: false });
+    editorHistoryControlsRef.current = null;
+  }, [setDraftSnapshot]);
 
   const loadCanvasNoteDetail = useCallback(async (canvasNoteId: number) => {
     const requestId = detailRequestIdRef.current + 1;
@@ -296,33 +305,43 @@ export function useAiCanvasNotes({
     const nextSnapshot: CanvasSnapshot = {
       documentJson: normalizeAiCanvasDocumentJson(change.documentJson),
       markdown: change.markdown,
+      selection: change.selection,
     };
     const previousSnapshot = currentSnapshot();
     if (snapshotEquals(nextSnapshot, previousSnapshot)) return;
 
-    const lineCountChanged = nextSnapshot.markdown.split('\n').length !== previousSnapshot.markdown.split('\n').length;
-    const likelyPaste = Math.abs(nextSnapshot.markdown.length - previousSnapshot.markdown.length) > 8;
-
-    if (directEditBaselineRef.current === null) {
-      directEditBaselineRef.current = previousSnapshot;
-      setUndoStack((current) => appendUndoSnapshot(current, previousSnapshot));
-      setRedoStack([]);
-      onRecordWorkspaceAction?.();
+    if (change.source === 'editor-history' || change.source === 'external') {
+      setDraftSnapshot(nextSnapshot);
+      return;
     }
     setDraftSnapshot(nextSnapshot);
+  }, [currentSnapshot, setDraftSnapshot]);
 
-    if (directEditTimerRef.current) {
-      clearTimeout(directEditTimerRef.current);
+  const changeSelectionDraft = useCallback((selection: AiCanvasSelection | null) => {
+    const current = selectionDraftRef.current;
+    if (
+      current?.from === selection?.from
+      && current?.to === selection?.to
+      && Boolean(current) === Boolean(selection)
+    ) {
+      return;
     }
-    directEditTimerRef.current = setTimeout(() => {
-      directEditBaselineRef.current = null;
-      directEditTimerRef.current = null;
-    }, DIRECT_EDIT_BATCH_DELAY_MS);
+    selectionDraftRef.current = selection;
+    setSelectionDraft(selection);
+  }, []);
 
-    if (lineCountChanged || likelyPaste) {
-      finishDirectEditBatch();
+  const changeEditorHistoryState = useCallback((state: { canUndo: boolean; canRedo: boolean }) => {
+    setEditorHistoryState((current) => (
+      current.canUndo === state.canUndo && current.canRedo === state.canRedo ? current : state
+    ));
+  }, []);
+
+  const registerEditorHistoryControls = useCallback((controls: AiCanvasEditorHistoryControls | null) => {
+    editorHistoryControlsRef.current = controls;
+    if (!controls) {
+      setEditorHistoryState({ canUndo: false, canRedo: false });
     }
-  }, [currentSnapshot, finishDirectEditBatch, onRecordWorkspaceAction, setDraftSnapshot]);
+  }, []);
 
   const createCanvasNote = useCallback(async () => {
     if (!enabled || !noteId) {
@@ -558,7 +577,6 @@ export function useAiCanvasNotes({
     operations: CanvasOperation[];
   }) => {
     setIsOpen(true);
-    finishDirectEditBatch();
     if (!operations.length) {
       setTransientError('AI returned no Canvas edits.');
       return;
@@ -609,7 +627,7 @@ export function useAiCanvasNotes({
       operations,
     });
     setError(null);
-  }, [activeNote, currentSnapshot, finishDirectEditBatch, onRecordWorkspaceAction, setDraftSnapshot, setTransientError]);
+  }, [activeNote, currentSnapshot, onRecordWorkspaceAction, setDraftSnapshot, setTransientError]);
 
   const completeCanvasOperations = useCallback(async (requestId: number, applied: boolean) => {
     const pendingRequest = pendingCanvasOperations;
@@ -641,22 +659,30 @@ export function useAiCanvasNotes({
   }, [applyActiveNote, loadCanvasNoteDetail, notes, onFeedback, pendingCanvasOperations, setTransientError]);
 
   const undoCanvasEdit = useCallback(() => {
-    if (!canUndo) return;
+    if (editorHistoryState.canUndo) {
+      const applied = editorHistoryControlsRef.current?.undo() ?? false;
+      if (!applied) setEditorHistoryState((current) => ({ ...current, canUndo: false }));
+      return;
+    }
     const previous = undoStack[undoStack.length - 1];
-    finishDirectEditBatch();
+    if (!previous) return;
     setUndoStack((current) => current.slice(0, -1));
     setRedoStack((current) => appendUndoSnapshot(current, currentSnapshot()));
     setDraftSnapshot(previous);
-  }, [canUndo, currentSnapshot, finishDirectEditBatch, setDraftSnapshot, undoStack]);
+  }, [currentSnapshot, editorHistoryState.canUndo, setDraftSnapshot, undoStack]);
 
   const redoCanvasEdit = useCallback(() => {
-    if (!canRedo) return;
+    if (editorHistoryState.canRedo) {
+      const applied = editorHistoryControlsRef.current?.redo() ?? false;
+      if (!applied) setEditorHistoryState((current) => ({ ...current, canRedo: false }));
+      return;
+    }
     const next = redoStack[redoStack.length - 1];
-    finishDirectEditBatch();
+    if (!next) return;
     setRedoStack((current) => current.slice(0, -1));
     setUndoStack((current) => appendUndoSnapshot(current, currentSnapshot()));
     setDraftSnapshot(next);
-  }, [canRedo, currentSnapshot, finishDirectEditBatch, redoStack, setDraftSnapshot]);
+  }, [currentSnapshot, editorHistoryState.canRedo, redoStack, setDraftSnapshot]);
 
   return {
     isOpen,
@@ -665,6 +691,7 @@ export function useAiCanvasNotes({
     activeNoteId,
     documentDraft,
     markdownDraft,
+    selectionDraft,
     pendingCanvasOperations,
     loading,
     saving,
@@ -680,6 +707,9 @@ export function useAiCanvasNotes({
     toggle: () => setIsOpen((current) => !current),
     selectNote,
     setDocumentDraft: changeDocumentDraft,
+    setSelectionDraft: changeSelectionDraft,
+    setEditorHistoryState: changeEditorHistoryState,
+    registerEditorHistoryControls,
     completeCanvasOperations,
     createNote,
     renameNote,

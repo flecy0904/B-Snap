@@ -4,6 +4,7 @@ import {
   EMPTY_AI_CANVAS_DOCUMENT,
   normalizeAiCanvasDocumentJson,
   type AiCanvasDocumentJson,
+  type AiCanvasBlockContext,
   type CanvasOperation,
 } from '../types/ai-canvas';
 
@@ -354,12 +355,20 @@ function normalizeBackendCaptureUploadJob(job: BackendCaptureUploadJob): Backend
   };
 }
 
-async function appendUploadFile(formData: FormData, fieldName: string, file: {
+type BackendUploadFilePayload = {
   uri: string;
   name: string;
   type: string;
-}) {
+  blob?: Blob | null;
+};
+
+async function appendUploadFile(formData: FormData, fieldName: string, file: BackendUploadFilePayload) {
   if (Platform.OS === 'web') {
+    if (file.blob) {
+      formData.append(fieldName, file.blob, file.name);
+      return;
+    }
+
     try {
       const response = await fetch(file.uri);
       const blob = await response.blob();
@@ -467,6 +476,7 @@ export async function uploadBackendPdfNote(payload: {
     uri: string;
     name: string;
     type: string;
+    blob?: Blob | null;
   };
   folderId: number;
   title: string;
@@ -826,12 +836,13 @@ export async function sendBackendAiMessage(payload: {
   pageNumber?: number | null;
   selectionImageUri?: string | null;
   contextHint?: string | null;
-  source?: 'chat' | 'canvas-mini';
+  source?: 'chat' | 'canvas-mini' | 'canvas-block';
   canvasNoteId?: number | null;
   canvasAction?: 'auto' | 'chat_only' | 'canvas_edit' | 'canvas_create';
   canvasNoteNeedsTitle?: boolean;
   canvasMarkdown?: string | null;
   canvasDocumentJson?: AiCanvasDocumentJson | null;
+  canvasBlockContext?: AiCanvasBlockContext | null;
 }) {
   return request<BackendAiMessageResponse>(`/chat-sessions/${payload.sessionId}/ai-messages`, {
     method: 'POST',
@@ -850,6 +861,7 @@ export async function sendBackendAiMessage(payload: {
       canvas_note_needs_title: payload.canvasNoteNeedsTitle ?? false,
       canvas_markdown: payload.canvasMarkdown ?? null,
       canvas_document_json: payload.canvasDocumentJson ?? null,
+      canvas_block_context: payload.canvasBlockContext ?? null,
     },
   }).then(normalizeBackendAiMessageResponse);
 }

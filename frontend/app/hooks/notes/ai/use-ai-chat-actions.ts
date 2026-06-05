@@ -12,17 +12,18 @@ import {
   type BackendChatSession,
 } from '../../../services/backend-api';
 import type { AiAnswer, StudyDocumentEntry } from '../../../types';
-import type { AiCanvasDocumentJson, CanvasOperation } from '../../../types/ai-canvas';
+import type { AiCanvasBlockContext, AiCanvasDocumentJson, CanvasOperation } from '../../../types/ai-canvas';
 import type { SelectionRect } from '../../../ui-types';
 import { getStudyDocumentBackendNoteId } from '../document/backend-sync';
 import { buildAiChatTitle } from './ai-chat-title';
 import { getAiBackendErrorMessage } from './ai-errors';
 
 type SetState<T> = Dispatch<SetStateAction<T>>;
-type AiQuestionSource = 'general' | 'selection' | 'photo' | 'class-insight' | 'chat' | 'canvas-mini';
+type AiQuestionSource = 'general' | 'selection' | 'photo' | 'class-insight' | 'chat' | 'canvas-mini' | 'canvas-block';
 type CanvasAction = 'auto' | 'chat_only' | 'canvas_edit' | 'canvas_create';
+type AiRequestSource = 'chat' | 'canvas-mini' | 'canvas-block';
 
-function getCanvasAction(question: string, source: 'chat' | 'canvas-mini' = 'chat'): CanvasAction {
+function getCanvasAction(question: string, source: AiRequestSource = 'chat'): CanvasAction {
   const lowerQuestion = question.toLowerCase();
   const createKeywords = [
     'new canvas',
@@ -43,7 +44,7 @@ function getCanvasAction(question: string, source: 'chat' | 'canvas-mini' = 'cha
     return 'canvas_create';
   }
 
-  if (source === 'canvas-mini') return 'canvas_edit';
+  if (source === 'canvas-mini' || source === 'canvas-block') return 'auto';
 
   const mentionsCanvas = lowerQuestion.includes('canvas') || question.includes('캔버스') || question.includes('정리 노트');
   const editKeywords = [
@@ -66,8 +67,8 @@ function getCanvasAction(question: string, source: 'chat' | 'canvas-mini' = 'cha
   return 'auto';
 }
 
-function mightRequestCanvasEdit(question: string, source: 'chat' | 'canvas-mini' = 'chat') {
-  if (source === 'canvas-mini') return true;
+function mightRequestCanvasEdit(question: string, source: AiRequestSource = 'chat') {
+  if (source === 'canvas-mini' || source === 'canvas-block') return true;
   const lowerQuestion = question.toLowerCase();
   if (getCanvasAction(question, source) === 'canvas_edit') return true;
   const possibleCanvasEditKeywords = [
@@ -95,6 +96,71 @@ function mightRequestCanvasEdit(question: string, source: 'chat' | 'canvas-mini'
     '개선',
   ];
   return possibleCanvasEditKeywords.some((keyword) => lowerQuestion.includes(keyword));
+}
+
+const CANVAS_BLOCK_CHAT_QUESTION_HINTS = [
+  '?',
+  'what',
+  'why',
+  'how',
+  'explain',
+  'meaning',
+  'definition',
+  '이유',
+  '왜',
+  '어떻게',
+  '무슨',
+  '뭐야',
+  '뭔지',
+  '뜻',
+  '의미',
+  '설명',
+  '알려줘',
+  '알려 줘',
+  '이해',
+  '해석',
+  '정의',
+  '예시',
+];
+
+const CANVAS_BLOCK_EDIT_HINTS = [
+  'add',
+  'rewrite',
+  'revise',
+  'shorten',
+  'lengthen',
+  'simplify',
+  'polish',
+  'delete',
+  'remove',
+  '추가',
+  '반영',
+  '작성',
+  '넣어',
+  '적어',
+  '수정',
+  '고쳐',
+  '다듬',
+  '바꿔',
+  '바꾸',
+  '변경',
+  '줄여',
+  '줄이',
+  '늘려',
+  '삭제',
+  '빼줘',
+];
+
+function shouldOpenCanvasBlockChatImmediately(
+  question: string,
+  source: AiRequestSource = 'chat',
+  canvasAction: CanvasAction = 'auto',
+) {
+  if (source !== 'canvas-block' || canvasAction !== 'auto') return false;
+  const normalized = question.toLowerCase();
+  const hasQuestionHint = CANVAS_BLOCK_CHAT_QUESTION_HINTS.some((keyword) => normalized.includes(keyword));
+  if (!hasQuestionHint) return false;
+  return !CANVAS_BLOCK_EDIT_HINTS.some((keyword) => normalized.includes(keyword));
 }
 
 export function useAiChatActions(params: {
@@ -131,6 +197,7 @@ export function useAiChatActions(params: {
     canvasNote: BackendAiCanvasNote;
     operations: CanvasOperation[];
   }) => void;
+  onOpenChatForCanvasAnswer?: () => void;
   clearSelection?: () => void;
   buildContextHint?: (question: string) => string | null | Promise<string | null>;
 }) {
@@ -390,10 +457,11 @@ export function useAiChatActions(params: {
     question?: string;
     selectionImageUri?: string | null;
     pageNumber?: number | null;
-    source?: 'chat' | 'canvas-mini';
+    source?: AiRequestSource;
     canvasAction?: CanvasAction;
     canvasMarkdown?: string | null;
     canvasDocumentJson?: AiCanvasDocumentJson | null;
+    canvasBlockContext?: AiCanvasBlockContext | null;
   }) => {
     if (!params.studyDocumentId) return false;
     if (params.aiChatReadOnly) {
@@ -405,12 +473,13 @@ export function useAiChatActions(params: {
       ? override?.selectionImageUri ?? null
       : undefined;
     const attachedSelectionPreviewUri = params.selectionAttachmentEnabled ? params.selectionPreviewUri : null;
+    const isCanvasOriginRequest = override?.source === 'canvas-mini' || override?.source === 'canvas-block';
     const selectionPreviewUri = explicitSelectionImageUri !== undefined
       ? explicitSelectionImageUri
-      : override?.source === 'canvas-mini'
+      : isCanvasOriginRequest
         ? null
         : attachedSelectionPreviewUri;
-    const selectionRect = override?.source === 'canvas-mini' && !selectionPreviewUri
+    const selectionRect = isCanvasOriginRequest && !selectionPreviewUri
       ? null
       : params.selectionAttachmentEnabled
         ? params.selectionRect
@@ -418,25 +487,34 @@ export function useAiChatActions(params: {
     const hasSelection = Boolean(selectionRect || selectionPreviewUri);
     const shouldHideSelectionAttachment = Boolean(selectionRect || attachedSelectionPreviewUri);
     const rawQuestion = override?.question?.trim() ?? params.aiQuestion.trim();
-    if (override?.source === 'canvas-mini' && !rawQuestion) return false;
+    if (isCanvasOriginRequest && !rawQuestion) return false;
 
     const question = rawQuestion || (hasSelection ? '선택한 영역을 설명해줘' : '현재 페이지를 요약해줘');
     const canvasAction = override?.canvasAction ?? getCanvasAction(question, override?.source ?? 'chat');
+    if (isCanvasOriginRequest && canvasAction === 'canvas_create') {
+      params.setAiError('현재 Canvas를 수정해달라고 요청해 주세요.');
+      return false;
+    }
     const isCanvasRequest = canvasAction === 'canvas_edit' || canvasAction === 'canvas_create';
     const shouldLockCanvas = isCanvasRequest || (
       canvasAction === 'auto' && mightRequestCanvasEdit(question, override?.source ?? 'chat')
     );
+    const shouldOpenChatImmediately = shouldOpenCanvasBlockChatImmediately(
+      question,
+      override?.source ?? 'chat',
+      canvasAction,
+    );
     const requestContent = override?.source === 'canvas-mini'
-      ? `${canvasAction === 'canvas_create' ? '새 Canvas' : 'Canvas 수정'}: ${question}`
+      ? `Canvas ${canvasAction === 'canvas_create' ? 'create' : 'edit'}: ${question}`
       : question;
-    const messageSource = override?.source === 'canvas-mini' ? 'canvas-mini' : 'chat';
+    const messageSource = isCanvasOriginRequest ? override?.source ?? 'canvas-mini' : 'chat';
     params.setAiLoading(true);
     if (shouldLockCanvas) params.setAiCanvasRequestBusy?.(true);
     params.setAiError(null);
     params.setAiQuestion('');
-    if (hasSelection && override?.source !== 'canvas-mini') {
+    if (hasSelection && !isCanvasOriginRequest) {
       params.clearSelection?.();
-    } else if (selectionPreviewUri && override?.source !== 'canvas-mini') {
+    } else if (selectionPreviewUri && !isCanvasOriginRequest) {
       params.setSelectionPreviewByDocument((current) => ({ ...current, [params.studyDocumentId!]: null }));
     }
     let aiRequestStage: 'chat-session' | 'ai-answer' = 'ai-answer';
@@ -495,6 +573,9 @@ export function useAiChatActions(params: {
         ...current,
         [sessionId]: [...(current[sessionId] ?? []), pendingUserMessage],
       }));
+      if (shouldOpenChatImmediately) {
+        params.onOpenChatForCanvasAnswer?.();
+      }
 
       const selectionImage = await buildSelectionImagePayload(selectionPreviewUri);
       const response = await sendBackendAiMessage({
@@ -508,12 +589,13 @@ export function useAiChatActions(params: {
         canvasNoteId: canvasAction === 'canvas_create' ? null : params.activeCanvasNoteId ?? null,
         canvasAction,
         canvasNoteNeedsTitle: canvasAction === 'canvas_create',
-        canvasMarkdown: canvasAction === 'canvas_edit' || (canvasAction === 'auto' && shouldLockCanvas)
+        canvasMarkdown: isCanvasOriginRequest || canvasAction === 'canvas_edit' || (canvasAction === 'auto' && shouldLockCanvas)
           ? override?.canvasMarkdown ?? params.activeCanvasMarkdown ?? null
           : null,
-        canvasDocumentJson: canvasAction === 'canvas_edit' || (canvasAction === 'auto' && shouldLockCanvas)
+        canvasDocumentJson: isCanvasOriginRequest || canvasAction === 'canvas_edit' || (canvasAction === 'auto' && shouldLockCanvas)
           ? override?.canvasDocumentJson ?? params.activeCanvasDocumentJson ?? null
           : null,
+        canvasBlockContext: override?.canvasBlockContext ?? null,
         contextHint,
       });
       const userMessageWithAttachment = {
@@ -568,6 +650,8 @@ export function useAiChatActions(params: {
         });
       } else if (canvasAction === 'canvas_edit' || canvasAction === 'canvas_create') {
         params.setAiError('Canvas 수정 중 서버와 연결 상태가 좋지 않아 문제가 발생했어요. 잠시 후 다시 시도해 주세요.');
+      } else if (isCanvasOriginRequest) {
+        params.onOpenChatForCanvasAnswer?.();
       }
       return true;
     } catch (error) {
@@ -586,22 +670,31 @@ export function useAiChatActions(params: {
 
   const requestAiAnswer = async (options?: {
     question?: string;
-    source?: 'chat' | 'canvas-mini';
+    source?: AiRequestSource;
     canvasAction?: CanvasAction;
     selectionImageUri?: string | null;
     canvasMarkdown?: string | null;
     canvasDocumentJson?: AiCanvasDocumentJson | null;
+    canvasBlockContext?: AiCanvasBlockContext | null;
   }) => requestAiAnswerInternal(options);
 
   const requestAiAnswerForQuestion = async (question: string, options?: {
     selectionImageUri?: string | null;
     pageNumber?: number | null;
     source?: AiQuestionSource;
+    canvasAction?: CanvasAction;
+    canvasMarkdown?: string | null;
+    canvasDocumentJson?: AiCanvasDocumentJson | null;
+    canvasBlockContext?: AiCanvasBlockContext | null;
   }) => requestAiAnswerInternal({
     question,
     selectionImageUri: options?.selectionImageUri ?? null,
     pageNumber: options?.pageNumber ?? params.currentPageNumber,
-    source: options?.source === 'canvas-mini' ? 'canvas-mini' : 'chat',
+    source: options?.source === 'canvas-mini' || options?.source === 'canvas-block' ? options.source : 'chat',
+    canvasAction: options?.canvasAction,
+    canvasMarkdown: options?.canvasMarkdown,
+    canvasDocumentJson: options?.canvasDocumentJson,
+    canvasBlockContext: options?.canvasBlockContext,
   });
 
   return {

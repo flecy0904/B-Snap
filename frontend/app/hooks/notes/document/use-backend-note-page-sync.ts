@@ -47,6 +47,12 @@ const EMPTY_PAGE_CONTENT = serializeNotePageContent({ inkStrokes: [], textAnnota
 
 const getPageSaveKey = (documentId: number, pageNumber: number) => `${documentId}:${pageNumber}`;
 
+function isTransientWebPdfUri(uri: string | null | undefined) {
+  if (typeof uri !== 'string') return false;
+  const normalizedUri = uri.toLowerCase();
+  return normalizedUri.startsWith('blob:') || normalizedUri.startsWith('data:application/pdf');
+}
+
 export function useBackendNotePageSync({
   workspaceHydrated,
   studyDocumentId,
@@ -368,7 +374,11 @@ export function useBackendNotePageSync({
     return () => clearTimeout(timer);
   }, [pendingPageSaves, savingPageKeys]);
 
-  const syncPdfDocumentToBackend = useCallback(async (document: StudyDocumentEntry, targetSubject: Subject) => {
+  const syncPdfDocumentToBackend = useCallback(async (
+    document: StudyDocumentEntry,
+    targetSubject: Subject,
+    uploadBlob?: Blob | null,
+  ) => {
     if (!isBackendApiEnabled() || document.type !== 'pdf' || document.backendNoteId || pdfSyncInFlightRef.current[document.id]) {
       return;
     }
@@ -391,6 +401,7 @@ export function useBackendNotePageSync({
           uri: sourceUri,
           name: document.title || `${targetSubject.name} PDF`,
           type: 'application/pdf',
+          blob: uploadBlob ?? null,
         },
         folderId: folder.id,
         title: document.title || `${targetSubject.name} PDF`,
@@ -403,20 +414,27 @@ export function useBackendNotePageSync({
         ...current,
         [document.id]: pagesByNumber,
       }));
+      const remotePdfUrl = result.note.file_url ?? result.upload.url;
       setUserStudyDocuments((current) => current.map((item) => (
         item.id === document.id
-          ? {
-            ...item,
-            backendNoteId: result.note.id,
-            title: result.note.title,
-            updatedAt: 'DB 저장됨',
-            pageCount: Math.max(item.pageCount, result.note.page_count ?? result.upload.page_count),
-            preview: result.note.summary ?? '업로드한 PDF 문서입니다.',
-            remoteFileUrl: result.note.file_url ?? result.upload.url,
-            thumbnailUrl: result.note.thumbnail_url ?? result.upload.thumbnail_url ?? undefined,
-            backendSyncStatus: 'synced',
-            backendSyncError: undefined,
-          }
+          ? (() => {
+            const hasTransientLocalFileUri = isTransientWebPdfUri(item.localFileUri);
+            const shouldUseRemotePdf = Boolean(remotePdfUrl) && (!item.localFileUri || hasTransientLocalFileUri);
+            return {
+              ...item,
+              backendNoteId: result.note.id,
+              title: result.note.title,
+              updatedAt: 'DB 저장됨',
+              pageCount: Math.max(item.pageCount, result.note.page_count ?? result.upload.page_count),
+              preview: result.note.summary ?? '업로드한 PDF 문서입니다.',
+              file: shouldUseRemotePdf ? { uri: remotePdfUrl } : item.file,
+              localFileUri: hasTransientLocalFileUri ? undefined : item.localFileUri,
+              remoteFileUrl: remotePdfUrl,
+              thumbnailUrl: result.note.thumbnail_url ?? result.upload.thumbnail_url ?? undefined,
+              backendSyncStatus: 'synced',
+              backendSyncError: undefined,
+            };
+          })()
           : item
       )));
 

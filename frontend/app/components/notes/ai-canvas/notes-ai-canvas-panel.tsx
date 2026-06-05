@@ -1,10 +1,13 @@
 import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { ActivityIndicator, Image, Platform, Pressable, Text, TextInput, View } from 'react-native';
+import { ActivityIndicator, Image, Platform, Pressable, ScrollView, Text, TextInput, View } from 'react-native';
 
 import { hasUsefulAiCanvasMarkdown } from '../../../hooks/notes/ai-canvas/use-ai-canvas-notes';
+import { isCanvasCreateRequest } from '../../../hooks/notes/ai-canvas/canvas-command-intent';
+import { useDelayedTooltip } from '../../../hooks/notes/use-delayed-tooltip';
 import AiCanvasMarkdownEditor from './ai-canvas-markdown-editor.dom';
 import { useDesktopNotesWorkspaceContext } from '../workspace/notes-workspace-context';
+import type { AiCanvasBlockContext } from '../../../types/ai-canvas';
 
 const AI_CANVAS_MINI_PROMPTS = ['마무리 다듬기', '수준 조정', '길이 조절'];
 
@@ -16,6 +19,15 @@ type WebCanvasResizeState = {
   startWidth: number;
 };
 
+function handleWebSubmitKeyPress(event: any, submit: () => void) {
+  if (Platform.OS !== 'web') return;
+  const key = event?.key ?? event?.nativeEvent?.key;
+  const shiftKey = Boolean(event?.shiftKey ?? event?.nativeEvent?.shiftKey);
+  if (key !== 'Enter' || shiftKey) return;
+  event.preventDefault?.();
+  submit();
+}
+
 const AI_CANVAS_RECOMMENDATION_COMMANDS = {
   polish: '마무리 다듬기',
   easier: '수준 조정 - 쉽게',
@@ -26,12 +38,14 @@ const AI_CANVAS_RECOMMENDATION_COMMANDS = {
 
 export function NotesAiCanvasPanel() {
   const workspace = useDesktopNotesWorkspaceContext();
+  const { activeTooltipId, hoveredTooltipId, getTooltipTriggerProps, hideTooltip } = useDelayedTooltip();
   const canvas = workspace.aiCanvas;
   const [noteListOpen, setNoteListOpen] = React.useState(false);
   const [noteActionMenuId, setNoteActionMenuId] = React.useState<number | null>(null);
   const [pendingRenameNoteId, setPendingRenameNoteId] = React.useState<number | null>(null);
   const [pendingDeleteNoteId, setPendingDeleteNoteId] = React.useState<number | null>(null);
   const [renameOpen, setRenameOpen] = React.useState(false);
+  const [helpOpen, setHelpOpen] = React.useState(false);
   const [renameDraft, setRenameDraft] = React.useState('');
   const [renameError, setRenameError] = React.useState<string | null>(null);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = React.useState(false);
@@ -50,6 +64,7 @@ export function NotesAiCanvasPanel() {
   const isNativeApp = Platform.OS !== 'web';
   const canvasEditModeEnabled = !isNativeApp || nativeEditorMode === 'edit';
   const canvasControlsLocked = canvasRequestBusy || workspace.aiCanvasRequestBusy;
+  const canvasAiEditingBusy = canvasRequestBusy || workspace.aiCanvasRequestBusy || Boolean(canvas.pendingCanvasOperations);
   const editorEditable = canvasEditModeEnabled && !canvasControlsLocked;
   const canvasCanModify = canvasEditModeEnabled;
   const recommendationBusy = canvasRequestBusy || workspace.aiLoading || canvas.loading || canvas.saving;
@@ -67,6 +82,7 @@ export function NotesAiCanvasPanel() {
     setNoteListOpen(false);
     setNoteActionMenuId(null);
     setRenameOpen(false);
+    setHelpOpen(false);
     setDeleteConfirmOpen(false);
     setPendingRenameNoteId(null);
     setPendingDeleteNoteId(null);
@@ -176,17 +192,20 @@ export function NotesAiCanvasPanel() {
   const submitMiniCommand = async () => {
     const command = miniCommand.trim();
     if (!command || recommendationBusy) return;
+    const locallyBlocked = isCanvasCreateRequest(command) || !canvas.activeNote;
     setCanvasRequestBusy(true);
     try {
       const sent = await workspace.onRequestAiCanvasCommand(command, {
         selectionImageUri: miniSelectionImageUri,
+        canvasAction: 'auto',
+        source: 'canvas-mini',
       });
       if (sent) {
         setMiniCommand('');
         setMiniSelectionImageUri(null);
         setMiniComposerOpen(false);
       }
-      if (!sent) {
+      if (!sent && !locallyBlocked) {
         canvas.showFeedback('Canvas 수정에 실패했습니다. 잠시 후 다시 시도해 주세요.');
       }
     } finally {
@@ -199,6 +218,8 @@ export function NotesAiCanvasPanel() {
     try {
       const sent = await workspace.onRequestAiCanvasCommand(command, {
         selectionImageUri: miniSelectionImageUri,
+        canvasAction: 'canvas_edit',
+        source: 'canvas-mini',
       });
       if (sent) {
         setRecommendationMode(null);
@@ -223,6 +244,23 @@ export function NotesAiCanvasPanel() {
     if (!workspace.copiedSelectionImageUri) return;
     setMiniSelectionImageUri(workspace.copiedSelectionImageUri);
   };
+  const submitBlockAiCommand = async (command: string, canvasBlockContext: AiCanvasBlockContext) => {
+    if (!command.trim() || recommendationBusy) return false;
+    setCanvasRequestBusy(true);
+    try {
+      const sent = await workspace.onRequestAiCanvasCommand(command, {
+        canvasAction: 'auto',
+        source: 'canvas-block',
+        canvasBlockContext,
+      });
+      if (!sent) {
+        canvas.showFeedback('AI 요청에 실패했습니다. 잠시 후 다시 시도해 주세요.');
+      }
+      return sent;
+    } finally {
+      setCanvasRequestBusy(false);
+    }
+  };
   const closeCanvasPanel = () => {
     if (isAppAiCanvasSidebar) {
       workspace.onCloseAppRightSidebar();
@@ -230,6 +268,29 @@ export function NotesAiCanvasPanel() {
     }
     canvas.close();
   };
+  const renderAiTooltip = (id: string, label: string, placement: 'above' | 'below' = 'below') => (
+    activeTooltipId === id ? (
+      <View
+        pointerEvents="none"
+        style={[
+          workspace.styles.aiTooltipBubble,
+          placement === 'above' ? workspace.styles.aiTooltipAbove : workspace.styles.aiTooltipBelow,
+        ]}
+      >
+        <Text style={workspace.styles.aiTooltipText} numberOfLines={1}>{label}</Text>
+      </View>
+    ) : null
+  );
+  const getAiCanvasHeaderIconButtonStyle = (id: string, active = false) => [
+    workspace.styles.aiCanvasIconButton,
+    hoveredTooltipId === id && workspace.styles.aiCanvasIconButtonHover,
+    active && workspace.styles.aiCanvasIconButtonActive,
+  ];
+  const getAiCanvasHeaderNewButtonStyle = (id: string) => [
+    workspace.styles.aiCanvasHeaderNewButton,
+    hoveredTooltipId === id && workspace.styles.aiCanvasHeaderNewButtonHover,
+    (canvasManagementDisabled || !canvas.canCreateNote) && workspace.styles.aiCanvasSaveButtonDisabled,
+  ];
   const renderRecommendationActions = () => {
     if (!miniComposerOpen) return null;
 
@@ -318,7 +379,7 @@ export function NotesAiCanvasPanel() {
     );
   };
   const renderMiniCommandInput = () => {
-    if (workspace.aiPanelOpen) return null;
+    if (!isWebAiCanvasPanel && workspace.aiPanelOpen) return null;
     if (!canvasCanModify) return null;
 
     return (
@@ -357,34 +418,59 @@ export function NotesAiCanvasPanel() {
               multiline
               editable={!recommendationBusy}
               onSubmitEditing={submitMiniCommand}
+              submitBehavior="submit"
+              blurOnSubmit={false}
+              onKeyPress={(event) => {
+                handleWebSubmitKeyPress(event, () => {
+                  void submitMiniCommand();
+                });
+              }}
               autoFocus
               showSoftInputOnFocus
             />
-            <Pressable
-              style={[
-                workspace.styles.aiCanvasMiniSendButton,
-                recommendationBusy && workspace.styles.aiCanvasMiniSendButtonDisabled,
-              ]}
-              onPress={miniCommandReady ? submitMiniCommand : closeMiniComposer}
-              disabled={recommendationBusy}
-            >
-              {recommendationBusy ? (
-                <ActivityIndicator size="small" color="#FFFFFF" />
-              ) : miniCommandReady ? (
-                <MaterialCommunityIcons name="arrow-up" size={18} color="#FFFFFF" />
-              ) : (
-                <MaterialCommunityIcons name="close" size={18} color="#FFFFFF" />
-              )}
-            </Pressable>
+            <View style={workspace.styles.aiTooltipAnchor}>
+              <Pressable
+                {...getTooltipTriggerProps('ai-canvas-mini-submit', miniCommandReady ? '전송' : '닫기')}
+                style={[
+                  workspace.styles.aiCanvasMiniSendButton,
+                  recommendationBusy && workspace.styles.aiCanvasMiniSendButtonDisabled,
+                ]}
+                onPress={() => {
+                  hideTooltip('ai-canvas-mini-submit');
+                  if (miniCommandReady) {
+                    void submitMiniCommand();
+                    return;
+                  }
+                  closeMiniComposer();
+                }}
+                disabled={recommendationBusy}
+              >
+                {recommendationBusy ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : miniCommandReady ? (
+                  <MaterialCommunityIcons name="arrow-up" size={18} color="#FFFFFF" />
+                ) : (
+                  <MaterialCommunityIcons name="close" size={18} color="#FFFFFF" />
+                )}
+              </Pressable>
+              {renderAiTooltip('ai-canvas-mini-submit', miniCommandReady ? '전송' : '닫기', 'above')}
+            </View>
           </View>
         ) : (
           <View style={workspace.styles.aiCanvasMiniFabAnchor}>
-            <Pressable
-              style={workspace.styles.aiCanvasMiniSendButton}
-              onPress={() => setMiniComposerOpen(true)}
-            >
-              <MaterialCommunityIcons name="pencil-outline" size={20} color="#FFFFFF" />
-            </Pressable>
+            <View style={workspace.styles.aiTooltipAnchor}>
+              <Pressable
+                {...getTooltipTriggerProps('ai-canvas-mini-open', 'AI')}
+                style={workspace.styles.aiCanvasMiniSendButton}
+                onPress={() => {
+                  hideTooltip('ai-canvas-mini-open');
+                  setMiniComposerOpen(true);
+                }}
+              >
+                <MaterialCommunityIcons name="pencil-outline" size={20} color="#FFFFFF" />
+              </Pressable>
+              {renderAiTooltip('ai-canvas-mini-open', 'AI', 'above')}
+            </View>
           </View>
         )}
       </View>
@@ -483,7 +569,7 @@ export function NotesAiCanvasPanel() {
           />
         </View>
       ) : null}
-      <View style={workspace.styles.aiCanvasHeader}>
+      <View style={[workspace.styles.aiCanvasHeader, isWebAiCanvasPanel && workspace.styles.aiCanvasHeaderWeb]}>
         <View style={workspace.styles.aiCanvasHeaderTitleWrap}>
           <Text style={workspace.styles.aiCanvasTitle} numberOfLines={1}>
             {canvas.activeNote?.title ?? 'Canvas Notes'}
@@ -491,34 +577,56 @@ export function NotesAiCanvasPanel() {
         </View>
         <View style={workspace.styles.aiCanvasHeaderActions}>
           {isNativeApp ? (
+            <View style={workspace.styles.aiTooltipAnchor}>
+              <Pressable
+                {...getTooltipTriggerProps('ai-canvas-mode', canvasEditModeEnabled ? '보기 모드' : '편집 모드')}
+                style={getAiCanvasHeaderIconButtonStyle('ai-canvas-mode', canvasEditModeEnabled)}
+                onPress={() => {
+                  hideTooltip('ai-canvas-mode');
+                  setNativeEditorMode((current) => (current === 'edit' ? 'view' : 'edit'));
+                }}
+                disabled={canvasControlsLocked}
+              >
+                <MaterialCommunityIcons name={canvasEditModeEnabled ? 'pencil' : 'eye-outline'} size={18} color="#303744" />
+              </Pressable>
+              {renderAiTooltip('ai-canvas-mode', canvasEditModeEnabled ? '보기 모드' : '편집 모드')}
+            </View>
+          ) : null}
+          <View style={workspace.styles.aiTooltipAnchor}>
             <Pressable
-              style={[
-                workspace.styles.aiCanvasIconButton,
-                canvasEditModeEnabled && workspace.styles.aiCanvasIconButtonActive,
-              ]}
-              onPress={() => setNativeEditorMode((current) => (current === 'edit' ? 'view' : 'edit'))}
+              {...getTooltipTriggerProps('ai-canvas-new-note', '새 노트')}
+              style={getAiCanvasHeaderNewButtonStyle('ai-canvas-new-note')}
+              onPress={() => {
+                hideTooltip('ai-canvas-new-note');
+                if (canvasManagementDisabled || !canvas.canCreateNote) return;
+                void canvas.createNote();
+              }}
+              disabled={canvasManagementDisabled || !canvas.canCreateNote}
+            >
+              <MaterialCommunityIcons name="note-edit-outline" size={18} color="#111827" />
+            </Pressable>
+            {renderAiTooltip('ai-canvas-new-note', '새 노트')}
+          </View>
+          <View style={workspace.styles.aiTooltipAnchor}>
+            <Pressable
+              {...getTooltipTriggerProps('ai-canvas-help', '도움말')}
+              style={getAiCanvasHeaderIconButtonStyle('ai-canvas-help')}
+              onPress={() => {
+                hideTooltip('ai-canvas-help');
+                setHelpOpen(true);
+              }}
               disabled={canvasControlsLocked}
             >
-              <MaterialCommunityIcons name={canvasEditModeEnabled ? 'pencil' : 'eye-outline'} size={18} color="#303744" />
+              <MaterialCommunityIcons name="help-circle-outline" size={19} color="#303744" />
             </Pressable>
-          ) : null}
-          <Pressable
-            style={[
-              workspace.styles.aiCanvasHeaderNewButton,
-              (canvasManagementDisabled || !canvas.canCreateNote) && workspace.styles.aiCanvasSaveButtonDisabled,
-            ]}
-            onPress={() => {
-              if (canvasManagementDisabled || !canvas.canCreateNote) return;
-              void canvas.createNote();
-            }}
-            disabled={canvasManagementDisabled || !canvas.canCreateNote}
-          >
-            <MaterialCommunityIcons name="note-edit-outline" size={18} color="#111827" />
-          </Pressable>
+            {renderAiTooltip('ai-canvas-help', '도움말')}
+          </View>
           <View style={workspace.styles.aiHeaderMenuWrap}>
             <Pressable
-              style={workspace.styles.aiCanvasIconButton}
+              {...getTooltipTriggerProps('ai-canvas-list', '목록')}
+              style={getAiCanvasHeaderIconButtonStyle('ai-canvas-list')}
               onPress={() => {
+                hideTooltip('ai-canvas-list');
                 if (canvasControlsLocked) return;
                 setNoteActionMenuId(null);
                 setNoteListOpen((current) => !current);
@@ -527,11 +635,22 @@ export function NotesAiCanvasPanel() {
             >
               <MaterialCommunityIcons name="dots-vertical" size={20} color="#303744" />
             </Pressable>
+            {renderAiTooltip('ai-canvas-list', '목록')}
             {renderNoteListMenu()}
           </View>
-          <Pressable style={workspace.styles.aiCanvasIconButton} onPress={closeCanvasPanel}>
-            <MaterialCommunityIcons name="close" size={20} color="#303744" />
-          </Pressable>
+          <View style={workspace.styles.aiTooltipAnchor}>
+            <Pressable
+              {...getTooltipTriggerProps('ai-canvas-close', '닫기')}
+              style={getAiCanvasHeaderIconButtonStyle('ai-canvas-close')}
+              onPress={() => {
+                hideTooltip('ai-canvas-close');
+                closeCanvasPanel();
+              }}
+            >
+              <MaterialCommunityIcons name="close" size={20} color="#303744" />
+            </Pressable>
+            {renderAiTooltip('ai-canvas-close', '닫기')}
+          </View>
         </View>
       </View>
 
@@ -555,26 +674,32 @@ export function NotesAiCanvasPanel() {
           {canvas.activeNote ? (
             <View style={workspace.styles.aiCanvasEditorShell}>
               <AiCanvasMarkdownEditor
+                key={canvas.activeNote.id}
                 documentJson={canvas.documentDraft}
                 fallbackMarkdown={canvas.markdownDraft}
                 editable={editorEditable}
                 placeholder="Markdown으로 정리 내용을 작성하세요."
                 pendingOperations={canvas.pendingCanvasOperations}
+                selectionToRestore={canvas.selectionDraft}
+                resetUiKey={canvas.activeNote?.id ?? null}
+                enableWebBlockLayers={isWebAiCanvasPanel}
+                aiRequestBusy={recommendationBusy}
+                onRequestBlockAi={submitBlockAiCommand}
                 onChangeDocument={async (change) => {
                   canvas.setDocumentDraft(change);
                 }}
+                onChangeSelection={(selection) => {
+                  canvas.setSelectionDraft(selection);
+                }}
+                onChangeHistoryState={(state) => {
+                  canvas.setEditorHistoryState(state);
+                }}
+                onRegisterHistoryControls={(controls) => {
+                  canvas.registerEditorHistoryControls(controls);
+                }}
                 onFocusEditor={async () => {
+                  if (miniComposerOpen) closeMiniComposer();
                   workspace.onFocusWorkspaceTarget('aiCanvas');
-                }}
-                canUndoShortcut={canvas.canUndo}
-                canRedoShortcut={canvas.canRedo}
-                onUndoShortcut={() => {
-                  workspace.onFocusWorkspaceTarget('aiCanvas');
-                  canvas.undoCanvasEdit();
-                }}
-                onRedoShortcut={() => {
-                  workspace.onFocusWorkspaceTarget('aiCanvas');
-                  canvas.redoCanvasEdit();
                 }}
                 onApplyOperationsResult={async (requestId, applied) => {
                   canvas.completeCanvasOperations(requestId, applied);
@@ -600,6 +725,14 @@ export function NotesAiCanvasPanel() {
           )}
         </>
       )}
+      {canvas.enabled && canvas.activeNote && canvasAiEditingBusy ? (
+        <View pointerEvents="none" style={workspace.styles.aiCanvasPanelBusyOverlay}>
+          <View style={workspace.styles.aiCanvasEditorBusyPill}>
+            <ActivityIndicator size="small" color="#405CD1" />
+            <Text style={workspace.styles.aiCanvasEditorBusyText}>AI가 Canvas를 수정하는 중입니다.</Text>
+          </View>
+        </View>
+      ) : null}
       {renameOpen ? (
         <Pressable style={workspace.styles.aiPanelDialogOverlay} onPress={cancelRename}>
           <Pressable style={workspace.styles.aiRenameModalCard} onPress={(event) => event.stopPropagation()}>
@@ -632,6 +765,28 @@ export function NotesAiCanvasPanel() {
                 <Text style={workspace.styles.aiRenameModalSaveText}>이름 바꾸기</Text>
               </Pressable>
             </View>
+          </Pressable>
+        </Pressable>
+      ) : null}
+      {helpOpen ? (
+        <Pressable style={workspace.styles.aiPanelDialogOverlay} onPress={() => setHelpOpen(false)}>
+          <Pressable style={workspace.styles.aiCanvasHelpModalCard} onPress={(event) => event.stopPropagation()}>
+            <View style={workspace.styles.aiCanvasHelpHeader}>
+              <Text style={workspace.styles.aiRenameModalTitle}>Canvas 사용법</Text>
+              <Pressable style={workspace.styles.aiCanvasIconButton} onPress={() => setHelpOpen(false)}>
+                <MaterialCommunityIcons name="close" size={18} color="#303744" />
+              </Pressable>
+            </View>
+            <ScrollView style={workspace.styles.aiCanvasHelpScroll} contentContainerStyle={workspace.styles.aiCanvasHelpContent}>
+              <Text style={workspace.styles.aiCanvasHelpSectionTitle}>빠르게 쓰기</Text>
+              <Text style={workspace.styles.aiCanvasHelpBody}>빈 줄이나 줄 맨 앞에서 / 를 입력하면 제목, 본문, 목록, 코드, 구분선을 바로 만들 수 있어요.</Text>
+              <Text style={workspace.styles.aiCanvasHelpSectionTitle}>기본 정리</Text>
+              <Text style={workspace.styles.aiCanvasHelpBody}>큰 제목은 흐름을 나눌 때, 글머리 목록은 핵심 개념을 모을 때, 번호 목록은 순서가 있는 내용을 정리할 때 사용하세요.</Text>
+              <Text style={workspace.styles.aiCanvasHelpSectionTitle}>AI에게 부탁하기</Text>
+              <Text style={workspace.styles.aiCanvasHelpBody}>문단 오른쪽 AI 버튼으로 해당 내용을 물어보거나 수정 요청할 수 있어요. 오른쪽 하단 AI 버튼으로는 Canvas 전체에 대해 질문하거나 수정 요청할 수 있어요.</Text>
+              <Text style={workspace.styles.aiCanvasHelpSectionTitle}>추천 버튼</Text>
+              <Text style={workspace.styles.aiCanvasHelpBody}>마무리 다듬기, 수준 조정, 길이 조절을 선택하면 AI가 Canvas 전체를 바로 다듬어줘요.</Text>
+            </ScrollView>
           </Pressable>
         </Pressable>
       ) : null}
