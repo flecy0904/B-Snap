@@ -411,20 +411,24 @@ export function useBackendNotePageSync({
       const remotePdfUrl = result.note.file_url ?? result.upload.url;
       setUserStudyDocuments((current) => current.map((item) => (
         item.id === document.id
-          ? {
-            ...item,
-            backendNoteId: result.note.id,
-            title: result.note.title,
-            updatedAt: 'DB 저장됨',
-            pageCount: Math.max(item.pageCount, result.note.page_count ?? result.upload.page_count),
-            preview: result.note.summary ?? '업로드한 PDF 문서입니다.',
-            file: remotePdfUrl ? { uri: remotePdfUrl } : item.file,
-            localFileUri: item.localFileUri?.startsWith('blob:') ? undefined : item.localFileUri,
-            remoteFileUrl: remotePdfUrl,
-            thumbnailUrl: result.note.thumbnail_url ?? result.upload.thumbnail_url ?? undefined,
-            backendSyncStatus: 'synced',
-            backendSyncError: undefined,
-          }
+          ? (() => {
+            const hasTransientLocalFileUri = item.localFileUri?.startsWith('blob:') ?? false;
+            const shouldUseRemotePdf = Boolean(remotePdfUrl) && (!item.localFileUri || hasTransientLocalFileUri);
+            return {
+              ...item,
+              backendNoteId: result.note.id,
+              title: result.note.title,
+              updatedAt: 'DB 저장됨',
+              pageCount: Math.max(item.pageCount, result.note.page_count ?? result.upload.page_count),
+              preview: result.note.summary ?? '업로드한 PDF 문서입니다.',
+              file: shouldUseRemotePdf ? { uri: remotePdfUrl } : item.file,
+              localFileUri: hasTransientLocalFileUri ? undefined : item.localFileUri,
+              remoteFileUrl: remotePdfUrl,
+              thumbnailUrl: result.note.thumbnail_url ?? result.upload.thumbnail_url ?? undefined,
+              backendSyncStatus: 'synced',
+              backendSyncError: undefined,
+            };
+          })()
           : item
       )));
 
