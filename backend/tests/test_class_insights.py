@@ -8,6 +8,7 @@ from backend.app.routes.class_insights import (
     _apply_chat_question_signals,
     _apply_page_state,
     _collect_active_signal_sources,
+    _extract_content_hint,
     _is_other_user_signal,
 )
 from backend.app.services.note_page_content import merge_page_state_content, parse_page_state
@@ -85,6 +86,15 @@ class ClassInsightSignalTest(unittest.TestCase):
 
         self.assertEqual(accumulators[13].ai_question_count, 1)
         self.assertNotIn(21, accumulators)
+
+    def test_extract_content_hint_uses_pdf_text(self):
+        content = merge_page_state_content(
+            None,
+            None,
+            pdf_text="\n3\n\nBellman Expectation Equation\n상태 가치 함수를 계산하는 핵심 식입니다.",
+        )
+
+        self.assertEqual(_extract_content_hint(content), "Bellman Expectation Equation")
 
     def test_active_signal_sources_ignore_empty_uploads(self):
         accumulators = {

@@ -128,6 +128,7 @@ export type BackendClassInsightPageSignal = {
   importance_score: number;
   priority: 'very-high' | 'high' | 'medium' | string;
   reason_tags: string[];
+  content_hint?: string | null;
   signal_count: number;
   bookmark_count?: number;
   highlight_count?: number;

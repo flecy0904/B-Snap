@@ -43,6 +43,33 @@ MAX_BOOKMARKS_PER_PAGE_STATE = 1
 MAX_KEYWORD_HITS_PER_PAGE_STATE = 6
 MAX_PHOTO_REFERENCES_PER_PAGE_STATE = 5
 MAX_MEMO_PAGES_PER_PAGE_STATE = 4
+CONTENT_HINT_MAX_CHARS = 72
+
+
+def _clean_content_hint(value: str) -> str:
+    return re.sub(r"\s+", " ", value).strip(" \t\r\n-•·:：")
+
+
+def _extract_content_hint(content: str | None) -> str | None:
+    state = parse_page_state(content)
+    if state is None:
+        return None
+    pdf_text = state.get("pdfText")
+    if not isinstance(pdf_text, str) or not pdf_text.strip():
+        return None
+
+    fallback = _clean_content_hint(pdf_text)
+    for raw_line in pdf_text.splitlines():
+        line = _clean_content_hint(raw_line)
+        if len(line) < 6:
+            continue
+        if not re.search(r"[A-Za-z가-힣]", line):
+            continue
+        if re.fullmatch(r"(?:page|p\.?)?\s*\d{1,3}", line, re.IGNORECASE):
+            continue
+        return line[:CONTENT_HINT_MAX_CHARS]
+
+    return fallback[:CONTENT_HINT_MAX_CHARS] if fallback else None
 
 @dataclass
 class PageInsightAccumulator:
@@ -336,6 +363,22 @@ def get_class_insights(
         "note not found",
     )
     current_note["subject_match_key"] = current_note.get("subject_match_key") or normalize_subject_key(current_note.get("folder_name"))
+    current_page_rows = fetch_all(
+        connection,
+        """
+        SELECT page_number,
+               content
+        FROM note_pages
+        WHERE note_id = %s
+        ORDER BY page_number ASC
+        """,
+        (note_id,),
+    )
+    content_hints_by_page = {
+        int(row["page_number"]): hint
+        for row in current_page_rows
+        if (hint := _extract_content_hint(row.get("content")))
+    }
 
     candidate_rows = fetch_all(
         connection,
@@ -431,6 +474,7 @@ def get_class_insights(
             importance_score=score,
             priority=_priority(score),
             reason_tags=accumulator.reason_tags(),
+            content_hint=content_hints_by_page.get(accumulator.page_number),
             signal_count=accumulator.signal_count,
             bookmark_count=accumulator.bookmark_count,
             highlight_count=accumulator.highlight_count,
