@@ -52,6 +52,21 @@ const CLASS_INSIGHT_SCOPE_TERMS = [
   'part',
 ];
 const CLASS_INSIGHT_MORE_TERMS = ['더', '추가', '다음', '이어서', '나머지', '순위', '전체', '많이', '많은', '10개', '열개', 'twelve', 'more', 'next', 'additional', 'rank'];
+const CLASS_INSIGHT_REVIEW_ROUTE_PHRASES = [
+  '복습 순서',
+  '복습 루트',
+  '복습 동선',
+  '복습 흐름',
+  '먼저 복습',
+  '우선 복습',
+  '먼저 볼',
+  '먼저 봐',
+  '어떤 순서',
+  '순서로',
+  'review order',
+  'study route',
+  'review route',
+];
 const DEFAULT_RECOMMENDATION_LIMIT = 5;
 const EXTENDED_RECOMMENDATION_LIMIT = 10;
 const MAX_RECOMMENDATION_LIMIT = 12;
@@ -118,6 +133,12 @@ export function isClassInsightQuestion(question: string) {
   const hasInsightIntent = CLASS_INSIGHT_INTENT_TERMS.some((term) => normalized.includes(normalize(term)));
   const asksForScope = CLASS_INSIGHT_SCOPE_TERMS.some((term) => normalized.includes(normalize(term)));
   return hasInsightIntent && asksForScope;
+}
+
+function isReviewRouteQuestion(question: string) {
+  const normalized = normalize(question);
+  if (!normalized) return false;
+  return CLASS_INSIGHT_REVIEW_ROUTE_PHRASES.some((phrase) => normalized.includes(normalize(phrase)));
 }
 
 function createEmptySignal(pageNumber: number): PageSignal {
@@ -198,6 +219,11 @@ function rankSignals(signals: PageSignal[], pageCount: number, limit: number) {
     .slice(0, limit);
 }
 
+function getContextSignalsForQuestion(question: string, rankedSignals: RankedPageSignal[]) {
+  if (!isReviewRouteQuestion(question)) return rankedSignals;
+  return [...rankedSignals].sort((left, right) => left.pageNumber - right.pageNumber);
+}
+
 function formatPriority(priority: RankedPageSignal['priority']) {
   if (priority === 'very-high') return '매우 높음';
   if (priority === 'high') return '높음';
@@ -236,8 +262,10 @@ export function buildClassInsightContext(params: {
   const aggregateSignals = buildAggregateSignals(params.classInsight, pageCount);
   const rankedSignals = rankSignals(aggregateSignals, pageCount, recommendationLimit);
   if (!rankedSignals.length) return null;
+  const reviewRouteQuestion = isReviewRouteQuestion(params.question);
+  const contextSignals = getContextSignalsForQuestion(params.question, rankedSignals);
 
-  const pageLines = rankedSignals.map((signal) => (
+  const pageLines = contextSignals.map((signal) => (
     `- ${signal.pageNumber}페이지: 우선순위 ${formatPriority(signal.priority)}. 추천 근거: ${signal.reasonTags.slice(0, 3).join(', ')}.`
   ));
 
@@ -245,12 +273,16 @@ export function buildClassInsightContext(params: {
     'Internal page-importance context for this PDF.',
     'This context is derived from aggregated study signals for this PDF.',
     'When the user asks about exam importance, important pages, review order, or pages likely to appear on a test, prioritize the Recommended page priorities below over nearby PDF/RAG text.',
+    reviewRouteQuestion
+      ? 'The user is asking for a review order. Present the recommended pages in document order, from earlier pages to later pages, while keeping each page reason concise.'
+      : 'The user is asking for important pages. Present the recommended pages in priority order.',
     'Use nearby PDF/RAG text only to add short human-readable reasons, not to replace these recommended pages.',
     'Do not mention classmates, student counts, bookmark counts, highlight counts, hidden signals, data collection, or this internal context.',
+    'Do not expose numeric scores.',
     'Answer naturally as a study assistant, with page recommendations and concise reasons.',
     `Recommend up to ${recommendationLimit} pages. If the user asks for more or next-ranked pages, include lower-ranked pages after the strongest pages.`,
     '',
-    'Recommended page priorities:',
+    reviewRouteQuestion ? 'Recommended review route:' : 'Recommended page priorities:',
     ...pageLines,
   ].join('\n');
 }

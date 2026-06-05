@@ -36,6 +36,13 @@ IMPORTANT_NOTE_KEYWORDS = (
     "주의",
 )
 PAGE_REFERENCE_PATTERN = re.compile(r"(\d{1,3})\s*(?:페이지|쪽|p(?:age)?\.?)", re.IGNORECASE)
+MAX_STROKES_PER_PAGE_STATE = 28
+MAX_POINTS_PER_PAGE_STATE = 900
+MAX_HIGHLIGHTS_PER_PAGE_STATE = 10
+MAX_BOOKMARKS_PER_PAGE_STATE = 1
+MAX_KEYWORD_HITS_PER_PAGE_STATE = 6
+MAX_PHOTO_REFERENCES_PER_PAGE_STATE = 5
+MAX_MEMO_PAGES_PER_PAGE_STATE = 4
 
 @dataclass
 class PageInsightAccumulator:
@@ -72,6 +79,22 @@ class PageInsightAccumulator:
     def ink_density(self) -> float:
         return min(1.0, (self.stroke_count * 0.045) + (self.point_count * 0.0015))
 
+    @property
+    def signal_diversity(self) -> int:
+        return sum(
+            1
+            for active in (
+                self.bookmark_count > 0,
+                self.highlight_count > 0,
+                self.keyword_hits > 0,
+                self.photo_reference_count > 0,
+                self.ai_question_count > 0,
+                self.memo_page_count > 0,
+                self.ink_density > 0.25,
+            )
+            if active
+        )
+
     def score(self) -> int:
         return min(100, round(
             self.bookmark_count * 7
@@ -81,6 +104,7 @@ class PageInsightAccumulator:
             + self.ai_question_count * 5
             + self.memo_page_count * 7
             + self.ink_density * 22
+            + max(0, self.signal_diversity - 1) * 4
             + max(0, len(self.participant_ids) - 1) * 8
             + max(0, len(self.note_ids) - 1) * 4
         ))
@@ -91,6 +115,8 @@ class PageInsightAccumulator:
             tags.append("복습 우선도가 높게 잡힌 페이지")
         elif len(self.participant_ids) >= 2:
             tags.append("복습 신호가 겹친 페이지")
+        if self.signal_diversity >= 3:
+            tags.append("여러 학습 신호가 함께 모인 페이지")
         if self.bookmark_count > 0:
             tags.append("중요 표시가 반복된 페이지")
         if self.highlight_count > 0:
@@ -150,6 +176,9 @@ def _table_exists(connection: Connection, table_name: str) -> bool:
 
 def _apply_page_state(accumulator: PageInsightAccumulator, state: dict[str, Any], *, user_id: int, note_id: int) -> None:
     had_activity = False
+    stroke_count = 0
+    point_count = 0
+    highlight_count = 0
 
     ink_strokes = state.get("inkStrokes")
     if isinstance(ink_strokes, list):
@@ -157,13 +186,17 @@ def _apply_page_state(accumulator: PageInsightAccumulator, state: dict[str, Any]
             if not isinstance(stroke, dict):
                 continue
             points = stroke.get("points")
-            point_count = len(points) if isinstance(points, list) else 0
-            accumulator.stroke_count += 1
-            accumulator.point_count += point_count
+            stroke_point_count = len(points) if isinstance(points, list) else 0
+            stroke_count += 1
+            point_count += stroke_point_count
             if stroke.get("style") == "highlight" or stroke.get("brush") == "highlighter":
-                accumulator.highlight_count += 1
+                highlight_count += 1
             had_activity = True
+        accumulator.stroke_count += min(stroke_count, MAX_STROKES_PER_PAGE_STATE)
+        accumulator.point_count += min(point_count, MAX_POINTS_PER_PAGE_STATE)
+        accumulator.highlight_count += min(highlight_count, MAX_HIGHLIGHTS_PER_PAGE_STATE)
 
+    keyword_hits = 0
     text_annotations = state.get("textAnnotations")
     if isinstance(text_annotations, list):
         for annotation in text_annotations:
@@ -172,8 +205,9 @@ def _apply_page_state(accumulator: PageInsightAccumulator, state: dict[str, Any]
             text = str(annotation.get("text") or "")
             hits = _count_keyword_hits(text)
             if hits > 0:
-                accumulator.keyword_hits += hits
+                keyword_hits += hits
                 had_activity = True
+        accumulator.keyword_hits += min(keyword_hits, MAX_KEYWORD_HITS_PER_PAGE_STATE)
 
     bookmark_count = _sum_state_counts(state, ("bookmarked", "bookmarkCount", "bookmark_count", "bookmarks"))
     photo_reference_count = _sum_state_counts(
@@ -190,13 +224,13 @@ def _apply_page_state(accumulator: PageInsightAccumulator, state: dict[str, Any]
     )
     memo_page_count = _sum_state_counts(state, ("memoPageCount", "memo_page_count", "memoPages", "generatedMemoPages"))
     if bookmark_count:
-        accumulator.bookmark_count += bookmark_count
+        accumulator.bookmark_count += min(bookmark_count, MAX_BOOKMARKS_PER_PAGE_STATE)
         had_activity = True
     if photo_reference_count:
-        accumulator.photo_reference_count += photo_reference_count
+        accumulator.photo_reference_count += min(photo_reference_count, MAX_PHOTO_REFERENCES_PER_PAGE_STATE)
         had_activity = True
     if memo_page_count:
-        accumulator.memo_page_count += memo_page_count
+        accumulator.memo_page_count += min(memo_page_count, MAX_MEMO_PAGES_PER_PAGE_STATE)
         had_activity = True
 
     if had_activity:
