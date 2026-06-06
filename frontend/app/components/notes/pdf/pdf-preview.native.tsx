@@ -238,6 +238,8 @@ function SelectionLassoOverlay(props: { points: InkPoint[] }) {
 
 export function PdfPreview(props: {
   file: number | string | { uri: string };
+  viewStateKey?: string | null;
+  pageAlign?: 'center' | 'start' | 'end';
   page: number;
   inkTool: InkTool;
   fingerDrawingEnabled?: boolean;

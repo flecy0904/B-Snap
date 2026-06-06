@@ -4,6 +4,7 @@ import { ActivityIndicator, Image, Platform, Pressable, ScrollView, Text, TextIn
 
 import { hasUsefulAiCanvasMarkdown } from '../../../hooks/notes/ai-canvas/use-ai-canvas-notes';
 import { isCanvasCreateRequest } from '../../../hooks/notes/ai-canvas/canvas-command-intent';
+import { useAppKeyboardInset } from '../../../hooks/notes/use-app-keyboard-inset';
 import { useDelayedTooltip } from '../../../hooks/notes/use-delayed-tooltip';
 import AiCanvasMarkdownEditor from './ai-canvas-markdown-editor.dom';
 import { useDesktopNotesWorkspaceContext } from '../workspace/notes-workspace-context';
@@ -60,6 +61,7 @@ export function NotesAiCanvasPanel() {
   const webCanvasResizeDraggingRef = React.useRef(false);
   const webCanvasResizeRef = React.useRef<WebCanvasResizeState | null>(null);
   const isAppAiCanvasSidebar = Boolean(workspace.isAppAiCanvasSidebarPanel);
+  const appKeyboardInset = useAppKeyboardInset(isAppAiCanvasSidebar);
   const isWebAiCanvasPanel = Platform.OS === 'web' && !isAppAiCanvasSidebar;
   const isNativeApp = Platform.OS !== 'web';
   const canvasEditModeEnabled = !isNativeApp || nativeEditorMode === 'edit';
@@ -72,6 +74,7 @@ export function NotesAiCanvasPanel() {
   const miniCommandReady = Boolean(miniCommand.trim());
   const canvasManagementDisabled = canvasControlsLocked || canvas.loading || canvas.saving;
   const resizeWebAiCanvasPanel = workspace.onResizeWebAiCanvasPanel;
+  const appKeyboardAvoidingStyle = appKeyboardInset > 0 ? { paddingBottom: appKeyboardInset + 12 } : null;
 
   React.useEffect(() => {
     webCanvasWidthRef.current = workspace.webAiCanvasPanelWidth;
@@ -545,6 +548,7 @@ export function NotesAiCanvasPanel() {
         isWebAiCanvasPanel && workspace.styles.aiCanvasWebAttachedPanel,
         isWebAiCanvasPanel && { width: workspace.webAiCanvasPanelWidth },
         isAppAiCanvasSidebar && workspace.styles.appRightSidebarAiCanvasPanel,
+        appKeyboardAvoidingStyle,
       ]}
     >
       {noteListOpen ? (

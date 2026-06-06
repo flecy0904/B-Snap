@@ -30,6 +30,7 @@ Use app-friendly plain text, not raw Markdown decoration:
 - For page recommendations, use this exact style:
   추천 페이지
   • 13페이지: 핵심 개념이 모인 부분입니다.
+  • 14-16페이지: 이어지는 개념을 한 번에 복습하기 좋습니다.
   • 21페이지: 시험 대비로 같이 보면 좋습니다.
 - Keep each bullet to one short sentence.
 - End with one short next-step sentence only when helpful.

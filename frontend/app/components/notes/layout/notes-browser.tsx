@@ -46,11 +46,13 @@ export type NotesBrowserProps = {
   onOpenPageCaptureReference: (referenceId: string) => void;
   onAskAiAboutPageCaptureReference: (referenceId: string) => void;
   onRemoveCaptureAsset: (assetId: string) => void;
+  isWeb?: boolean;
 };
 
 export function NotesBrowser(props: NotesBrowserProps) {
   const [recoveryOpen, setRecoveryOpen] = React.useState(false);
   const [previewAssetId, setPreviewAssetId] = React.useState<string | null>(null);
+  const isWeb = Boolean(props.isWeb);
   const subjectById = React.useMemo(() => {
     const map = new Map<number, Subject>();
     allSubjects.forEach((subject) => map.set(subject.id, subject));
@@ -103,21 +105,44 @@ export function NotesBrowser(props: NotesBrowserProps) {
     () => selectedPhotoAssets.find((asset) => asset.id === previewAssetId) ?? null,
     [previewAssetId, selectedPhotoAssets],
   );
+  const visibleItemCount = props.noteMode === 'photo' ? selectedPhotoAssets.length : props.studyDocuments.length;
+  const totalItemCount = props.noteMode === 'photo'
+    ? Object.values(props.captureAssetsBySubject).reduce((total, assets) => (
+        total + assets.filter((asset) => asset.type === 'image' && asset.status !== 'dismissed').length
+      ), 0)
+    : props.allStudyDocuments.length;
+  const itemUnit = props.noteMode === 'photo' ? '장' : '개';
+  const scopeLabel = props.selectedSubject?.name ?? '전체 과목';
 
   React.useEffect(() => {
     if (recoverableCount === 0) setRecoveryOpen(false);
   }, [recoverableCount]);
 
   return (
-    <ScrollView style={props.styles.main} contentContainerStyle={[props.styles.desktopPage, props.compact && props.styles.desktopPageCompact]}>
-      <View style={props.styles.desktopNotesTopRow}>
-        <View><Text style={[props.styles.desktopTitle, props.compact && props.styles.desktopTitleCompact]}>{props.noteMode === 'photo' ? 'Photo' : 'Note'}</Text></View>
+    <ScrollView style={props.styles.main} contentContainerStyle={[props.styles.desktopPage, props.compact && props.styles.desktopPageCompact, isWeb && props.styles.webDesktopPage]}>
+      <View style={isWeb ? props.styles.webPageHeader : props.styles.desktopNotesTopRow}>
+        <View style={isWeb ? props.styles.webPageHeaderMeta : undefined}>
+          {isWeb ? <Text style={props.styles.desktopCaption}>{scopeLabel}</Text> : null}
+          <Text style={[props.styles.desktopTitle, props.compact && props.styles.desktopTitleCompact]}>{props.noteMode === 'photo' ? 'Photo' : 'Note'}</Text>
+          {isWeb ? (
+            <View style={props.styles.webNotesHeaderStats}>
+              <View style={props.styles.webNotesHeaderStat}>
+                <MaterialCommunityIcons name={props.noteMode === 'photo' ? 'image-multiple-outline' : 'file-document-outline'} size={14} color="#4F68D2" />
+                <Text style={props.styles.webNotesHeaderStatText}>{visibleItemCount}{itemUnit} 표시</Text>
+              </View>
+              <View style={props.styles.webNotesHeaderStat}>
+                <MaterialCommunityIcons name="folder-multiple-outline" size={14} color="#617083" />
+                <Text style={props.styles.webNotesHeaderStatText}>전체 {totalItemCount}{itemUnit}</Text>
+              </View>
+            </View>
+          ) : null}
+        </View>
         <View style={props.styles.desktopModeSegment}>
           <Pressable style={[props.styles.desktopModeButton, props.noteMode === 'note' && props.styles.desktopModeButtonActive]} onPress={() => props.onChangeMode('note')}><Text style={[props.styles.desktopModeButtonText, props.noteMode === 'note' && props.styles.desktopModeButtonTextActive]}>Note</Text></Pressable>
           <Pressable style={[props.styles.desktopModeButton, props.noteMode === 'photo' && props.styles.desktopModeButtonActive]} onPress={() => props.onChangeMode('photo')}><Text style={[props.styles.desktopModeButtonText, props.noteMode === 'photo' && props.styles.desktopModeButtonTextActive]}>Photo</Text></Pressable>
         </View>
       </View>
-      <View style={props.styles.desktopFilters}>
+      <View style={[props.styles.desktopFilters, isWeb && props.styles.webLibrarySearchCard]}>
         <View style={props.styles.desktopSearch}>
           <Text style={props.styles.searchIcon}>⌕</Text>
           <TextInput value={props.query} onChangeText={props.onQuery} placeholder={props.noteMode === 'photo' ? 'Photo 검색' : 'Note 검색'} placeholderTextColor="#C3C8D5" style={props.styles.searchInput} />
@@ -134,7 +159,9 @@ export function NotesBrowser(props: NotesBrowserProps) {
             <Pressable style={props.styles.desktopFilterButton} onPress={props.onUploadPdf}><Text style={props.styles.desktopFilterButtonText}>PDF 업로드</Text></Pressable>
           </>
         ) : null}
-        <Pressable style={props.styles.desktopFilterButton} onPress={props.onReset}><Text style={props.styles.desktopFilterButtonText}>초기화</Text></Pressable>
+        {!isWeb ? (
+          <Pressable style={props.styles.desktopFilterButton} onPress={props.onReset}><Text style={props.styles.desktopFilterButtonText}>초기화</Text></Pressable>
+        ) : null}
       </View>
       {recoveryOpen && recoverableCount ? (
         <View style={props.styles.recoveryPanel}>
@@ -171,10 +198,10 @@ export function NotesBrowser(props: NotesBrowserProps) {
           })}
         </View>
       ) : null}
-      <View style={[props.styles.desktopNotesLayout, props.compact && props.styles.desktopNotesLayoutCompact]}>
-        <View style={[props.styles.desktopSubjects, props.compact && props.styles.desktopSubjectsCompact]}>
+      <View style={[props.styles.desktopNotesLayout, props.compact && props.styles.desktopNotesLayoutCompact, isWeb && props.styles.webLibraryShell]}>
+        <View style={[props.styles.desktopSubjects, props.compact && props.styles.desktopSubjectsCompact, isWeb && props.styles.webSubjectList]}>
           {props.subjects.map((item) => (
-            <Pressable key={item.id} style={[props.styles.subjectRow, props.selectedSubject?.id === item.id && { borderColor: item.color, backgroundColor: '#FFFFFF' }, props.selectedSubject?.id === item.id && props.styles.subjectRowActive]} onPress={() => props.onOpenSubject(item.id)}>
+            <Pressable key={item.id} style={[props.styles.subjectRow, isWeb && props.styles.webSubjectRow, props.selectedSubject?.id === item.id && { borderColor: item.color, backgroundColor: '#FFFFFF' }, props.selectedSubject?.id === item.id && props.styles.subjectRowActive]} onPress={() => props.onOpenSubject(item.id)}>
               <View style={[props.styles.subjectIconBox, { backgroundColor: item.bgColor }, props.selectedSubject?.id === item.id && { backgroundColor: item.color }]}>
                 <View style={[props.styles.subjectDot, { backgroundColor: darkenHex(item.bgColor, 0.28) }]} />
               </View>
@@ -187,10 +214,10 @@ export function NotesBrowser(props: NotesBrowserProps) {
             </Pressable>
           ))}
         </View>
-        <View style={props.styles.fill}>
+        <View style={[props.styles.fill, isWeb && props.styles.webLibraryContent]}>
           {props.noteMode === 'photo' ? (
             selectedPhotoAssets.length ? (
-              <View style={props.styles.photoGalleryPanel}>
+              <View style={[props.styles.photoGalleryPanel, isWeb && props.styles.webLibraryCard]}>
                 <View style={props.styles.photoGalleryHeader}>
                   <View>
                     <Text style={props.styles.photoGalleryTitle}>{photoGalleryTitle}</Text>
@@ -231,10 +258,25 @@ export function NotesBrowser(props: NotesBrowserProps) {
             ) : (
               <View style={props.styles.emptyCard}>
                 <Text style={props.styles.emptyTitle}>저장된 이미지가 없습니다.</Text>
+                {isWeb ? <Text style={props.styles.emptyBody}>캡처 탭에서 이미지를 올리면 이곳에서 과목별로 정리됩니다.</Text> : null}
               </View>
             )
           ) : (
-            <View style={props.styles.desktopDocumentsPanel}>
+            <View style={[props.styles.desktopDocumentsPanel, isWeb && props.styles.webLibraryCard]}>
+              {isWeb ? (
+                <View style={props.styles.webDocumentsHeader}>
+                  <View style={props.styles.fill}>
+                    <Text style={props.styles.webDocumentsTitle} numberOfLines={1}>{scopeLabel}</Text>
+                    <Text style={props.styles.webDocumentsMeta}>{visibleItemCount}{itemUnit} · {props.sort === 'latest' ? '최신순' : '오래된순'}</Text>
+                  </View>
+                  {props.noteMode === 'note' ? (
+                    <View style={props.styles.webDocumentsTypeBadge}>
+                      <MaterialCommunityIcons name="note-edit-outline" size={14} color="#4F68D2" />
+                      <Text style={props.styles.webDocumentsTypeText}>Note</Text>
+                    </View>
+                  ) : null}
+                </View>
+              ) : null}
               {props.studyDocuments.length ? props.studyDocuments.map((item) => {
                 const subject = findSubject(item.subjectId);
                 const subjectColor = subject?.color ?? '#D6DCE8';
@@ -242,7 +284,7 @@ export function NotesBrowser(props: NotesBrowserProps) {
                 const isImage = item.type === 'image';
                 const documentPreviewUri = item.thumbnailUrl ?? (!isPdf && typeof item.file === 'object' && item.file && 'uri' in item.file ? item.file.uri : null);
                 return (
-                  <Pressable key={item.id} style={props.styles.documentListCard} onPress={() => props.onOpenStudyDocument(item.id)}>
+                  <Pressable key={item.id} style={[props.styles.documentListCard, isWeb && props.styles.webDocumentCard]} onPress={() => props.onOpenStudyDocument(item.id)}>
                     <View style={[props.styles.documentListRail, { backgroundColor: subjectColor }]} />
                     <View style={[props.styles.documentThumb, { backgroundColor: isPdf ? '#F6F8FE' : isImage ? '#F3FAF7' : '#EEF1F6' }]}>
                       {documentPreviewUri ? (
@@ -261,7 +303,7 @@ export function NotesBrowser(props: NotesBrowserProps) {
                       <Text style={props.styles.documentMeta}>{item.updatedAt} · {item.pageCount}페이지</Text>
                     </View>
                     <Pressable
-                      style={props.styles.libraryDeleteButton}
+                      style={[props.styles.libraryDeleteButton, isWeb && props.styles.webLibraryDeleteButton]}
                       onPress={(event) => {
                         event.stopPropagation();
                         props.onDeleteStudyDocument(item.id);
@@ -271,7 +313,24 @@ export function NotesBrowser(props: NotesBrowserProps) {
                     </Pressable>
                   </Pressable>
                 );
-              }) : <View style={props.styles.emptyCard}><Text style={props.styles.emptyTitle}>문서가 없어요.</Text></View>}
+              }) : (
+                <View style={[props.styles.emptyCard, isWeb && props.styles.webLibraryEmptyCard]}>
+                  <Text style={props.styles.emptyTitle}>문서가 없어요.</Text>
+                  {isWeb ? (
+                    <>
+                      <Text style={props.styles.emptyBody}>빈 노트를 만들거나 PDF를 업로드해서 수업 자료를 정리해보세요.</Text>
+                      <View style={props.styles.webLibraryEmptyActions}>
+                        <Pressable style={[props.styles.desktopFilterButton, props.styles.desktopPrimaryAction]} onPress={props.onCreateBlankNote}>
+                          <Text style={[props.styles.desktopFilterButtonText, props.styles.desktopPrimaryActionText]}>+ 새 노트</Text>
+                        </Pressable>
+                        <Pressable style={props.styles.desktopFilterButton} onPress={props.onUploadPdf}>
+                          <Text style={props.styles.desktopFilterButtonText}>PDF 업로드</Text>
+                        </Pressable>
+                      </View>
+                    </>
+                  ) : null}
+                </View>
+              )}
             </View>
           )}
         </View>

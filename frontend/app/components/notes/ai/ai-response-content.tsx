@@ -19,7 +19,8 @@ type TextBlock = {
 };
 
 type RecommendationItem = {
-  pageNumber: number;
+  startPageNumber: number;
+  endPageNumber: number;
   body: string;
 };
 
@@ -37,7 +38,7 @@ type SectionBlock = {
 type AiContentBlock = TextBlock | RecommendationBlock | SectionBlock;
 
 const RECOMMENDATION_HEADING_PATTERN = /^\s*(추천\s*페이지|먼저\s*볼\s*페이지|중요\s*페이지)\s*[:：]?\s*$/i;
-const RECOMMENDATION_LINE_PATTERN = /^\s*(?:[•*-]\s*)?(?:\d+[.)]\s*)?(\d{1,3})\s*(?:페이지|쪽|p(?:age)?\.?)\s*[:：-]\s*(.+)$/i;
+const RECOMMENDATION_LINE_PATTERN = /^\s*(?:[•*-]\s*)?(?:\d+[.)]\s*)?(\d{1,3})(?:\s*[-~–—]\s*(\d{1,3}))?\s*(?:페이지|쪽|p(?:age)?\.?)\s*[:：-]\s*(.+)$/i;
 const SECTION_HEADING_PATTERN = /^\s*(추천\s*이유|이유|근거|복습\s*순서|공부\s*순서|시험\s*포인트|핵심\s*포인트|다음\s*단계|먼저\s*볼\s*내용|정리)\s*[:：]?\s*$/i;
 const INLINE_SECTION_PATTERN = /^\s*(추천\s*이유|이유|근거|복습\s*순서|공부\s*순서|시험\s*포인트|핵심\s*포인트|다음\s*단계|먼저\s*볼\s*내용|정리)\s*[:：]\s*(.+)$/i;
 
@@ -52,10 +53,12 @@ function parseRecommendationLine(line: string): RecommendationItem | null {
   const match = normalizeAiLine(line).match(RECOMMENDATION_LINE_PATTERN);
   if (!match) return null;
 
-  const pageNumber = Number(match[1]);
-  const body = match[2]?.trim();
-  if (!Number.isFinite(pageNumber) || !body) return null;
-  return { pageNumber, body };
+  const startPageNumber = Number(match[1]);
+  const rawEndPageNumber = match[2] ? Number(match[2]) : startPageNumber;
+  const body = match[3]?.trim();
+  if (!Number.isFinite(startPageNumber) || !Number.isFinite(rawEndPageNumber) || !body) return null;
+  const endPageNumber = Math.max(startPageNumber, rawEndPageNumber);
+  return { startPageNumber, endPageNumber, body };
 }
 
 function parseSectionHeading(line: string) {
@@ -240,6 +243,11 @@ export function AiResponseContent({
 }: AiResponseContentProps) {
   const maxPage = pageCount && pageCount > 0 ? pageCount : Number.POSITIVE_INFINITY;
   const blocks = React.useMemo(() => parseAiContent(content), [content]);
+  const getRecommendationPageLabel = (item: RecommendationItem) => (
+    item.startPageNumber === item.endPageNumber
+      ? `${item.startPageNumber}p`
+      : `${item.startPageNumber}-${item.endPageNumber}p`
+  );
 
   return (
     <View style={styles.aiStructuredContent}>
@@ -288,16 +296,16 @@ export function AiResponseContent({
             </View>
             <View style={styles.aiPageRecommendationList}>
               {block.items.map((item) => {
-                const canOpen = Boolean(onOpenPage) && item.pageNumber >= 1 && item.pageNumber <= maxPage;
+                const canOpen = Boolean(onOpenPage) && item.startPageNumber >= 1 && item.startPageNumber <= maxPage;
                 return (
                   <Pressable
-                    key={`${blockIndex}-${item.pageNumber}-${item.body}`}
+                    key={`${blockIndex}-${item.startPageNumber}-${item.endPageNumber}-${item.body}`}
                     style={styles.aiPageRecommendationItem}
-                    onPress={canOpen ? () => onOpenPage?.(item.pageNumber) : undefined}
+                    onPress={canOpen ? () => onOpenPage?.(item.startPageNumber) : undefined}
                     disabled={!canOpen}
                   >
                     <View style={styles.aiPageRecommendationPill}>
-                      <Text style={styles.aiPageRecommendationPillText}>{item.pageNumber}p</Text>
+                      <Text style={styles.aiPageRecommendationPillText}>{getRecommendationPageLabel(item)}</Text>
                     </View>
                     <Text style={styles.aiPageRecommendationBody}>{item.body}</Text>
                     {canOpen ? (

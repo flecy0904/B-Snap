@@ -34,6 +34,7 @@ export interface DesktopScheduleProps {
   onAddSubject: (name: string, slots: TimetableSlotInput[]) => void;
   onRemoveSubject: (entryId: number) => void;
   compact: boolean;
+  isWeb?: boolean;
   styles: any;
 }
 

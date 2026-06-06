@@ -2,7 +2,6 @@ import React from 'react';
 import { Platform, Pressable, ScrollView, Text, View } from 'react-native';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { useDocumentContext } from './document-context';
-import { useCanvasContext } from '../canvas/canvas-context';
 import { NotebookPage, NotebookPageTemplate } from '../../../types';
 import { useDesktopNotesWorkspaceContext } from './notes-workspace-context';
 import { FloatingToolPalette } from './floating-tool-palette';
@@ -135,7 +134,6 @@ export function NotesPageListOverlay() {
 export const NotesWorkspaceToolbar = React.memo(function NotesWorkspaceToolbar() {
   const workspaceContext = useDesktopNotesWorkspaceContext();
   const documentContext = useDocumentContext();
-  const canvasContext = useCanvasContext();
   const [blankTemplateMenuOpen, setBlankTemplateMenuOpen] = React.useState(false);
   const usesAppAiPanelLayout = Boolean(workspaceContext.usesAppAiPanelLayout);
   const useWebAttachedToolbar = Platform.OS === 'web' && !usesAppAiPanelLayout;
@@ -169,7 +167,7 @@ export const NotesWorkspaceToolbar = React.memo(function NotesWorkspaceToolbar()
             <View style={workspaceContext.styles.inkToolbarReadModeRailSoft} />
           </View>
         ) : null}
-        <View style={[workspaceContext.styles.documentPageNavigator, { position: 'relative' }]}>
+        <View style={[workspaceContext.styles.documentPageNavigator, workspaceContext.styles.inkToolbarLeftGroup]}>
           <Pressable
             style={[
               workspaceContext.styles.inkActionButton,
@@ -233,9 +231,6 @@ export const NotesWorkspaceToolbar = React.memo(function NotesWorkspaceToolbar()
             <MaterialCommunityIcons name={documentContext.currentPageBookmarked ? 'star' : 'star-outline'} size={18} color={documentContext.currentPageBookmarked ? '#D97706' : '#556070'} />
             {documentContext.currentPageBookmarked ? <View pointerEvents="none" style={workspaceContext.styles.bookmarkActionButtonDot} /> : null}
           </Pressable>
-          <Pressable style={workspaceContext.styles.inkActionButton} onPress={documentContext.onExportCurrentDocument}>
-            <MaterialCommunityIcons name="share-variant-outline" size={18} color="#556070" />
-          </Pressable>
           <Pressable
             style={[
               workspaceContext.styles.inkActionButton,
@@ -253,8 +248,8 @@ export const NotesWorkspaceToolbar = React.memo(function NotesWorkspaceToolbar()
           ) : null}
         </View>
 
-        <View style={workspaceContext.styles.inkToolbarTools}>
-          {!readMode ? (
+        {!readMode ? (
+          <View style={workspaceContext.styles.inkToolbarEditGroup}>
             <View style={workspaceContext.styles.inkSecondaryCluster}>
               <Pressable
                 style={[
@@ -276,59 +271,55 @@ export const NotesWorkspaceToolbar = React.memo(function NotesWorkspaceToolbar()
               >
                 <MaterialCommunityIcons name="redo-variant" size={18} color={workspaceContext.canRedoFocusedWorkspaceAction ? '#556070' : '#A8B0BF'} />
               </Pressable>
-              <Pressable style={workspaceContext.styles.inkActionButton} onPress={canvasContext.clearInk}>
-                <MaterialCommunityIcons name="trash-can-outline" size={18} color="#556070" />
-              </Pressable>
             </View>
-          ) : null}
-
-          {!readMode ? <View style={workspaceContext.styles.inkToolbarDivider} /> : null}
-
-          <View style={workspaceContext.styles.inkSecondaryCluster}>
-            <Pressable
-              style={[
-                workspaceContext.styles.inkActionButton,
-                workspaceContext.styles.aiIconButton,
-                chatToolActive && workspaceContext.styles.aiIconButtonActive,
-              ]}
-              onPress={() => {
-                if (usesAppAiPanelLayout) {
-                  workspaceContext.onOpenAppChatSidebar();
-                  return;
-                }
-                workspaceContext.onToggleAiPanel();
-              }}
-            >
-              <MaterialCommunityIcons name="star-four-points" size={18} color={chatToolActive ? '#5A74E8' : '#7786D8'} />
-            </Pressable>
-            <Pressable
-              style={[
-                workspaceContext.styles.inkActionButton,
-                workspaceContext.styles.aiCanvasToolbarButton,
-                canvasToolActive && workspaceContext.styles.aiCanvasToolbarButtonActive,
-              ]}
-              onPress={() => {
-                if (usesAppAiPanelLayout) {
-                  workspaceContext.onOpenAppAiCanvasSidebar();
-                  return;
-                }
-                workspaceContext.aiCanvas.toggle();
-              }}
-            >
-              <MaterialCommunityIcons name="note-text-outline" size={18} color={canvasToolActive ? '#5A74E8' : '#77839A'} />
-            </Pressable>
-            {usesAppAiPanelLayout && workspaceContext.appRightSidebarPanel ? (
-              <Pressable style={workspaceContext.styles.inkActionButton} onPress={workspaceContext.onToggleAppSidebarPosition}>
-                <MaterialCommunityIcons
-                  name={workspaceContext.appSidebarPosition === 'left' ? 'dock-right' : 'dock-left'}
-                  size={18}
-                  color="#556070"
-                />
-              </Pressable>
-            ) : null}
+            <View style={workspaceContext.styles.inkToolbarDivider} />
+            <FloatingToolPalette />
           </View>
+        ) : null}
+
+        <View style={[workspaceContext.styles.inkSecondaryCluster, workspaceContext.styles.inkToolbarAiGroup]}>
+          <Pressable
+            style={[
+              workspaceContext.styles.inkActionButton,
+              workspaceContext.styles.aiIconButton,
+              chatToolActive && workspaceContext.styles.aiIconButtonActive,
+            ]}
+            onPress={() => {
+              if (usesAppAiPanelLayout) {
+                workspaceContext.onOpenAppChatSidebar();
+                return;
+              }
+              workspaceContext.onToggleAiPanel();
+            }}
+          >
+            <MaterialCommunityIcons name="star-four-points" size={18} color={chatToolActive ? '#5A74E8' : '#7786D8'} />
+          </Pressable>
+          <Pressable
+            style={[
+              workspaceContext.styles.inkActionButton,
+              workspaceContext.styles.aiCanvasToolbarButton,
+              canvasToolActive && workspaceContext.styles.aiCanvasToolbarButtonActive,
+            ]}
+            onPress={() => {
+              if (usesAppAiPanelLayout) {
+                workspaceContext.onOpenAppAiCanvasSidebar();
+                return;
+              }
+              workspaceContext.aiCanvas.toggle();
+            }}
+          >
+            <MaterialCommunityIcons name="note-text-outline" size={18} color={canvasToolActive ? '#5A74E8' : '#77839A'} />
+          </Pressable>
+          {usesAppAiPanelLayout && workspaceContext.appRightSidebarPanel ? (
+            <Pressable style={workspaceContext.styles.inkActionButton} onPress={workspaceContext.onToggleAppSidebarPosition}>
+              <MaterialCommunityIcons
+                name={workspaceContext.appSidebarPosition === 'left' ? 'dock-right' : 'dock-left'}
+                size={18}
+                color="#556070"
+              />
+            </Pressable>
+          ) : null}
         </View>
-        {!readMode ? <FloatingToolPalette /> : null}
       </View>
     </View>
   );

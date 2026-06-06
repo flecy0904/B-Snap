@@ -4,14 +4,20 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import { subjects as fallbackSubjects } from '../../app-defaults';
 import { createCaptureAsset, useSyncBridge, useSyncBridgeStatus } from '../use-sync-bridge';
-import { BackendApiError, createBackendCaptureUploadJob, getBackendCaptureUploadJob, isBackendApiEnabled, type BackendCaptureUploadJob, type BackendUpload } from '../../services/backend-api';
+import { BackendApiError, createBackendCaptureUploadJob, getBackendCaptureUploadJob, isBackendApiEnabled, type BackendCaptureUploadJob, type BackendUpload, uploadBackendFile } from '../../services/backend-api';
 import type { CaptureAsset, CaptureProcessingStage, CaptureProcessingState, Subject } from '../../types';
 import { buildEmptyStudyWorkspaceState, loadStudyWorkspaceState, saveStudyWorkspaceState } from '../../storage/local-workspace-store';
 import { cleanAiDisplayText } from '../../ui-helpers';
 
 type UploadResult = BackendUpload;
+type CapturePendingAction = 'camera' | 'library' | 'drop';
 type PreprocessingFallbackChoice = 'continue' | 'use-original' | 'cancel';
 type ProcessingSource = CaptureProcessingState['source'];
+export type DroppedCaptureFile = {
+  uri: string;
+  name: string;
+  type: string;
+};
 
 const PROCESSING_DISMISS_DELAY_MS = 650;
 const PHOTO_VIEWER_OPEN_DELAY_MS = PROCESSING_DISMISS_DELAY_MS + 120;
@@ -110,7 +116,7 @@ export function useCaptureWorkspace(props: {
   const syncBridge = useSyncBridge();
   const syncStatus = useSyncBridgeStatus();
   const [recentUploads, setRecentUploads] = useState<CaptureAsset[]>([]);
-  const [pendingAction, setPendingAction] = useState<'camera' | 'library' | null>(null);
+  const [pendingAction, setPendingAction] = useState<CapturePendingAction | null>(null);
   const [lastFailedAction, setLastFailedAction] = useState<'camera' | 'library' | null>(null);
   const [captureFeedback, setCaptureFeedback] = useState<string | null>(null);
   const [captureError, setCaptureError] = useState<string | null>(null);
@@ -218,6 +224,14 @@ export function useCaptureWorkspace(props: {
       return `실시간 업로드 서버 없이 이 기기에서만 ${assetLabel}를 저장했습니다.`;
     }
     return `${assetLabel}를 업로드했어요.`;
+  };
+
+  const normalizeDroppedFileType = (file: DroppedCaptureFile) => {
+    const type = file.type || '';
+    const lowerName = file.name.toLowerCase();
+    if (type.startsWith('image/') || /\.(png|jpe?g|webp|gif)$/i.test(lowerName)) return 'image';
+    if (type === 'application/pdf' || /\.pdf$/i.test(lowerName)) return 'pdf';
+    return null;
   };
 
   const pushAsset = async (asset: CaptureAsset) => {
@@ -394,6 +408,104 @@ export function useCaptureWorkspace(props: {
     }
   };
 
+  const importDroppedFile = async (file: DroppedCaptureFile) => {
+    if (!subject || pendingAction) return;
+    const droppedType = normalizeDroppedFileType(file);
+    setCaptureFeedback(null);
+    setCaptureError(null);
+    setLastFailedAction(null);
+
+    if (!droppedType) {
+      setCaptureError('이미지 또는 PDF 파일만 업로드할 수 있습니다.');
+      return;
+    }
+
+    setPendingAction('drop');
+    try {
+      if (droppedType === 'image') {
+        showProcessingModal('library', file.uri);
+        let previewUri = file.uri;
+        let backendUpload: UploadResult | null = null;
+
+        if (isBackendApiEnabled()) {
+          backendUpload = await uploadCaptureImageWithProgress({
+            uri: file.uri,
+            name: file.name || `${subject.name} 웹 업로드 이미지.jpg`,
+            type: file.type || 'image/jpeg',
+          });
+          previewUri = backendUpload.url;
+        }
+
+        if (isTargetDetectionFallback(backendUpload)) {
+          setProcessingStage('target-detecting');
+          await wait(120);
+        }
+        const fallbackChoice = await resolvePreprocessingFallbackChoice(backendUpload);
+        if (fallbackChoice === 'cancel') {
+          hideProcessingModal();
+          setCaptureFeedback('이미지 저장을 취소 할게요.');
+          return;
+        }
+
+        const newAsset = createCaptureAsset({
+          subjectId: subject.id,
+          subjectName: subject.name,
+          type: 'image',
+          source: 'library',
+          fileName: file.name || `${subject.name} 웹 업로드 이미지`,
+        });
+        newAsset.fileUrl = previewUri;
+        newAsset.thumbnailUrl = previewUri;
+        newAsset.previewImageKey = file.uri.startsWith('data:image/') ? file.uri : newAsset.previewImageKey;
+        newAsset.createdAt = '방금 전 · web';
+        newAsset.sourceDeviceLabel = 'Web upload';
+        if (backendUpload) applyUploadAnalysis(newAsset, backendUpload, { useOriginalImage: fallbackChoice === 'use-original' });
+
+        await pushAsset(newAsset);
+        completeProcessingModal(newAsset.id);
+        return;
+      }
+
+      let backendUpload: UploadResult | null = null;
+      let fileUrl = file.uri;
+      let thumbnailUrl: string | undefined;
+      let pageCount: number | undefined;
+
+      if (isBackendApiEnabled()) {
+        backendUpload = await uploadBackendFile({
+          uri: file.uri,
+          name: file.name || `${subject.name} 웹 업로드.pdf`,
+          type: file.type || 'application/pdf',
+        });
+        fileUrl = backendUpload.url;
+        thumbnailUrl = backendUpload.thumbnail_url ?? undefined;
+        pageCount = backendUpload.page_count || undefined;
+      }
+
+      const newAsset = createCaptureAsset({
+        subjectId: subject.id,
+        subjectName: subject.name,
+        type: 'pdf',
+        source: 'document',
+        fileName: file.name || `${subject.name} 웹 업로드.pdf`,
+        pageCount,
+      });
+      newAsset.fileUrl = fileUrl;
+      newAsset.thumbnailUrl = thumbnailUrl;
+      newAsset.pageCount = pageCount ?? newAsset.pageCount;
+      newAsset.createdAt = '방금 전 · web';
+      newAsset.sourceDeviceLabel = 'Web upload';
+      if (backendUpload?.filename) newAsset.title = backendUpload.filename;
+
+      await pushAsset(newAsset);
+    } catch (error) {
+      hideProcessingModal();
+      setCaptureError(getCaptureErrorMessage(error, '파일을 업로드하지 못했습니다.'));
+    } finally {
+      setPendingAction(null);
+    }
+  };
+
   const retryLastFailedAction = async () => {
     if (!lastFailedAction || pendingAction) return;
     if (lastFailedAction === 'camera') {
@@ -419,5 +531,6 @@ export function useCaptureWorkspace(props: {
     consumeCompletedPreviewAsset,
     captureFromCamera,
     pickImageFromLibrary,
+    importDroppedFile,
   };
 }

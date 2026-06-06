@@ -17,6 +17,7 @@ interface TimetableBaseProps {
   onOpenSubject: (id: number) => void;
   onRemoveSubject?: (entryId: number) => void;
   styles: any;
+  isWeb?: boolean;
 }
 
 function findEntrySubject(entry: TimetableEntry, subjects?: Subject[]) {
@@ -114,7 +115,7 @@ export function MobileTimetableCard(props: TimetableBaseProps & { currentTime: n
 
 export function DesktopTimetableBoard(props: TimetableBaseProps & { compact: boolean }) {
   return (
-    <View style={[props.styles.desktopBoard, props.compact && props.styles.desktopBoardCompact]}>
+    <View style={[props.styles.desktopBoard, props.isWeb && props.styles.webDesktopBoard, props.compact && props.styles.desktopBoardCompact]}>
       <View style={props.styles.timetableHeader}>
         <View style={[props.styles.timeColumnSpacer, { width: 64 }]} />
         {DAYS.map((day) => (

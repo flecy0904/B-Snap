@@ -1,6 +1,6 @@
 import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { ActivityIndicator, Image, Pressable, ScrollView, Text, View } from 'react-native';
+import { ActivityIndicator, Image, Platform, Pressable, ScrollView, Text, View } from 'react-native';
 import { BlankNoteCanvas } from '../canvas/blank-note-canvas';
 import { PdfPreview } from '../pdf/pdf-preview';
 import { useNotesGlobalContext } from './notes-global-context';
@@ -38,7 +38,10 @@ export const NotesDocumentViewer = React.memo(function NotesDocumentViewer() {
 
   const pdfSurfaceFile = documentContext.studyDocument?.file;
   const usePdfSurfaceDocument = (
-    (documentContext.studyDocument?.type === 'pdf' || documentContext.studyDocument?.type === 'blank')
+    (
+      documentContext.studyDocument?.type === 'pdf'
+      || (Platform.OS !== 'web' && documentContext.studyDocument?.type === 'blank')
+    )
     && pdfSurfaceFile
   );
 
@@ -54,10 +57,19 @@ export const NotesDocumentViewer = React.memo(function NotesDocumentViewer() {
       : canvasContext.imageAnnotations;
     const readMode = globalContext.studyInteractionMode === 'read';
     const effectiveInkTool = readMode ? 'view' : canvasContext.inkTool;
+    const webChatSidebarOpen = !globalContext.usesAppAiPanelLayout && globalContext.aiPanelOpen && globalContext.aiPanelMode === 'sidebar';
+    const webAiCanvasSidebarOpen = !globalContext.usesAppAiPanelLayout && globalContext.aiCanvas.isOpen;
+    const pdfPageAlign = webChatSidebarOpen && !webAiCanvasSidebarOpen
+      ? 'start'
+      : webAiCanvasSidebarOpen && !webChatSidebarOpen
+        ? 'end'
+        : 'center';
 
     return (
       <PdfPreview
         file={pdfSurfaceFile}
+        viewStateKey={documentContext.studyDocument?.id ? `study-document:${documentContext.studyDocument.id}` : null}
+        pageAlign={pdfPageAlign}
         page={documentContext.currentPdfPage}
         inkTool={effectiveInkTool}
         fingerDrawingEnabled={readMode ? false : globalContext.fingerDrawingEnabled}

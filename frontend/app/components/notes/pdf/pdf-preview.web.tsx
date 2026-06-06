@@ -789,6 +789,8 @@ function WebPdfTextAnnotationLayer(props: {
 
 export function PdfPreview(props: {
   file: number | string | { uri: string };
+  viewStateKey?: string | null;
+  pageAlign?: 'center' | 'start' | 'end';
   page: number;
   inkTool: InkTool;
   fingerDrawingEnabled?: boolean;
@@ -836,6 +838,7 @@ export function PdfPreview(props: {
   const [draftSelectionPageKey, setDraftSelectionPageKey] = useState<string | null>(null);
   const [openReferenceId, setOpenReferenceId] = useState<string | null>(null);
   const currentStrokeRef = useRef<InkStroke | null>(null);
+  const currentStrokeRenderFrameRef = useRef<number | null>(null);
   const activePointerIdRef = useRef<number | null>(null);
   const activePointerPageRef = useRef<NotebookPage | null>(null);
   const selectionOriginRef = useRef<InkPoint | null>(null);
@@ -844,6 +847,8 @@ export function PdfPreview(props: {
   const selectionResizeCornerRef = useRef<ResizeCorner | null>(null);
   const selectionResizeStartRectRef = useRef<SelectionRect | null>(null);
   const draftSelectionRef = useRef<SelectionRect | null>(null);
+  const draftSelectionPageKeyRef = useRef<string | null>(null);
+  const draftSelectionRenderFrameRef = useRef<number | null>(null);
   const textTapRef = useRef<InkPoint | null>(null);
   const selectionPreviewRequestRef = useRef(0);
   const scrollbarDragRef = useRef<ScrollbarDragState | null>(null);
@@ -851,6 +856,46 @@ export function PdfPreview(props: {
   const verticalScrollbarTrackRef = useRef<HTMLDivElement | null>(null);
   const horizontalScrollbarTrackRef = useRef<HTMLDivElement | null>(null);
   const [scrollbarTrackSizes, setScrollbarTrackSizes] = useState({ vertical: 0, horizontal: 0 });
+  const flushCurrentStrokeRender = useCallback((stroke: InkStroke | null) => {
+    if (currentStrokeRenderFrameRef.current !== null) {
+      window.cancelAnimationFrame(currentStrokeRenderFrameRef.current);
+      currentStrokeRenderFrameRef.current = null;
+    }
+    currentStrokeRef.current = stroke;
+    setCurrentStroke(stroke);
+  }, []);
+  const scheduleCurrentStrokeRender = useCallback((stroke: InkStroke | null) => {
+    currentStrokeRef.current = stroke;
+    if (currentStrokeRenderFrameRef.current !== null) return;
+    currentStrokeRenderFrameRef.current = window.requestAnimationFrame(() => {
+      currentStrokeRenderFrameRef.current = null;
+      setCurrentStroke(currentStrokeRef.current);
+    });
+  }, []);
+  const flushDraftSelectionRender = useCallback((rect: SelectionRect | null, pageKey: string | null) => {
+    if (draftSelectionRenderFrameRef.current !== null) {
+      window.cancelAnimationFrame(draftSelectionRenderFrameRef.current);
+      draftSelectionRenderFrameRef.current = null;
+    }
+    draftSelectionRef.current = rect;
+    draftSelectionPageKeyRef.current = pageKey;
+    setDraftSelection(rect);
+    setDraftSelectionPageKey(pageKey);
+  }, []);
+  const scheduleDraftSelectionRender = useCallback((rect: SelectionRect | null, pageKey: string | null) => {
+    draftSelectionRef.current = rect;
+    draftSelectionPageKeyRef.current = pageKey;
+    if (draftSelectionRenderFrameRef.current !== null) return;
+    draftSelectionRenderFrameRef.current = window.requestAnimationFrame(() => {
+      draftSelectionRenderFrameRef.current = null;
+      setDraftSelection(draftSelectionRef.current);
+      setDraftSelectionPageKey(draftSelectionPageKeyRef.current);
+    });
+  }, []);
+  useEffect(() => () => {
+    if (currentStrokeRenderFrameRef.current !== null) window.cancelAnimationFrame(currentStrokeRenderFrameRef.current);
+    if (draftSelectionRenderFrameRef.current !== null) window.cancelAnimationFrame(draftSelectionRenderFrameRef.current);
+  }, []);
   const pdfUri = useMemo(() => {
     if (typeof props.file === 'string') return props.file;
     if (typeof props.file === 'number') return Image.resolveAssetSource(props.file)?.uri ?? null;
@@ -858,6 +903,8 @@ export function PdfPreview(props: {
   }, [props.file]);
   const { engine, snapshot, rootRef } = useWebPdfViewportEngine({
     sourceUri: pdfUri,
+    viewStateKey: props.viewStateKey,
+    pageAlign: props.pageAlign,
     currentPage: props.page,
     pageGap: WEB_PDF_PAGE_GAP,
     onDocumentLoaded: props.onDocumentLoaded,
@@ -1160,9 +1207,7 @@ export function PdfPreview(props: {
   };
 
   const clearDraftSelection = () => {
-    draftSelectionRef.current = null;
-    setDraftSelection(null);
-    setDraftSelectionPageKey(null);
+    flushDraftSelectionRender(null, null);
   };
 
   const finishSelection = (page: NotebookPage) => {
@@ -1263,7 +1308,7 @@ export function PdfPreview(props: {
       selectionResizeCornerRef.current = null;
       selectionResizeStartRectRef.current = null;
       textTapRef.current = null;
-      setCurrentStroke(null);
+      flushCurrentStrokeRender(null);
       clearPointerInteraction();
     };
     const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -1296,8 +1341,7 @@ export function PdfPreview(props: {
           pageHeight: point.pageHeight,
           points: [point],
         };
-        currentStrokeRef.current = stroke;
-        setCurrentStroke(stroke);
+        flushCurrentStrokeRender(stroke);
         return;
       }
 
@@ -1307,9 +1351,7 @@ export function PdfPreview(props: {
         if (currentSelection && resizeCorner) {
           selectionResizeCornerRef.current = resizeCorner;
           selectionResizeStartRectRef.current = currentSelection;
-          draftSelectionRef.current = currentSelection;
-          setDraftSelection(currentSelection);
-          setDraftSelectionPageKey(page.id);
+          flushDraftSelectionRender(currentSelection, page.id);
           return;
         }
         if (
@@ -1321,9 +1363,7 @@ export function PdfPreview(props: {
         ) {
           selectionMoveOriginRef.current = point;
           selectionMoveStartRectRef.current = currentSelection;
-          draftSelectionRef.current = currentSelection;
-          setDraftSelection(currentSelection);
-          setDraftSelectionPageKey(page.id);
+          flushDraftSelectionRender(currentSelection, page.id);
           return;
         }
         props.onSelectionChange(null);
@@ -1332,9 +1372,7 @@ export function PdfPreview(props: {
         selectionOriginRef.current = point;
         const selectionMode = props.selectionMode ?? 'rect';
         const rect = { x: point.x, y: point.y, width: 0, height: 0, mode: selectionMode, path: selectionMode === 'lasso' ? [point] : undefined, pageWidth: point.pageWidth, pageHeight: point.pageHeight };
-        draftSelectionRef.current = rect;
-        setDraftSelection(rect);
-        setDraftSelectionPageKey(page.id);
+        flushDraftSelectionRender(rect, page.id);
         return;
       }
 
@@ -1360,14 +1398,12 @@ export function PdfPreview(props: {
         if (!stroke) return;
         if (stroke.style === 'shape') {
           const nextStroke = { ...stroke, points: [stroke.points[0], point] };
-          currentStrokeRef.current = nextStroke;
-          setCurrentStroke(nextStroke);
+          scheduleCurrentStrokeRender(nextStroke);
           return;
         }
         if (!shouldAppendInkPoint(stroke, point)) return;
         const nextStroke = { ...stroke, points: [...stroke.points, point] };
-        currentStrokeRef.current = nextStroke;
-        setCurrentStroke(nextStroke);
+        scheduleCurrentStrokeRender(nextStroke);
         return;
       }
 
@@ -1376,8 +1412,7 @@ export function PdfPreview(props: {
         const resizeStartRect = selectionResizeStartRectRef.current;
         if (resizeCorner && resizeStartRect) {
           const rect = resizeRectFromCorner(resizeStartRect, resizeCorner, point);
-          draftSelectionRef.current = rect;
-          setDraftSelection(rect);
+          scheduleDraftSelectionRender(rect, page.id);
           return;
         }
         const moveOrigin = selectionMoveOriginRef.current;
@@ -1399,8 +1434,7 @@ export function PdfPreview(props: {
             pageWidth: point.pageWidth,
             pageHeight: point.pageHeight,
           };
-          draftSelectionRef.current = rect;
-          setDraftSelection(rect);
+          scheduleDraftSelectionRender(rect, page.id);
           return;
         }
         const origin = selectionOriginRef.current;
@@ -1416,8 +1450,7 @@ export function PdfPreview(props: {
               return getSelectionRectFromPoints(nextPath) ?? getSelectionRectFromDrag(origin, point, 'lasso');
             })()
           : getSelectionRectFromDrag(origin, point, 'rect');
-        draftSelectionRef.current = rect;
-        setDraftSelection(rect);
+        scheduleDraftSelectionRender(rect, page.id);
       }
     };
     const handlePointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -1426,8 +1459,7 @@ export function PdfPreview(props: {
       const stroke = currentStrokeRef.current;
       if (stroke && stroke.points.length > 1) props.onCommitInkStroke(finalizeInkStroke(stroke));
       finishSelection(activePointerPageRef.current ?? page);
-      currentStrokeRef.current = null;
-      setCurrentStroke(null);
+      flushCurrentStrokeRender(null);
       clearPointerInteraction();
     };
 
