@@ -94,6 +94,7 @@ export function useWorkspaceDocumentIntents(params: WorkspaceDocumentIntentsPara
           params.setUserStudyDocuments((current) => upsertStudyDocument(current, {
             ...target,
             backendNoteId: updated.id,
+            backendFolderId: updated.folder_id ?? target.backendFolderId,
             title: updated.title,
             preview: updated.summary ?? target.preview,
             updatedAt: 'DB 저장됨',

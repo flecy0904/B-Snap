@@ -78,6 +78,7 @@ export type UseAiCanvasNotesResult = {
 const DEFAULT_CANVAS_TITLE = 'Canvas Note';
 const DEFAULT_CANVAS_MARKDOWN = '';
 const MAX_AI_CANVAS_NOTES_PER_NOTE = 3;
+const AUTOSAVE_DEBOUNCE_DELAY_MS = 2000;
 const TRANSIENT_ERROR_DELAY_MS = 3000;
 const MAX_UNDO_STACK_SIZE = 50;
 
@@ -546,7 +547,7 @@ export function useAiCanvasNotes({
             }
           }
         });
-    }, 700);
+    }, AUTOSAVE_DEBOUNCE_DELAY_MS);
     autosaveTimerRef.current = timer;
 
     return () => {

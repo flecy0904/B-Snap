@@ -8,7 +8,9 @@ import {
   sendBackendAiMessage,
   updateBackendChatSession,
   type BackendAiCanvasNote,
+  type BackendAiContextMode,
   type BackendChatMessage,
+  type BackendRagScope,
   type BackendChatSession,
 } from '../../../services/backend-api';
 import type { AiAnswer, StudyDocumentEntry } from '../../../types';
@@ -22,6 +24,30 @@ type SetState<T> = Dispatch<SetStateAction<T>>;
 type AiQuestionSource = 'general' | 'selection' | 'photo' | 'class-insight' | 'chat' | 'canvas-mini' | 'canvas-block';
 type CanvasAction = 'auto' | 'chat_only' | 'canvas_edit' | 'canvas_create';
 type AiRequestSource = 'chat' | 'canvas-mini' | 'canvas-block';
+
+const AI_CONTEXT_MODE_LABELS: Record<BackendAiContextMode, string> = {
+  general: 'general',
+  rag: 'rag',
+};
+
+function getAiContextModeFeedback(
+  mode?: BackendAiContextMode | null,
+  scopeCount = 0,
+  sourceCount = 0,
+  chunkCount = 0,
+  fallback = false,
+) {
+  if (!mode) return null;
+  const label = AI_CONTEXT_MODE_LABELS[mode];
+  if (mode === 'general') return `AI mode: ${label}`;
+  return [
+    `AI mode: ${label}`,
+    `scope ${scopeCount}`,
+    `sources ${sourceCount}`,
+    `chunks ${chunkCount}`,
+    fallback ? 'fallback' : null,
+  ].filter(Boolean).join(' · ');
+}
 
 function getCanvasAction(question: string, source: AiRequestSource = 'chat'): CanvasAction {
   const lowerQuestion = question.toLowerCase();
@@ -182,6 +208,7 @@ export function useAiChatActions(params: {
   setAiError: SetState<string | null>;
   setAiLoading: SetState<boolean>;
   setAiCanvasRequestBusy?: SetState<boolean>;
+  setWorkspaceFeedback?: SetState<string | null>;
   setSelectionPreviewByDocument: SetState<Record<number, string | null>>;
   setChatSessionByDocument: SetState<Record<number, number>>;
   setViewingAiChatSessionId: SetState<number | null>;
@@ -189,6 +216,7 @@ export function useAiChatActions(params: {
   setChatSessionsByDocument: SetState<Record<number, BackendChatSession[]>>;
   setAllChatSessions: SetState<BackendChatSession[]>;
   setAiMessagesBySession: SetState<Record<number, BackendChatMessage[]>>;
+  activeRagScope?: BackendRagScope | null;
   activeCanvasNoteId?: number | null;
   activeCanvasMarkdown?: string | null;
   activeCanvasDocumentJson?: AiCanvasDocumentJson | null;
@@ -197,6 +225,8 @@ export function useAiChatActions(params: {
     canvasNote: BackendAiCanvasNote;
     operations: CanvasOperation[];
   }) => void;
+  onSyncRagScope?: (sessionId: number, scope: BackendRagScope | null) => void;
+  onResetDraftRagScope?: () => void;
   onOpenChatForCanvasAnswer?: () => void;
   clearSelection?: () => void;
   buildContextHint?: (question: string) => string | null | Promise<string | null>;
@@ -425,6 +455,7 @@ export function useAiChatActions(params: {
       const session = await createBackendChatSession({
         noteId: backendNoteId,
         title: params.studyDocument?.title ? `${params.studyDocument.title} AI 채팅` : 'AI 채팅',
+        ragScope: params.activeRagScope ?? null,
       });
       upsertSession(session);
       params.setChatSessionByDocument((current) => ({ ...current, [params.studyDocumentId!]: session.id }));
@@ -447,6 +478,7 @@ export function useAiChatActions(params: {
         delete next[params.studyDocumentId!];
         return next;
       });
+      params.onResetDraftRagScope?.();
     }
     params.setAiAnswer(null);
     params.setAiQuestion('');
@@ -545,6 +577,7 @@ export function useAiChatActions(params: {
         const session = await createBackendChatSession({
           noteId: backendNoteId,
           title: buildAiChatTitle(requestContent, params.studyDocument?.title),
+          ragScope: params.activeRagScope ?? null,
         });
         sessionId = session.id;
         params.setChatSessionByDocument((current) => ({
@@ -597,11 +630,25 @@ export function useAiChatActions(params: {
           : null,
         canvasBlockContext: override?.canvasBlockContext ?? null,
         contextHint,
+        ragScope: params.activeRagScope ?? null,
       });
       const userMessageWithAttachment = {
         ...response.user_message,
         selection_image_url: selectionPreviewUri,
       };
+      if (response.ragScope !== undefined) {
+        params.onSyncRagScope?.(sessionId, response.ragScope ?? null);
+      }
+      const aiContextModeFeedback = getAiContextModeFeedback(
+        response.context_mode,
+        response.debug?.scope_count ?? response.ragScope?.sources.length ?? params.activeRagScope?.sources.length ?? 0,
+        response.debug?.retrieved_source_count ?? response.sources?.length ?? 0,
+        response.debug?.retrieved_chunk_count ?? response.sources?.length ?? 0,
+        Boolean(response.debug?.fallback),
+      );
+      if (aiContextModeFeedback) {
+        params.setWorkspaceFeedback?.(aiContextModeFeedback);
+      }
       params.setLastChatSessionByDocument((current) => ({
         ...current,
         [params.studyDocumentId!]: sessionId,

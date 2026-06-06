@@ -85,6 +85,19 @@ export type BackendChatSession = {
   note_id: number;
   title: string;
   model: string | null;
+  ragScope?: BackendRagScope | null;
+};
+
+export type BackendRagScopeSource = {
+  id: string;
+  // RAG v1 intentionally exposes only pinned notes and explicit Canvas notes.
+  type: 'note' | 'canvas_note';
+  title: string;
+};
+
+export type BackendRagScope = {
+  sourceIds: string[];
+  sources: BackendRagScopeSource[];
 };
 
 export type BackendChatMessage = {
@@ -144,6 +157,21 @@ export type BackendClassInsight = {
   pages: BackendClassInsightPageSignal[];
 };
 
+export type BackendAiContextMode = 'general' | 'rag';
+
+export type BackendRetrievedContext = {
+  source_type: string;
+  source_id: string;
+  title: string;
+  content: string;
+  score: number;
+  folder_id?: number | null;
+  note_id?: number | null;
+  page_number?: number | null;
+  chunk_index?: number | null;
+  metadata?: Record<string, unknown>;
+};
+
 export type BackendAiMessageResponse = {
   model: string;
   user_message: BackendChatMessage;
@@ -163,6 +191,20 @@ export type BackendAiMessageResponse = {
     title: string;
     canvas_note: BackendAiCanvasNote;
     operations: CanvasOperation[];
+  } | null;
+  context_mode?: BackendAiContextMode | null;
+  rewritten_query?: string | null;
+  rag_scope?: BackendRagScope | null;
+  ragScope?: BackendRagScope | null;
+  sources?: BackendRetrievedContext[];
+  debug?: {
+    mode?: BackendAiContextMode | string;
+    scope_count?: number;
+    retrieved_source_count?: number;
+    retrieved_chunk_count?: number;
+    fallback?: boolean;
+    fallback_reason?: string | null;
+    router_reason?: string | null;
   } | null;
 };
 
@@ -277,14 +319,44 @@ function normalizeBackendAiCanvasNote(note: any): BackendAiCanvasNote {
   } as BackendAiCanvasNote;
 }
 
-function normalizeBackendAiMessageResponse(response: BackendAiMessageResponse): BackendAiMessageResponse {
-  if (!response.canvas_edit) return response;
+function normalizeBackendRagScope(scope: any): BackendRagScope | null {
+  if (!scope || !Array.isArray(scope.sources)) return null;
+  const sources: BackendRagScopeSource[] = [];
+  scope.sources.forEach((source: any) => {
+    const type = source?.type === 'canvas_note' ? 'canvas_note' : source?.type === 'note' ? 'note' : null;
+    const id = String(source?.id ?? '');
+    const title = String(source?.title ?? '');
+    if (!type || !id || !title) return;
+    sources.push({ id, type, title });
+  });
   return {
+    sourceIds: Array.isArray(scope.sourceIds)
+      ? scope.sourceIds.map((value: unknown) => String(value))
+      : sources.map((source) => `${source.type}:${source.id}`),
+    sources,
+  };
+}
+
+function normalizeBackendChatSession(session: any): BackendChatSession {
+  return {
+    ...session,
+    ragScope: normalizeBackendRagScope(session?.ragScope ?? session?.rag_scope),
+  } as BackendChatSession;
+}
+
+function normalizeBackendAiMessageResponse(response: BackendAiMessageResponse): BackendAiMessageResponse {
+  const normalized = {
     ...response,
+    chat_session: response.chat_session ? normalizeBackendChatSession(response.chat_session) : response.chat_session,
+    ragScope: normalizeBackendRagScope(response.ragScope ?? response.rag_scope),
+  };
+  if (!normalized.canvas_edit) return normalized;
+  return {
+    ...normalized,
     canvas_edit: {
-      ...response.canvas_edit,
-      operations: Array.isArray(response.canvas_edit.operations) ? response.canvas_edit.operations : [],
-      canvas_note: normalizeBackendAiCanvasNote(response.canvas_edit.canvas_note),
+      ...normalized.canvas_edit,
+      operations: Array.isArray(normalized.canvas_edit.operations) ? normalized.canvas_edit.operations : [],
+      canvas_note: normalizeBackendAiCanvasNote(normalized.canvas_edit.canvas_note),
     },
   };
 }
@@ -777,36 +849,40 @@ export async function createBackendChatSession(payload: {
   noteId: number;
   title: string;
   model?: string | null;
+  ragScope?: BackendRagScope | null;
 }) {
   return request<BackendChatSession>(`/notes/${payload.noteId}/chat-sessions`, {
     method: 'POST',
     body: {
       title: payload.title,
       model: payload.model ?? null,
+      rag_scope: payload.ragScope ?? null,
     },
-  });
+  }).then(normalizeBackendChatSession);
 }
 
 export function listBackendChatSessions(noteId: number) {
-  return request<BackendChatSession[]>(`/notes/${noteId}/chat-sessions`);
+  return request<BackendChatSession[]>(`/notes/${noteId}/chat-sessions`).then((sessions) => sessions.map(normalizeBackendChatSession));
 }
 
 export function listAllBackendChatSessions() {
-  return request<BackendChatSession[]>('/chat-sessions');
+  return request<BackendChatSession[]>('/chat-sessions').then((sessions) => sessions.map(normalizeBackendChatSession));
 }
 
 export async function updateBackendChatSession(payload: {
   sessionId: number;
   title?: string;
   model?: string | null;
+  ragScope?: BackendRagScope | null;
 }) {
   return request<BackendChatSession>(`/chat-sessions/${payload.sessionId}`, {
     method: 'PATCH',
     body: {
       title: payload.title,
       model: payload.model,
+      rag_scope: payload.ragScope,
     },
-  });
+  }).then(normalizeBackendChatSession);
 }
 
 export function deleteBackendChatSession(sessionId: number) {
@@ -843,6 +919,9 @@ export async function sendBackendAiMessage(payload: {
   canvasMarkdown?: string | null;
   canvasDocumentJson?: AiCanvasDocumentJson | null;
   canvasBlockContext?: AiCanvasBlockContext | null;
+  ragScope?: BackendRagScope | null;
+  useRag?: boolean;
+  topK?: number;
 }) {
   return request<BackendAiMessageResponse>(`/chat-sessions/${payload.sessionId}/ai-messages`, {
     method: 'POST',
@@ -862,6 +941,9 @@ export async function sendBackendAiMessage(payload: {
       canvas_markdown: payload.canvasMarkdown ?? null,
       canvas_document_json: payload.canvasDocumentJson ?? null,
       canvas_block_context: payload.canvasBlockContext ?? null,
+      rag_scope: payload.ragScope ?? null,
+      use_rag: payload.useRag ?? false,
+      top_k: payload.topK ?? 5,
     },
   }).then(normalizeBackendAiMessageResponse);
 }

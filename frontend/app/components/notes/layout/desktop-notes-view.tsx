@@ -11,7 +11,7 @@ import { NotesWorkspaceToolbar, NotesPageListOverlay } from '../workspace/notes-
 import { NotesDetailHeader } from './notes-detail-header';
 import { NotesBrowser } from './notes-browser';
 import { DesktopNotesWorkspaceProvider, useDesktopNotesWorkspaceContext } from '../workspace/notes-workspace-context';
-import type { BackendChatMessage, BackendChatSession, BackendClassInsight } from '../../../services/backend-api';
+import type { BackendChatMessage, BackendChatSession, BackendClassInsight, BackendRagScope, BackendRagScopeSource } from '../../../services/backend-api';
 import type { UseAiCanvasNotesResult } from '../../../hooks/notes/ai-canvas/use-ai-canvas-notes';
 import type { AiCanvasBlockContext } from '../../../types/ai-canvas';
 import type { ImportantPageRecommendation } from '../../../hooks/notes/class-insight';
@@ -173,6 +173,9 @@ export type DesktopNotesViewProps = {
   allAiChatSessions: BackendChatSession[];
   aiChatScope: 'note' | 'all';
   aiChatSearchQuery: string;
+  activeAiRagScope: BackendRagScope | null;
+  aiRagReferenceCandidates: BackendRagScopeSource[];
+  aiRagScopeCollapsed: boolean;
   activeAiChatSessionId: number | null;
   aiChatReadOnly: boolean;
   aiLoading: boolean;
@@ -237,6 +240,10 @@ export type DesktopNotesViewProps = {
   onChangeAiQuestion: (value: string) => void;
   onChangeAiChatScope: (scope: 'note' | 'all') => void;
   onLoadAllAiChatSessions: () => void;
+  onToggleAiRagScopeCollapsed: () => void;
+  onAddAiRagScopeSource: (source: BackendRagScopeSource) => void;
+  onRemoveAiRagScopeSource: (sourceKey: string) => void;
+  onResetAiRagScope: () => void;
   onChangeAiChatSearchQuery: (value: string) => void;
   onSelectAiChatSession: (sessionId: number) => void;
   onRenameAiChatSession: (sessionId: number, title: string) => Promise<boolean>;
@@ -621,6 +628,9 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           allAiChatSessions: props.allAiChatSessions,
           aiChatScope: props.aiChatScope,
           aiChatSearchQuery: props.aiChatSearchQuery,
+          activeAiRagScope: props.activeAiRagScope,
+          aiRagReferenceCandidates: props.aiRagReferenceCandidates,
+          aiRagScopeCollapsed: props.aiRagScopeCollapsed,
           activeAiChatSessionId: props.activeAiChatSessionId,
           aiChatReadOnly: props.aiChatReadOnly,
           aiLoading: props.aiLoading,
@@ -707,6 +717,10 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           onChangeAiQuestion: props.onChangeAiQuestion,
           onChangeAiChatScope: props.onChangeAiChatScope,
           onLoadAllAiChatSessions: props.onLoadAllAiChatSessions,
+          onToggleAiRagScopeCollapsed: props.onToggleAiRagScopeCollapsed,
+          onAddAiRagScopeSource: props.onAddAiRagScopeSource,
+          onRemoveAiRagScopeSource: props.onRemoveAiRagScopeSource,
+          onResetAiRagScope: props.onResetAiRagScope,
           onChangeAiChatSearchQuery: props.onChangeAiChatSearchQuery,
           onSelectAiChatSession: props.onSelectAiChatSession,
           onRenameAiChatSession: props.onRenameAiChatSession,

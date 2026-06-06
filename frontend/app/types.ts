@@ -75,6 +75,7 @@ export interface BookmarkedPage {
 export interface StudyDocumentEntry {
   id: number;
   backendNoteId?: number;
+  backendFolderId?: number;
   subjectId: number;
   title: string;
   type: StudyDocumentType;
