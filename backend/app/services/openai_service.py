@@ -428,9 +428,11 @@ def generate_ai_canvas_operations_from_chat(
     current_page_number: int | None = None,
     selection_image: str | None = None,
     selection_image_url: str | None = None,
+    context_hint: str | None = None,
     canvas_block_context: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     block_context_text = format_canvas_block_context(canvas_block_context)
+    support_context_text = context_hint.strip() if context_hint else "(none)"
     input_items: list[dict[str, Any]] = [
         {
             "role": "user",
@@ -453,6 +455,9 @@ def generate_ai_canvas_operations_from_chat(
                 "",
                 "Note/PDF context:",
                 build_note_context(note, pages, current_page_number=current_page_number),
+                "",
+                "Support context from scoped RAG routing:",
+                support_context_text,
                 "",
                 "Return Canvas operations JSON only.",
             ]),

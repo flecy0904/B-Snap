@@ -1,10 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from psycopg import Connection
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
 
 from backend.app.core.auth import get_current_user
-from backend.app.db.crud import execute_commit, execute_returning, fetch_all, fetch_one, require_row
+from backend.app.db.crud import execute_returning, fetch_all, fetch_one, require_row
 from backend.app.db.session import get_db_connection
 from backend.app.routes.notes import get_note_for_user
 from backend.app.schemas.ai_canvas_notes import (
@@ -13,6 +13,7 @@ from backend.app.schemas.ai_canvas_notes import (
     AiCanvasNoteSummaryRead,
     AiCanvasNoteUpdate,
 )
+from backend.app.services.document_chunk_index import reindex_canvas_background
 
 
 router = APIRouter(tags=["ai-canvas-notes"])
@@ -56,6 +57,7 @@ def get_ai_canvas_note(canvas_note_id: int, connection: Connection, user_id: int
 def create_ai_canvas_note(
     note_id: int,
     payload: AiCanvasNoteCreate,
+    background_tasks: BackgroundTasks,
     connection: Connection = Depends(get_db_connection),
     current_user: dict = Depends(get_current_user),
 ):
@@ -72,7 +74,7 @@ def create_ai_canvas_note(
         )
 
     title = normalize_title(payload.title)
-    return execute_returning(
+    created = execute_returning(
         connection,
         """
         INSERT INTO ai_canvas_notes (folder_id, note_id, title, markdown, document_json, source_page_start, source_page_end)
@@ -89,6 +91,8 @@ def create_ai_canvas_note(
             payload.source_page_end,
         ),
     )
+    background_tasks.add_task(reindex_canvas_background, int(created["id"]), current_user["id"])
+    return created
 
 
 @router.get("/notes/{note_id}/ai-canvas-notes", response_model=list[AiCanvasNoteSummaryRead])
@@ -145,6 +149,7 @@ def read_ai_canvas_note(
 def update_ai_canvas_note(
     canvas_note_id: int,
     payload: AiCanvasNoteUpdate,
+    background_tasks: BackgroundTasks,
     connection: Connection = Depends(get_db_connection),
     current_user: dict = Depends(get_current_user),
 ):
@@ -207,6 +212,7 @@ def update_ai_canvas_note(
         raise HTTPException(status_code=409, detail="AI canvas note was updated by another request")
     if updated is None:
         raise HTTPException(status_code=404, detail="AI canvas note not found")
+    background_tasks.add_task(reindex_canvas_background, canvas_note_id, current_user["id"])
     return updated
 
 
@@ -217,4 +223,14 @@ def delete_ai_canvas_note(
     current_user: dict = Depends(get_current_user),
 ):
     get_ai_canvas_note(canvas_note_id, connection, current_user["id"])
-    execute_commit(connection, "DELETE FROM ai_canvas_notes WHERE id = %s", (canvas_note_id,))
+    try:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM document_chunks WHERE user_id = %s AND source_type = 'canvas_note' AND source_id = %s",
+                (current_user["id"], str(canvas_note_id)),
+            )
+            cursor.execute("DELETE FROM ai_canvas_notes WHERE id = %s", (canvas_note_id,))
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise

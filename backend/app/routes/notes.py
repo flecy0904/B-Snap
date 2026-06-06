@@ -2,7 +2,7 @@ import logging
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
 from psycopg import Connection
 
 from backend.app.core.auth import get_current_user
@@ -20,11 +20,16 @@ from backend.app.schemas.notes import (
     PdfTextExtractionRead,
 )
 from backend.app.services.note_page_content import merge_page_state_content
+from backend.app.services.document_chunk_index import reindex_note_background
 from backend.app.services.pdf_text_extractor import extract_pdf_text_pages, extract_pdf_text_pages_from_path
 
 
 router = APIRouter(tags=["notes"])
 logger = logging.getLogger("uvicorn.error")
+
+
+def _schedule_note_reindex(background_tasks: BackgroundTasks, note_id: int, user_id: int) -> None:
+    background_tasks.add_task(reindex_note_background, note_id, user_id)
 
 
 def get_note_for_user(note_id: int, user_id: int, connection: Connection):
@@ -156,6 +161,7 @@ def get_note(
 def update_note(
     note_id: int,
     payload: NoteUpdate,
+    background_tasks: BackgroundTasks,
     connection: Connection = Depends(get_db_connection),
     current_user: dict = Depends(get_current_user),
 ):
@@ -165,7 +171,7 @@ def update_note(
         fetch_one(connection, "SELECT id FROM folders WHERE id = %s AND user_id = %s", (next_folder_id, current_user["id"])),
         "folder not found",
     )
-    return execute_returning(
+    updated = execute_returning(
         connection,
         """
         UPDATE notes
@@ -181,6 +187,8 @@ def update_note(
             current_user["id"],
         ),
     )
+    _schedule_note_reindex(background_tasks, note_id, current_user["id"])
+    return updated
 
 
 @router.delete("/notes/{note_id}", status_code=204)
@@ -199,11 +207,12 @@ def delete_note(
 def create_note_page(
     note_id: int,
     payload: NotePageCreate,
+    background_tasks: BackgroundTasks,
     connection: Connection = Depends(get_db_connection),
     current_user: dict = Depends(get_current_user),
 ):
     get_note_for_user(note_id, current_user["id"], connection)
-    return execute_returning(
+    created = execute_returning(
         connection,
         """
         INSERT INTO note_pages (note_id, page_number, content, image_url)
@@ -212,6 +221,8 @@ def create_note_page(
         """,
         (note_id, payload.page_number, payload.content, payload.image_url),
     )
+    _schedule_note_reindex(background_tasks, note_id, current_user["id"])
+    return created
 
 
 @router.get("/notes/{note_id}/pages", response_model=list[NotePageRead])
@@ -228,6 +239,7 @@ def list_note_pages(
 def duplicate_note_page(
     note_id: int,
     page_number: int,
+    background_tasks: BackgroundTasks,
     connection: Connection = Depends(get_db_connection),
     current_user: dict = Depends(get_current_user),
 ):
@@ -269,6 +281,7 @@ def duplicate_note_page(
         connection.rollback()
         raise
 
+    _schedule_note_reindex(background_tasks, note_id, current_user["id"])
     return _list_pages_for_note(connection, note_id)
 
 
@@ -276,6 +289,7 @@ def duplicate_note_page(
 def delete_note_page_by_number(
     note_id: int,
     page_number: int,
+    background_tasks: BackgroundTasks,
     connection: Connection = Depends(get_db_connection),
     current_user: dict = Depends(get_current_user),
 ):
@@ -304,6 +318,7 @@ def delete_note_page_by_number(
         connection.rollback()
         raise
 
+    _schedule_note_reindex(background_tasks, note_id, current_user["id"])
     return _list_pages_for_note(connection, note_id)
 
 
@@ -311,6 +326,7 @@ def delete_note_page_by_number(
 def move_note_page_by_number(
     note_id: int,
     page_number: int,
+    background_tasks: BackgroundTasks,
     delta: int = Query(..., ge=-1, le=1),
     connection: Connection = Depends(get_db_connection),
     current_user: dict = Depends(get_current_user),
@@ -346,6 +362,7 @@ def move_note_page_by_number(
         connection.rollback()
         raise
 
+    _schedule_note_reindex(background_tasks, note_id, current_user["id"])
     return _list_pages_for_note(connection, note_id)
 
 
@@ -353,6 +370,7 @@ def move_note_page_by_number(
 def extract_note_pdf_text(
     note_id: int,
     payload: PdfTextExtractionCreate,
+    background_tasks: BackgroundTasks,
     connection: Connection = Depends(get_db_connection),
     current_user: dict = Depends(get_current_user),
     settings: Settings = Depends(get_settings),
@@ -420,6 +438,7 @@ def extract_note_pdf_text(
         (len(page_texts), note_id),
     )
     pages = _list_pages_for_note(connection, note_id)
+    _schedule_note_reindex(background_tasks, note_id, current_user["id"])
     return {
         "note_id": note_id,
         "pages_extracted": len(page_texts),
@@ -431,6 +450,7 @@ def extract_note_pdf_text(
 def update_note_page(
     page_id: int,
     payload: NotePageUpdate,
+    background_tasks: BackgroundTasks,
     connection: Connection = Depends(get_db_connection),
     current_user: dict = Depends(get_current_user),
 ):
@@ -447,7 +467,7 @@ def update_note_page(
         ),
         "note page not found",
     )
-    return execute_returning(
+    updated = execute_returning(
         connection,
         """
         UPDATE note_pages
@@ -464,19 +484,22 @@ def update_note_page(
             page_id,
         ),
     )
+    _schedule_note_reindex(background_tasks, int(current["note_id"]), current_user["id"])
+    return updated
 
 
 @router.delete("/note-pages/{page_id}", status_code=204)
 def delete_note_page(
     page_id: int,
+    background_tasks: BackgroundTasks,
     connection: Connection = Depends(get_db_connection),
     current_user: dict = Depends(get_current_user),
 ):
-    require_row(
+    current = require_row(
         fetch_one(
             connection,
             """
-            SELECT p.id
+            SELECT p.id, p.note_id
             FROM note_pages p
             JOIN notes n ON n.id = p.note_id
             WHERE p.id = %s AND n.user_id = %s
@@ -486,3 +509,4 @@ def delete_note_page(
         "note page not found",
     )
     execute_commit(connection, "DELETE FROM note_pages WHERE id = %s", (page_id,))
+    _schedule_note_reindex(background_tasks, int(current["note_id"]), current_user["id"])

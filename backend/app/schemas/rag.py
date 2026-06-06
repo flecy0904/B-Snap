@@ -9,6 +9,11 @@ class RetrievedContext(BaseModel):
     title: str
     content: str
     score: float = 0.0
+    folder_id: int | None = None
+    note_id: int | None = None
+    page_number: int | None = None
+    chunk_index: int | None = None
+    metadata: dict = Field(default_factory=dict)
 
 
 class NoteSummarySection(BaseModel):

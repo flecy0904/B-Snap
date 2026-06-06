@@ -17,6 +17,12 @@ from backend.app.schemas.chats import (
     ChatSessionRead,
     ChatSessionUpdate,
 )
+from backend.app.services.ai_context_builder import (
+    build_ai_context,
+    format_context_mode_instruction,
+    select_rag_context_pages,
+)
+from backend.app.services.ai_context_router import AiContextRoute, route_ai_context
 from backend.app.services.openai_service import (
     generate_ai_canvas_intent,
     generate_ai_canvas_operations_from_chat,
@@ -24,7 +30,7 @@ from backend.app.services.openai_service import (
     generate_chat_title,
     generate_note_chat_answer,
 )
-from backend.app.services.rag_service import ask_with_rag, build_rag_context_hint, load_note_documents
+from backend.app.services.rag_service import retrieve_rag_contexts_with_debug
 
 
 router = APIRouter(tags=["chats"])
@@ -250,19 +256,133 @@ def create_canvas_note_for_chat(note: dict, connection: Connection) -> dict:
 
 
 def select_chat_context_pages(pages: list[dict], page_number: int | None) -> list[dict]:
-    if not pages:
-        return []
-    if page_number is None:
-        return pages[:3]
+    return select_rag_context_pages(pages, page_number)
 
-    start_page = max(1, page_number - 1)
-    end_page = page_number + 1
-    selected_pages = [
-        page
-        for page in pages
-        if start_page <= page["page_number"] <= end_page
-    ]
-    return selected_pages or pages[:3]
+
+def default_rag_scope(note: dict) -> dict:
+    return {
+        "sourceIds": [f"note:{note['id']}"],
+        "sources": [{
+            "id": str(note["id"]),
+            "type": "note",
+            "title": str(note["title"]),
+        }],
+    }
+
+
+def _scope_to_dict(scope: object | None) -> dict | None:
+    if scope is None:
+        return None
+    if hasattr(scope, "model_dump"):
+        return scope.model_dump()
+    return scope if isinstance(scope, dict) else None
+
+
+def normalize_rag_scope(
+    connection: Connection,
+    *,
+    requested_scope: object | None,
+    default_note: dict,
+    user_id: int,
+) -> dict:
+    raw_scope = _scope_to_dict(requested_scope) or {}
+    raw_sources = raw_scope.get("sources")
+    if not isinstance(raw_sources, list):
+        raw_sources = []
+
+    note_ids: list[int] = []
+    canvas_note_ids: list[int] = []
+    for raw_source in raw_sources:
+        if not isinstance(raw_source, dict):
+            continue
+        source_type = raw_source.get("type")
+        try:
+            source_id = int(str(raw_source.get("id")))
+        except (TypeError, ValueError):
+            continue
+        if source_type == "note":
+            note_ids.append(source_id)
+        elif source_type == "canvas_note":
+            canvas_note_ids.append(source_id)
+
+    note_rows = []
+    if note_ids:
+        note_rows = fetch_all(
+            connection,
+            """
+            SELECT id, title
+            FROM notes
+            WHERE user_id = %s
+              AND folder_id = %s
+              AND id = ANY(%s)
+            """,
+            (user_id, default_note["folder_id"], note_ids),
+        )
+    canvas_rows = []
+    if canvas_note_ids:
+        canvas_rows = fetch_all(
+            connection,
+            """
+            SELECT c.id, c.title, n.title AS note_title
+            FROM ai_canvas_notes c
+            JOIN notes n ON n.id = c.note_id
+            WHERE n.user_id = %s
+              AND c.folder_id = %s
+              AND c.id = ANY(%s)
+            """,
+            (user_id, default_note["folder_id"], canvas_note_ids),
+        )
+
+    notes_by_id = {int(row["id"]): row for row in note_rows}
+    canvas_by_id = {int(row["id"]): row for row in canvas_rows}
+    sources = []
+    seen: set[str] = set()
+    for raw_source in raw_sources:
+        if not isinstance(raw_source, dict):
+            continue
+        source_type = raw_source.get("type")
+        try:
+            source_id = int(str(raw_source.get("id")))
+        except (TypeError, ValueError):
+            continue
+        key = f"{source_type}:{source_id}"
+        if key in seen:
+            continue
+        if source_type == "note" and source_id in notes_by_id:
+            seen.add(key)
+            sources.append({"id": str(source_id), "type": "note", "title": str(notes_by_id[source_id]["title"])})
+        elif source_type == "canvas_note" and source_id in canvas_by_id:
+            canvas = canvas_by_id[source_id]
+            seen.add(key)
+            sources.append({
+                "id": str(source_id),
+                "type": "canvas_note",
+                "title": f"{canvas['note_title']} - {canvas['title']}",
+            })
+
+    if not sources:
+        return default_rag_scope(default_note)
+    return {
+        "sourceIds": [f"{source['type']}:{source['id']}" for source in sources],
+        "sources": sources,
+    }
+
+
+def rag_scope_search_targets(scope: dict) -> tuple[list[int], list[int]]:
+    note_ids: list[int] = []
+    canvas_note_ids: list[int] = []
+    for source in scope.get("sources", []):
+        if not isinstance(source, dict):
+            continue
+        try:
+            source_id = int(str(source.get("id")))
+        except (TypeError, ValueError):
+            continue
+        if source.get("type") == "note":
+            note_ids.append(source_id)
+        elif source.get("type") == "canvas_note":
+            canvas_note_ids.append(source_id)
+    return note_ids, canvas_note_ids
 
 
 @router.post("/notes/{note_id}/chat-sessions", response_model=ChatSessionRead)
@@ -272,15 +392,21 @@ def create_chat_session(
     connection: Connection = Depends(get_db_connection),
     current_user: dict = Depends(get_current_user),
 ):
-    get_note_for_user(note_id, current_user["id"], connection)
+    note = get_note_for_user(note_id, current_user["id"], connection)
+    rag_scope = normalize_rag_scope(
+        connection,
+        requested_scope=payload.rag_scope,
+        default_note=note,
+        user_id=current_user["id"],
+    )
     return execute_returning(
         connection,
         """
-        INSERT INTO chat_sessions (note_id, title, model)
-        VALUES (%s, %s, %s)
-        RETURNING id, note_id, title, model, created_at, updated_at
+        INSERT INTO chat_sessions (note_id, title, model, rag_scope)
+        VALUES (%s, %s, %s, %s)
+        RETURNING id, note_id, title, model, rag_scope, created_at, updated_at
         """,
-        (note_id, payload.title, payload.model),
+        (note_id, payload.title, payload.model, Jsonb(rag_scope)),
     )
 
 
@@ -294,7 +420,7 @@ def list_chat_sessions(
     return fetch_all(
         connection,
         """
-        SELECT id, note_id, title, model, created_at, updated_at
+        SELECT id, note_id, title, model, rag_scope, created_at, updated_at
         FROM chat_sessions
         WHERE note_id = %s
         ORDER BY updated_at DESC, id DESC
@@ -311,7 +437,7 @@ def list_all_chat_sessions(
     return fetch_all(
         connection,
         """
-        SELECT s.id, s.note_id, s.title, s.model, s.created_at, s.updated_at
+        SELECT s.id, s.note_id, s.title, s.model, s.rag_scope, s.created_at, s.updated_at
         FROM chat_sessions s
         JOIN notes n ON n.id = s.note_id
         WHERE n.user_id = %s
@@ -331,7 +457,7 @@ def get_chat_session(
         fetch_one(
             connection,
             """
-            SELECT s.id, s.note_id, s.title, s.model, s.created_at, s.updated_at
+            SELECT s.id, s.note_id, s.title, s.model, s.rag_scope, s.created_at, s.updated_at
             FROM chat_sessions s
             JOIN notes n ON n.id = s.note_id
             WHERE s.id = %s AND n.user_id = %s
@@ -365,13 +491,21 @@ def update_chat_session(
         connection,
         """
         UPDATE chat_sessions
-        SET title = %s, model = %s, updated_at = now()
+        SET title = %s, model = %s, rag_scope = %s, updated_at = now()
         WHERE id = %s
-        RETURNING id, note_id, title, model, created_at, updated_at
+        RETURNING id, note_id, title, model, rag_scope, created_at, updated_at
         """,
         (
             payload.title if payload.title is not None else current["title"],
             payload.model if payload.model is not None else current["model"],
+            Jsonb(
+                normalize_rag_scope(
+                    connection,
+                    requested_scope=payload.rag_scope if payload.rag_scope is not None else current.get("rag_scope"),
+                    default_note=get_note_for_user(current["note_id"], current_user["id"], connection),
+                    user_id=current_user["id"],
+                )
+            ),
             session_id,
         ),
     )
@@ -450,6 +584,59 @@ def create_ai_chat_message(
         canvas_origin_request=canvas_origin_request,
         canvas_block_context=payload.canvas_block_context,
     )
+    has_selection_context = bool(payload.selection_image or payload.selection_image_url or payload.selection_rect)
+    context_route = route_ai_context(
+        question=payload.content,
+        model=model,
+        has_selection=has_selection_context,
+        has_canvas_context=canvas_origin_request or bool(payload.canvas_block_context),
+        current_page_number=payload.page_number,
+    )
+    rag_scope = normalize_rag_scope(
+        connection,
+        requested_scope=payload.rag_scope if payload.rag_scope is not None else session.get("rag_scope"),
+        default_note=note,
+        user_id=current_user["id"],
+    )
+    if rag_scope != (session.get("rag_scope") or None):
+        execute_commit(
+            connection,
+            "UPDATE chat_sessions SET rag_scope = %s, updated_at = now() WHERE id = %s",
+            (Jsonb(rag_scope), session_id),
+        )
+        session["rag_scope"] = rag_scope
+    if payload.use_rag and context_route.mode == "general":
+        context_route = AiContextRoute(
+            mode="rag",
+            rewritten_query=context_route.rewritten_query,
+            reason="explicit_use_rag",
+        )
+    rag_sources = []
+    rag_debug = None
+    if context_route.mode == "rag":
+        note_ids, canvas_note_ids = rag_scope_search_targets(rag_scope)
+        rag_sources, rag_debug = retrieve_rag_contexts_with_debug(
+            connection,
+            user_id=current_user["id"],
+            question=context_route.rewritten_query,
+            note_ids=note_ids,
+            canvas_note_ids=canvas_note_ids,
+            exclude_canvas_for_notes=True,
+            documents=None,
+            top_k=payload.top_k,
+        )
+    context_mode_instruction = format_context_mode_instruction(
+        context_route.mode,
+        has_rag_sources=bool(rag_sources),
+    )
+    built_context = build_ai_context(
+        mode=context_route.mode,
+        pages=pages,
+        page_number=payload.page_number,
+        base_context_hints=[context_mode_instruction] if context_route.mode == "general" else [context_mode_instruction, payload.context_hint],
+        rag_sources=rag_sources,
+        rag_debug=rag_debug,
+    )
 
     if canvas_origin_request and canvas_action == "canvas_create":
         canvas_action = "chat_only"
@@ -466,7 +653,6 @@ def create_ai_chat_message(
 
     if canvas_action in {"canvas_edit", "canvas_create"} and canvas_note is not None:
         try:
-            context_pages = select_chat_context_pages(pages, payload.page_number)
             current_canvas_markdown = (
                 payload.canvas_markdown
                 if canvas_action == "canvas_edit" and payload.canvas_markdown is not None
@@ -480,7 +666,7 @@ def create_ai_chat_message(
             operations = generate_ai_canvas_operations_from_chat(
                 model=model,
                 note=note,
-                pages=context_pages,
+                pages=built_context.context_pages,
                 messages=previous_messages,
                 user_content=payload.content,
                 canvas_title=canvas_note["title"],
@@ -489,6 +675,7 @@ def create_ai_chat_message(
                 current_page_number=payload.page_number,
                 selection_image=payload.selection_image,
                 selection_image_url=payload.selection_image_url,
+                context_hint=built_context.context_hint,
                 canvas_block_context=payload.canvas_block_context,
             )
             canvas_title = canvas_note["title"]
@@ -536,40 +723,22 @@ def create_ai_chat_message(
             "canvas_note": canvas_note,
             "operations": operations,
         }
-    elif payload.use_rag:
-        documents = load_note_documents(connection, note_ids=[session["note_id"]], user_id=current_user["id"])
-        answer = ask_with_rag(
-            question=payload.content,
-            documents=documents,
-            top_k=payload.top_k,
-            model=model,
-        ).answer
     else:
-        context_pages = select_chat_context_pages(pages, payload.page_number)
-        documents = load_note_documents(connection, note_ids=[session["note_id"]], user_id=current_user["id"])
-        rag_context_hint = build_rag_context_hint(
-            question=payload.content,
-            documents=documents,
-            top_k=payload.top_k,
-        )
-        context_hint = "\n\n".join(
-            hint
-            for hint in [payload.context_hint, rag_context_hint]
-            if hint
-        ) or None
         answer = generate_note_chat_answer(
             model=model,
             note=note,
-            pages=context_pages,
+            pages=built_context.context_pages,
             messages=previous_messages,
             user_content=payload.content,
             selection_image=payload.selection_image,
             selection_rect=payload.selection_rect.model_dump() if payload.selection_rect else None,
             page_number=payload.page_number,
             selection_image_url=payload.selection_image_url,
-            context_hint=context_hint,
+            context_hint=built_context.context_hint,
             canvas_block_context=payload.canvas_block_context,
         )
+        if built_context.answer_sources_text:
+            answer = f"{answer.rstrip()}\n\n{built_context.answer_sources_text}"
     user_message = execute_returning(
         connection,
         """
@@ -604,11 +773,11 @@ def create_ai_chat_message(
             updated_session = execute_returning(
                 connection,
                 """
-                UPDATE chat_sessions
-                SET title = %s, model = %s, updated_at = now()
-                WHERE id = %s
-                RETURNING id, note_id, title, model, created_at, updated_at
-                """,
+                    UPDATE chat_sessions
+                    SET title = %s, model = %s, updated_at = now()
+                    WHERE id = %s
+                    RETURNING id, note_id, title, model, rag_scope, created_at, updated_at
+                    """,
                 (generated_title, model, session_id),
             )
 
@@ -620,6 +789,16 @@ def create_ai_chat_message(
         "assistant_message": assistant_message,
         "chat_session": updated_session,
         "canvas_edit": canvas_edit,
+        "context_mode": context_route.mode,
+        "rewritten_query": context_route.rewritten_query,
+        "rag_scope": rag_scope,
+        "sources": rag_sources,
+        "debug": {
+            **built_context.debug,
+            "mode": context_route.mode,
+            "scope_count": len(rag_scope.get("sources", [])),
+            "router_reason": context_route.reason,
+        },
     }
 
 

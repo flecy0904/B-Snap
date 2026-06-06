@@ -22,6 +22,7 @@ from backend.app.core.auth import get_current_user
 from backend.app.core.config import Settings, get_settings
 from backend.app.db.session import get_db_connection
 from backend.app.services.document_matching import build_document_match_key, normalize_subject_key, sha256_file
+from backend.app.services.document_chunk_index import extract_pdf_text_and_reindex_background
 from backend.app.services.openai_service import generate_capture_image_analysis
 
 try:
@@ -919,6 +920,7 @@ async def upload_file(
 
 @router.post("/pdf-note")
 async def upload_pdf_note(
+    background_tasks: BackgroundTasks,
     folder_id: int = Form(...),
     title: str = Form(...),
     summary: str | None = Form(default=None),
@@ -1004,6 +1006,13 @@ async def upload_pdf_note(
         connection.rollback()
         _cleanup_stored_upload(upload, settings)
         raise
+
+    background_tasks.add_task(
+        extract_pdf_text_and_reindex_background,
+        int(note["id"]),
+        int(current_user["id"]),
+        str(settings.upload_path / upload.stored_filename),
+    )
 
     return {
         "upload": _upload_response(upload),

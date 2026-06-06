@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from typing import Any
 
@@ -13,6 +14,7 @@ from backend.app.schemas.rag import (
     RAGQuizResponse,
     RetrievedContext,
 )
+from backend.app.services.document_chunk_index import retrieve_chunk_contexts
 from backend.app.services.note_page_content import extract_ai_page_text
 from backend.app.services.openai_service import generate_text_response
 from backend.app.services.prompts.rag import (
@@ -33,6 +35,7 @@ from backend.app.services.rag_retriever import (
 )
 
 
+logger = logging.getLogger(__name__)
 JSON_FENCE_PATTERN = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
 
 
@@ -43,6 +46,7 @@ def load_note_documents(
     folder_id: int | None = None,
     subject_id: int | None = None,
     user_id: int | None = None,
+    include_canvas_notes: bool = True,
 ) -> list[Document]:
     current_folder_id = folder_id if folder_id is not None else subject_id
     where_clause, params = _build_note_filters(note_ids=note_ids, folder_id=current_folder_id, user_id=user_id)
@@ -68,23 +72,25 @@ def load_note_documents(
         """,
         params,
     )
-    ai_canvas_notes = fetch_all(
-        connection,
-        f"""
-        SELECT c.id,
-               c.note_id,
-               c.title,
-               c.markdown,
-               c.source_page_start,
-               c.source_page_end,
-               n.title AS note_title
-        FROM ai_canvas_notes c
-        JOIN notes n ON n.id = c.note_id
-        {where_clause}
-        ORDER BY c.updated_at DESC, c.id DESC
-        """,
-        params,
-    )
+    ai_canvas_notes = []
+    if include_canvas_notes:
+        ai_canvas_notes = fetch_all(
+            connection,
+            f"""
+            SELECT c.id,
+                   c.note_id,
+                   c.title,
+                   c.markdown,
+                   c.source_page_start,
+                   c.source_page_end,
+                   n.title AS note_title
+            FROM ai_canvas_notes c
+            JOIN notes n ON n.id = c.note_id
+            {where_clause}
+            ORDER BY c.updated_at DESC, c.id DESC
+            """,
+            params,
+        )
 
     documents: list[Document] = []
     for note in notes:
@@ -135,6 +141,65 @@ def load_note_documents(
     return documents
 
 
+def load_canvas_documents(
+    connection: Connection,
+    *,
+    canvas_note_ids: list[int],
+    user_id: int | None = None,
+) -> list[Document]:
+    if not canvas_note_ids:
+        return []
+
+    filters = ["c.id = ANY(%s)"]
+    params: list[Any] = [canvas_note_ids]
+    if user_id is not None:
+        filters.append("n.user_id = %s")
+        params.append(user_id)
+
+    ai_canvas_notes = fetch_all(
+        connection,
+        f"""
+        SELECT c.id,
+               c.note_id,
+               c.title,
+               c.markdown,
+               c.source_page_start,
+               c.source_page_end,
+               n.title AS note_title
+        FROM ai_canvas_notes c
+        JOIN notes n ON n.id = c.note_id
+        WHERE {' AND '.join(filters)}
+        ORDER BY c.updated_at DESC, c.id DESC
+        """,
+        tuple(params),
+    )
+
+    documents: list[Document] = []
+    for canvas_note in ai_canvas_notes:
+        if not canvas_note.get("markdown"):
+            continue
+        page_range = _format_page_range(
+            canvas_note.get("source_page_start"),
+            canvas_note.get("source_page_end"),
+        )
+        documents.append(
+            {
+                "source_type": "canvas_note",
+                "source_id": str(canvas_note["id"]),
+                "title": f"{canvas_note['note_title']} - {canvas_note['title']}",
+                "content": "\n".join(
+                    part
+                    for part in [
+                        f"Source pages: {page_range}" if page_range else "",
+                        canvas_note["markdown"],
+                    ]
+                    if part
+                ),
+            }
+        )
+    return documents
+
+
 def ask_with_rag(
     *,
     question: str,
@@ -143,6 +208,15 @@ def ask_with_rag(
     model: str | None = None,
 ) -> RAGAnswer:
     contexts = _retrieve_or_mock(question, documents, top_k)
+    return answer_with_retrieved_contexts(question=question, contexts=contexts, model=model)
+
+
+def answer_with_retrieved_contexts(
+    *,
+    question: str,
+    contexts: list[RetrievedContext],
+    model: str | None = None,
+) -> RAGAnswer:
     prompt = build_rag_prompt(question, contexts)
     selected_model = model or get_settings().default_ai_model
     mock_response = _mock_answer(question, contexts)
@@ -161,6 +235,101 @@ def ask_with_rag(
         ],
         sources=contexts,
     )
+
+
+def retrieve_rag_contexts(
+    connection: Connection,
+    *,
+    user_id: int,
+    question: str,
+    note_ids: list[int] | None = None,
+    folder_id: int | None = None,
+    canvas_note_ids: list[int] | None = None,
+    exclude_canvas_for_notes: bool = False,
+    documents: list[Document] | None = None,
+    top_k: int = 5,
+) -> list[RetrievedContext]:
+    contexts, _debug = retrieve_rag_contexts_with_debug(
+        connection,
+        user_id=user_id,
+        question=question,
+        note_ids=note_ids,
+        folder_id=folder_id,
+        canvas_note_ids=canvas_note_ids,
+        exclude_canvas_for_notes=exclude_canvas_for_notes,
+        documents=documents,
+        top_k=top_k,
+    )
+    return contexts
+
+
+def retrieve_rag_contexts_with_debug(
+    connection: Connection,
+    *,
+    user_id: int,
+    question: str,
+    note_ids: list[int] | None = None,
+    folder_id: int | None = None,
+    canvas_note_ids: list[int] | None = None,
+    exclude_canvas_for_notes: bool = False,
+    documents: list[Document] | None = None,
+    top_k: int = 5,
+) -> tuple[list[RetrievedContext], dict[str, Any]]:
+    debug: dict[str, Any] = {
+        "fallback": False,
+        "fallback_reason": None,
+        "retrieved_source_count": 0,
+        "retrieved_chunk_count": 0,
+    }
+    try:
+        contexts = retrieve_chunk_contexts(
+            connection,
+            user_id=user_id,
+            query=question,
+            note_ids=note_ids,
+            folder_id=folder_id,
+            canvas_note_ids=canvas_note_ids,
+            exclude_canvas_for_notes=exclude_canvas_for_notes,
+            top_k=top_k,
+        )
+        if contexts:
+            debug["retrieved_source_count"] = len({f"{context.source_type}:{context.source_id}" for context in contexts})
+            debug["retrieved_chunk_count"] = len(contexts)
+            return contexts, debug
+        debug["fallback"] = True
+        debug["fallback_reason"] = "vector_empty"
+    except Exception as exc:
+        debug["fallback"] = True
+        debug["fallback_reason"] = "vector_error"
+        logger.warning(
+            "vector RAG retrieval failed; falling back to keyword retrieval: user_id=%s note_ids=%s folder_id=%s canvas_note_ids=%s error=%s",
+            user_id,
+            note_ids,
+            folder_id,
+            canvas_note_ids,
+            exc,
+        )
+
+    if documents is None:
+        documents = []
+        if note_ids or folder_id is not None:
+            documents.extend(load_note_documents(
+                connection,
+                note_ids=note_ids,
+                folder_id=folder_id,
+                user_id=user_id,
+                include_canvas_notes=not exclude_canvas_for_notes,
+            ))
+        if canvas_note_ids:
+            documents.extend(load_canvas_documents(
+                connection,
+                canvas_note_ids=canvas_note_ids,
+                user_id=user_id,
+            ))
+    contexts = retrieve_relevant_contexts(question, documents, top_k=top_k)
+    debug["retrieved_source_count"] = len({f"{context.source_type}:{context.source_id}" for context in contexts})
+    debug["retrieved_chunk_count"] = len(contexts)
+    return contexts, debug
 
 
 def build_rag_context_hint(

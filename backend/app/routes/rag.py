@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, BackgroundTasks, Depends
 from psycopg import Connection
 
 from backend.app.core.auth import get_current_user
+from backend.app.db.crud import fetch_all, fetch_one, require_row
 from backend.app.db.session import get_db_connection
 from backend.app.schemas.rag import (
     RAGAnswer,
@@ -11,14 +12,52 @@ from backend.app.schemas.rag import (
     RAGSummaryRequest,
 )
 from backend.app.services.rag_service import (
-    ask_with_rag,
+    answer_with_retrieved_contexts,
     generate_quiz_from_context,
     load_note_documents,
+    retrieve_rag_contexts,
     summarize_note_with_prompt,
 )
+from backend.app.services.document_chunk_index import reindex_note_background
 
 
 router = APIRouter(prefix="/ai/rag", tags=["rag"])
+
+
+@router.post("/reindex/notes/{note_id}")
+def reindex_note_rag(
+    note_id: int,
+    background_tasks: BackgroundTasks,
+    connection: Connection = Depends(get_db_connection),
+    current_user: dict = Depends(get_current_user),
+):
+    require_row(
+        fetch_one(connection, "SELECT id FROM notes WHERE id = %s AND user_id = %s", (note_id, current_user["id"])),
+        "note not found",
+    )
+    background_tasks.add_task(reindex_note_background, note_id, current_user["id"])
+    return {"status": "queued", "note_count": 1}
+
+
+@router.post("/reindex/folders/{folder_id}")
+def reindex_folder_rag(
+    folder_id: int,
+    background_tasks: BackgroundTasks,
+    connection: Connection = Depends(get_db_connection),
+    current_user: dict = Depends(get_current_user),
+):
+    require_row(
+        fetch_one(connection, "SELECT id FROM folders WHERE id = %s AND user_id = %s", (folder_id, current_user["id"])),
+        "folder not found",
+    )
+    notes = fetch_all(
+        connection,
+        "SELECT id FROM notes WHERE folder_id = %s AND user_id = %s ORDER BY id ASC",
+        (folder_id, current_user["id"]),
+    )
+    for note in notes:
+        background_tasks.add_task(reindex_note_background, int(note["id"]), current_user["id"])
+    return {"status": "queued", "note_count": len(notes)}
 
 
 @router.post("/ask", response_model=RAGAnswer)
@@ -27,17 +66,17 @@ def ask_rag(
     connection: Connection = Depends(get_db_connection),
     current_user: dict = Depends(get_current_user),
 ):
-    documents = load_note_documents(
+    contexts = retrieve_rag_contexts(
         connection,
-        note_ids=payload.note_ids,
-        folder_id=payload.folder_id,
-        subject_id=payload.subject_id,
         user_id=current_user["id"],
-    )
-    return ask_with_rag(
         question=payload.question,
-        documents=documents,
+        note_ids=payload.note_ids,
+        folder_id=payload.folder_id or payload.subject_id,
         top_k=payload.top_k,
+    )
+    return answer_with_retrieved_contexts(
+        question=payload.question,
+        contexts=contexts,
         model=payload.model,
     )
 
