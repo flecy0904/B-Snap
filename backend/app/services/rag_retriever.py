@@ -3,6 +3,7 @@ from collections import Counter
 from typing import Any
 
 from backend.app.schemas.rag import RetrievedContext
+from backend.app.services.rag_chunker import split_text_into_chunks
 
 
 Document = dict[str, Any]
@@ -71,26 +72,6 @@ TOKEN_ALIASES = {
     "동적계획법": ("dp", "dynamic", "programming"),
     "dp": ("동적계획법",),
 }
-
-
-def split_text_into_chunks(text: str, chunk_size: int = 800, overlap: int = 100) -> list[str]:
-    if not text:
-        return []
-    if chunk_size <= 0:
-        raise ValueError("chunk_size must be positive")
-    if overlap < 0 or overlap >= chunk_size:
-        raise ValueError("overlap must be greater than or equal to 0 and smaller than chunk_size")
-
-    normalized = re.sub(r"\s+", " ", text).strip()
-    chunks = []
-    start = 0
-    while start < len(normalized):
-        end = start + chunk_size
-        chunks.append(normalized[start:end].strip())
-        if end >= len(normalized):
-            break
-        start = end - overlap
-    return [chunk for chunk in chunks if chunk]
 
 
 def retrieve_relevant_contexts(

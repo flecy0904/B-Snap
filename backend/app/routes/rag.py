@@ -11,10 +11,10 @@ from backend.app.schemas.rag import (
     RAGSummaryRequest,
 )
 from backend.app.services.rag_service import (
-    ask_with_rag,
-    generate_quiz_from_context,
+    ask_with_hybrid_rag,
+    generate_quiz_with_hybrid_rag,
     load_note_documents,
-    summarize_note_with_prompt,
+    summarize_note_with_hybrid_rag,
 )
 
 
@@ -27,16 +27,20 @@ def ask_rag(
     connection: Connection = Depends(get_db_connection),
     current_user: dict = Depends(get_current_user),
 ):
+    folder_id = payload.folder_id if payload.folder_id is not None else payload.subject_id
     documents = load_note_documents(
         connection,
         note_ids=payload.note_ids,
-        folder_id=payload.folder_id,
-        subject_id=payload.subject_id,
+        folder_id=folder_id,
         user_id=current_user["id"],
     )
-    return ask_with_rag(
+    return ask_with_hybrid_rag(
+        connection,
+        user_id=current_user["id"],
         question=payload.question,
         documents=documents,
+        note_ids=payload.note_ids,
+        folder_id=folder_id,
         top_k=payload.top_k,
         model=payload.model,
     )
@@ -48,15 +52,19 @@ def summarize_rag(
     connection: Connection = Depends(get_db_connection),
     current_user: dict = Depends(get_current_user),
 ):
+    folder_id = payload.folder_id if payload.folder_id is not None else payload.subject_id
     documents = load_note_documents(
         connection,
         note_ids=payload.note_ids,
-        folder_id=payload.folder_id,
-        subject_id=payload.subject_id,
+        folder_id=folder_id,
         user_id=current_user["id"],
     )
-    return summarize_note_with_prompt(
+    return summarize_note_with_hybrid_rag(
+        connection,
+        user_id=current_user["id"],
         documents=documents,
+        note_ids=payload.note_ids,
+        folder_id=folder_id,
         top_k=payload.top_k,
         mode=payload.mode,
         model=payload.model,
@@ -69,15 +77,19 @@ def quiz_rag(
     connection: Connection = Depends(get_db_connection),
     current_user: dict = Depends(get_current_user),
 ):
+    folder_id = payload.folder_id if payload.folder_id is not None else payload.subject_id
     documents = load_note_documents(
         connection,
         note_ids=payload.note_ids,
-        folder_id=payload.folder_id,
-        subject_id=payload.subject_id,
+        folder_id=folder_id,
         user_id=current_user["id"],
     )
-    return generate_quiz_from_context(
+    return generate_quiz_with_hybrid_rag(
+        connection,
+        user_id=current_user["id"],
         documents=documents,
+        note_ids=payload.note_ids,
+        folder_id=folder_id,
         top_k=payload.top_k,
         count=payload.count,
         model=payload.model,

@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     ai_provider: str = Field(default="openai", validation_alias="AI_PROVIDER")
     openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
     openai_default_model: str = Field(default="gpt-4.1-mini", validation_alias="OPENAI_DEFAULT_MODEL")
+    openai_embedding_model: str = Field(default="text-embedding-3-small", validation_alias="OPENAI_EMBEDDING_MODEL")
     gemini_api_key: str | None = Field(default=None, validation_alias="GEMINI_API_KEY")
     gemini_default_model: str = Field(default="gemini-2.5-flash", validation_alias="GEMINI_DEFAULT_MODEL")
     allowed_origins: str = Field(

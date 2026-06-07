@@ -42,10 +42,59 @@ def apply_auth_migration(engine) -> None:
         connection.execute(text("CREATE INDEX IF NOT EXISTS ix_notes_user_id ON notes(user_id)"))
 
 
+def apply_document_chunk_migration(engine) -> None:
+    try:
+        with engine.begin() as connection:
+            connection.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS document_chunks (
+                        id BIGSERIAL PRIMARY KEY,
+                        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        folder_id INTEGER REFERENCES folders(id) ON DELETE CASCADE,
+                        note_id INTEGER REFERENCES notes(id) ON DELETE CASCADE,
+                        source_type VARCHAR(40) NOT NULL,
+                        source_id TEXT NOT NULL,
+                        page_number INTEGER,
+                        chunk_index INTEGER NOT NULL,
+                        title TEXT NOT NULL,
+                        content TEXT NOT NULL,
+                        content_hash VARCHAR(64) NOT NULL,
+                        embedding vector(1536) NOT NULL,
+                        embedding_model VARCHAR(100) NOT NULL,
+                        source_updated_at TIMESTAMPTZ,
+                        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+                        indexed_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                        UNIQUE (user_id, source_type, source_id, chunk_index)
+                    )
+                    """
+                )
+            )
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_document_chunks_user_note ON document_chunks(user_id, note_id)"))
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_document_chunks_user_folder ON document_chunks(user_id, folder_id)"))
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_document_chunks_source ON document_chunks(user_id, source_type, source_id)"))
+            connection.execute(
+                text(
+                    """
+                    CREATE INDEX IF NOT EXISTS ix_document_chunks_embedding
+                    ON document_chunks
+                    USING ivfflat (embedding vector_cosine_ops)
+                    WITH (lists = 100)
+                    """
+                )
+            )
+    except Exception as exc:
+        print({"warning": "pgvector document chunk migration skipped", "detail": str(exc)})
+
+
 def main() -> None:
     engine = create_engine(get_settings().database_url)
     Base.metadata.create_all(bind=engine)
     apply_auth_migration(engine)
+    apply_document_chunk_migration(engine)
     print({"status": "ok", "tables": sorted(Base.metadata.tables.keys())})
 
 

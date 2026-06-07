@@ -23,7 +23,7 @@ from backend.app.services.openai_service import (
     generate_chat_title,
     generate_note_chat_answer,
 )
-from backend.app.services.rag_service import ask_with_rag, build_rag_context_hint, load_note_documents
+from backend.app.services.rag_service import ask_with_hybrid_rag, build_hybrid_rag_context_hint, load_note_documents
 
 
 router = APIRouter(tags=["chats"])
@@ -405,18 +405,24 @@ def create_ai_chat_message(
         }
     elif payload.use_rag:
         documents = load_note_documents(connection, note_ids=[session["note_id"]], user_id=current_user["id"])
-        answer = ask_with_rag(
+        answer = ask_with_hybrid_rag(
+            connection,
+            user_id=current_user["id"],
             question=payload.content,
             documents=documents,
+            note_ids=[session["note_id"]],
             top_k=payload.top_k,
             model=model,
         ).answer
     else:
         context_pages = select_chat_context_pages(pages, payload.page_number)
         documents = load_note_documents(connection, note_ids=[session["note_id"]], user_id=current_user["id"])
-        rag_context_hint = build_rag_context_hint(
+        rag_context_hint = build_hybrid_rag_context_hint(
+            connection,
+            user_id=current_user["id"],
             question=payload.content,
             documents=documents,
+            note_ids=[session["note_id"]],
             top_k=payload.top_k,
         )
         context_hint = "\n\n".join(

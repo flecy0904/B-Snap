@@ -13,6 +13,7 @@ from backend.app.schemas.rag import (
     RAGQuizResponse,
     RetrievedContext,
 )
+from backend.app.services.document_chunk_index import retrieve_hybrid_contexts
 from backend.app.services.note_page_content import extract_ai_page_text
 from backend.app.services.openai_service import generate_text_response
 from backend.app.services.prompts.rag import (
@@ -143,6 +144,40 @@ def ask_with_rag(
     model: str | None = None,
 ) -> RAGAnswer:
     contexts = _retrieve_or_mock(question, documents, top_k)
+    return answer_with_retrieved_contexts(question=question, contexts=contexts, model=model)
+
+
+def ask_with_hybrid_rag(
+    connection: Connection,
+    *,
+    user_id: int,
+    question: str,
+    documents: list[Document],
+    note_ids: list[int] | None = None,
+    folder_id: int | None = None,
+    top_k: int = 5,
+    model: str | None = None,
+) -> RAGAnswer:
+    contexts = retrieve_hybrid_contexts(
+        connection,
+        user_id=user_id,
+        query=question,
+        documents=documents,
+        note_ids=note_ids,
+        folder_id=folder_id,
+        top_k=top_k,
+    )
+    if not contexts and not documents:
+        contexts = build_mock_contexts(question)
+    return answer_with_retrieved_contexts(question=question, contexts=contexts, model=model)
+
+
+def answer_with_retrieved_contexts(
+    *,
+    question: str,
+    contexts: list[RetrievedContext],
+    model: str | None = None,
+) -> RAGAnswer:
     prompt = build_rag_prompt(question, contexts)
     selected_model = model or get_settings().default_ai_model
     mock_response = _mock_answer(question, contexts)
@@ -181,15 +216,46 @@ def build_rag_context_hint(
     )
 
 
+def build_hybrid_rag_context_hint(
+    connection: Connection,
+    *,
+    user_id: int,
+    question: str,
+    documents: list[Document],
+    note_ids: list[int] | None = None,
+    folder_id: int | None = None,
+    top_k: int = 5,
+) -> str | None:
+    contexts = retrieve_hybrid_contexts(
+        connection,
+        user_id=user_id,
+        query=question,
+        documents=documents,
+        note_ids=note_ids,
+        folder_id=folder_id,
+        top_k=top_k,
+    )
+    if not contexts:
+        return None
+
+    return "\n\n".join(
+        [
+            "Retrieved study context for this user question:",
+            format_contexts_for_prompt(contexts),
+        ]
+    )
+
+
 def summarize_note_with_prompt(
     *,
     documents: list[Document],
     top_k: int = 5,
     mode: str = "note",
     model: str | None = None,
+    contexts: list[RetrievedContext] | None = None,
 ) -> RAGAnswer:
     query = "시험 대비 핵심 개념 예상 문제" if mode == "exam" else "노트 핵심 요약 중요 개념"
-    contexts = _retrieve_or_mock(query, documents, top_k, fallback_to_documents=True)
+    contexts = contexts or _retrieve_or_mock(query, documents, top_k, fallback_to_documents=True)
     selected_model = model or get_settings().default_ai_model
     instructions = EXAM_SUMMARY_PROMPT if mode == "exam" else NOTE_SUMMARY_PROMPT
     mock_response = _mock_summary(contexts, mode)
@@ -211,14 +277,45 @@ def summarize_note_with_prompt(
     )
 
 
+def summarize_note_with_hybrid_rag(
+    connection: Connection,
+    *,
+    user_id: int,
+    documents: list[Document],
+    note_ids: list[int] | None = None,
+    folder_id: int | None = None,
+    top_k: int = 5,
+    mode: str = "note",
+    model: str | None = None,
+) -> RAGAnswer:
+    query = "시험 대비 핵심 개념 예상 문제" if mode == "exam" else "노트 핵심 요약 중요 개념"
+    contexts = retrieve_hybrid_contexts(
+        connection,
+        user_id=user_id,
+        query=query,
+        documents=documents,
+        note_ids=note_ids,
+        folder_id=folder_id,
+        top_k=top_k,
+    )
+    return summarize_note_with_prompt(
+        documents=documents,
+        top_k=top_k,
+        mode=mode,
+        model=model,
+        contexts=contexts or None,
+    )
+
+
 def generate_quiz_from_context(
     *,
     documents: list[Document],
     top_k: int = 5,
     count: int = 5,
     model: str | None = None,
+    contexts: list[RetrievedContext] | None = None,
 ) -> RAGQuizResponse:
-    contexts = _retrieve_or_mock("퀴즈 문제 정답 설명 핵심 개념", documents, top_k, fallback_to_documents=True)
+    contexts = contexts or _retrieve_or_mock("퀴즈 문제 정답 설명 핵심 개념", documents, top_k, fallback_to_documents=True)
     selected_model = model or get_settings().default_ai_model
     mock_questions = _mock_quiz_questions(contexts, count)
     mock_response = json.dumps(
@@ -235,6 +332,35 @@ def generate_quiz_from_context(
     return RAGQuizResponse(
         questions=_parse_quiz_questions(raw_response, fallback=mock_questions),
         sources=contexts,
+    )
+
+
+def generate_quiz_with_hybrid_rag(
+    connection: Connection,
+    *,
+    user_id: int,
+    documents: list[Document],
+    note_ids: list[int] | None = None,
+    folder_id: int | None = None,
+    top_k: int = 5,
+    count: int = 5,
+    model: str | None = None,
+) -> RAGQuizResponse:
+    contexts = retrieve_hybrid_contexts(
+        connection,
+        user_id=user_id,
+        query="퀴즈 문제 정답 설명 핵심 개념",
+        documents=documents,
+        note_ids=note_ids,
+        folder_id=folder_id,
+        top_k=top_k,
+    )
+    return generate_quiz_from_context(
+        documents=documents,
+        top_k=top_k,
+        count=count,
+        model=model,
+        contexts=contexts or None,
     )
 
 
