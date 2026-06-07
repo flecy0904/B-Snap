@@ -5,6 +5,13 @@ from unittest.mock import patch
 from pydantic import ValidationError
 
 from backend.app.schemas.rag import QuizQuestion, RAGAskRequest, RAGSummaryRequest
+from backend.app.services.document_chunk_index import (
+    _delete_stale_note_chunks,
+    collect_note_index_sources,
+    embedding_to_vector_literal,
+    merge_hybrid_contexts,
+)
+from backend.app.services.rag_chunker import IndexSource
 from backend.app.services.prompts.ai_canvas import AI_CANVAS_EDIT_INSTRUCTIONS
 from backend.app.services.prompts.ai_chat import AI_CHAT_INSTRUCTIONS
 from backend.app.services.prompts.rag import (
@@ -25,6 +32,36 @@ from backend.app.services.rag_retriever import (
     retrieve_relevant_contexts,
     split_text_into_chunks,
 )
+
+
+class RecordingCursor:
+    def __init__(self, connection):
+        self.connection = connection
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+    def execute(self, sql, params=()):
+        self.connection.statements.append((" ".join(sql.split()), params))
+
+
+class RecordingConnection:
+    def __init__(self):
+        self.statements = []
+        self.commit_count = 0
+        self.rollback_count = 0
+
+    def cursor(self):
+        return RecordingCursor(self)
+
+    def commit(self):
+        self.commit_count += 1
+
+    def rollback(self):
+        self.rollback_count += 1
 
 
 class RAGRetrieverTest(unittest.TestCase):
@@ -87,6 +124,87 @@ class RAGRetrieverTest(unittest.TestCase):
         self.assertEqual(len(contexts), 1)
         self.assertEqual(contexts[0].title, "해시 테이블")
 
+    def test_merge_hybrid_contexts_combines_vector_and_keyword_scores(self):
+        vector_context = retrieve_relevant_contexts(
+            "네트워크 계층",
+            [
+                {
+                    "source_type": "note_page",
+                    "source_id": "3",
+                    "title": "컴퓨터 네트워크 - page 3",
+                    "content": "OSI 계층 구조와 TCP/IP 모델을 설명합니다.",
+                }
+            ],
+            top_k=1,
+        )[0]
+        vector_context.score = 0.8
+        keyword_context = retrieve_relevant_contexts(
+            "네트워크 계층",
+            [
+                {
+                    "source_type": "note_page",
+                    "source_id": "3",
+                    "title": "컴퓨터 네트워크 - page 3",
+                    "content": "네트워크 계층은 라우팅과 패킷 전달을 담당합니다.",
+                }
+            ],
+            top_k=1,
+        )[0]
+
+        contexts = merge_hybrid_contexts(
+            vector_contexts=[vector_context],
+            keyword_contexts=[keyword_context],
+            top_k=1,
+        )
+
+        self.assertEqual(len(contexts), 1)
+        self.assertEqual(contexts[0].source_id, "3")
+        self.assertGreater(contexts[0].score, vector_context.score * 0.7)
+
+    def test_embedding_to_vector_literal_formats_pgvector_value(self):
+        self.assertEqual(embedding_to_vector_literal([0.1, -0.25, 1.0]), "[0.1,-0.25,1]")
+
+    def test_delete_stale_note_chunks_removes_sources_not_in_current_index(self):
+        connection = RecordingConnection()
+        sources = [
+            IndexSource(
+                source_type="note_page",
+                source_id="10",
+                title="네트워크 - page 1",
+                content="Network layer",
+                user_id=7,
+                note_id=3,
+            ),
+            IndexSource(
+                source_type="ai_canvas_note",
+                source_id="20",
+                title="네트워크 - 시험 대비",
+                content="Routing",
+                user_id=7,
+                note_id=3,
+            ),
+        ]
+
+        _delete_stale_note_chunks(connection, user_id=7, note_id=3, sources=sources)
+
+        self.assertEqual(connection.commit_count, 1)
+        self.assertEqual(connection.rollback_count, 0)
+        sql, params = connection.statements[0]
+        self.assertIn("DELETE FROM document_chunks", sql)
+        self.assertIn("NOT EXISTS", sql)
+        self.assertEqual(params, (7, 3, "ai_canvas_note", "20", "note_page", "10"))
+
+    def test_delete_stale_note_chunks_clears_note_when_no_sources_remain(self):
+        connection = RecordingConnection()
+
+        _delete_stale_note_chunks(connection, user_id=7, note_id=3, sources=[])
+
+        self.assertEqual(connection.commit_count, 1)
+        sql, params = connection.statements[0]
+        self.assertIn("DELETE FROM document_chunks", sql)
+        self.assertNotIn("NOT EXISTS", sql)
+        self.assertEqual(params, (7, 3))
+
     def test_build_rag_context_includes_sources(self):
         documents = [
             {
@@ -142,6 +260,50 @@ class RAGRetrieverTest(unittest.TestCase):
         self.assertIn("Source pages: 3-4", contents)
         self.assertTrue(any(document["source_type"] == "ai_canvas_note" for document in documents))
         self.assertNotIn('"kind": "bsnap-page-state"', contents)
+
+    def test_collect_note_index_sources_uses_note_pages_and_canvas_notes(self):
+        page_state = json.dumps(
+            {
+                "kind": "bsnap-page-state",
+                "version": 1,
+                "pdfText": "Network layer는 routing과 forwarding을 담당합니다.",
+                "textAnnotations": [{"text": "시험 중요: IP 주소"}],
+            },
+            ensure_ascii=False,
+        )
+
+        with patch("backend.app.services.document_chunk_index.fetch_one") as fetch_one:
+            with patch("backend.app.services.document_chunk_index.fetch_all") as fetch_all:
+                fetch_one.return_value = {
+                    "id": 1,
+                    "user_id": 7,
+                    "folder_id": 2,
+                    "title": "컴퓨터 네트워크",
+                    "summary": "프로토콜과 계층 구조 요약",
+                    "updated_at": None,
+                }
+                fetch_all.side_effect = [
+                    [{"id": 10, "note_id": 1, "page_number": 4, "content": page_state, "updated_at": None}],
+                    [
+                        {
+                            "id": 20,
+                            "note_id": 1,
+                            "title": "시험 대비",
+                            "markdown": "라우팅과 IP 주소를 함께 복습합니다.",
+                            "source_page_start": 4,
+                            "source_page_end": 5,
+                            "updated_at": None,
+                        }
+                    ],
+                ]
+
+                sources = collect_note_index_sources(object(), note_id=1, user_id=7)
+
+        source_types = {source.source_type for source in sources}
+        self.assertIn("note", source_types)
+        self.assertIn("note_page", source_types)
+        self.assertIn("ai_canvas_note", source_types)
+        self.assertTrue(any(source.page_number == 4 for source in sources))
 
     def test_build_rag_context_hint_formats_retrieved_sources(self):
         hint = build_rag_context_hint(

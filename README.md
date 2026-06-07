@@ -44,6 +44,7 @@ DATABASE_URL=postgresql+psycopg://postgres:<password>@localhost:5432/bsnap
 AI_PROVIDER=openai
 OPENAI_API_KEY=<your_openai_api_key>
 OPENAI_DEFAULT_MODEL=gpt-4.1-mini
+OPENAI_EMBEDDING_MODEL=text-embedding-3-small
 ALLOWED_ORIGINS=http://localhost:8081,http://localhost:19006
 JWT_SECRET_KEY=replace_with_openssl_rand_hex_32
 JWT_ALGORITHM=HS256
@@ -107,6 +108,24 @@ DB를 만든 뒤 한 번 실행합니다.
 cd C:\Users\User\Desktop\WorkSpace\B-Snap
 .\backend\.venv\Scripts\python.exe -m backend.scripts.init_db
 ```
+
+### 5-1. RAG vector 색인 생성
+
+RAG는 저장된 노트, PDF/OCR 텍스트, 사용자 메모, AI Canvas 정리본을 검색해 AI 답변에 참고 context로 넣습니다.
+
+기본적으로 keyword retrieval fallback이 동작하므로 API key나 vector 색인이 없어도 RAG API를 호출할 수 있습니다. 다만 의미 기반 검색까지 사용하려면 `backend/.env`에 `OPENAI_API_KEY`와 `OPENAI_EMBEDDING_MODEL`을 설정한 뒤 기존 노트 데이터를 한 번 색인합니다.
+
+```powershell
+.\backend\.venv\Scripts\python.exe -m backend.scripts.backfill_document_chunks
+```
+
+macOS/Linux:
+
+```bash
+backend/.venv/bin/python -m backend.scripts.backfill_document_chunks
+```
+
+이 과정을 거치면 `document_chunks` 테이블에 embedding이 저장되고, RAG는 vector retrieval과 keyword retrieval을 함께 사용하는 hybrid 검색으로 동작합니다. pgvector나 API key가 준비되지 않은 환경에서는 자동으로 keyword 검색으로 fallback합니다.
 
 ## 실행 방법
 
@@ -264,7 +283,39 @@ Backend:
 - 노트 제목 및 노트 페이지 내용 저장 API
 - OpenAI `gpt-4.1-mini` 연결
 - AI 질문/응답 DB 저장
+- RAG 기반 AI 학습 어시스턴트 API
+- keyword retrieval fallback 및 pgvector 기반 hybrid vector retrieval
+- RAG 프롬프트 템플릿, 노트 요약, 시험 대비 요약, 퀴즈 생성 프롬프트
+- 기존 AI 채팅 흐름에 RAG context hint 연결
 - 이미지 업로드 시 원본 파일 저장, 전처리 이미지 생성, 전처리 이미지를 우선 사용한 AI 사진 설명 생성
+
+## RAG / AI 학습 어시스턴트 흐름
+
+RAG는 B-Snap에 저장된 학습 자료를 검색한 뒤, 검색된 context를 AI 프롬프트에 붙여 답변을 생성하는 구조입니다.
+
+지원 API:
+
+- `POST /ai/rag/ask`: 저장된 학습 자료 기반 질의응답
+- `POST /ai/rag/summary`: 노트 요약 / 시험 대비 요약
+- `POST /ai/rag/quiz`: context 기반 퀴즈 생성
+
+검색 대상:
+
+- `notes.summary`
+- `note_pages.content`에서 추출한 PDF/OCR 텍스트
+- note page의 사용자 텍스트 메모
+- `ai_canvas_notes.markdown`
+
+기존 `POST /chat-sessions/{session_id}/ai-messages` 흐름에도 RAG context가 연결되어 있습니다. `use_rag: true`를 보내면 RAG 답변을 직접 생성하고, 기본 AI 채팅에서는 검색된 context를 내부 hint로 붙여 답변 품질을 보강합니다.
+
+시연 환경에서 vector RAG까지 사용하려면 다음 순서로 준비합니다.
+
+1. PostgreSQL에서 pgvector 사용 가능 여부를 확인합니다.
+2. `backend/.env`에 `OPENAI_API_KEY`와 `OPENAI_EMBEDDING_MODEL`을 설정합니다.
+3. `backend.scripts.init_db`를 실행해 `document_chunks` 테이블을 생성합니다.
+4. `backend.scripts.backfill_document_chunks`를 실행해 기존 노트 데이터를 embedding으로 색인합니다.
+
+자세한 RAG 구조, curl 예시, vector DB 교체 지점은 `backend/README_RAG.md`를 참고합니다.
 
 ## 이미지 전처리/사진 설명 흐름
 
