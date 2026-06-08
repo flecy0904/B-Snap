@@ -11,6 +11,7 @@ from backend.app.db.crud import fetch_all, fetch_one, require_row
 from backend.app.db.session import get_db_connection
 from backend.app.schemas.class_insights import ClassInsightPageSignalRead, ClassInsightRead
 from backend.app.services.document_matching import documents_match, normalize_subject_key, subjects_match
+from backend.app.services.handwriting_signals import SYMBOL_NAMES, normalize_korean_study_keywords
 from backend.app.services.note_page_content import parse_page_state
 
 
@@ -44,6 +45,19 @@ MAX_KEYWORD_HITS_PER_PAGE_STATE = 6
 MAX_PHOTO_REFERENCES_PER_PAGE_STATE = 5
 MAX_MEMO_PAGES_PER_PAGE_STATE = 4
 CONTENT_HINT_MAX_CHARS = 72
+STRONG_SEMANTIC_KEYWORDS = {"중요", "시험", "기말", "중간", "암기", "필수"}
+PRIMARY_SEMANTIC_SYMBOLS = {"star"}
+SEMANTIC_KEYWORD_WEIGHTS = {
+    "시험": 20,
+    "중요": 18,
+    "기말": 18,
+    "중간": 16,
+    "암기": 14,
+    "필수": 14,
+}
+SEMANTIC_SYMBOL_WEIGHTS = {
+    "star": 22,
+}
 
 
 def _clean_content_hint(value: str) -> str:
@@ -84,6 +98,18 @@ class PageInsightAccumulator:
     photo_reference_count: int = 0
     ai_question_count: int = 0
     memo_page_count: int = 0
+    handwriting_keyword_hits: int = 0
+    handwriting_symbol_count: int = 0
+    semantic_keywords: set[str] = field(default_factory=set)
+    semantic_symbols: set[str] = field(default_factory=set)
+    semantic_confidence_sum: float = 0.0
+    semantic_signal_participant_ids: set[int] = field(default_factory=set)
+    keyword_participant_counts: dict[str, set[int]] = field(default_factory=lambda: defaultdict(set))
+    symbol_participant_counts: dict[str, set[int]] = field(default_factory=lambda: defaultdict(set))
+    symbol_participant_weights: dict[str, dict[int, float]] = field(default_factory=lambda: defaultdict(dict))
+    semantic_keyword_weight_sum: float = 0.0
+    semantic_symbol_weight_sum: float = 0.0
+    semantic_symbol_weight_by_symbol: dict[str, float] = field(default_factory=lambda: defaultdict(float))
 
     def add_activity(self, *, user_id: int, note_id: int) -> None:
         self.participant_ids.add(user_id)
@@ -99,6 +125,8 @@ class PageInsightAccumulator:
             + self.photo_reference_count
             + self.ai_question_count
             + self.memo_page_count
+            + self.handwriting_keyword_hits
+            + self.handwriting_symbol_count
             + len(self.participant_ids)
         )
 
@@ -117,23 +145,102 @@ class PageInsightAccumulator:
                 self.photo_reference_count > 0,
                 self.ai_question_count > 0,
                 self.memo_page_count > 0,
+                self.handwriting_keyword_hits > 0,
+                self.handwriting_symbol_count > 0,
                 self.ink_density > 0.25,
             )
             if active
         )
 
-    def score(self) -> int:
-        return min(100, round(
-            self.bookmark_count * 7
-            + self.highlight_count * 2.8
-            + self.keyword_hits * 10
-            + self.photo_reference_count * 6
-            + self.ai_question_count * 5
+    @property
+    def semantic_signal_participant_count(self) -> int:
+        return len(self.semantic_signal_participant_ids)
+
+    def add_semantic_signal(
+        self,
+        *,
+        user_id: int,
+        note_id: int,
+        keywords: set[str],
+        symbols: set[str],
+        confidence_multiplier: float,
+    ) -> None:
+        if confidence_multiplier <= 0 or (not keywords and not symbols):
+            return
+        self.add_activity(user_id=user_id, note_id=note_id)
+        self.semantic_signal_participant_ids.add(user_id)
+        self.semantic_confidence_sum += confidence_multiplier
+
+        for keyword in keywords:
+            if keyword not in STRONG_SEMANTIC_KEYWORDS:
+                continue
+            self.semantic_keywords.add(keyword)
+            self.keyword_participant_counts[keyword].add(user_id)
+            self.handwriting_keyword_hits += 1
+            self.semantic_keyword_weight_sum += SEMANTIC_KEYWORD_WEIGHTS.get(keyword, 0) * confidence_multiplier
+
+        for symbol in symbols:
+            if symbol not in PRIMARY_SEMANTIC_SYMBOLS:
+                continue
+            self.semantic_symbols.add(symbol)
+            self.symbol_participant_counts[symbol].add(user_id)
+            self.symbol_participant_weights[symbol][user_id] = max(
+                self.symbol_participant_weights[symbol].get(user_id, 0.0),
+                confidence_multiplier,
+            )
+            self.handwriting_symbol_count += 1
+            weighted_symbol_score = SEMANTIC_SYMBOL_WEIGHTS.get(symbol, 0) * confidence_multiplier
+            self.semantic_symbol_weight_sum += weighted_symbol_score
+            self.semantic_symbol_weight_by_symbol[symbol] += weighted_symbol_score
+
+    def semantic_keyword_score(self) -> float:
+        return min(60.0, self.semantic_keyword_weight_sum)
+
+    def symbol_score(self) -> float:
+        return min(22.0, self.semantic_symbol_weight_by_symbol.get("star", 0.0))
+
+    def group_consensus_score(self) -> float:
+        semantic_participants = len(self.semantic_signal_participant_ids)
+        if semantic_participants >= 4:
+            participant_score = 35.0
+        elif semantic_participants == 3:
+            participant_score = 24.0
+        elif semantic_participants == 2:
+            participant_score = 12.0
+        else:
+            participant_score = 0.0
+
+        star_participants = len(self.symbol_participant_counts.get("star", set()))
+        if star_participants >= 3:
+            star_consensus_score = 25.0
+        elif star_participants >= 2:
+            star_consensus_score = 15.0
+        else:
+            star_consensus_score = 0.0
+
+        return min(60.0, participant_score + star_consensus_score)
+
+    def study_action_score(self) -> float:
+        return min(28.0, (
+            self.bookmark_count * 8
+            + min(10.0, self.highlight_count * 2)
+            + self.ai_question_count * 6
             + self.memo_page_count * 7
-            + self.ink_density * 22
-            + max(0, self.signal_diversity - 1) * 4
-            + max(0, len(self.participant_ids) - 1) * 8
-            + max(0, len(self.note_ids) - 1) * 4
+            + self.photo_reference_count * 4
+        ))
+
+    def raw_ink_density_score(self) -> float:
+        return min(6.0, self.ink_density * 6)
+
+    def score(self) -> int:
+        legacy_text_keyword_score = min(12.0, self.keyword_hits * 4)
+        return min(100, round(
+            self.semantic_keyword_score()
+            + self.symbol_score()
+            + self.group_consensus_score()
+            + self.study_action_score()
+            + self.raw_ink_density_score()
+            + legacy_text_keyword_score
         ))
 
     def reason_tags(self) -> list[str]:
@@ -142,6 +249,20 @@ class PageInsightAccumulator:
             tags.append("복습 우선도가 높게 잡힌 페이지")
         elif len(self.participant_ids) >= 2:
             tags.append("복습 신호가 겹친 페이지")
+        if self.semantic_signal_participant_count >= 2:
+            tags.append("여러 학생의 중요 표시가 겹친 페이지")
+        if self.handwriting_keyword_hits > 0 or self.handwriting_symbol_count > 0:
+            tags.append("손필기 중요 표시가 감지된 페이지")
+        if "시험" in self.semantic_keywords:
+            tags.append("시험 관련 손필기 표시가 있는 페이지")
+        if {"중요", "암기", "필수"} & self.semantic_keywords:
+            tags.append("중요/암기 표시가 있는 페이지")
+        if {"기말", "중간"} & self.semantic_keywords:
+            tags.append("기말/중간 대비 표시가 있는 페이지")
+        if "star" in self.semantic_symbols:
+            tags.append("별표로 중요 표시된 페이지")
+        if self.handwriting_keyword_hits > 0 or self.handwriting_symbol_count > 0:
+            tags.append("단순 필기량보다 명시적 중요 표시가 강한 페이지")
         if self.signal_diversity >= 3:
             tags.append("여러 학습 신호가 함께 모인 페이지")
         if self.bookmark_count > 0:
@@ -156,9 +277,9 @@ class PageInsightAccumulator:
             tags.append("복습 질문이 모인 페이지")
         if self.memo_page_count > 0:
             tags.append("추가 정리/메모가 붙은 구간")
-        if self.ink_density > 0.45:
+        if self.ink_density > 0.45 and not (self.handwriting_keyword_hits or self.handwriting_symbol_count):
             tags.append("표시가 밀집된 페이지")
-        return tags or ["복습 우선도가 감지된 페이지"]
+        return tags or ["복습 우선도가 높은 페이지"]
 
 
 def _is_same_class_document(row: dict[str, Any], current_note: dict[str, Any]) -> bool:
@@ -174,6 +295,116 @@ def _is_same_class_document(row: dict[str, Any], current_note: dict[str, Any]) -
 
 def _count_keyword_hits(text: str) -> int:
     return sum(1 for keyword in IMPORTANT_NOTE_KEYWORDS if keyword in text)
+
+
+def _confidence_multiplier(value: Any) -> float:
+    if not isinstance(value, (int, float)):
+        return 0.0
+    confidence = float(value)
+    if confidence >= 0.80:
+        return 1.0
+    if confidence >= 0.60:
+        return 0.75
+    if confidence >= 0.40:
+        return 0.45
+    return 0.0
+
+
+def _collect_keywords_from_recognition(value: dict[str, Any]) -> set[str]:
+    keywords: set[str] = set()
+    raw_keywords = value.get("keywords")
+    if isinstance(raw_keywords, list):
+        for keyword in raw_keywords:
+            if isinstance(keyword, str):
+                keywords.update(normalize_korean_study_keywords(keyword))
+
+    text = value.get("text")
+    candidates: list[str] = []
+    raw_candidates = value.get("candidates")
+    if isinstance(raw_candidates, list):
+        for candidate in raw_candidates:
+            if isinstance(candidate, str):
+                candidates.append(candidate)
+            elif isinstance(candidate, dict) and isinstance(candidate.get("text"), str):
+                candidates.append(candidate["text"])
+    if isinstance(text, str):
+        keywords.update(normalize_korean_study_keywords(text, candidates))
+    return keywords
+
+
+def _collect_symbols_from_recognition(value: dict[str, Any]) -> set[str]:
+    raw_symbols = value.get("symbols")
+    if not isinstance(raw_symbols, list):
+        return set()
+    symbols: set[str] = set()
+    for symbol in raw_symbols:
+        if isinstance(symbol, str) and symbol in SYMBOL_NAMES:
+            symbols.add(symbol)
+        elif isinstance(symbol, dict) and isinstance(symbol.get("symbol"), str) and symbol["symbol"] in SYMBOL_NAMES:
+            symbols.add(symbol["symbol"])
+    return symbols
+
+
+def _apply_handwriting_recognition(
+    accumulator: PageInsightAccumulator,
+    state: dict[str, Any],
+    *,
+    user_id: int,
+    note_id: int,
+) -> bool:
+    recognition = state.get("handwritingRecognition")
+    if not isinstance(recognition, dict) or recognition.get("status") != "ready":
+        return False
+
+    keyword_multipliers: dict[str, float] = {}
+    symbol_multipliers: dict[str, float] = {}
+
+    def merge_semantics(source: dict[str, Any], fallback_multiplier: float | None = None) -> None:
+        multiplier = fallback_multiplier if fallback_multiplier is not None else _confidence_multiplier(source.get("confidence"))
+        if multiplier <= 0:
+            return
+        for keyword in _collect_keywords_from_recognition(source):
+            keyword_multipliers[keyword] = max(keyword_multipliers.get(keyword, 0.0), multiplier)
+        for symbol in _collect_symbols_from_recognition(source):
+            symbol_multipliers[symbol] = max(symbol_multipliers.get(symbol, 0.0), multiplier)
+
+    page_multiplier = _confidence_multiplier(recognition.get("confidence"))
+    merge_semantics(recognition, page_multiplier)
+    clusters = recognition.get("clusters")
+    if isinstance(clusters, list):
+        for cluster in clusters:
+            if isinstance(cluster, dict):
+                cluster_multiplier = (
+                    _confidence_multiplier(cluster.get("confidence"))
+                    if "confidence" in cluster
+                    else page_multiplier
+                )
+                merge_semantics(cluster, cluster_multiplier)
+
+    applied = False
+    for keyword, multiplier in keyword_multipliers.items():
+        if keyword not in STRONG_SEMANTIC_KEYWORDS:
+            continue
+        accumulator.add_semantic_signal(
+            user_id=user_id,
+            note_id=note_id,
+            keywords={keyword},
+            symbols=set(),
+            confidence_multiplier=multiplier,
+        )
+        applied = True
+    for symbol, multiplier in symbol_multipliers.items():
+        if symbol not in PRIMARY_SEMANTIC_SYMBOLS:
+            continue
+        accumulator.add_semantic_signal(
+            user_id=user_id,
+            note_id=note_id,
+            keywords=set(),
+            symbols={symbol},
+            confidence_multiplier=multiplier,
+        )
+        applied = True
+    return applied
 
 
 def _coerce_count(value: Any) -> int:
@@ -235,6 +466,8 @@ def _apply_page_state(accumulator: PageInsightAccumulator, state: dict[str, Any]
                 keyword_hits += hits
                 had_activity = True
         accumulator.keyword_hits += min(keyword_hits, MAX_KEYWORD_HITS_PER_PAGE_STATE)
+
+    had_activity = _apply_handwriting_recognition(accumulator, state, user_id=user_id, note_id=note_id) or had_activity
 
     bookmark_count = _sum_state_counts(state, ("bookmarked", "bookmarkCount", "bookmark_count", "bookmarks"))
     photo_reference_count = _sum_state_counts(
@@ -482,9 +715,13 @@ def get_class_insights(
             photo_reference_count=accumulator.photo_reference_count,
             ai_question_count=accumulator.ai_question_count,
             memo_page_count=accumulator.memo_page_count,
+            handwriting_keyword_hits=accumulator.handwriting_keyword_hits,
+            handwriting_symbol_count=accumulator.handwriting_symbol_count,
+            semantic_keywords=sorted(accumulator.semantic_keywords),
+            semantic_symbols=sorted(accumulator.semantic_symbols),
         )
         for accumulator in accumulators.values()
-        if (score := accumulator.score()) >= 18
+        if (score := accumulator.score()) >= 35
     ]
     pages.sort(key=lambda page: page.importance_score, reverse=True)
     active_participant_ids, active_note_ids = _collect_active_signal_sources(accumulators)
