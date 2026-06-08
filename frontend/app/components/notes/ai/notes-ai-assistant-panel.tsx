@@ -51,6 +51,8 @@ type WebMessageScrollbarDragState = {
 };
 
 const WEB_MESSAGE_SCROLLBAR_MIN_THUMB_HEIGHT = 32;
+const AI_COMPOSER_INPUT_MIN_HEIGHT = 36;
+const AI_COMPOSER_INPUT_MAX_HEIGHT = 132;
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
@@ -106,6 +108,7 @@ export function NotesAiAssistantPanel() {
   const [deleteTarget, setDeleteTarget] = React.useState<{ id: number; title: string } | null>(null);
   const [ragMenuOpen, setRagMenuOpen] = React.useState(false);
   const [ragMenuQuery, setRagMenuQuery] = React.useState('');
+  const [aiComposerInputHeight, setAiComposerInputHeight] = React.useState(AI_COMPOSER_INPUT_MIN_HEIGHT);
   const aiQuestionInputRef = React.useRef<TextInput | null>(null);
   const messagesScrollRef = React.useRef<ScrollView | null>(null);
   const [messageScrollbarState, setMessageScrollbarState] = React.useState<WebMessageScrollbarState>({
@@ -188,6 +191,7 @@ export function NotesAiAssistantPanel() {
   }, []);
   const handleAiQuestionChange = React.useCallback((value: string) => {
     workspace.onChangeAiQuestion(value);
+    if (!value) setAiComposerInputHeight(AI_COMPOSER_INPUT_MIN_HEIGHT);
     if (Platform.OS !== 'web') return;
     const match = value.match(/(?:^|\s)@([^\s@]*)$/);
     if (match) {
@@ -197,11 +201,42 @@ export function NotesAiAssistantPanel() {
     }
     closeRagReferenceMenu();
   }, [closeRagReferenceMenu, workspace.onChangeAiQuestion]);
+  const handleAiQuestionContentSizeChange = React.useCallback((event: any) => {
+    const contentHeight = Number(event?.nativeEvent?.contentSize?.height ?? 0);
+    if (!Number.isFinite(contentHeight) || contentHeight <= 0) return;
+    const nextHeight = clamp(Math.ceil(contentHeight), AI_COMPOSER_INPUT_MIN_HEIGHT, AI_COMPOSER_INPUT_MAX_HEIGHT);
+    setAiComposerInputHeight((current) => (
+      Math.abs(current - nextHeight) < 1 ? current : nextHeight
+    ));
+  }, []);
   const addRagReference = React.useCallback((source: BackendRagScopeSource) => {
     workspace.onAddAiRagScopeSource?.(source);
     workspace.onChangeAiQuestion(removeMentionToken(workspace.aiQuestion));
     closeRagReferenceMenu();
   }, [closeRagReferenceMenu, removeMentionToken, workspace]);
+  const webRagMenuInteractiveProps = React.useMemo(() => (
+    Platform.OS === 'web'
+      ? ({
+        'data-ai-rag-menu-interactive': 'true',
+        onPointerDown: (event: any) => {
+          event.stopPropagation?.();
+          event.nativeEvent?.stopPropagation?.();
+        },
+      } as any)
+      : {}
+  ), []);
+  const getWebRagMenuItemProps = React.useCallback((source: BackendRagScopeSource) => (
+    Platform.OS === 'web'
+      ? ({
+        onPointerDown: (event: any) => {
+          event.preventDefault?.();
+          event.stopPropagation?.();
+          event.nativeEvent?.stopPropagation?.();
+          addRagReference(source);
+        },
+      } as any)
+      : {}
+  ), [addRagReference]);
   const handleAiComposerKeyPress = React.useCallback((event: any) => {
     if (Platform.OS === 'web') {
       const key = event?.key ?? event?.nativeEvent?.key;
@@ -276,10 +311,10 @@ export function NotesAiAssistantPanel() {
       event.preventDefault();
       closeRagReferenceMenu({ focusComposer: true });
     };
-    window.addEventListener('pointerdown', handlePointerDown, true);
+    window.addEventListener('pointerdown', handlePointerDown);
     window.addEventListener('keydown', handleKeyDown);
     return () => {
-      window.removeEventListener('pointerdown', handlePointerDown, true);
+      window.removeEventListener('pointerdown', handlePointerDown);
       window.removeEventListener('keydown', handleKeyDown);
     };
   }, [closeRagReferenceMenu, ragMenuOpen]);
@@ -913,7 +948,13 @@ export function NotesAiAssistantPanel() {
                       },
                     } as any;
                     return (
-                      <View key={session.id} style={workspace.styles.aiSidebarChatRowWrap}>
+                      <View
+                        key={session.id}
+                        style={[
+                          workspace.styles.aiSidebarChatRowWrap,
+                          menuSessionId === session.id && workspace.styles.aiSidebarChatRowWrapMenuOpen,
+                        ]}
+                      >
                         <Pressable
                           {...contextMenuProps}
                           style={[workspace.styles.aiHeaderRecentMenuItem, active && workspace.styles.aiHeaderRecentMenuItemActive]}
@@ -926,7 +967,7 @@ export function NotesAiAssistantPanel() {
                           </Text>
                         </Pressable>
                         {menuSessionId === session.id ? (
-                          <View style={workspace.styles.aiSidebarContextMenu}>
+                          <View style={[workspace.styles.aiSidebarContextMenu, workspace.styles.aiHeaderRecentContextMenu]}>
                             <Pressable style={workspace.styles.aiSidebarContextMenuItem} onPress={() => startEditingSession(session.id, session.title)}>
                               <MaterialCommunityIcons name="pencil-outline" size={15} color="#111827" />
                               <Text style={workspace.styles.aiSidebarContextMenuText}>이름 바꾸기</Text>
@@ -1012,6 +1053,7 @@ export function NotesAiAssistantPanel() {
             </View>
           ) : null}
             </ScrollView>
+            {Platform.OS === 'web' ? <View pointerEvents="none" style={workspace.styles.aiMessagesTopFade} /> : null}
             {Platform.OS === 'web' ? (
             <View
               pointerEvents={messageScrollbarMetrics.visible ? 'auto' : 'none'}
@@ -1116,14 +1158,22 @@ export function NotesAiAssistantPanel() {
             </ScrollView>
           ) : null}
           <View
-            style={workspace.styles.aiComposerInputShell}
-            {...(Platform.OS === 'web' ? ({ 'data-ai-rag-menu-interactive': 'true' } as any) : {})}
+            style={[
+              workspace.styles.aiComposerInputShell,
+              Platform.OS !== 'web' && workspace.styles.aiComposerInputShellStandalone,
+            ]}
+            {...webRagMenuInteractiveProps}
           >
             {ragMenuOpen && Platform.OS === 'web' ? (
               <View style={workspace.styles.aiRagScopeMenu}>
                 <Text style={workspace.styles.aiRagScopeMenuTitle}>참고 자료 추가</Text>
                 {filteredRagCandidates.length ? filteredRagCandidates.map((source) => (
-                  <Pressable key={`${source.type}:${source.id}`} style={workspace.styles.aiRagScopeMenuItem} onPress={() => addRagReference(source)}>
+                  <Pressable
+                    key={`${source.type}:${source.id}`}
+                    style={workspace.styles.aiRagScopeMenuItem}
+                    onPress={Platform.OS === 'web' ? undefined : () => addRagReference(source)}
+                    {...getWebRagMenuItemProps(source)}
+                  >
                     <MaterialCommunityIcons name={source.type === 'canvas_note' ? 'note-edit-outline' : 'file-document-outline'} size={15} color="#5F79FF" />
                     <Text style={workspace.styles.aiRagScopeMenuItemText} numberOfLines={1}>{source.title}</Text>
                   </Pressable>
@@ -1131,18 +1181,6 @@ export function NotesAiAssistantPanel() {
                   <Text style={workspace.styles.aiRagScopeMenuEmpty}>추가할 참고 자료가 없어요.</Text>
                 )}
               </View>
-            ) : null}
-            {Platform.OS === 'web' ? (
-              <Pressable
-                style={workspace.styles.aiRagScopeAddButton}
-                onPress={() => {
-                  setRagMenuOpen((current) => !current);
-                  setRagMenuQuery('');
-                }}
-                disabled={workspace.aiChatReadOnly || workspace.aiLoading}
-              >
-                <MaterialCommunityIcons name="plus" size={18} color="#5B6472" />
-              </Pressable>
             ) : null}
             <TextInput
               ref={aiQuestionInputRef}
@@ -1154,7 +1192,12 @@ export function NotesAiAssistantPanel() {
               multiline
               editable={!workspace.aiChatReadOnly && !workspace.aiLoading}
               showSoftInputOnFocus
-              style={workspace.styles.aiComposerInput}
+              style={[
+                workspace.styles.aiComposerInput,
+                { height: aiComposerInputHeight },
+              ]}
+              onContentSizeChange={handleAiQuestionContentSizeChange}
+              scrollEnabled={aiComposerInputHeight >= AI_COMPOSER_INPUT_MAX_HEIGHT}
               submitBehavior="submit"
               blurOnSubmit={false}
               onSubmitEditing={() => {
@@ -1162,7 +1205,32 @@ export function NotesAiAssistantPanel() {
               }}
               onKeyPress={handleAiComposerKeyPress}
             />
-            <View style={workspace.styles.aiTooltipAnchor}>
+            <View style={workspace.styles.aiComposerActionRow}>
+              {Platform.OS === 'web' ? (
+                <Pressable
+                  style={workspace.styles.aiRagScopeAddButton}
+                  onPress={() => {
+                    if (ragMenuOpen) {
+                      closeRagReferenceMenu({ focusComposer: true });
+                      return;
+                    }
+                    setRagMenuOpen(true);
+                    setRagMenuQuery('');
+                  }}
+                  disabled={workspace.aiChatReadOnly || workspace.aiLoading}
+                >
+                  <MaterialCommunityIcons name="plus" size={18} color="#5B6472" />
+                </Pressable>
+              ) : null}
+              <View style={workspace.styles.aiComposerActionSpacer} />
+              <Pressable
+                style={workspace.styles.aiComposerModeButton}
+                disabled={workspace.aiChatReadOnly || workspace.aiLoading}
+              >
+                <Text style={workspace.styles.aiComposerModeText}>GPT-5.5</Text>
+                <MaterialCommunityIcons name="chevron-down" size={15} color="#5B6472" />
+              </Pressable>
+              <View style={workspace.styles.aiTooltipAnchor}>
               <Pressable
                 {...getTooltipTriggerProps('ai-chat-send', '전송')}
                 style={[workspace.styles.aiSendButton, workspace.aiChatReadOnly && workspace.styles.aiSendButtonDisabled]}
@@ -1178,6 +1246,7 @@ export function NotesAiAssistantPanel() {
             </View>
           </View>
         </View>
+      </View>
       </View>
       </Animated.View>
       {workspace.aiPanelMode === 'sidebar' && !workspace.usesAppAiPanelLayout ? (

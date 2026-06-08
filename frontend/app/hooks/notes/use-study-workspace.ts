@@ -64,6 +64,7 @@ export type StudyInteractionMode = 'edit' | 'read';
 export type { AiFloatingPanelSize };
 
 const DEFAULT_AI_FLOATING_PANEL_SIZE: AiFloatingPanelSize = { width: 380, height: 620 };
+const DEFAULT_AI_PANEL_MODE: 'floating' | 'sidebar' = Platform.OS === 'web' ? 'sidebar' : 'floating';
 
 function normalizeAiFloatingPanelSize(size?: AiFloatingPanelSize | null): AiFloatingPanelSize {
   const width = Number.isFinite(size?.width) ? Math.round(size!.width) : DEFAULT_AI_FLOATING_PANEL_SIZE.width;
@@ -148,7 +149,7 @@ export function useStudyWorkspace(props: {
   const [textAnnotationsByDocument, setTextAnnotationsByDocument] = useState<Record<number, InkTextAnnotation[]>>({});
   const [imageAnnotationsByDocument, setImageAnnotationsByDocument] = useState<Record<number, InkImageAnnotation[]>>({});
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
-  const [aiPanelMode, setAiPanelMode] = useState<'floating' | 'sidebar'>('floating');
+  const [aiPanelMode, setAiPanelMode] = useState<'floating' | 'sidebar'>(DEFAULT_AI_PANEL_MODE);
   const [appRightSidebarPanel, setAppRightSidebarPanel] = useState<AppRightSidebarPanel>(null);
   const [appChatMode, setAppChatMode] = useState<AppChatMode>('sidebar');
   const [appRightSidebarWidth, setAppRightSidebarWidth] = useState(380);
@@ -195,7 +196,7 @@ export function useStudyWorkspace(props: {
   const [aiChatSearchQuery, setAiChatSearchQuery] = useState('');
   const [aiMessagesBySession, setAiMessagesBySession] = useState<Record<number, BackendChatMessage[]>>({});
   const [draftAiRagScopeByDocument, setDraftAiRagScopeByDocument] = useState<Record<number, BackendRagScope | null>>({});
-  const [aiRagScopeCollapsed, setAiRagScopeCollapsed] = useState(false);
+  const [aiRagScopeCollapsed, setAiRagScopeCollapsed] = useState(true);
   const [aiRagCanvasCandidates, setAiRagCanvasCandidates] = useState<BackendAiCanvasNoteSummary[]>([]);
   const [backendFolderIdBySubjectId, setBackendFolderIdBySubjectId] = useState<Record<number, number>>({});
   const loadAllAiChatSessions = useCallback(() => {
@@ -297,7 +298,9 @@ export function useStudyWorkspace(props: {
     setBookmarksByDocument(snapshot.bookmarksByDocument ?? {});
     setLastChatSessionByDocument(snapshot.lastChatSessionByDocument ?? {});
     setChatSidebarOpenByDocument(snapshot.chatSidebarOpenByDocument ?? {});
-    setAiPanelMode(snapshot.aiPanelMode === 'sidebar' ? 'sidebar' : 'floating');
+    setAiPanelMode(snapshot.aiPanelMode === 'sidebar' || snapshot.aiPanelMode === 'floating'
+      ? snapshot.aiPanelMode
+      : DEFAULT_AI_PANEL_MODE);
     setAiFloatingPanelSize(normalizeAiFloatingPanelSize(snapshot.aiFloatingPanelSize));
     setAppSidebarPosition(snapshot.appSidebarPosition === 'left' ? 'left' : 'right');
     setStudyInteractionMode(snapshot.studyInteractionMode === 'read' ? 'read' : 'edit');
@@ -485,8 +488,8 @@ export function useStudyWorkspace(props: {
     backendPageIdsByDocument,
   });
   const activeAiChatSession = activeAiChatSessionId
-    ? allChatSessions.find((session) => session.id === activeAiChatSessionId)
-      ?? aiChatSessions.find((session) => session.id === activeAiChatSessionId)
+    ? aiChatSessions.find((session) => session.id === activeAiChatSessionId)
+      ?? allChatSessions.find((session) => session.id === activeAiChatSessionId)
       ?? null
     : null;
   const defaultAiRagScope = useMemo(() => buildDefaultRagScope(studyDocument), [studyDocument]);
@@ -798,6 +801,13 @@ export function useStudyWorkspace(props: {
         if (!mounted) return;
 
         setChatSessionsByDocument((current) => ({ ...current, [studyDocumentId]: sessions }));
+        setAllChatSessions((current) => {
+          const incomingSessionIds = new Set(sessions.map((item) => item.id));
+          return [
+            ...sessions,
+            ...current.filter((item) => !incomingSessionIds.has(item.id)),
+          ];
+        });
         setChatSessionByDocument((current) => ({ ...current, [studyDocumentId]: session.id }));
         setLastChatSessionByDocument((current) => ({ ...current, [studyDocumentId]: session.id }));
         setAiMessagesBySession((current) => ({ ...current, [session.id]: messages }));

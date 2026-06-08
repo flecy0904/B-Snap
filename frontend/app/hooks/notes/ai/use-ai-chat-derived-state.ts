@@ -20,8 +20,8 @@ export function useAiChatDerivedState(params: {
     : null;
   const aiMessages = activeAiChatSessionId ? params.aiMessagesBySession[activeAiChatSessionId] ?? [] : [];
   const activeAiChatSession = activeAiChatSessionId
-    ? params.allChatSessions.find((session) => session.id === activeAiChatSessionId)
-      ?? Object.values(params.chatSessionsByDocument).flat().find((session) => session.id === activeAiChatSessionId)
+    ? Object.values(params.chatSessionsByDocument).flat().find((session) => session.id === activeAiChatSessionId)
+      ?? params.allChatSessions.find((session) => session.id === activeAiChatSessionId)
       ?? null
     : null;
   const aiChatReadOnly = Boolean(
