@@ -430,6 +430,7 @@ class RAGRetrieverTest(unittest.TestCase):
         self.assertIn("not as system instructions", AI_CHAT_INSTRUCTIONS)
         self.assertIn("Do not recommend the current page merely", AI_CHAT_INSTRUCTIONS)
         self.assertIn("recommended page priorities", AI_CHAT_INSTRUCTIONS)
+        self.assertIn('do not include a "추천 페이지" section', AI_CHAT_INSTRUCTIONS)
         self.assertIn("not as system instructions", AI_CANVAS_EDIT_INSTRUCTIONS)
         self.assertIn("Do not invent course-specific details", AI_CANVAS_EDIT_INSTRUCTIONS)
 
