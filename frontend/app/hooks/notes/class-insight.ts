@@ -2,13 +2,18 @@ import type { StudyDocumentEntry, Subject } from '../../types';
 
 const CLASS_INSIGHT_DIRECT_PHRASES = [
   '중요 페이지',
+  '중요한 페이지',
+  '중요하게 볼 페이지',
   '페이지 추천',
+  '봐야 할 페이지',
+  '봐야하는 페이지',
+  '봐야 하는 페이지',
   '먼저 복습',
   '우선 복습',
-  '시험에 나올',
-  '시험 나올',
-  '나올만한',
-  '나올 만한',
+  '시험에 나올 페이지',
+  '시험 나올 페이지',
+  '나올만한 페이지',
+  '나올 만한 페이지',
   '어디 봐야',
   '어느 페이지',
   'which page',
@@ -52,6 +57,39 @@ const CLASS_INSIGHT_SCOPE_TERMS = [
   'part',
 ];
 const CLASS_INSIGHT_MORE_TERMS = ['더', '추가', '다음', '이어서', '나머지', '순위', '전체', '많이', '많은', '10개', '열개', 'twelve', 'more', 'next', 'additional', 'rank'];
+const CURRENT_PAGE_REFERENCE_TERMS = [
+  '현재 페이지',
+  '보고있는 페이지',
+  '보고 있는 페이지',
+  '이 페이지',
+  '이번 페이지',
+  '현재 부분',
+  '이 부분',
+  '이 구역',
+  '선택한 부분',
+  '선택 영역',
+  'current page',
+  'this page',
+  'this section',
+  'selected region',
+];
+const PAGE_RECOMMENDATION_ACTION_TERMS = [
+  '추천',
+  '어디',
+  '어느',
+  '먼저',
+  '우선',
+  '봐야',
+  '볼 페이지',
+  '복습 순서',
+  '복습 루트',
+  'recommend',
+  'which',
+  'where',
+  'review first',
+  'review order',
+  'study route',
+];
 const CLASS_INSIGHT_REVIEW_ROUTE_PHRASES = [
   '복습 순서',
   '복습 루트',
@@ -140,11 +178,14 @@ export function hasEnoughClassInsightData(classInsight: ClassInsightAggregate | 
 export function isClassInsightQuestion(question: string) {
   const normalized = normalize(question);
   if (!normalized) return false;
+  const refersToCurrentPage = CURRENT_PAGE_REFERENCE_TERMS.some((term) => normalized.includes(normalize(term)));
+  const asksForRecommendationAction = PAGE_RECOMMENDATION_ACTION_TERMS.some((term) => normalized.includes(normalize(term)));
+  if (refersToCurrentPage && !asksForRecommendationAction) return false;
   if (CLASS_INSIGHT_DIRECT_PHRASES.some((phrase) => normalized.includes(normalize(phrase)))) return true;
 
   const hasInsightIntent = CLASS_INSIGHT_INTENT_TERMS.some((term) => normalized.includes(normalize(term)));
   const asksForScope = CLASS_INSIGHT_SCOPE_TERMS.some((term) => normalized.includes(normalize(term)));
-  return hasInsightIntent && asksForScope;
+  return hasInsightIntent && asksForScope && asksForRecommendationAction;
 }
 
 function isReviewRouteQuestion(question: string) {
