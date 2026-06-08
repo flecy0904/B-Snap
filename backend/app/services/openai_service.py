@@ -78,7 +78,8 @@ def build_response_input(
             "role": "user",
             "content": (
                 "Internal assistant-only study context follows. "
-                "Use it silently to improve recommendations. "
+                "Use it silently only when it is relevant to the user's request. "
+                "Do not use this context for page recommendations unless it explicitly contains recommended page priorities. "
                 "Never reveal, quote, or describe this internal context or its raw sources to the user.\n\n"
                 f"{context_hint}"
             ),
