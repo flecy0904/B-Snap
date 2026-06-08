@@ -20,6 +20,7 @@ from backend.app.services.rag_chunker import IndexSource, build_text_chunks, is_
 
 
 logger = logging.getLogger(__name__)
+PAGE_SOURCE_TYPES = ("pdf_page", "pdf_text_box", "image_ocr", "image_ai_summary")
 
 
 def content_hash(content: str) -> str:
@@ -46,6 +47,78 @@ def _extract_canvas_block_ids(document_json: Any) -> list[str]:
 
     walk(document_json)
     return block_ids[:100]
+
+
+def _collect_page_index_sources(note: dict, page: dict, *, user_id: int) -> list[IndexSource]:
+    page_number = int(page["page_number"])
+    page_label = f"{page_number}페이지"
+    state = parse_page_state(page.get("content"))
+    sources: list[IndexSource] = []
+
+    if state is None:
+        if is_meaningful_text(page.get("content")):
+            sources.append(
+                IndexSource(
+                    source_type="pdf_page",
+                    source_id=str(page["id"]),
+                    title=f"{note['title']} - {page_label}",
+                    content=page["content"],
+                    user_id=user_id,
+                    folder_id=note["folder_id"],
+                    note_id=note["id"],
+                    page_number=page_number,
+                    source_updated_at=page.get("updated_at"),
+                    metadata={"note_page_id": page["id"], "page_label": page_label},
+                )
+            )
+        return sources
+
+    pdf_text = state.get("pdfText")
+    if isinstance(pdf_text, str) and is_meaningful_text(pdf_text):
+        sources.append(
+            IndexSource(
+                source_type="pdf_page",
+                source_id=str(page["id"]),
+                title=f"{note['title']} - {page_label}",
+                content=pdf_text,
+                user_id=user_id,
+                folder_id=note["folder_id"],
+                note_id=note["id"],
+                page_number=page_number,
+                source_updated_at=page.get("updated_at"),
+                metadata={"note_page_id": page["id"], "page_label": page_label},
+            )
+        )
+
+    image_annotations = state.get("imageAnnotations")
+    if isinstance(image_annotations, list):
+        for index, annotation in enumerate(image_annotations, start=1):
+            if not isinstance(annotation, dict):
+                continue
+            image_id = annotation.get("id") or annotation.get("assetId") or f"image-{index}"
+            summary = str(
+                annotation.get("analysisSummary")
+                or annotation.get("analysis_summary")
+                or annotation.get("summary")
+                or ""
+            ).strip()
+            if is_meaningful_text(summary):
+                sources.append(
+                    IndexSource(
+                        source_type="image_ai_summary",
+                        source_id=f"{page['id']}:{image_id}:summary",
+                        title=f"{note['title']} - {page_label} 이미지 분석",
+                        content=summary,
+                        user_id=user_id,
+                        folder_id=note["folder_id"],
+                        note_id=note["id"],
+                        page_number=page_number,
+                        source_updated_at=page.get("updated_at"),
+                        metadata=_metadata({"note_page_id": page["id"], "image_id": image_id, "page_label": page_label}),
+                    )
+                )
+
+    return sources
 
 
 def collect_note_index_sources(connection: Connection, *, note_id: int, user_id: int) -> list[IndexSource]:
@@ -84,115 +157,7 @@ def collect_note_index_sources(connection: Connection, *, note_id: int, user_id:
 
     sources: list[IndexSource] = []
     for page in pages:
-        page_number = int(page["page_number"])
-        page_label = f"{page_number}페이지"
-        state = parse_page_state(page.get("content"))
-        if state is None:
-            if is_meaningful_text(page.get("content")):
-                sources.append(
-                    IndexSource(
-                        source_type="pdf_page",
-                        source_id=str(page["id"]),
-                        title=f"{note['title']} - {page_label}",
-                        content=page["content"],
-                        user_id=user_id,
-                        folder_id=note["folder_id"],
-                        note_id=note_id,
-                        page_number=page_number,
-                        source_updated_at=page.get("updated_at"),
-                        metadata={"note_page_id": page["id"], "page_label": page_label},
-                    )
-                )
-            continue
-
-        pdf_text = state.get("pdfText")
-        if isinstance(pdf_text, str) and is_meaningful_text(pdf_text):
-            sources.append(
-                IndexSource(
-                    source_type="pdf_page",
-                    source_id=str(page["id"]),
-                    title=f"{note['title']} - {page_label}",
-                    content=pdf_text,
-                    user_id=user_id,
-                    folder_id=note["folder_id"],
-                    note_id=note_id,
-                    page_number=page_number,
-                    source_updated_at=page.get("updated_at"),
-                    metadata={"note_page_id": page["id"], "page_label": page_label},
-                )
-            )
-
-        text_annotations = state.get("textAnnotations")
-        if isinstance(text_annotations, list):
-            for index, annotation in enumerate(text_annotations, start=1):
-                if not isinstance(annotation, dict):
-                    continue
-                text = str(annotation.get("text") or "").strip()
-                if not is_meaningful_text(text):
-                    continue
-                text_box_id = annotation.get("id") or annotation.get("clientId") or f"text-{index}"
-                sources.append(
-                    IndexSource(
-                        source_type="pdf_text_box",
-                        source_id=f"{page['id']}:{text_box_id}",
-                        title=f"{note['title']} - {page_label} 텍스트 박스",
-                        content=text,
-                        user_id=user_id,
-                        folder_id=note["folder_id"],
-                        note_id=note_id,
-                        page_number=page_number,
-                        source_updated_at=page.get("updated_at"),
-                        metadata=_metadata({
-                            "note_page_id": page["id"],
-                            "text_box_id": text_box_id,
-                            "page_label": page_label,
-                        }),
-                    )
-                )
-
-        image_annotations = state.get("imageAnnotations")
-        if isinstance(image_annotations, list):
-            for index, annotation in enumerate(image_annotations, start=1):
-                if not isinstance(annotation, dict):
-                    continue
-                image_id = annotation.get("id") or annotation.get("assetId") or f"image-{index}"
-                ocr_text = str(annotation.get("ocrText") or annotation.get("ocr_text") or "").strip()
-                if is_meaningful_text(ocr_text):
-                    sources.append(
-                        IndexSource(
-                            source_type="image_ocr",
-                            source_id=f"{page['id']}:{image_id}:ocr",
-                            title=f"{note['title']} - {page_label} 이미지 OCR",
-                            content=ocr_text,
-                            user_id=user_id,
-                            folder_id=note["folder_id"],
-                            note_id=note_id,
-                            page_number=page_number,
-                            source_updated_at=page.get("updated_at"),
-                            metadata=_metadata({"note_page_id": page["id"], "image_id": image_id, "page_label": page_label}),
-                        )
-                    )
-                summary = str(
-                    annotation.get("analysisSummary")
-                    or annotation.get("analysis_summary")
-                    or annotation.get("summary")
-                    or ""
-                ).strip()
-                if is_meaningful_text(summary):
-                    sources.append(
-                        IndexSource(
-                            source_type="image_ai_summary",
-                            source_id=f"{page['id']}:{image_id}:summary",
-                            title=f"{note['title']} - {page_label} 이미지 분석",
-                            content=summary,
-                            user_id=user_id,
-                            folder_id=note["folder_id"],
-                            note_id=note_id,
-                            page_number=page_number,
-                            source_updated_at=page.get("updated_at"),
-                            metadata=_metadata({"note_page_id": page["id"], "image_id": image_id, "page_label": page_label}),
-                        )
-                    )
+        sources.extend(_collect_page_index_sources(note, page, user_id=user_id))
 
     for canvas_note in canvas_notes:
         markdown = str(canvas_note.get("markdown") or "").strip()
@@ -219,6 +184,35 @@ def collect_note_index_sources(connection: Connection, *, note_id: int, user_id:
         )
 
     return sources
+
+
+def collect_note_page_index_sources(connection: Connection, *, page_id: int, user_id: int) -> list[IndexSource]:
+    row = fetch_one(
+        connection,
+        """
+        SELECT p.id,
+               p.note_id,
+               p.page_number,
+               p.content,
+               p.image_url,
+               p.updated_at,
+               n.folder_id,
+               n.title
+        FROM note_pages p
+        JOIN notes n ON n.id = p.note_id
+        WHERE p.id = %s AND n.user_id = %s
+        """,
+        (page_id, user_id),
+    )
+    if not row:
+        return []
+
+    note = {
+        "id": row["note_id"],
+        "folder_id": row["folder_id"],
+        "title": row["title"],
+    }
+    return _collect_page_index_sources(note, row, user_id=user_id)
 
 
 def collect_canvas_index_sources(connection: Connection, *, canvas_note_id: int, user_id: int) -> list[IndexSource]:
@@ -327,6 +321,39 @@ def replace_note_chunks(connection: Connection, *, note_id: int, user_id: int) -
     return len(chunks)
 
 
+def delete_note_page_chunks(connection: Connection, *, page_id: int, user_id: int) -> None:
+    page_source_id = str(page_id)
+    page_source_prefix = f"{page_source_id}:%"
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            DELETE FROM document_chunks
+            WHERE user_id = %s
+              AND source_type = ANY(%s)
+              AND (
+                  source_id = %s
+                  OR source_id LIKE %s
+              )
+            """,
+            (user_id, list(PAGE_SOURCE_TYPES), page_source_id, page_source_prefix),
+        )
+
+
+def replace_note_page_chunks(connection: Connection, *, page_id: int, user_id: int) -> int:
+    sources = collect_note_page_index_sources(connection, page_id=page_id, user_id=user_id)
+    chunks = [chunk for source in sources for chunk in build_text_chunks(source)]
+    embedding_model = get_settings().openai_embedding_model
+
+    try:
+        delete_note_page_chunks(connection, page_id=page_id, user_id=user_id)
+        _insert_chunks(connection, chunks, embedding_model=embedding_model)
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    return len(chunks)
+
+
 def replace_canvas_chunks(connection: Connection, *, canvas_note_id: int, user_id: int) -> int:
     sources = collect_canvas_index_sources(connection, canvas_note_id=canvas_note_id, user_id=user_id)
     chunks = [chunk for source in sources for chunk in build_text_chunks(source)]
@@ -348,6 +375,23 @@ def reindex_note_background(note_id: int, user_id: int) -> None:
             replace_note_chunks(connection, note_id=note_id, user_id=user_id)
     except Exception as exc:
         logger.warning("failed to reindex note chunks: note_id=%s user_id=%s error=%s", note_id, user_id, exc)
+
+
+def reindex_note_page_background(page_id: int, user_id: int) -> None:
+    try:
+        with psycopg.connect(get_database_url(), row_factory=dict_row) as connection:
+            replace_note_page_chunks(connection, page_id=page_id, user_id=user_id)
+    except Exception as exc:
+        logger.warning("failed to reindex note page chunks: page_id=%s user_id=%s error=%s", page_id, user_id, exc)
+
+
+def delete_note_page_chunks_background(page_id: int, user_id: int) -> None:
+    try:
+        with psycopg.connect(get_database_url(), row_factory=dict_row) as connection:
+            delete_note_page_chunks(connection, page_id=page_id, user_id=user_id)
+            connection.commit()
+    except Exception as exc:
+        logger.warning("failed to delete note page chunks: page_id=%s user_id=%s error=%s", page_id, user_id, exc)
 
 
 def extract_pdf_text_and_reindex_background(note_id: int, user_id: int, pdf_path: str) -> None:
@@ -496,10 +540,15 @@ def retrieve_chunk_contexts(
 __all__ = [
     "collect_canvas_index_sources",
     "collect_note_index_sources",
+    "collect_note_page_index_sources",
+    "delete_note_page_chunks",
+    "delete_note_page_chunks_background",
     "extract_pdf_text_and_reindex_background",
     "reindex_canvas_background",
     "reindex_note_background",
+    "reindex_note_page_background",
     "replace_canvas_chunks",
     "replace_note_chunks",
+    "replace_note_page_chunks",
     "retrieve_chunk_contexts",
 ]

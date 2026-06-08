@@ -20,7 +20,11 @@ from backend.app.schemas.notes import (
     PdfTextExtractionRead,
 )
 from backend.app.services.note_page_content import merge_page_state_content
-from backend.app.services.document_chunk_index import reindex_note_background
+from backend.app.services.document_chunk_index import (
+    delete_note_page_chunks_background,
+    reindex_note_background,
+    reindex_note_page_background,
+)
 from backend.app.services.pdf_text_extractor import extract_pdf_text_pages, extract_pdf_text_pages_from_path
 
 
@@ -30,6 +34,14 @@ logger = logging.getLogger("uvicorn.error")
 
 def _schedule_note_reindex(background_tasks: BackgroundTasks, note_id: int, user_id: int) -> None:
     background_tasks.add_task(reindex_note_background, note_id, user_id)
+
+
+def _schedule_note_page_reindex(background_tasks: BackgroundTasks, page_id: int, user_id: int) -> None:
+    background_tasks.add_task(reindex_note_page_background, page_id, user_id)
+
+
+def _schedule_note_page_chunk_delete(background_tasks: BackgroundTasks, page_id: int, user_id: int) -> None:
+    background_tasks.add_task(delete_note_page_chunks_background, page_id, user_id)
 
 
 def get_note_for_user(note_id: int, user_id: int, connection: Connection):
@@ -221,7 +233,7 @@ def create_note_page(
         """,
         (note_id, payload.page_number, payload.content, payload.image_url),
     )
-    _schedule_note_reindex(background_tasks, note_id, current_user["id"])
+    _schedule_note_page_reindex(background_tasks, int(created["id"]), current_user["id"])
     return created
 
 
@@ -484,7 +496,7 @@ def update_note_page(
             page_id,
         ),
     )
-    _schedule_note_reindex(background_tasks, int(current["note_id"]), current_user["id"])
+    _schedule_note_page_reindex(background_tasks, int(updated["id"]), current_user["id"])
     return updated
 
 
@@ -509,4 +521,4 @@ def delete_note_page(
         "note page not found",
     )
     execute_commit(connection, "DELETE FROM note_pages WHERE id = %s", (page_id,))
-    _schedule_note_reindex(background_tasks, int(current["note_id"]), current_user["id"])
+    _schedule_note_page_chunk_delete(background_tasks, page_id, current_user["id"])

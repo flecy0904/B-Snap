@@ -8,7 +8,12 @@ from backend.app.schemas.rag import QuizQuestion, RAGAskRequest, RAGSummaryReque
 from backend.app.routes.chats import normalize_rag_scope, rag_scope_search_targets
 from backend.app.services.ai_context_builder import build_ai_context, format_answer_sources, select_rag_context_pages
 from backend.app.services.ai_context_router import route_ai_context
-from backend.app.services.document_chunk_index import collect_canvas_index_sources, collect_note_index_sources, retrieve_chunk_contexts
+from backend.app.services.document_chunk_index import (
+    collect_canvas_index_sources,
+    collect_note_index_sources,
+    replace_note_page_chunks,
+    retrieve_chunk_contexts,
+)
 from backend.app.services.rag_chunker import IndexSource, build_text_chunks
 from backend.app.services.rag_service import (
     _parse_quiz_questions,
@@ -231,10 +236,45 @@ class RAGRetrieverTest(unittest.TestCase):
 
         self.assertEqual(
             {source.source_type for source in sources},
-            {"pdf_page", "pdf_text_box", "image_ocr", "image_ai_summary", "canvas_note"},
+            {"pdf_page", "image_ai_summary", "canvas_note"},
         )
         canvas_source = next(source for source in sources if source.source_type == "canvas_note")
         self.assertEqual(canvas_source.metadata["block_ids"], ["b1"])
+
+    def test_replace_note_page_chunks_deletes_legacy_page_sources_before_insert(self):
+        executed = []
+
+        class FakeCursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def execute(self, query, params=None):
+                executed.append((query, params))
+
+        class FakeConnection:
+            def cursor(self):
+                return FakeCursor()
+
+            def commit(self):
+                executed.append(("COMMIT", None))
+
+            def rollback(self):
+                executed.append(("ROLLBACK", None))
+
+        with patch("backend.app.services.document_chunk_index.collect_note_page_index_sources", return_value=[]):
+            count = replace_note_page_chunks(FakeConnection(), page_id=10, user_id=7)
+
+        self.assertEqual(count, 0)
+        delete_query, delete_params = executed[0]
+        self.assertIn("DELETE FROM document_chunks", delete_query)
+        self.assertEqual(delete_params[0], 7)
+        self.assertIn("pdf_text_box", delete_params[1])
+        self.assertIn("image_ocr", delete_params[1])
+        self.assertEqual(delete_params[2], "10")
+        self.assertEqual(delete_params[3], "10:%")
 
     def test_collect_canvas_index_sources_targets_one_canvas_note(self):
         with patch("backend.app.services.document_chunk_index.fetch_one") as fetch_one:
