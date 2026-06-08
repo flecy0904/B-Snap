@@ -3,6 +3,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import { Image, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { PdfPreview } from '../pdf/pdf-preview';
 import { BlankNoteCanvas } from '../canvas/blank-note-canvas';
+import { HandwritingDebugFloatingPanel } from '../workspace/notes-document-viewer';
 import { NoteSummaryContent } from '../shared/notes-shared';
 import { PhotoViewerModal } from './photo-viewer-modal';
 import { MobileAiSheet } from './mobile-ai-sheet';
@@ -337,52 +338,55 @@ export function MobileNotesView(props: MobileNotesViewProps) {
   const renderDocumentStage = () => (
     <View style={[props.styles.mobilePdfStage, phoneViewerOnly && props.styles.mobileViewerStage]}>
       {props.studyDocument?.type === 'pdf' && props.studyDocument.file ? (
-        <PdfPreview
-          file={props.studyDocument.file}
-          page={props.currentPdfPage}
-          inkTool={phoneViewerOnly ? (props.inkTool === 'select' ? 'select' : 'view') : props.inkTool}
-          fingerDrawingEnabled={props.fingerDrawingEnabled}
-          penColor={props.penColor}
-          penWidth={props.penWidth}
-          brushType={props.brushType}
-          linePattern={props.linePattern}
-          eraserMode={props.eraserMode}
-          eraserWidth={props.eraserWidth}
-          selectionMode={props.selectionMode}
-          inkStrokes={props.inkByDocument[props.studyDocument.id] ?? props.inkStrokes}
-          textAnnotations={props.textAnnotationsByDocument[props.studyDocument.id] ?? props.textAnnotations}
-          imageAnnotations={props.imageAnnotationsByDocument[props.studyDocument.id] ?? props.imageAnnotations}
-          textAnnotationVariant={phoneViewerOnly ? 'marker' : undefined}
-          selectionRect={props.selectionRect}
-          onCommitInkStroke={props.onCommitInkStroke}
-          onRemoveInkStroke={props.onRemoveInkStroke}
-          onReplaceInkStrokes={props.onReplaceInkStrokes}
-          onAddTextAnnotation={props.onAddTextAnnotation}
-          onUpdateTextAnnotation={props.onUpdateTextAnnotation}
-          onRemoveTextAnnotation={props.onRemoveTextAnnotation}
-          onMoveTextAnnotation={props.onMoveTextAnnotation}
-          onResizeTextAnnotation={props.onResizeTextAnnotation}
-          onChangeTextAnnotationFontSize={props.onChangeTextAnnotationFontSize}
-          onEraseInkAtPoint={props.onEraseInkAtPoint}
-          onSelectionChange={props.onSelectionChange}
-          onAskAiAboutSelection={props.onAskAiAboutSelection}
-          onSelectionPreviewChange={props.onSelectionPreviewChange}
-          onMoveSelection={props.onMoveSelection}
-          onDocumentLoaded={props.onUpdateStudyDocumentPageCount}
-          onPageChanged={props.onSetCurrentPdfPage}
-          onOpenGeneratedPage={props.onOpenGeneratedPage}
-          notebookPages={props.notebookPages}
-          activeGeneratedPageId={props.currentDocumentPage?.kind === 'generated' ? props.currentDocumentPage.pageId : null}
-          pageCaptureReferences={props.pageCaptureReferences}
-          incomingAssetSuggestion={props.incomingAssetSuggestion}
-          onAcceptIncomingAsset={props.onAcceptIncomingAsset}
-          onArchiveIncomingAsset={props.onArchiveIncomingAsset}
-          onDismissIncomingAsset={props.onDismissIncomingAsset}
-          onOpenPageCaptureReference={props.onOpenPageCaptureReference}
-          onAskAiAboutPageCaptureReference={props.onAskAiAboutPageCaptureReference}
-          onChangeInkTool={props.onChangeInkTool}
-          styles={props.styles}
-        />
+        <View style={{ flex: 1 }}>
+          <PdfPreview
+            file={props.studyDocument.file}
+            page={props.currentPdfPage}
+            inkTool={phoneViewerOnly ? (props.inkTool === 'select' ? 'select' : 'view') : props.inkTool}
+            fingerDrawingEnabled={props.fingerDrawingEnabled}
+            penColor={props.penColor}
+            penWidth={props.penWidth}
+            brushType={props.brushType}
+            linePattern={props.linePattern}
+            eraserMode={props.eraserMode}
+            eraserWidth={props.eraserWidth}
+            selectionMode={props.selectionMode}
+            inkStrokes={props.inkByDocument[props.studyDocument.id] ?? props.inkStrokes}
+            textAnnotations={props.textAnnotationsByDocument[props.studyDocument.id] ?? props.textAnnotations}
+            imageAnnotations={props.imageAnnotationsByDocument[props.studyDocument.id] ?? props.imageAnnotations}
+            textAnnotationVariant={phoneViewerOnly ? 'marker' : undefined}
+            selectionRect={props.selectionRect}
+            onCommitInkStroke={props.onCommitInkStroke}
+            onRemoveInkStroke={props.onRemoveInkStroke}
+            onReplaceInkStrokes={props.onReplaceInkStrokes}
+            onAddTextAnnotation={props.onAddTextAnnotation}
+            onUpdateTextAnnotation={props.onUpdateTextAnnotation}
+            onRemoveTextAnnotation={props.onRemoveTextAnnotation}
+            onMoveTextAnnotation={props.onMoveTextAnnotation}
+            onResizeTextAnnotation={props.onResizeTextAnnotation}
+            onChangeTextAnnotationFontSize={props.onChangeTextAnnotationFontSize}
+            onEraseInkAtPoint={props.onEraseInkAtPoint}
+            onSelectionChange={props.onSelectionChange}
+            onAskAiAboutSelection={props.onAskAiAboutSelection}
+            onSelectionPreviewChange={props.onSelectionPreviewChange}
+            onMoveSelection={props.onMoveSelection}
+            onDocumentLoaded={props.onUpdateStudyDocumentPageCount}
+            onPageChanged={props.onSetCurrentPdfPage}
+            onOpenGeneratedPage={props.onOpenGeneratedPage}
+            notebookPages={props.notebookPages}
+            activeGeneratedPageId={props.currentDocumentPage?.kind === 'generated' ? props.currentDocumentPage.pageId : null}
+            pageCaptureReferences={props.pageCaptureReferences}
+            incomingAssetSuggestion={props.incomingAssetSuggestion}
+            onAcceptIncomingAsset={props.onAcceptIncomingAsset}
+            onArchiveIncomingAsset={props.onArchiveIncomingAsset}
+            onDismissIncomingAsset={props.onDismissIncomingAsset}
+            onOpenPageCaptureReference={props.onOpenPageCaptureReference}
+            onAskAiAboutPageCaptureReference={props.onAskAiAboutPageCaptureReference}
+            onChangeInkTool={props.onChangeInkTool}
+            styles={props.styles}
+          />
+          <HandwritingDebugFloatingPanel />
+        </View>
       ) : props.activeGeneratedPage?.pageKind === 'memo' && phoneViewerOnly ? (
         <View style={props.styles.mobileViewerFallbackCard}>
           <MaterialCommunityIcons name="notebook-outline" size={24} color="#5F79FF" />

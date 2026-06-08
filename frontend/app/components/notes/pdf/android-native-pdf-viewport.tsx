@@ -959,6 +959,7 @@ export function AndroidNativePdfViewport(props: {
     const point: InkPoint = {
       x: ((x - page.left) / Math.max(1, page.width) * page.pageWidth),
       y: ((y - page.top) / Math.max(1, page.height) * page.pageHeight),
+      t: Date.now(),
       pageNumber: page.pageNumber,
       generatedPageId: page.generatedPageId,
       pageWidth: page.pageWidth,
@@ -1245,6 +1246,7 @@ export function AndroidNativePdfViewport(props: {
     const point: InkPoint = {
       x: payload.x,
       y: payload.y,
+      t: Date.now(),
       pageNumber: payload.pageNumber ?? undefined,
       generatedPageId: payload.generatedPageId ?? undefined,
       pageWidth: payload.pageWidth,

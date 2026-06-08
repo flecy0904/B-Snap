@@ -7,6 +7,7 @@ import {
   updateBackendNotePage,
   uploadBackendPdfNote,
   BackendApiError,
+  type BackendNotePage,
 } from '../../../services/backend-api';
 import type { InkImageAnnotation, InkStroke, InkTextAnnotation } from '../../../ui-types';
 import type { BookmarkedPage, GeneratedWorkspacePage, PageCaptureReference, StudyDocumentEntry, Subject } from '../../../types';
@@ -41,6 +42,7 @@ type UseBackendNotePageSyncParams = {
   setImageAnnotationsByDocument: Dispatch<SetStateAction<Record<number, InkImageAnnotation[]>>>;
   setWorkspaceFeedback: Dispatch<SetStateAction<string | null>>;
   onPageSaveSuccess?: (documentId: number, pageNumber: number) => void;
+  onBackendPagesLoaded?: (documentId: number, pages: BackendNotePage[]) => void;
 };
 
 const EMPTY_PAGE_CONTENT = serializeNotePageContent({ inkStrokes: [], textAnnotations: [] });
@@ -71,6 +73,7 @@ export function useBackendNotePageSync({
   setImageAnnotationsByDocument,
   setWorkspaceFeedback,
   onPageSaveSuccess,
+  onBackendPagesLoaded,
 }: UseBackendNotePageSyncParams) {
   const [backendPageIdsByDocument, setBackendPageIdsByDocument] = useState<Record<number, Record<number, number>>>({});
   const [pendingPageSaves, setPendingPageSaves] = useState<Record<string, PendingPageSave>>({});
@@ -161,7 +164,8 @@ export function useBackendNotePageSync({
       setTextAnnotationsByDocument((current) => ({ ...current, [documentId]: documentTextAnnotations }));
       setImageAnnotationsByDocument((current) => ({ ...current, [documentId]: documentImageAnnotations }));
     }
-  }, [setImageAnnotationsByDocument, setInkByDocument, setTextAnnotationsByDocument, setUserStudyDocuments]);
+    onBackendPagesLoaded?.(documentId, pages);
+  }, [onBackendPagesLoaded, setImageAnnotationsByDocument, setInkByDocument, setTextAnnotationsByDocument, setUserStudyDocuments]);
 
   const markBackendPageDirty = useCallback((documentId: number, pageNumber: number) => {
     dirtyPageKeysRef.current.add(getPageSaveKey(documentId, pageNumber));

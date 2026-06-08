@@ -15,7 +15,9 @@ import type { BackendChatMessage, BackendChatSession, BackendClassInsight } from
 import type { UseAiCanvasNotesResult } from '../../../hooks/notes/ai-canvas/use-ai-canvas-notes';
 import type { AiCanvasBlockContext } from '../../../types/ai-canvas';
 import type { ImportantPageRecommendation } from '../../../hooks/notes/class-insight';
-import type { AiFloatingPanelSize, AppChatMode, AppRightSidebarPanel, AppSidebarPosition, StudyInteractionMode, WorkspaceFocusTarget } from '../../../hooks/notes/use-study-workspace';
+import type { HandwritingRecognitionState } from '../../../hooks/notes/document/note-page-content';
+import type { MlKitHandwritingDebugState } from '../../../services/handwriting-recognition';
+import type { AiFloatingPanelSize, AppChatMode, AppRightSidebarPanel, AppSidebarPosition, HandwritingDebugReadiness, StudyInteractionMode, WorkspaceFocusTarget } from '../../../hooks/notes/use-study-workspace';
 import {
   AiAnswer,
   CaptureAsset,
@@ -181,6 +183,11 @@ export type DesktopNotesViewProps = {
   aiCanvas: UseAiCanvasNotesResult;
   classInsight: BackendClassInsight | null;
   importantPageRecommendations: ImportantPageRecommendation[];
+  currentPageHandwritingRecognition: HandwritingRecognitionState | null;
+  handwritingAnalysisBusy: 'page' | 'note' | null;
+  mlKitHandwritingDebug: MlKitHandwritingDebugState;
+  handwritingDebugReadiness: HandwritingDebugReadiness;
+  canAnalyzeCurrentPageHandwriting: boolean;
   incomingAssetSuggestion: CaptureAsset | null;
   inboxHint: string | null;
   inboxPendingCount: number;
@@ -302,6 +309,14 @@ export type DesktopNotesViewProps = {
   onRemovePdfPage: (pageNumber?: number) => void;
   onMovePdfPage: (pageNumber: number | undefined, delta: -1 | 1) => void;
   onCreateMemoPage: (insertAfterPage?: number) => void;
+  analyzeCurrentPageHandwriting: () => Promise<void>;
+  forceAnalyzeCurrentPageHandwriting: () => Promise<void>;
+  analyzeCurrentPageHandwritingWithVision: () => Promise<void>;
+  analyzeCurrentNoteHandwriting: () => Promise<void>;
+  checkMlKitHandwritingAvailability: () => Promise<void>;
+  prepareKoreanHandwritingModel: () => Promise<void>;
+  recognizeCurrentPageWithMlKit: () => Promise<void>;
+  recognizeAndSaveCurrentPageWithMlKit: () => Promise<void>;
   onChangeBlankNoteTemplate: (template: NotebookPageTemplate) => void;
   onQuery: (value: string) => void;
   onSort: () => void;
@@ -666,6 +681,11 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           aiCanvas: props.aiCanvas,
           classInsight: props.classInsight,
           importantPageRecommendations: props.importantPageRecommendations,
+          currentPageHandwritingRecognition: props.currentPageHandwritingRecognition,
+          handwritingAnalysisBusy: props.handwritingAnalysisBusy,
+          mlKitHandwritingDebug: props.mlKitHandwritingDebug,
+          handwritingDebugReadiness: props.handwritingDebugReadiness,
+          canAnalyzeCurrentPageHandwriting: props.canAnalyzeCurrentPageHandwriting,
           inkTool: props.inkTool,
           fingerDrawingEnabled: props.fingerDrawingEnabled,
           penColor: props.penColor,
@@ -789,6 +809,14 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           onRemovePdfPage: props.onRemovePdfPage,
           onMovePdfPage: props.onMovePdfPage,
           onCreateMemoPage: props.onCreateMemoPage,
+          analyzeCurrentPageHandwriting: props.analyzeCurrentPageHandwriting,
+          forceAnalyzeCurrentPageHandwriting: props.forceAnalyzeCurrentPageHandwriting,
+          analyzeCurrentPageHandwritingWithVision: props.analyzeCurrentPageHandwritingWithVision,
+          analyzeCurrentNoteHandwriting: props.analyzeCurrentNoteHandwriting,
+          checkMlKitHandwritingAvailability: props.checkMlKitHandwritingAvailability,
+          prepareKoreanHandwritingModel: props.prepareKoreanHandwritingModel,
+          recognizeCurrentPageWithMlKit: props.recognizeCurrentPageWithMlKit,
+          recognizeAndSaveCurrentPageWithMlKit: props.recognizeAndSaveCurrentPageWithMlKit,
           onChangeBlankNoteTemplate: props.onChangeBlankNoteTemplate,
           onInsertInboxAsset: props.onInsertInboxAsset,
           onRemoveInboxAsset: props.onRemoveInboxAsset,

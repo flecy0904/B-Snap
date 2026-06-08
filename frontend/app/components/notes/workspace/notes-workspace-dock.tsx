@@ -6,6 +6,23 @@ import { useNotesGlobalContext } from './notes-global-context';
 import { useDocumentContext } from './document-context';
 import { cleanAiDisplayText } from '../../../ui-helpers';
 
+const HANDWRITING_DEBUG_ENABLED = process.env.EXPO_PUBLIC_ENABLE_HANDWRITING_DEBUG === 'true';
+
+function formatVisionSkipReason(reason?: string | null) {
+  switch (reason) {
+    case 'disabled':
+      return 'fallback-disabled';
+    case 'missing-api-key':
+      return 'missing-api-key';
+    case 'cluster-limit':
+      return 'cluster-limit-exceeded';
+    case 'page-limit':
+      return 'note-page-limit-exceeded';
+    default:
+      return reason || '없음';
+  }
+}
+
 export function NotesWorkspaceDock() {
   const globalContext = useNotesGlobalContext();
   const documentContext = useDocumentContext();
@@ -50,6 +67,54 @@ export function NotesWorkspaceDock() {
   );
   const previewIsIncoming = Boolean(globalContext.previewedIncoming);
   const importantRecommendations = globalContext.importantPageRecommendations ?? [];
+  const handwritingRecognition = globalContext.currentPageHandwritingRecognition;
+  const handwritingBusy = globalContext.handwritingAnalysisBusy;
+  const mlKitDebug = globalContext.mlKitHandwritingDebug;
+  const handwritingFirstCluster = handwritingRecognition?.clusters?.[0] ?? null;
+  const handwritingRejectedCandidate = handwritingFirstCluster?.symbolCandidates?.find((candidate) => !candidate.accepted && candidate.confidence > 0)
+    ?? handwritingFirstCluster?.symbolCandidates?.find((candidate) => !candidate.accepted)
+    ?? null;
+  const handwritingReadiness = globalContext.handwritingDebugReadiness;
+  const handwritingReadinessMissing = React.useMemo(() => {
+    if (!handwritingReadiness) return ['readiness'];
+    const missing: string[] = [];
+    if (!handwritingReadiness.workspaceHydrated) missing.push('hydrated');
+    if (!handwritingReadiness.backendApiEnabled) missing.push('api');
+    if (!handwritingReadiness.studyDocumentId) missing.push('doc');
+    if (!handwritingReadiness.backendNoteId) missing.push('noteId');
+    if (!handwritingReadiness.currentDocumentHasBackendPages) missing.push('backendPages');
+    if (typeof handwritingReadiness.pageNumber !== 'number') missing.push('page');
+    if (!handwritingReadiness.pageId) missing.push('pageId');
+    if (handwritingReadiness.pendingPageSaveCount || handwritingReadiness.savingPageCount) missing.push('save-pending');
+    return missing;
+  }, [handwritingReadiness]);
+  const handwritingReadyText = globalContext.canAnalyzeCurrentPageHandwriting
+    ? 'ready'
+    : `missing ${handwritingReadinessMissing.join(', ') || 'unknown'}`;
+  const handwritingKeywords = handwritingRecognition?.keywords?.length ? handwritingRecognition.keywords.join(', ') : '없음';
+  const handwritingSymbols = handwritingRecognition?.symbols?.length ? handwritingRecognition.symbols.join(', ') : '없음';
+  const handwritingConfidence = typeof handwritingRecognition?.confidence === 'number'
+    ? `${Math.round(handwritingRecognition.confidence * 100)}%`
+    : '없음';
+  const handwritingClusterCount = handwritingRecognition?.analyzedClusterCount ?? handwritingRecognition?.clusters?.length ?? 0;
+  const handwritingVisionClusterCount = handwritingRecognition?.visionAnalyzedClusterCount ?? 0;
+  const handwritingVisionUsed = handwritingRecognition?.visionFallbackUsed ? 'yes' : 'no';
+  const handwritingSkippedReason = formatVisionSkipReason(handwritingRecognition?.visionFallbackSkippedReason);
+  const handwritingCacheState = [
+    handwritingRecognition?.cached ? 'cached' : null,
+    handwritingRecognition?.stale ? 'stale' : null,
+  ].filter(Boolean).join(', ') || 'fresh';
+  const mlKitCandidates = mlKitDebug?.result?.candidates?.length
+    ? mlKitDebug.result.candidates.slice(0, 3).map((candidate) => (
+      typeof candidate.confidence === 'number'
+        ? `${candidate.text} ${Math.round(candidate.confidence * 100)}%`
+        : candidate.text
+    )).join(' · ')
+    : '없음';
+  const mlKitKeywords = mlKitDebug?.result?.keywords?.length ? mlKitDebug.result.keywords.join(', ') : '없음';
+  const mlKitConfidence = typeof mlKitDebug?.result?.confidence === 'number'
+    ? `${Math.round(mlKitDebug.result.confidence * 100)}%`
+    : '없음';
   const getPriorityText = (priority: string) => {
     if (priority === 'very-high') return '최상';
     if (priority === 'high') return '높음';
@@ -168,6 +233,129 @@ export function NotesWorkspaceDock() {
                 </Pressable>
               </View>
             ) : null}
+          </View>
+        ) : null}
+        {HANDWRITING_DEBUG_ENABLED ? (
+          <View style={globalContext.styles.workspaceDockSection}>
+            <View style={globalContext.styles.workspaceDockSectionHeader}>
+              <Text style={globalContext.styles.workspaceDockSectionTitle}>손필기 분석 디버그</Text>
+              <Text style={globalContext.styles.workspaceDockSectionMeta}>{handwritingRecognition?.status ?? 'not-run'}</Text>
+            </View>
+            <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={1}>
+              engine {handwritingRecognition?.engine ?? '없음'} · status {handwritingRecognition?.status ?? 'not-run'}
+            </Text>
+            <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>
+              ready {handwritingReadyText}
+            </Text>
+            <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>
+              ids doc {handwritingReadiness?.studyDocumentId ?? '없음'} · note {handwritingReadiness?.backendNoteId ?? '없음'} · page {handwritingReadiness?.pageNumber ?? '없음'} · pageId {handwritingReadiness?.pageId ?? '없음'}
+            </Text>
+            <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>
+              state {handwritingReadiness?.platform ?? 'unknown'} · api {handwritingReadiness?.backendApiEnabled ? 'on' : 'off'} · pages {handwritingReadiness?.backendPageCount ?? 0} · save {handwritingReadiness?.pendingPageSaveCount ?? 0}/{handwritingReadiness?.savingPageCount ?? 0}/{handwritingReadiness?.failedPageSaveCount ?? 0}
+            </Text>
+            <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>
+              hash {handwritingRecognition?.strokeHash ? handwritingRecognition.strokeHash.slice(0, 12) : '없음'}
+            </Text>
+            <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>
+              text {handwritingRecognition?.text || '없음'}
+            </Text>
+            <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>
+              keywords {handwritingKeywords}
+            </Text>
+            <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>
+              symbols {handwritingSymbols} · confidence {handwritingConfidence}
+            </Text>
+            <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={1}>
+              clusters {handwritingClusterCount} · vision clusters {handwritingVisionClusterCount}
+            </Text>
+            {handwritingFirstCluster ? (
+              <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>
+                cluster {handwritingFirstCluster.clusterKind ?? 'unknown'} · text {typeof handwritingFirstCluster.textLikeScore === 'number' ? Math.round(handwritingFirstCluster.textLikeScore * 100) : 0}% · symbol {typeof handwritingFirstCluster.symbolLikeScore === 'number' ? Math.round(handwritingFirstCluster.symbolLikeScore * 100) : 0}%
+              </Text>
+            ) : null}
+            {handwritingRejectedCandidate ? (
+              <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>
+                rejected {handwritingRejectedCandidate.symbol} {Math.round((handwritingRejectedCandidate.confidence ?? 0) * 100)}% · {handwritingRejectedCandidate.rejectionReason ?? 'below threshold'}
+              </Text>
+            ) : null}
+            <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>
+              vision used {handwritingVisionUsed} · skipped {handwritingSkippedReason}
+            </Text>
+            <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={1}>
+              cache {handwritingCacheState}
+            </Text>
+            <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>
+              mlkit available {mlKitDebug?.available === null ? 'unknown' : mlKitDebug?.available ? 'yes' : 'no'} · model {mlKitDebug?.modelState ?? (mlKitDebug?.modelReady === null ? 'unknown' : mlKitDebug?.modelReady ? 'ready' : 'missing')}
+            </Text>
+            <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>
+              mlkit candidates {mlKitCandidates}
+            </Text>
+            <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>
+              mlkit keywords {mlKitKeywords} · confidence {mlKitConfidence}
+            </Text>
+            {mlKitDebug?.detail ? (
+              <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>
+                mlkit detail {mlKitDebug.detail}
+              </Text>
+            ) : null}
+            <View style={globalContext.styles.workspaceDockActions}>
+              <Pressable
+                style={[globalContext.styles.workspacePrimaryAction, (!globalContext.canAnalyzeCurrentPageHandwriting || handwritingBusy) && { opacity: 0.55 }]}
+                disabled={!globalContext.canAnalyzeCurrentPageHandwriting || Boolean(handwritingBusy)}
+                onPress={globalContext.analyzeCurrentPageHandwriting}
+              >
+                <Text style={globalContext.styles.workspacePrimaryActionText}>{handwritingBusy === 'page' ? '분석 중' : '현재 페이지 재분석'}</Text>
+              </Pressable>
+              <Pressable
+                style={[globalContext.styles.workspaceSecondaryAction, (!globalContext.canAnalyzeCurrentPageHandwriting || handwritingBusy) && { opacity: 0.55 }]}
+                disabled={!globalContext.canAnalyzeCurrentPageHandwriting || Boolean(handwritingBusy)}
+                onPress={globalContext.forceAnalyzeCurrentPageHandwriting}
+              >
+                <Text style={globalContext.styles.workspaceSecondaryActionText}>force 재분석</Text>
+              </Pressable>
+              <Pressable
+                style={[globalContext.styles.workspaceSecondaryAction, (!globalContext.canAnalyzeCurrentPageHandwriting || handwritingBusy) && { opacity: 0.55 }]}
+                disabled={!globalContext.canAnalyzeCurrentPageHandwriting || Boolean(handwritingBusy)}
+                onPress={globalContext.analyzeCurrentPageHandwritingWithVision}
+              >
+                <Text style={globalContext.styles.workspaceSecondaryActionText}>Vision fallback</Text>
+              </Pressable>
+              <Pressable
+                style={[globalContext.styles.workspaceSecondaryAction, handwritingBusy && { opacity: 0.55 }]}
+                disabled={Boolean(handwritingBusy)}
+                onPress={globalContext.analyzeCurrentNoteHandwriting}
+              >
+                <Text style={globalContext.styles.workspaceSecondaryActionText}>{handwritingBusy === 'note' ? '전체 분석 중' : '현재 노트 전체 재분석'}</Text>
+              </Pressable>
+              <Pressable
+                style={[globalContext.styles.workspaceSecondaryAction, mlKitDebug?.busy && { opacity: 0.55 }]}
+                disabled={Boolean(mlKitDebug?.busy)}
+                onPress={globalContext.checkMlKitHandwritingAvailability}
+              >
+                <Text style={globalContext.styles.workspaceSecondaryActionText}>ML Kit 확인</Text>
+              </Pressable>
+              <Pressable
+                style={[globalContext.styles.workspaceSecondaryAction, mlKitDebug?.busy && { opacity: 0.55 }]}
+                disabled={Boolean(mlKitDebug?.busy)}
+                onPress={globalContext.prepareKoreanHandwritingModel}
+              >
+                <Text style={globalContext.styles.workspaceSecondaryActionText}>한국어 모델 준비</Text>
+              </Pressable>
+              <Pressable
+                style={[globalContext.styles.workspaceSecondaryAction, (!globalContext.canAnalyzeCurrentPageHandwriting || mlKitDebug?.busy) && { opacity: 0.55 }]}
+                disabled={!globalContext.canAnalyzeCurrentPageHandwriting || Boolean(mlKitDebug?.busy)}
+                onPress={globalContext.recognizeCurrentPageWithMlKit}
+              >
+                <Text style={globalContext.styles.workspaceSecondaryActionText}>{mlKitDebug?.busy ? 'ML Kit 실행 중' : '현재 페이지 ML Kit'}</Text>
+              </Pressable>
+              <Pressable
+                style={[globalContext.styles.workspacePrimaryAction, (!globalContext.canAnalyzeCurrentPageHandwriting || mlKitDebug?.busy || handwritingBusy) && { opacity: 0.55 }]}
+                disabled={!globalContext.canAnalyzeCurrentPageHandwriting || Boolean(mlKitDebug?.busy) || Boolean(handwritingBusy)}
+                onPress={globalContext.recognizeAndSaveCurrentPageWithMlKit}
+              >
+                <Text style={globalContext.styles.workspacePrimaryActionText}>{mlKitDebug?.busy ? 'ML Kit 저장 중' : 'ML Kit 실행 후 저장'}</Text>
+              </Pressable>
+            </View>
           </View>
         ) : null}
         {importantRecommendations.length ? (

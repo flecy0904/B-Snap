@@ -1,5 +1,44 @@
 import type { InkImageAnnotation, InkStroke, InkTextAnnotation } from '../../../ui-types';
 
+export type HandwritingRecognitionCluster = {
+  id: string;
+  pageNumber: number;
+  bbox: { x: number; y: number; width: number; height: number };
+  text: string;
+  candidates?: Array<{ text: string; confidence?: number }>;
+  keywords: string[];
+  symbols: string[];
+  confidence: number;
+  source?: string;
+  clusterKind?: 'text_like' | 'symbol_like' | 'mixed' | 'unknown' | string;
+  textLikeScore?: number;
+  symbolLikeScore?: number;
+  symbolCandidates?: Array<{
+    symbol: string;
+    confidence: number;
+    accepted: boolean;
+    rejectionReason?: string;
+  }>;
+};
+
+export type HandwritingRecognitionState = {
+  status: 'pending' | 'ready' | 'failed' | 'unavailable' | string;
+  strokeHash?: string;
+  engine?: string;
+  text?: string;
+  keywords?: string[];
+  symbols?: string[];
+  confidence?: number;
+  clusters?: HandwritingRecognitionCluster[];
+  updatedAt?: string;
+  visionFallbackUsed?: boolean;
+  visionFallbackSkippedReason?: string;
+  analyzedClusterCount?: number;
+  visionAnalyzedClusterCount?: number;
+  cached?: boolean;
+  stale?: boolean;
+};
+
 export type StoredNotePageContent = {
   kind: 'bsnap-page-state';
   version: 1;
@@ -9,6 +48,7 @@ export type StoredNotePageContent = {
   bookmarked: boolean;
   photoReferenceCount: number;
   memoPageCount: number;
+  handwritingRecognition?: HandwritingRecognitionState | null;
 };
 
 export function serializeNotePageContent(params: {
@@ -72,6 +112,9 @@ export function parseNotePageContent(content: string | null): StoredNotePageCont
         normalizeCount(parsed.memoPages),
         normalizeCount(parsed.generatedMemoPages),
       ),
+      handwritingRecognition: typeof parsed.handwritingRecognition === 'object' && parsed.handwritingRecognition !== null
+        ? parsed.handwritingRecognition as HandwritingRecognitionState
+        : null,
     };
   } catch {
     return null;

@@ -8,6 +8,181 @@ import { useDocumentContext } from './document-context';
 import { useNavigationContext } from './navigation-context';
 import { useCanvasContext } from '../canvas/canvas-context';
 
+const HANDWRITING_DEBUG_ENABLED = process.env.EXPO_PUBLIC_ENABLE_HANDWRITING_DEBUG === 'true';
+
+function formatVisionSkipReason(reason?: string | null) {
+  switch (reason) {
+    case 'disabled':
+      return 'fallback-disabled';
+    case 'missing-api-key':
+      return 'missing-api-key';
+    case 'cluster-limit':
+      return 'cluster-limit-exceeded';
+    case 'page-limit':
+      return 'note-page-limit-exceeded';
+    default:
+      return reason || '없음';
+  }
+}
+
+export function HandwritingDebugFloatingPanel() {
+  const globalContext = useNotesGlobalContext();
+  const [expanded, setExpanded] = React.useState(true);
+  const recognition = globalContext.currentPageHandwritingRecognition;
+  const mlKit = globalContext.mlKitHandwritingDebug;
+  const handwritingBusy = globalContext.handwritingAnalysisBusy;
+  const readiness = globalContext.handwritingDebugReadiness;
+  const firstCluster = recognition?.clusters?.[0] ?? null;
+  const rejectedSymbolCandidate = firstCluster?.symbolCandidates?.find((candidate) => !candidate.accepted && candidate.confidence > 0)
+    ?? firstCluster?.symbolCandidates?.find((candidate) => !candidate.accepted)
+    ?? null;
+  const disabled = !globalContext.canAnalyzeCurrentPageHandwriting || Boolean(handwritingBusy);
+  const mlKitDisabled = !globalContext.canAnalyzeCurrentPageHandwriting || Boolean(mlKit?.busy) || Boolean(handwritingBusy);
+  const missingReadiness = React.useMemo(() => {
+    if (!readiness) return ['readiness'];
+    const missing: string[] = [];
+    if (!readiness.workspaceHydrated) missing.push('hydrated');
+    if (!readiness.backendApiEnabled) missing.push('api');
+    if (!readiness.studyDocumentId) missing.push('doc');
+    if (!readiness.backendNoteId) missing.push('noteId');
+    if (!readiness.currentDocumentHasBackendPages) missing.push('backendPages');
+    if (typeof readiness.pageNumber !== 'number') missing.push('page');
+    if (!readiness.pageId) missing.push('pageId');
+    if (readiness.pendingPageSaveCount || readiness.savingPageCount) missing.push('save-pending');
+    return missing;
+  }, [readiness]);
+  const debugReadyText = globalContext.canAnalyzeCurrentPageHandwriting
+    ? 'analyze ready'
+    : `not ready: missing ${missingReadiness.join(', ') || 'unknown'}`;
+  const panelStyle = {
+    position: 'absolute' as const,
+    right: 12,
+    top: 12,
+    zIndex: 80,
+    width: 320,
+    maxWidth: '92%' as const,
+    maxHeight: '72%' as const,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#D9E2FF',
+    backgroundColor: 'rgba(255, 255, 255, 0.96)',
+    padding: 10,
+    shadowColor: '#172033',
+    shadowOpacity: 0.18,
+    shadowRadius: 18,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 12,
+  };
+  const rowTextStyle = {
+    fontSize: 11,
+    lineHeight: 15,
+    color: '#5D687A',
+    fontWeight: '700' as const,
+  };
+  const buttonStyle = {
+    minHeight: 28,
+    paddingHorizontal: 9,
+    borderRadius: 9,
+    backgroundColor: '#EEF2FF',
+    alignItems: 'center' as const,
+    justifyContent: 'center' as const,
+  };
+  const primaryButtonStyle = {
+    ...buttonStyle,
+    backgroundColor: '#4F68D2',
+  };
+  const buttonTextStyle = {
+    fontSize: 10,
+    lineHeight: 13,
+    fontWeight: '900' as const,
+    color: '#4F68D2',
+  };
+  const primaryButtonTextStyle = {
+    ...buttonTextStyle,
+    color: '#FFFFFF',
+  };
+
+  if (!HANDWRITING_DEBUG_ENABLED) return null;
+
+  return (
+    <View pointerEvents="box-none" style={{ position: 'absolute', inset: 0, zIndex: 80 }}>
+      <View style={panelStyle}>
+        <Pressable
+          onPress={() => setExpanded((current) => !current)}
+          style={{ minHeight: 28, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}
+        >
+          <Text style={{ fontSize: 12, fontWeight: '900', color: '#23304A' }}>손필기 디버그</Text>
+          <Text style={{ fontSize: 11, fontWeight: '900', color: '#4F68D2' }}>{recognition?.status ?? 'not-run'}</Text>
+        </Pressable>
+        {expanded ? (
+          <ScrollView nestedScrollEnabled showsVerticalScrollIndicator={false} style={{ maxHeight: 430 }} contentContainerStyle={{ gap: 6, paddingTop: 8 }}>
+            <Text style={rowTextStyle} numberOfLines={1}>engine {recognition?.engine ?? '없음'} · confidence {typeof recognition?.confidence === 'number' ? `${Math.round(recognition.confidence * 100)}%` : '없음'}</Text>
+            <Text style={[rowTextStyle, { color: globalContext.canAnalyzeCurrentPageHandwriting ? '#15803D' : '#B45309' }]} numberOfLines={2}>
+              ready {debugReadyText}
+            </Text>
+            <Text style={rowTextStyle} numberOfLines={2}>
+              ids doc {readiness?.studyDocumentId ?? '없음'} · note {readiness?.backendNoteId ?? '없음'} · page {readiness?.pageNumber ?? '없음'} · pageId {readiness?.pageId ?? '없음'}
+            </Text>
+            <Text style={rowTextStyle} numberOfLines={2}>
+              state platform {readiness?.platform ?? Platform.OS} · api {readiness?.backendApiEnabled ? 'on' : 'off'} · url {readiness?.backendUrlPresent ? 'env' : 'default'}
+            </Text>
+            <Text style={rowTextStyle} numberOfLines={2}>
+              sync hydrated {readiness?.workspaceHydrated ? 'yes' : 'no'} · backendPages {readiness?.currentDocumentHasBackendPages ? 'yes' : 'no'} · pageCount {readiness?.backendPageCount ?? 0} · save {readiness?.pendingPageSaveCount ?? 0}/{readiness?.savingPageCount ?? 0}/{readiness?.failedPageSaveCount ?? 0}
+            </Text>
+            <Text style={rowTextStyle} numberOfLines={1}>hash {recognition?.strokeHash ? recognition.strokeHash.slice(0, 12) : '없음'}</Text>
+            <Text style={rowTextStyle} numberOfLines={2}>text {recognition?.text || '없음'}</Text>
+            <Text style={rowTextStyle} numberOfLines={2}>keywords {recognition?.keywords?.length ? recognition.keywords.join(', ') : '없음'}</Text>
+            <Text style={rowTextStyle} numberOfLines={2}>symbols {recognition?.symbols?.length ? recognition.symbols.join(', ') : '없음'}</Text>
+            <Text style={rowTextStyle} numberOfLines={2}>
+              clusters {recognition?.analyzedClusterCount ?? recognition?.clusters?.length ?? 0} · vision {recognition?.visionAnalyzedClusterCount ?? 0} · skipped {formatVisionSkipReason(recognition?.visionFallbackSkippedReason)}
+            </Text>
+            {firstCluster ? (
+              <Text style={rowTextStyle} numberOfLines={2}>
+                cluster {firstCluster.clusterKind ?? 'unknown'} · text {typeof firstCluster.textLikeScore === 'number' ? Math.round(firstCluster.textLikeScore * 100) : 0}% · symbol {typeof firstCluster.symbolLikeScore === 'number' ? Math.round(firstCluster.symbolLikeScore * 100) : 0}%
+              </Text>
+            ) : null}
+            {rejectedSymbolCandidate ? (
+              <Text style={rowTextStyle} numberOfLines={2}>
+                rejected {rejectedSymbolCandidate.symbol} {Math.round((rejectedSymbolCandidate.confidence ?? 0) * 100)}% · {rejectedSymbolCandidate.rejectionReason ?? 'below threshold'}
+              </Text>
+            ) : null}
+            <Text style={rowTextStyle} numberOfLines={2}>
+              mlkit {mlKit?.available === null ? 'unknown' : mlKit?.available ? 'available' : 'unavailable'} · model {mlKit?.modelState ?? (mlKit?.modelReady === null ? 'unknown' : mlKit?.modelReady ? 'ready' : 'missing')}
+            </Text>
+            <Text style={rowTextStyle} numberOfLines={2}>
+              candidates {mlKit?.result?.candidates?.length ? mlKit.result.candidates.slice(0, 2).map((candidate) => candidate.text).join(' · ') : '없음'}
+            </Text>
+            {mlKit?.detail ? <Text style={rowTextStyle} numberOfLines={2}>detail {mlKit.detail}</Text> : null}
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingTop: 4 }}>
+              <Pressable style={[primaryButtonStyle, disabled && { opacity: 0.5 }]} disabled={disabled} onPress={globalContext.analyzeCurrentPageHandwriting}>
+                <Text style={primaryButtonTextStyle}>{handwritingBusy === 'page' ? '분석 중' : 'geometry 저장'}</Text>
+              </Pressable>
+              <Pressable style={[buttonStyle, disabled && { opacity: 0.5 }]} disabled={disabled} onPress={globalContext.forceAnalyzeCurrentPageHandwriting}>
+                <Text style={buttonTextStyle}>force</Text>
+              </Pressable>
+              <Pressable style={[buttonStyle, disabled && { opacity: 0.5 }]} disabled={disabled} onPress={globalContext.analyzeCurrentPageHandwritingWithVision}>
+                <Text style={buttonTextStyle}>Vision</Text>
+              </Pressable>
+              <Pressable style={[buttonStyle, mlKit?.busy && { opacity: 0.5 }]} disabled={Boolean(mlKit?.busy)} onPress={globalContext.checkMlKitHandwritingAvailability}>
+                <Text style={buttonTextStyle}>ML Kit 확인</Text>
+              </Pressable>
+              <Pressable style={[buttonStyle, mlKit?.busy && { opacity: 0.5 }]} disabled={Boolean(mlKit?.busy)} onPress={globalContext.prepareKoreanHandwritingModel}>
+                <Text style={buttonTextStyle}>모델 준비</Text>
+              </Pressable>
+              <Pressable style={[buttonStyle, mlKitDisabled && { opacity: 0.5 }]} disabled={mlKitDisabled} onPress={globalContext.recognizeCurrentPageWithMlKit}>
+                <Text style={buttonTextStyle}>ML Kit 실행</Text>
+              </Pressable>
+              <Pressable style={[primaryButtonStyle, mlKitDisabled && { opacity: 0.5 }]} disabled={mlKitDisabled} onPress={globalContext.recognizeAndSaveCurrentPageWithMlKit}>
+                <Text style={primaryButtonTextStyle}>ML Kit 저장</Text>
+              </Pressable>
+            </View>
+          </ScrollView>
+        ) : null}
+      </View>
+    </View>
+  );
+}
+
 export const NotesDocumentViewer = React.memo(function NotesDocumentViewer() {
   const globalContext = useNotesGlobalContext();
   const documentContext = useDocumentContext();
@@ -66,60 +241,64 @@ export const NotesDocumentViewer = React.memo(function NotesDocumentViewer() {
         : 'center';
 
     return (
-      <PdfPreview
-        file={pdfSurfaceFile}
-        viewStateKey={documentContext.studyDocument?.id ? `study-document:${documentContext.studyDocument.id}` : null}
-        pageAlign={pdfPageAlign}
-        page={documentContext.currentPdfPage}
-        inkTool={effectiveInkTool}
-        fingerDrawingEnabled={readMode ? false : globalContext.fingerDrawingEnabled}
-        penColor={canvasContext.penColor}
-        penWidth={canvasContext.penWidth}
-        brushType={canvasContext.brushType}
-        linePattern={canvasContext.linePattern}
-        eraserMode={canvasContext.eraserMode}
-        eraserWidth={canvasContext.eraserWidth}
-        selectionMode={canvasContext.selectionMode}
-        brushSettings={canvasContext.brushSettings}
-        inkStrokes={documentInkStrokes}
-        textAnnotations={documentTextAnnotations}
-        imageAnnotations={documentImageAnnotations}
-        readOnly={readMode}
-        notebookPages={documentContext.notebookPages}
-        activeGeneratedPageId={documentContext.currentDocumentPage?.kind === 'generated' ? documentContext.currentDocumentPage.pageId : null}
-        pageCaptureReferences={globalContext.pageCaptureReferences}
-        incomingAssetSuggestion={globalContext.incomingAssetSuggestion}
-        onAcceptIncomingAsset={globalContext.onAcceptIncomingAsset}
-        onArchiveIncomingAsset={globalContext.onArchiveIncomingAsset}
-        onDismissIncomingAsset={globalContext.onDismissIncomingAsset}
-        onOpenPageCaptureReference={globalContext.onOpenPageCaptureReference}
-        onAskAiAboutPageCaptureReference={globalContext.onAskAiAboutPageCaptureReference}
-        selectionRect={readMode ? null : canvasContext.selectionRect}
-        onCommitInkStroke={canvasContext.commitInkStroke}
-        onRemoveInkStroke={canvasContext.removeInkStroke}
-        onReplaceInkStrokes={canvasContext.replaceInkStrokes}
-        onAddTextAnnotation={canvasContext.addTextAnnotation}
-        onUpdateTextAnnotation={canvasContext.updateTextAnnotation}
-        onRemoveTextAnnotation={canvasContext.removeTextAnnotation}
-        onMoveTextAnnotation={canvasContext.moveTextAnnotation}
-        onResizeTextAnnotation={canvasContext.resizeTextAnnotation}
-        onChangeTextAnnotationFontSize={canvasContext.changeTextAnnotationFontSize}
-        onEraseInkAtPoint={canvasContext.eraseInkAtPoint}
-        onSelectionChange={canvasContext.setSelectionRect}
-        onMoveSelection={canvasContext.nudgeSelectedStrokes}
-        onResizeSelection={canvasContext.resizeSelectedStrokesToRect}
-        onAskAiAboutSelection={globalContext.onAskAiAboutSelection}
-        onDuplicateSelection={canvasContext.duplicateSelectedStrokes}
-        onDeleteSelection={canvasContext.deleteSelectedStrokes}
-        onChangeSelectedStrokesColor={canvasContext.changeSelectedStrokesColor}
-        onChangeInkTool={canvasContext.setInkTool}
-        onSelectionPreviewChange={canvasContext.setSelectionPreviewUri}
-        onPageChanged={documentContext.onSetCurrentPdfPage}
-        onOpenGeneratedPage={documentContext.onOpenGeneratedPage}
-        onDocumentLoaded={documentContext.onUpdateStudyDocumentPageCount}
-        onViewportDoubleTap={globalContext.onToggleFocusMode}
-        styles={globalContext.styles}
-      />
+      <View style={{ flex: 1 }}>
+        <PdfPreview
+          file={pdfSurfaceFile}
+          viewStateKey={documentContext.studyDocument?.id ? `study-document:${documentContext.studyDocument.id}` : null}
+          pageAlign={pdfPageAlign}
+          page={documentContext.currentPdfPage}
+          inkTool={effectiveInkTool}
+          fingerDrawingEnabled={readMode ? false : globalContext.fingerDrawingEnabled}
+          penColor={canvasContext.penColor}
+          penWidth={canvasContext.penWidth}
+          brushType={canvasContext.brushType}
+          linePattern={canvasContext.linePattern}
+          eraserMode={canvasContext.eraserMode}
+          eraserWidth={canvasContext.eraserWidth}
+          selectionMode={canvasContext.selectionMode}
+          brushSettings={canvasContext.brushSettings}
+          inkStrokes={documentInkStrokes}
+          textAnnotations={documentTextAnnotations}
+          imageAnnotations={documentImageAnnotations}
+          readOnly={readMode}
+          notebookPages={documentContext.notebookPages}
+          activeGeneratedPageId={documentContext.currentDocumentPage?.kind === 'generated' ? documentContext.currentDocumentPage.pageId : null}
+          pageCaptureReferences={globalContext.pageCaptureReferences}
+          incomingAssetSuggestion={globalContext.incomingAssetSuggestion}
+          handwritingDebugClusters={HANDWRITING_DEBUG_ENABLED ? globalContext.currentPageHandwritingRecognition?.clusters ?? [] : []}
+          onAcceptIncomingAsset={globalContext.onAcceptIncomingAsset}
+          onArchiveIncomingAsset={globalContext.onArchiveIncomingAsset}
+          onDismissIncomingAsset={globalContext.onDismissIncomingAsset}
+          onOpenPageCaptureReference={globalContext.onOpenPageCaptureReference}
+          onAskAiAboutPageCaptureReference={globalContext.onAskAiAboutPageCaptureReference}
+          selectionRect={readMode ? null : canvasContext.selectionRect}
+          onCommitInkStroke={canvasContext.commitInkStroke}
+          onRemoveInkStroke={canvasContext.removeInkStroke}
+          onReplaceInkStrokes={canvasContext.replaceInkStrokes}
+          onAddTextAnnotation={canvasContext.addTextAnnotation}
+          onUpdateTextAnnotation={canvasContext.updateTextAnnotation}
+          onRemoveTextAnnotation={canvasContext.removeTextAnnotation}
+          onMoveTextAnnotation={canvasContext.moveTextAnnotation}
+          onResizeTextAnnotation={canvasContext.resizeTextAnnotation}
+          onChangeTextAnnotationFontSize={canvasContext.changeTextAnnotationFontSize}
+          onEraseInkAtPoint={canvasContext.eraseInkAtPoint}
+          onSelectionChange={canvasContext.setSelectionRect}
+          onMoveSelection={canvasContext.nudgeSelectedStrokes}
+          onResizeSelection={canvasContext.resizeSelectedStrokesToRect}
+          onAskAiAboutSelection={globalContext.onAskAiAboutSelection}
+          onDuplicateSelection={canvasContext.duplicateSelectedStrokes}
+          onDeleteSelection={canvasContext.deleteSelectedStrokes}
+          onChangeSelectedStrokesColor={canvasContext.changeSelectedStrokesColor}
+          onChangeInkTool={canvasContext.setInkTool}
+          onSelectionPreviewChange={canvasContext.setSelectionPreviewUri}
+          onPageChanged={documentContext.onSetCurrentPdfPage}
+          onOpenGeneratedPage={documentContext.onOpenGeneratedPage}
+          onDocumentLoaded={documentContext.onUpdateStudyDocumentPageCount}
+          onViewportDoubleTap={globalContext.onToggleFocusMode}
+          styles={globalContext.styles}
+        />
+        <HandwritingDebugFloatingPanel />
+      </View>
     );
   }
 
