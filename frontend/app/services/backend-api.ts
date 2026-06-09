@@ -208,6 +208,111 @@ export type BackendAiMessageResponse = {
   } | null;
 };
 
+export type BackendRagDebugResult = {
+  source_type: string;
+  source_id?: string | number | null;
+  title: string;
+  score?: number | null;
+  folder_id?: number | null;
+  note_id?: number | null;
+  page_number?: number | null;
+  chunk_index?: number | null;
+  metadata?: Record<string, unknown>;
+  content_length: number;
+  content_snippet: string;
+  content: string;
+  embedding_model?: string | null;
+  indexed_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type BackendRagDebugIndexResponse = {
+  note: {
+    id: number;
+    folder_id: number;
+    title: string;
+  };
+  summary: {
+    page_count: number;
+    chunk_count: number;
+    chunks_returned: number;
+    chunk_limit: number;
+    source_counts: Record<string, number>;
+    embedding_model?: string | null;
+    embedding_models?: string[];
+    last_indexed_at?: string | null;
+  };
+  pages: Array<{
+    id: number;
+    page_number: number;
+    text_length: number;
+    text_snippet: string;
+    text: string;
+    updated_at?: string | null;
+  }>;
+  chunks: BackendRagDebugResult[];
+};
+
+export type BackendRagDebugContextSection = {
+  title: string;
+  count: number;
+  items: BackendRagDebugResult[];
+};
+
+export type BackendRagDebugContext = {
+  mode: BackendAiContextMode;
+  scope_count: number;
+  source_count: number;
+  retrieved_chunk_count: number;
+  current_page_included: boolean;
+  nearby_pages_included: boolean;
+  canvas_context_included: boolean;
+  vision_image_attached: boolean;
+  fallback: boolean;
+  fallback_reason?: string | null;
+  context_preview: string;
+  sections: BackendRagDebugContextSection[];
+};
+
+export type BackendRagDebugEvaluateResponse = {
+  mode: BackendAiContextMode;
+  rewritten_query: string;
+  router_reason: string;
+  rag_scope: BackendRagScope;
+  ragScope?: BackendRagScope | null;
+  search_targets: {
+    note_ids: number[];
+    canvas_note_ids: number[];
+  };
+  debug: {
+    fallback?: boolean;
+    fallback_reason?: string | null;
+    retrieved_source_count?: number;
+    retrieved_chunk_count?: number;
+    scope_count?: number;
+  };
+  context?: BackendRagDebugContext | null;
+  results: BackendRagDebugResult[];
+};
+
+export type BackendRagDebugStatusResponse = {
+  pgvector_available: boolean;
+  document_chunks_total_count: number;
+  current_note_chunk_count: number;
+  current_scope_chunk_count: number;
+  embedding_models: Array<{ model: string; count: number }>;
+  recent_index_status: Array<{
+    note_id?: number | null;
+    source_type?: string | null;
+    chunk_count: number;
+    last_indexed_at?: string | null;
+  }>;
+  failed_indexes: Array<Record<string, unknown>>;
+  last_error?: string | null;
+  rag_scope: BackendRagScope;
+  ragScope?: BackendRagScope | null;
+};
+
 export type BackendPdfTextExtractionResponse = {
   note_id: number;
   pages_extracted: number;
@@ -946,4 +1051,71 @@ export async function sendBackendAiMessage(payload: {
       top_k: payload.topK ?? 5,
     },
   }).then(normalizeBackendAiMessageResponse);
+}
+
+export function getBackendRagDebugIndex(noteId: number) {
+  return request<BackendRagDebugIndexResponse>(`/notes/${noteId}/rag-debug/index`);
+}
+
+export function reindexBackendNoteRag(noteId: number) {
+  return request<{ status: string; note_count: number }>(`/ai/rag/reindex/notes/${noteId}`, {
+    method: 'POST',
+  });
+}
+
+export async function evaluateBackendRagDebug(payload: {
+  sessionId: number;
+  content: string;
+  model?: string | null;
+  pageNumber?: number | null;
+  contextHint?: string | null;
+  selectionImage?: string | null;
+  selectionImageUri?: string | null;
+  selectionRect?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    mode?: 'rect' | 'lasso';
+    pageWidth?: number;
+    pageHeight?: number;
+  } | null;
+  canvasBlockContext?: AiCanvasBlockContext | null;
+  ragScope?: BackendRagScope | null;
+  useRag?: boolean;
+  topK?: number;
+}) {
+  return request<BackendRagDebugEvaluateResponse>(`/chat-sessions/${payload.sessionId}/rag-debug/evaluate`, {
+    method: 'POST',
+    body: {
+      content: payload.content,
+      page_number: payload.pageNumber ?? null,
+      context_hint: payload.contextHint ?? null,
+      selection_image: payload.selectionImage ?? payload.selectionImageUri ?? null,
+      selection_image_url: payload.selectionImageUri ?? null,
+      selection_rect: payload.selectionRect ?? null,
+      canvas_block_context: payload.canvasBlockContext ?? null,
+      rag_scope: payload.ragScope ?? null,
+      use_rag: payload.useRag ?? false,
+      top_k: payload.topK ?? 5,
+    },
+  }).then((response) => ({
+    ...response,
+    ragScope: normalizeBackendRagScope(response.ragScope ?? response.rag_scope),
+  }));
+}
+
+export async function getBackendRagDebugStatus(payload: {
+  sessionId: number;
+  ragScope?: BackendRagScope | null;
+}) {
+  return request<BackendRagDebugStatusResponse>(`/chat-sessions/${payload.sessionId}/rag-debug/status`, {
+    method: 'POST',
+    body: {
+      rag_scope: payload.ragScope ?? null,
+    },
+  }).then((response) => ({
+    ...response,
+    ragScope: normalizeBackendRagScope(response.ragScope ?? response.rag_scope),
+  }));
 }
