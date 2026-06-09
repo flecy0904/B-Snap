@@ -22,7 +22,7 @@ import {
 import {
   ensureKoreanHandwritingModel,
   getHandwritingRecognitionAvailability,
-  recognizeKoreanHandwriting,
+  recognizeKoreanHandwritingByClusters,
   type HandwritingRecognitionResult,
   type MlKitHandwritingDebugState,
 } from '../../services/handwriting-recognition';
@@ -86,6 +86,10 @@ export type HandwritingDebugReadiness = {
   pendingPageSaveCount: number;
   savingPageCount: number;
   failedPageSaveCount: number;
+  handwritingSaveState: 'idle' | 'pending' | 'success' | 'failed';
+  handwritingPersisted: boolean | null;
+  lastHandwritingSaveError: string | null;
+  lastHandwritingSaveAt: number | null;
   canAnalyze: boolean;
 };
 
@@ -136,6 +140,10 @@ function formatVisionSkipReason(reason?: string | null) {
       return 'no-eligible-clusters';
     case 'no-renderable-clusters':
       return 'no-renderable-clusters';
+    case 'no-star-anchor':
+      return 'no-star-anchor';
+    case 'no-star-text-anchor':
+      return 'no-star-text-anchor';
     case 'unavailable':
       return 'unavailable';
     case 'failed':
@@ -285,6 +293,17 @@ export function useStudyWorkspace(props: {
   const [classInsightByDocument, setClassInsightByDocument] = useState<Record<number, BackendClassInsight | null>>({});
   const [handwritingRecognitionByDocument, setHandwritingRecognitionByDocument] = useState<Record<number, Record<number, HandwritingRecognitionState | null>>>({});
   const [handwritingAnalysisBusy, setHandwritingAnalysisBusy] = useState<'page' | 'note' | null>(null);
+  const [handwritingPersistenceDebug, setHandwritingPersistenceDebug] = useState<{
+    state: 'idle' | 'pending' | 'success' | 'failed';
+    persisted: boolean | null;
+    lastError: string | null;
+    lastSavedAt: number | null;
+  }>({
+    state: 'idle',
+    persisted: null,
+    lastError: null,
+    lastSavedAt: null,
+  });
   const [mlKitHandwritingDebug, setMlKitHandwritingDebug] = useState<MlKitHandwritingDebugState>({
     available: null,
     modelReady: null,
@@ -553,6 +572,7 @@ export function useStudyWorkspace(props: {
     backendPageIdsByDocument,
     setBackendPageIdsByDocument,
     markBackendPageDirty,
+    rememberSavedBackendNotePage,
     syncPdfDocumentToBackend,
     failedPageSaveCount,
     pendingPageSaveCount,
@@ -589,6 +609,7 @@ export function useStudyWorkspace(props: {
       analyzeBackendNotePageHandwriting(pageId, { force: false, useVisionFallback: false })
         .then((page) => {
           rememberHandwritingRecognitionFromPage(documentId, page);
+          rememberSavedBackendNotePage(documentId, page);
           scheduleClassInsightRefresh(documentId);
         })
         .catch(() => {
@@ -606,6 +627,7 @@ export function useStudyWorkspace(props: {
     backendPageIdsByDocument,
     handwritingAutoAnalyzeRequest,
     rememberHandwritingRecognitionFromPage,
+    rememberSavedBackendNotePage,
     scheduleClassInsightRefresh,
   ]);
   const {
@@ -692,6 +714,10 @@ export function useStudyWorkspace(props: {
     pendingPageSaveCount,
     savingPageCount,
     failedPageSaveCount,
+    handwritingSaveState: handwritingPersistenceDebug.state,
+    handwritingPersisted: handwritingPersistenceDebug.persisted,
+    lastHandwritingSaveError: handwritingPersistenceDebug.lastError,
+    lastHandwritingSaveAt: handwritingPersistenceDebug.lastSavedAt,
     canAnalyze: Boolean(
       workspaceHydrated
       && handwritingDebugBackendApiEnabled
@@ -716,24 +742,54 @@ export function useStudyWorkspace(props: {
     }
     const pageId = backendPageIdsByDocument[studyDocumentId]?.[currentHandwritingDebugPageNumber];
     if (!pageId) {
+      setHandwritingPersistenceDebug({
+        state: 'failed',
+        persisted: false,
+        lastError: 'no backend page id',
+        lastSavedAt: null,
+      });
       setWorkspaceFeedback('서버에 연결된 현재 페이지가 아직 준비되지 않았어요.');
       return;
     }
 
     setHandwritingAnalysisBusy('page');
+    setHandwritingPersistenceDebug({
+      state: 'pending',
+      persisted: false,
+      lastError: null,
+      lastSavedAt: null,
+    });
     try {
       const page = await analyzeBackendNotePageHandwriting(pageId, options);
       const recognition = parseNotePageContent(page.content)?.handwritingRecognition ?? null;
       rememberHandwritingRecognitionFromPage(studyDocumentId, page);
+      rememberSavedBackendNotePage(studyDocumentId, page);
       scheduleClassInsightRefresh(studyDocumentId);
+      setHandwritingPersistenceDebug({
+        state: 'success',
+        persisted: Boolean(recognition),
+        lastError: recognition ? null : 'backend response did not include handwritingRecognition',
+        lastSavedAt: Date.now(),
+      });
       setWorkspaceFeedback(formatHandwritingAnalysisFeedback(
         page.page_number,
         recognition,
         options,
         currentPageHandwritingRecognition?.strokeHash,
       ));
-    } catch {
-      setWorkspaceFeedback('현재 페이지 손필기 분석에 실패했어요.');
+    } catch (error) {
+      const detail = error instanceof BackendApiError
+        ? error.detail ?? error.message
+        : error instanceof Error
+          ? error.message
+          : 'unknown error';
+      setHandwritingPersistenceDebug({
+        state: 'failed',
+        persisted: false,
+        lastError: detail,
+        lastSavedAt: null,
+      });
+      setWorkspaceFeedback(`현재 페이지 손필기 분석에 실패했어요. ${detail}`);
     } finally {
       setHandwritingAnalysisBusy(null);
     }
@@ -743,6 +799,7 @@ export function useStudyWorkspace(props: {
     currentHandwritingDebugPageNumber,
     currentPageHandwritingRecognition?.strokeHash,
     pendingPageSaveCount,
+    rememberSavedBackendNotePage,
     rememberHandwritingRecognitionFromPage,
     savingPageCount,
     scheduleClassInsightRefresh,
@@ -768,6 +825,7 @@ export function useStudyWorkspace(props: {
       const summary = await analyzeBackendNoteHandwriting(currentBackendNoteId, options);
       const pages = await listBackendNotePages(currentBackendNoteId);
       rememberHandwritingRecognitionFromPages(studyDocumentId, pages);
+      pages.forEach((page) => rememberSavedBackendNotePage(studyDocumentId, page));
       scheduleClassInsightRefresh(studyDocumentId);
       setWorkspaceFeedback(`손필기 분석 완료: ${summary.pages_analyzed}개 분석, ${summary.pages_skipped}개 건너뜀, ${summary.pages_failed}개 실패`);
     } catch {
@@ -779,6 +837,7 @@ export function useStudyWorkspace(props: {
     currentBackendNoteId,
     pendingPageSaveCount,
     rememberHandwritingRecognitionFromPages,
+    rememberSavedBackendNotePage,
     savingPageCount,
     scheduleClassInsightRefresh,
     setWorkspaceFeedback,
@@ -843,7 +902,8 @@ export function useStudyWorkspace(props: {
     }
 
     setMlKitHandwritingDebug((current) => ({ ...current, busy: true }));
-    const result = await recognizeKoreanHandwriting(strokes, { pageNumber: currentHandwritingDebugPageNumber });
+    const result = await recognizeKoreanHandwritingByClusters(strokes, { pageNumber: currentHandwritingDebugPageNumber });
+    const clusterCount = result.clusters?.length ?? 0;
     setMlKitHandwritingDebug((current) => ({
       ...current,
       available: result.status === 'ready' ? true : current.available,
@@ -855,7 +915,7 @@ export function useStudyWorkspace(props: {
     }));
     setWorkspaceFeedback(
       result.status === 'ready'
-        ? `${currentHandwritingDebugPageNumber}페이지 ML Kit 후보를 인식했어요.`
+        ? `${currentHandwritingDebugPageNumber}페이지 ML Kit 후보를 ${clusterCount || 1}개 cluster에서 인식했어요.`
         : formatMlKitUnavailableFeedback(result.detail ?? result.status),
     );
   }, [
@@ -893,7 +953,7 @@ export function useStudyWorkspace(props: {
     setHandwritingAnalysisBusy('page');
     setMlKitHandwritingDebug((current) => ({ ...current, busy: true }));
     try {
-      const result = await recognizeKoreanHandwriting(strokes, { pageNumber: currentHandwritingDebugPageNumber });
+      const result = await recognizeKoreanHandwritingByClusters(strokes, { pageNumber: currentHandwritingDebugPageNumber });
       setMlKitHandwritingDebug((current) => ({
         ...current,
         available: result.status === 'ready' ? true : current.available,
@@ -916,8 +976,9 @@ export function useStudyWorkspace(props: {
         ),
       );
       rememberHandwritingRecognitionFromPage(studyDocumentId, page);
+      rememberSavedBackendNotePage(studyDocumentId, page);
       scheduleClassInsightRefresh(studyDocumentId);
-      setWorkspaceFeedback(`${page.page_number}페이지 ML Kit 손필기 결과를 저장했고 class insight를 새로고침했어요.`);
+      setWorkspaceFeedback(`${page.page_number}페이지 ML Kit 손필기 결과를 ${result.clusters?.length || 1}개 cluster 기준으로 저장했고 class insight를 새로고침했어요.`);
     } catch (error) {
       if (error instanceof BackendApiError && error.status === 409) {
         setWorkspaceFeedback('ML Kit 결과가 오래됐어요. 현재 페이지에서 다시 실행해주세요.');
@@ -939,6 +1000,7 @@ export function useStudyWorkspace(props: {
     mlKitHandwritingDebug.modelState,
     pendingPageSaveCount,
     rememberHandwritingRecognitionFromPage,
+    rememberSavedBackendNotePage,
     savingPageCount,
     scheduleClassInsightRefresh,
     setWorkspaceFeedback,
@@ -2156,6 +2218,7 @@ export function useStudyWorkspace(props: {
     startNewAiChatSession,
     createAiChatSession,
     requestAiAnswer,
+    requestAiAnswerForQuestion,
     requestAiCanvasCommand,
     askAiAboutSelection,
     insertAiAnswerPage,

@@ -28,6 +28,53 @@ def _stroke(points, **extra):
     }
 
 
+def _star_strokes():
+    return [
+        _stroke([(50, 8), (50, 92)], id="star-vertical"),
+        _stroke([(10, 50), (90, 50)], id="star-horizontal"),
+        _stroke([(18, 18), (82, 82)], id="star-diagonal-1"),
+        _stroke([(18, 82), (82, 18)], id="star-diagonal-2"),
+    ]
+
+
+def _one_stroke_star():
+    return _stroke(
+        [
+            (50, 6),
+            (66, 88),
+            (6, 34),
+            (94, 34),
+            (34, 88),
+            (50, 6),
+        ],
+        id="one-stroke-star",
+    )
+
+
+def _keyword_like_strokes(x=180, y=24, *, prefix="text"):
+    return [
+        _stroke([(x, y + 34), (x + 18, y), (x + 36, y + 34)], id=f"{prefix}-a"),
+        _stroke([(x + 48, y), (x + 48, y + 36), (x + 72, y + 36)], id=f"{prefix}-b"),
+        _stroke([(x + 4, y + 48), (x + 76, y + 48)], id=f"{prefix}-underline"),
+    ]
+
+
+def _loose_keyword_stroke(x=180, y=24):
+    return _stroke(
+        [
+            (x, y + 34),
+            (x + 10, y + 10),
+            (x + 22, y + 2),
+            (x + 34, y + 28),
+            (x + 46, y + 8),
+            (x + 58, y + 36),
+            (x + 72, y + 20),
+            (x + 84, y + 40),
+        ],
+        id="loose-keyword",
+    )
+
+
 def _content(strokes, recognition=None):
     return json.dumps({
         "kind": "bsnap-page-state",
@@ -127,7 +174,7 @@ class HandwritingVisionFallbackTest(unittest.TestCase):
         self.assertEqual(openai_mock.call_count, 1)
 
     def test_openai_exception_does_not_break_analyze_handwriting(self):
-        strokes = [_stroke([(0, 0), (40, 20), (80, 0)])]
+        strokes = [*_star_strokes(), *_keyword_like_strokes()]
         with patch.dict(
             "os.environ",
             {
@@ -148,6 +195,197 @@ class HandwritingVisionFallbackTest(unittest.TestCase):
         self.assertEqual(status, "failed")
         self.assertIsNotNone(state)
         self.assertEqual(state["handwritingRecognition"]["status"], "failed")
+
+    def test_starless_page_skips_vision_without_openai_call(self):
+        strokes = [
+            _stroke([(0, 0), (18, 34), (36, 0)], id="text-a"),
+            _stroke([(48, 0), (48, 36), (72, 36)], id="text-b"),
+            _stroke([(4, 48), (76, 48)], id="text-c"),
+        ]
+        with patch.dict(
+            "os.environ",
+            {
+                "HANDWRITING_VISION_FALLBACK_ENABLED": "true",
+                "OPENAI_API_KEY": "test",
+                "HANDWRITING_VISION_MIN_CLUSTER_STROKES": "1",
+            },
+            clear=False,
+        ):
+            with patch("backend.app.routes.notes.analyze_handwriting_image_with_openai") as openai_mock:
+                next_content, status = _analyze_page_handwriting_content(
+                    _content(strokes),
+                    force=True,
+                    use_vision_fallback=True,
+                )
+
+        recognition = parse_page_state(next_content)["handwritingRecognition"]
+        self.assertEqual(status, "analyzed")
+        openai_mock.assert_not_called()
+        self.assertFalse(recognition["visionFallbackUsed"])
+        self.assertEqual(recognition["visionFallbackSkippedReason"], "no-star-anchor")
+
+    def test_star_page_sends_handwriting_clusters_to_vision(self):
+        strokes = [
+            *_star_strokes(),
+            *_keyword_like_strokes(190, 24, prefix="near"),
+            *_keyword_like_strokes(620, 24, prefix="far"),
+        ]
+        with patch.dict(
+            "os.environ",
+            {
+                "HANDWRITING_VISION_FALLBACK_ENABLED": "true",
+                "OPENAI_API_KEY": "test",
+                "HANDWRITING_VISION_MAX_CLUSTERS_PER_PAGE": "5",
+                "HANDWRITING_VISION_MIN_CLUSTER_STROKES": "1",
+            },
+            clear=False,
+        ):
+            with patch("backend.app.routes.notes.analyze_handwriting_image_with_openai", return_value={
+                "status": "ready",
+                "text": "중요",
+                "keywords": ["중요"],
+                "symbols": [],
+                "confidence": 0.9,
+            }) as openai_mock:
+                next_content, status = _analyze_page_handwriting_content(
+                    _content(strokes),
+                    force=True,
+                    use_vision_fallback=True,
+                )
+
+        recognition = parse_page_state(next_content)["handwritingRecognition"]
+        self.assertEqual(status, "analyzed")
+        self.assertEqual(openai_mock.call_count, 2)
+        self.assertTrue(recognition["visionFallbackUsed"])
+        self.assertEqual(recognition["visionAnalyzedClusterCount"], 2)
+        self.assertIn("중요", recognition["keywords"])
+
+    def test_star_page_sends_loose_near_handwriting_cluster_to_vision(self):
+        strokes = [
+            *_star_strokes(),
+            _loose_keyword_stroke(190, 24),
+        ]
+        with patch.dict(
+            "os.environ",
+            {
+                "HANDWRITING_VISION_FALLBACK_ENABLED": "true",
+                "OPENAI_API_KEY": "test",
+                "HANDWRITING_VISION_MAX_CLUSTERS_PER_PAGE": "5",
+                "HANDWRITING_VISION_MIN_CLUSTER_STROKES": "1",
+            },
+            clear=False,
+        ):
+            with patch("backend.app.routes.notes.analyze_handwriting_image_with_openai", return_value={
+                "status": "ready",
+                "text": "시험",
+                "keywords": ["시험"],
+                "symbols": [],
+                "confidence": 0.9,
+            }) as openai_mock:
+                next_content, status = _analyze_page_handwriting_content(
+                    _content(strokes),
+                    force=True,
+                    use_vision_fallback=True,
+                )
+
+        recognition = parse_page_state(next_content)["handwritingRecognition"]
+        self.assertEqual(status, "analyzed")
+        self.assertEqual(openai_mock.call_count, 1)
+        self.assertTrue(recognition["visionFallbackUsed"])
+        self.assertIn("시험", recognition["keywords"])
+
+    def test_pure_star_page_does_not_call_vision_when_not_needed(self):
+        with patch.dict(
+            "os.environ",
+            {
+                "HANDWRITING_VISION_FALLBACK_ENABLED": "true",
+                "OPENAI_API_KEY": "test",
+                "HANDWRITING_VISION_MIN_CLUSTER_STROKES": "1",
+            },
+            clear=False,
+        ):
+            with patch("backend.app.routes.notes.analyze_handwriting_image_with_openai") as openai_mock:
+                next_content, status = _analyze_page_handwriting_content(
+                    _content(_star_strokes()),
+                    use_vision_fallback=True,
+                )
+
+        recognition = parse_page_state(next_content)["handwritingRecognition"]
+        self.assertEqual(status, "analyzed")
+        openai_mock.assert_not_called()
+        self.assertFalse(recognition["visionFallbackUsed"])
+        self.assertEqual(recognition["visionFallbackSkippedReason"], "not-needed")
+
+    def test_text_like_cluster_with_star_like_crossing_can_trigger_vision(self):
+        strokes = [
+            *_star_strokes(),
+            *_keyword_like_strokes(90, 24, prefix="attached"),
+        ]
+        with patch.dict(
+            "os.environ",
+            {
+                "HANDWRITING_VISION_FALLBACK_ENABLED": "true",
+                "OPENAI_API_KEY": "test",
+                "HANDWRITING_VISION_MAX_CLUSTERS_PER_PAGE": "2",
+                "HANDWRITING_VISION_MIN_CLUSTER_STROKES": "1",
+            },
+            clear=False,
+        ):
+            with patch("backend.app.routes.notes.analyze_handwriting_image_with_openai", return_value={
+                "status": "ready",
+                "text": "중요",
+                "keywords": ["중요"],
+                "symbols": [],
+                "confidence": 0.9,
+            }) as openai_mock:
+                next_content, status = _analyze_page_handwriting_content(
+                    _content(strokes),
+                    force=True,
+                    use_vision_fallback=True,
+                )
+
+        recognition = parse_page_state(next_content)["handwritingRecognition"]
+        self.assertEqual(status, "analyzed")
+        self.assertEqual(openai_mock.call_count, 1)
+        self.assertTrue(recognition["visionFallbackUsed"])
+        self.assertEqual(recognition["visionAnalyzedClusterCount"], 1)
+        self.assertNotIn("star", recognition["symbols"])
+        self.assertIn("중요", recognition["keywords"])
+
+    def test_text_like_cluster_with_one_stroke_star_can_trigger_vision(self):
+        strokes = [
+            _one_stroke_star(),
+            *_keyword_like_strokes(92, 24, prefix="attached-one-stroke"),
+        ]
+        with patch.dict(
+            "os.environ",
+            {
+                "HANDWRITING_VISION_FALLBACK_ENABLED": "true",
+                "OPENAI_API_KEY": "test",
+                "HANDWRITING_VISION_MAX_CLUSTERS_PER_PAGE": "2",
+                "HANDWRITING_VISION_MIN_CLUSTER_STROKES": "1",
+            },
+            clear=False,
+        ):
+            with patch("backend.app.routes.notes.analyze_handwriting_image_with_openai", return_value={
+                "status": "ready",
+                "text": "중요",
+                "keywords": ["중요"],
+                "symbols": [],
+                "confidence": 0.9,
+            }) as openai_mock:
+                next_content, status = _analyze_page_handwriting_content(
+                    _content(strokes),
+                    force=True,
+                    use_vision_fallback=True,
+                )
+
+        recognition = parse_page_state(next_content)["handwritingRecognition"]
+        self.assertEqual(status, "analyzed")
+        self.assertEqual(openai_mock.call_count, 1)
+        self.assertTrue(recognition["visionFallbackUsed"])
+        self.assertEqual(recognition["visionAnalyzedClusterCount"], 1)
+        self.assertIn("중요", recognition["keywords"])
 
     def test_force_bypasses_stroke_hash_skip(self):
         strokes = [_stroke([(0, 0), (40, 20), (80, 0)])]
@@ -183,9 +421,10 @@ class HandwritingVisionFallbackTest(unittest.TestCase):
 
     def test_cluster_limit_prevents_excessive_openai_calls(self):
         strokes = [
-            _stroke([(0, 0), (40, 20), (80, 0)], id="a"),
-            _stroke([(300, 0), (340, 20), (380, 0)], id="b"),
-            _stroke([(0, 300), (40, 320), (80, 300)], id="c"),
+            *_star_strokes(),
+            *_keyword_like_strokes(190, 24, prefix="near-a"),
+            *_keyword_like_strokes(190, 172, prefix="near-b"),
+            *_keyword_like_strokes(640, 24, prefix="far"),
         ]
         with patch.dict(
             "os.environ",

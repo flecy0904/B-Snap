@@ -28,6 +28,13 @@ HANDWRITING_VISION_MIN_CLUSTER_STROKES=2
 HANDWRITING_VISION_CACHE_TTL_DAYS=14
 ```
 
+Current demo policy:
+
+- Core recommendation works without OpenAI: star, bookmarks, highlights, AI questions, memos, group overlap, and weak ink density.
+- Vision fallback is cost-controlled and should run only for pages where geometry detects a star anchor.
+- Vision analyzes only nearby B-Snap overlay ink clusters. It must not include the original PDF background.
+- ML Kit is optional. If it is unavailable or inaccurate, the app should continue with geometry/Vision.
+
 ## Run Locally
 
 Backend:
@@ -55,23 +62,31 @@ xcodebuild -workspace BSNAP.xcworkspace -scheme BSNAP -configuration Debug -sdk 
 ## Geometry-Only Web QA
 
 1. Open a PDF note on web.
-2. Draw star/check/circle/underline-like overlay marks in B-Snap.
+2. Draw a clear star overlay mark in B-Snap.
 3. In the debug panel, run `현재 페이지 재분석`.
 4. Confirm feedback says geometry analysis was saved and class insight was refreshed.
 5. Confirm `handwritingRecognition.status`, `engine`, `symbols`, `confidence`, and `clusters` update.
 6. Confirm bbox overlay appears and does not block interaction.
 7. Ask: `중요 페이지 추천해줘`.
-8. Expected: recommended pages reflect semantic marks, especially star/check/circle, without exposing scores, signal counts, or engine names.
+8. Expected: recommended pages reflect the star signal without exposing scores, signal counts, or engine names.
+
+Notes:
+
+- `check`, `circle`, `box`, `underline`, `bracket`, `arrow`, and `exclamation` may appear in debug metadata.
+- They should not make a page high/very-high by themselves.
+- Raw stroke density alone should remain a weak backup signal.
 
 ## Vision Fallback QA
 
 1. Start backend with `HANDWRITING_VISION_FALLBACK_ENABLED=true` and `OPENAI_API_KEY`.
-2. Draw text-like handwriting or ambiguous marks.
+2. Draw a star and nearby short handwriting such as `중요`, `시험`, or `기말`.
 3. Run `Vision fallback` from the debug panel.
-4. Confirm only rendered overlay ink is analyzed. Original PDF content must never be included.
+4. Confirm only rendered overlay ink near the star is analyzed. Original PDF content must never be included.
 5. Confirm `visionFallbackUsed`, `visionFallbackSkippedReason`, `analyzedClusterCount`, and `visionAnalyzedClusterCount` display clearly.
-6. Remove `OPENAI_API_KEY` or disable the env flag and rerun.
-7. Expected: analysis fails safely with `missing-api-key` or `fallback-disabled`; note save/PDF/chat/canvas flows keep working.
+6. Draw Korean handwriting without a star and run Vision fallback.
+7. Expected: Vision is skipped with `no-star-anchor`; OpenAI should not be called.
+8. Remove `OPENAI_API_KEY` or disable the env flag and rerun.
+9. Expected: analysis fails safely with `missing-api-key` or `fallback-disabled`; note save/PDF/chat/canvas flows keep working.
 
 ## ML Kit QA
 
@@ -89,7 +104,7 @@ iOS dev build:
 3. Click `한국어 모델 준비`.
 4. Draw Korean handwriting such as `중요`, `시험`, or `기말`.
 5. Click `현재 페이지 ML Kit`.
-6. Confirm candidates, normalized keywords, and confidence are shown.
+6. Confirm candidates, normalized keywords, cluster count, and confidence are shown if available.
 7. Click `ML Kit 실행 후 저장`.
 8. Confirm persisted `handwritingRecognition` appears in the debug panel and class insight refreshes.
 9. Modify strokes and try saving an old recognition result if possible.
@@ -107,16 +122,16 @@ backend/.venv/bin/python backend/scripts/seed_handwriting_semantic_demo.py
 The script creates demo users with password `semantic-demo-pass` and pages:
 
 - Page 13: star + `중요` + `시험`
-- Page 21: check + `기말`
-- Page 32: circle + `공식` + `암기`
+- Page 21: `기말` / `중간`
+- Page 32: `암기` / `필수`
 - Page 75: many random strokes without semantic signal
 
 Expected ranking:
 
 ```text
 Page 13 outranks Page 75.
-Semantic pages outrank raw-stroke-heavy pages.
-Star consensus is stronger than check/circle-only emphasis.
+Star and strong keywords outrank raw-stroke-heavy pages.
+Check/circle/underline-only pages should not become high priority.
 ```
 
 ## Prompt Examples
@@ -132,5 +147,5 @@ Use these in the AI panel:
 Expected answer style:
 
 - Natural study-assistant wording.
-- Mentions pages and concise reasons like handwritten important marks, star/check marks, exam/final keywords, or overlapping study signals.
+- Mentions pages and concise reasons like handwritten important marks, star marks, exam/final keywords, or overlapping study signals.
 - Does not expose hidden scores, classmate counts, raw signal counts, raw stroke count, engine names, OpenAI, or ML Kit details.

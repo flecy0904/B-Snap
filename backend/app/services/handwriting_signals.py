@@ -25,14 +25,39 @@ CANONICAL_STUDY_KEYWORDS = (
 
 KEYWORD_VARIANTS: dict[str, str] = {
     "시험범위": "시험",
+    "시혐": "시험",
+    "시헙": "시험",
+    "시엄": "시험",
+    "시함": "시험",
+    "시염": "시험",
     "기말고사": "기말",
+    "기맣": "기말",
+    "기마": "기말",
+    "가말": "기말",
+    "거말": "기말",
+    "기발": "기말",
     "중간고사": "중간",
+    "중칸": "중간",
+    "중긴": "중간",
+    "증간": "중간",
     "중요함": "중요",
     "중요표시": "중요",
+    "중오": "중요",
+    "즁요": "중요",
+    "증요": "중요",
+    "종요": "중요",
+    "중여": "중요",
+    "쥬요": "중요",
     "외우기": "암기",
     "외워": "암기",
     "외우": "암기",
+    "암가": "암기",
+    "암키": "암기",
+    "임기": "암기",
+    "암끼": "암기",
     "암기할것": "암기",
+    "필쑤": "필수",
+    "필슈": "필수",
     "나옴": "시험",
     "나온다": "시험",
     "나올듯": "시험",
@@ -44,6 +69,19 @@ KEYWORD_VARIANTS: dict[str, str] = {
 }
 
 SYMBOL_NAMES = {"star", "check", "circle", "box", "underline", "bracket", "arrow", "exclamation"}
+STRONG_STUDY_KEYWORDS = {"중요", "시험", "기말", "중간", "암기", "필수"}
+
+_HANGUL_BASE = 0xAC00
+_HANGUL_END = 0xD7A3
+_HANGUL_MEDIAL_COUNT = 21
+_HANGUL_FINAL_COUNT = 28
+_SIMILAR_MEDIALS = (
+    {8, 12},  # ㅗ/ㅛ
+    {13, 17},  # ㅜ/ㅠ
+    {4, 6},  # ㅓ/ㅕ
+    {0, 2},  # ㅏ/ㅑ
+    {18, 19},  # ㅡ/ㅢ
+)
 
 
 def _round_number(value: Any, digits: int = 3) -> Any:
@@ -332,6 +370,69 @@ def _stroke_orientation_bin(points: list[tuple[float, float]]) -> int | None:
     return int(round((angle % math.pi) / (math.pi / 6))) % 6
 
 
+def _simplify_polyline(points: list[tuple[float, float]], min_distance: float) -> list[tuple[float, float]]:
+    if len(points) <= 2:
+        return points
+    simplified = [points[0]]
+    for point in points[1:-1]:
+        previous = simplified[-1]
+        if math.hypot(point[0] - previous[0], point[1] - previous[1]) >= min_distance:
+            simplified.append(point)
+    if simplified[-1] != points[-1]:
+        simplified.append(points[-1])
+    return simplified
+
+
+def _orientation(a: tuple[float, float], b: tuple[float, float], c: tuple[float, float]) -> float:
+    return (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])
+
+
+def _segments_intersect(
+    a: tuple[float, float],
+    b: tuple[float, float],
+    c: tuple[float, float],
+    d: tuple[float, float],
+) -> bool:
+    o1 = _orientation(a, b, c)
+    o2 = _orientation(a, b, d)
+    o3 = _orientation(c, d, a)
+    o4 = _orientation(c, d, b)
+    return (o1 * o2 < 0) and (o3 * o4 < 0)
+
+
+def _self_intersection_count(points: list[tuple[float, float]]) -> int:
+    if len(points) < 5:
+        return 0
+    intersections = 0
+    segment_count = len(points) - 1
+    for left in range(segment_count):
+        for right in range(left + 2, segment_count):
+            if left == 0 and right == segment_count - 1:
+                continue
+            if _segments_intersect(points[left], points[left + 1], points[right], points[right + 1]):
+                intersections += 1
+    return intersections
+
+
+def _sharp_turn_count(points: list[tuple[float, float]]) -> int:
+    turns = 0
+    for index in range(1, len(points) - 1):
+        previous = points[index - 1]
+        current = points[index]
+        following = points[index + 1]
+        left = (current[0] - previous[0], current[1] - previous[1])
+        right = (following[0] - current[0], following[1] - current[1])
+        left_length = math.hypot(left[0], left[1])
+        right_length = math.hypot(right[0], right[1])
+        if left_length < 1 or right_length < 1:
+            continue
+        cosine = max(-1.0, min(1.0, (left[0] * right[0] + left[1] * right[1]) / (left_length * right_length)))
+        angle = math.acos(cosine)
+        if angle >= 0.7:
+            turns += 1
+    return turns
+
+
 def _occupied_bins(values: list[float], origin: float, span: float, bin_count: int = 4) -> int:
     if not values or span <= 0:
         return 0
@@ -544,17 +645,20 @@ def _detect_box(strokes: list[dict[str, Any]], bbox: dict[str, float]) -> float:
 
 def _detect_star(strokes: list[dict[str, Any]], bbox: dict[str, float]) -> float:
     pen_strokes = [stroke for stroke in strokes if not _is_highlighter(stroke)]
-    if len(pen_strokes) < 4:
-        return 0.0
     width = max(1.0, bbox["width"])
     height = max(1.0, bbox["height"])
     max_dim = max(width, height)
     if width < 18 or height < 18 or max_dim / min(width, height) > 1.75:
         return 0.0
-    metrics = _star_geometry_metrics(pen_strokes, bbox)
-    if metrics["centerCrossingCount"] < 3 or metrics["centerCrossingRatio"] < 0.62:
+    if len(pen_strokes) == 1:
+        return _detect_single_stroke_star(pen_strokes[0], bbox)
+    if len(pen_strokes) < 4:
         return 0.0
-    if metrics["centeredCount"] < 3 or metrics["centeredRatio"] < 0.55:
+    metrics = _star_geometry_metrics(pen_strokes, bbox)
+    required_center_crossings = 3
+    if metrics["centerCrossingCount"] < required_center_crossings or metrics["centerCrossingRatio"] < 0.62:
+        return 0.0
+    if metrics["centeredCount"] < required_center_crossings or metrics["centeredRatio"] < 0.55:
         return 0.0
     if metrics["orientationCount"] < 3:
         return 0.0
@@ -568,6 +672,79 @@ def _detect_star(strokes: list[dict[str, Any]], bbox: dict[str, float]) -> float
     confidence += min(0.1, metrics["orientationCount"] * 0.025)
     confidence += 0.06 if max_dim / min(width, height) <= 1.35 else 0.0
     return min(confidence, 0.9)
+
+
+def _detect_single_stroke_star(stroke: dict[str, Any], bbox: dict[str, float]) -> float:
+    points = _stroke_points_xy(stroke)
+    if len(points) < 5:
+        return 0.0
+    width = max(1.0, bbox["width"])
+    height = max(1.0, bbox["height"])
+    max_dim = max(width, height)
+    simplified = _simplify_polyline(points, max(4.0, max_dim * 0.08))
+    if len(simplified) < 5:
+        return 0.0
+    intersections = _self_intersection_count(simplified)
+    sharp_turns = _sharp_turn_count(simplified)
+    path_length = _path_length(points)
+    center = (float(bbox.get("x") or 0.0) + width / 2, float(bbox.get("y") or 0.0) + height / 2)
+    center_threshold = max(5.0, max_dim * 0.16)
+    center_crossings = sum(
+        1
+        for index in range(1, len(simplified))
+        if _distance_point_to_segment(center, simplified[index - 1], simplified[index]) <= center_threshold
+    )
+    endpoint_bins = _occupied_bins([point[0] for point in simplified], float(bbox.get("x") or 0.0), width, bin_count=5)
+    vertical_bins = _occupied_bins([point[1] for point in simplified], float(bbox.get("y") or 0.0), height, bin_count=5)
+    path_ratio = path_length / max(1.0, width + height)
+    far_points = [
+        point for point in simplified
+        if math.hypot(point[0] - center[0], point[1] - center[1]) >= max_dim * 0.3
+    ]
+    angle_bins = {
+        int((((math.atan2(point[1] - center[1], point[0] - center[0]) + math.pi * 2) % (math.pi * 2)) / (math.pi / 4)))
+        for point in far_points
+    }
+    near_center_vertices = sum(
+        1
+        for point in simplified
+        if math.hypot(point[0] - center[0], point[1] - center[1]) <= center_threshold * 1.2
+    )
+
+    if (
+        center_crossings >= 3
+        and len(far_points) >= 4
+        and len(angle_bins) >= 4
+        and near_center_vertices >= 2
+        and sharp_turns >= 3
+        and endpoint_bins >= 3
+        and vertical_bins >= 3
+        and path_ratio >= 1.55
+    ):
+        confidence = 0.7
+        confidence += min(0.08, center_crossings * 0.015)
+        confidence += min(0.06, len(angle_bins) * 0.01)
+        confidence += min(0.04, near_center_vertices * 0.01)
+        confidence += 0.04 if max_dim / min(width, height) <= 1.45 else 0.0
+        return min(confidence, 0.88)
+
+    if intersections < 2:
+        return 0.0
+    if sharp_turns < 4:
+        return 0.0
+    if center_crossings < 2:
+        return 0.0
+    if endpoint_bins < 3 or vertical_bins < 3:
+        return 0.0
+    if path_ratio < 2.1:
+        return 0.0
+
+    confidence = 0.68
+    confidence += min(0.08, intersections * 0.02)
+    confidence += min(0.08, sharp_turns * 0.012)
+    confidence += min(0.06, center_crossings * 0.02)
+    confidence += 0.04 if max_dim / min(width, height) <= 1.45 else 0.0
+    return min(confidence, 0.88)
 
 
 def _detect_bracket(strokes: list[dict[str, Any]], bbox: dict[str, float]) -> float:
@@ -668,6 +845,58 @@ def _normalize_keyword_text(value: str) -> str:
     return re.sub(r"[^0-9a-zA-Z가-힣]+", "", value.strip().lower())
 
 
+def _decompose_hangul_syllable(char: str) -> tuple[int, int, int] | None:
+    code = ord(char)
+    if code < _HANGUL_BASE or code > _HANGUL_END:
+        return None
+    offset = code - _HANGUL_BASE
+    initial = offset // (_HANGUL_MEDIAL_COUNT * _HANGUL_FINAL_COUNT)
+    medial = (offset % (_HANGUL_MEDIAL_COUNT * _HANGUL_FINAL_COUNT)) // _HANGUL_FINAL_COUNT
+    final = offset % _HANGUL_FINAL_COUNT
+    return initial, medial, final
+
+
+def _similar_medial(left: int, right: int) -> bool:
+    return any(left in group and right in group for group in _SIMILAR_MEDIALS)
+
+
+def _hangul_syllable_similarity(left: str, right: str) -> float:
+    if left == right:
+        return 1.0
+    left_parts = _decompose_hangul_syllable(left)
+    right_parts = _decompose_hangul_syllable(right)
+    if left_parts is None or right_parts is None:
+        return 0.0
+
+    score = 0.0
+    if left_parts[0] == right_parts[0]:
+        score += 0.45
+    if left_parts[1] == right_parts[1]:
+        score += 0.35
+    elif _similar_medial(left_parts[1], right_parts[1]):
+        score += 0.28
+    if left_parts[2] == right_parts[2]:
+        score += 0.2
+    return score
+
+
+def _hangul_keyword_similarity(left: str, right: str) -> float:
+    if len(left) != len(right) or not left:
+        return 0.0
+    return sum(
+        _hangul_syllable_similarity(left_char, right_char)
+        for left_char, right_char in zip(left, right, strict=False)
+    ) / len(right)
+
+
+def _keyword_windows(value: str, length: int) -> list[str]:
+    if length <= 0 or len(value) < length:
+        return []
+    if len(value) == length:
+        return [value]
+    return [value[index:index + length] for index in range(0, len(value) - length + 1)]
+
+
 def normalize_korean_study_keywords(text: str, candidates: list[str] | None = None) -> list[str]:
     values = [text, *(candidates or [])]
     found: list[str] = []
@@ -697,6 +926,14 @@ def normalize_korean_study_keywords(text: str, candidates: list[str] | None = No
                 if len(token_normalized) < len(canonical_normalized):
                     continue
                 if SequenceMatcher(None, token_normalized, canonical_normalized).ratio() >= 0.88:
+                    add(canonical)
+            for canonical in STRONG_STUDY_KEYWORDS:
+                canonical_normalized = _normalize_keyword_text(canonical)
+                threshold = 0.84 if len(canonical_normalized) <= 2 else 0.82
+                if any(
+                    _hangul_keyword_similarity(window, canonical_normalized) >= threshold
+                    for window in _keyword_windows(token_normalized, len(canonical_normalized))
+                ):
                     add(canonical)
     return found
 

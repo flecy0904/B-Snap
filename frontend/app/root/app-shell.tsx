@@ -374,6 +374,7 @@ export function AppShell(props: {
                   onStartNewAiChatSession={notesState.startNewAiChatSession}
                   onCreateAiChatSession={notesState.createAiChatSession}
                   onRequestAiAnswer={notesState.requestAiAnswer}
+                  onRequestAiAnswerForQuestion={notesState.requestAiAnswerForQuestion}
                   onAskAiAboutSelection={notesState.askAiAboutSelection}
                   onRequestAiCanvasCommand={notesState.requestAiCanvasCommand}
                   onInsertAiAnswerPage={notesState.insertAiAnswerPage}
@@ -623,6 +624,7 @@ export function AppShell(props: {
                   onStartNewAiChatSession={notesState.startNewAiChatSession}
                   onCreateAiChatSession={notesState.createAiChatSession}
                   onRequestAiAnswer={notesState.requestAiAnswer}
+                  onRequestAiAnswerForQuestion={notesState.requestAiAnswerForQuestion}
                   onAskAiAboutSelection={notesState.askAiAboutSelection}
                   onRequestAiCanvasCommand={notesState.requestAiCanvasCommand}
                   onInsertAiAnswerPage={notesState.insertAiAnswerPage}

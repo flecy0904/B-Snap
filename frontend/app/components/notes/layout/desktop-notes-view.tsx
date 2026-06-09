@@ -251,6 +251,7 @@ export type DesktopNotesViewProps = {
   onStartNewAiChatSession: () => void;
   onCreateAiChatSession: () => void;
   onRequestAiAnswer: () => void;
+  onRequestAiAnswerForQuestion: (question: string) => Promise<boolean>;
   onAskAiAboutSelection: (selectionPreviewUri?: string | null) => void;
   onRequestAiCanvasCommand: (command: string, options?: {
     selectionImageUri?: string | null;
@@ -771,6 +772,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           onStartNewAiChatSession: props.onStartNewAiChatSession,
           onCreateAiChatSession: props.onCreateAiChatSession,
           onRequestAiAnswer: props.onRequestAiAnswer,
+          onRequestAiAnswerForQuestion: props.onRequestAiAnswerForQuestion,
           onAskAiAboutSelection: props.onAskAiAboutSelection,
           onRequestAiCanvasCommand: props.onRequestAiCanvasCommand,
           onInsertAiAnswerPage: props.onInsertAiAnswerPage,

@@ -18,6 +18,10 @@ function formatVisionSkipReason(reason?: string | null) {
       return 'cluster-limit-exceeded';
     case 'page-limit':
       return 'note-page-limit-exceeded';
+    case 'no-star-anchor':
+      return 'no-star-anchor';
+    case 'no-star-text-anchor':
+      return 'no-star-text-anchor';
     default:
       return reason || '없음';
   }
@@ -30,6 +34,7 @@ export function NotesWorkspaceDock() {
   const [position, setPosition] = React.useState(() => ({ x: 12, y: 8 }));
   const [referenceQuery, setReferenceQuery] = React.useState('');
   const [referenceScope, setReferenceScope] = React.useState<'current' | 'all'>('current');
+  const [handwritingDebugAdvanced, setHandwritingDebugAdvanced] = React.useState(false);
   const startPositionRef = React.useRef(position);
   const headerIconName = 'image-multiple-outline';
   const panelHeight = Math.max(360, Math.min(640, height - position.y - 16));
@@ -248,17 +253,13 @@ export function NotesWorkspaceDock() {
               ready {handwritingReadyText}
             </Text>
             <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>
-              ids doc {handwritingReadiness?.studyDocumentId ?? '없음'} · note {handwritingReadiness?.backendNoteId ?? '없음'} · page {handwritingReadiness?.pageNumber ?? '없음'} · pageId {handwritingReadiness?.pageId ?? '없음'}
+              persist {handwritingReadiness?.handwritingSaveState ?? 'idle'} · persisted {handwritingReadiness?.handwritingPersisted === null || handwritingReadiness?.handwritingPersisted === undefined ? 'unknown' : handwritingReadiness.handwritingPersisted ? 'yes' : 'no'}
             </Text>
-            <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>
-              state {handwritingReadiness?.platform ?? 'unknown'} · api {handwritingReadiness?.backendApiEnabled ? 'on' : 'off'} · pages {handwritingReadiness?.backendPageCount ?? 0} · save {handwritingReadiness?.pendingPageSaveCount ?? 0}/{handwritingReadiness?.savingPageCount ?? 0}/{handwritingReadiness?.failedPageSaveCount ?? 0}
-            </Text>
-            <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>
-              hash {handwritingRecognition?.strokeHash ? handwritingRecognition.strokeHash.slice(0, 12) : '없음'}
-            </Text>
-            <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>
-              text {handwritingRecognition?.text || '없음'}
-            </Text>
+            {handwritingReadiness?.lastHandwritingSaveError ? (
+              <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>
+                save error {handwritingReadiness.lastHandwritingSaveError}
+              </Text>
+            ) : null}
             <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>
               keywords {handwritingKeywords}
             </Text>
@@ -268,21 +269,8 @@ export function NotesWorkspaceDock() {
             <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={1}>
               clusters {handwritingClusterCount} · vision clusters {handwritingVisionClusterCount}
             </Text>
-            {handwritingFirstCluster ? (
-              <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>
-                cluster {handwritingFirstCluster.clusterKind ?? 'unknown'} · text {typeof handwritingFirstCluster.textLikeScore === 'number' ? Math.round(handwritingFirstCluster.textLikeScore * 100) : 0}% · symbol {typeof handwritingFirstCluster.symbolLikeScore === 'number' ? Math.round(handwritingFirstCluster.symbolLikeScore * 100) : 0}%
-              </Text>
-            ) : null}
-            {handwritingRejectedCandidate ? (
-              <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>
-                rejected {handwritingRejectedCandidate.symbol} {Math.round((handwritingRejectedCandidate.confidence ?? 0) * 100)}% · {handwritingRejectedCandidate.rejectionReason ?? 'below threshold'}
-              </Text>
-            ) : null}
             <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>
               vision used {handwritingVisionUsed} · skipped {handwritingSkippedReason}
-            </Text>
-            <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={1}>
-              cache {handwritingCacheState}
             </Text>
             <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>
               mlkit available {mlKitDebug?.available === null ? 'unknown' : mlKitDebug?.available ? 'yes' : 'no'} · model {mlKitDebug?.modelState ?? (mlKitDebug?.modelReady === null ? 'unknown' : mlKitDebug?.modelReady ? 'ready' : 'missing')}
@@ -293,10 +281,45 @@ export function NotesWorkspaceDock() {
             <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>
               mlkit keywords {mlKitKeywords} · confidence {mlKitConfidence}
             </Text>
-            {mlKitDebug?.detail ? (
-              <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>
-                mlkit detail {mlKitDebug.detail}
-              </Text>
+            <Pressable style={globalContext.styles.workspaceGhostAction} onPress={() => setHandwritingDebugAdvanced((current) => !current)}>
+              <Text style={globalContext.styles.workspaceGhostActionText}>{handwritingDebugAdvanced ? '디버그 상세 숨기기' : '디버그 상세 보기'}</Text>
+            </Pressable>
+            {handwritingDebugAdvanced ? (
+              <>
+                <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>
+                  ids doc {handwritingReadiness?.studyDocumentId ?? '없음'} · note {handwritingReadiness?.backendNoteId ?? '없음'} · page {handwritingReadiness?.pageNumber ?? '없음'} · pageId {handwritingReadiness?.pageId ?? '없음'}
+                </Text>
+                <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>
+                  state {handwritingReadiness?.platform ?? 'unknown'} · api {handwritingReadiness?.backendApiEnabled ? 'on' : 'off'} · pages {handwritingReadiness?.backendPageCount ?? 0}
+                </Text>
+                <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>
+                  autosave queue p/s/f {handwritingReadiness?.pendingPageSaveCount ?? 0}/{handwritingReadiness?.savingPageCount ?? 0}/{handwritingReadiness?.failedPageSaveCount ?? 0}
+                </Text>
+                <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>
+                  hash {handwritingRecognition?.strokeHash ? handwritingRecognition.strokeHash.slice(0, 12) : '없음'}
+                </Text>
+                <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>
+                  text {handwritingRecognition?.text || '없음'}
+                </Text>
+                {handwritingFirstCluster ? (
+                  <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>
+                    cluster {handwritingFirstCluster.clusterKind ?? 'unknown'} · text {typeof handwritingFirstCluster.textLikeScore === 'number' ? Math.round(handwritingFirstCluster.textLikeScore * 100) : 0}% · symbol {typeof handwritingFirstCluster.symbolLikeScore === 'number' ? Math.round(handwritingFirstCluster.symbolLikeScore * 100) : 0}%
+                  </Text>
+                ) : null}
+                {handwritingRejectedCandidate ? (
+                  <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>
+                    rejected {handwritingRejectedCandidate.symbol} {Math.round((handwritingRejectedCandidate.confidence ?? 0) * 100)}% · {handwritingRejectedCandidate.rejectionReason ?? 'below threshold'}
+                  </Text>
+                ) : null}
+                <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={1}>
+                  cache {handwritingCacheState}
+                </Text>
+                {mlKitDebug?.detail ? (
+                  <Text style={globalContext.styles.workspaceDockRowBody} numberOfLines={2}>
+                    mlkit detail {mlKitDebug.detail}
+                  </Text>
+                ) : null}
+              </>
             ) : null}
             <View style={globalContext.styles.workspaceDockActions}>
               <Pressable

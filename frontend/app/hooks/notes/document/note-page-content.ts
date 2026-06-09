@@ -29,6 +29,7 @@ export type HandwritingRecognitionState = {
   keywords?: string[];
   symbols?: string[];
   confidence?: number;
+  candidates?: Array<{ text: string; confidence?: number }>;
   clusters?: HandwritingRecognitionCluster[];
   updatedAt?: string;
   visionFallbackUsed?: boolean;
@@ -58,10 +59,11 @@ export function serializeNotePageContent(params: {
   bookmarked?: boolean;
   photoReferenceCount?: number;
   memoPageCount?: number;
+  handwritingRecognition?: HandwritingRecognitionState | null;
 }) {
   const photoReferenceCount = Math.max(0, Math.floor(params.photoReferenceCount ?? 0));
   const memoPageCount = Math.max(0, Math.floor(params.memoPageCount ?? 0));
-  return JSON.stringify({
+  const pageState: StoredNotePageContent = {
     kind: 'bsnap-page-state',
     version: 1,
     inkStrokes: params.inkStrokes,
@@ -70,7 +72,11 @@ export function serializeNotePageContent(params: {
     bookmarked: Boolean(params.bookmarked),
     photoReferenceCount,
     memoPageCount,
-  } satisfies StoredNotePageContent);
+  };
+  if (params.handwritingRecognition) {
+    pageState.handwritingRecognition = params.handwritingRecognition;
+  }
+  return JSON.stringify(pageState);
 }
 
 function normalizeCount(value: unknown) {
@@ -80,11 +86,15 @@ function normalizeCount(value: unknown) {
   return 0;
 }
 
-export function parseNotePageContent(content: string | null): StoredNotePageContent | null {
+export function parseNotePageContent(content: string | Partial<StoredNotePageContent> | null): StoredNotePageContent | null {
   if (!content) return null;
 
   try {
-    const parsed = JSON.parse(content) as Partial<StoredNotePageContent> & Record<string, unknown>;
+    const parsed = (
+      typeof content === 'string'
+        ? JSON.parse(content)
+        : content
+    ) as Partial<StoredNotePageContent> & Record<string, unknown>;
     if (parsed.kind !== 'bsnap-page-state' || parsed.version !== 1) return null;
     const bookmarkCount = normalizeCount(parsed.bookmarked)
       + normalizeCount(parsed.bookmarkCount)

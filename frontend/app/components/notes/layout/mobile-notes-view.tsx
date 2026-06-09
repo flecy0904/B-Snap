@@ -129,6 +129,7 @@ export type MobileNotesViewProps = {
   onSelectAiChatSession: (sessionId: number) => void;
   onCreateAiChatSession: () => void;
   onRequestAiAnswer: () => void;
+  onRequestAiAnswerForQuestion: (question: string) => Promise<boolean>;
   onAskAiAboutSelection: (selectionPreviewUri?: string | null) => void;
   onInsertAiAnswerPage: () => void;
   onSelectionChange: (rect: SelectionRect | null) => void;

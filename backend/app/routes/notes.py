@@ -1,4 +1,5 @@
 import logging
+import math
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -26,6 +27,7 @@ from backend.app.schemas.notes import (
 from backend.app.services.handwriting_signals import (
     build_handwriting_recognition_from_geometry,
     cluster_ink_strokes,
+    compute_geometry_symbol_candidates,
     extract_page_ink_strokes,
     merge_handwriting_recognition_results,
     normalize_korean_study_keywords,
@@ -46,6 +48,7 @@ from backend.app.services.pdf_text_extractor import extract_pdf_text_pages, extr
 
 router = APIRouter(tags=["notes"])
 logger = logging.getLogger("uvicorn.error")
+VISION_STAR_LIKE_CONFIDENCE_THRESHOLD = 0.45
 
 
 def get_note_for_user(note_id: int, user_id: int, connection: Connection):
@@ -132,7 +135,350 @@ def _cluster_looks_text_like(cluster: dict[str, Any]) -> bool:
     return 0.25 <= ratio <= 12
 
 
+def _cluster_symbols(cluster: dict[str, Any]) -> set[str]:
+    symbols = cluster.get("symbols")
+    return {symbol for symbol in symbols if isinstance(symbol, str)} if isinstance(symbols, list) else set()
+
+
+def _cluster_id(cluster: dict[str, Any]) -> str:
+    value = cluster.get("id")
+    return str(value) if value is not None else ""
+
+
+def _cluster_bbox(cluster: dict[str, Any]) -> dict[str, float] | None:
+    bbox = cluster.get("bbox") if isinstance(cluster.get("bbox"), dict) else None
+    if not bbox:
+        return None
+    try:
+        return {
+            "x": float(bbox.get("x") or 0.0),
+            "y": float(bbox.get("y") or 0.0),
+            "width": max(0.0, float(bbox.get("width") or 0.0)),
+            "height": max(0.0, float(bbox.get("height") or 0.0)),
+        }
+    except (TypeError, ValueError):
+        return None
+
+
+def _bbox_gap(left: dict[str, float], right: dict[str, float]) -> float:
+    left_right = left["x"] + left["width"]
+    right_right = right["x"] + right["width"]
+    left_bottom = left["y"] + left["height"]
+    right_bottom = right["y"] + right["height"]
+    dx = max(right["x"] - left_right, left["x"] - right_right, 0.0)
+    dy = max(right["y"] - left_bottom, left["y"] - right_bottom, 0.0)
+    return math.hypot(dx, dy)
+
+
+def _raw_point_xy(point: dict[str, Any]) -> tuple[float, float] | None:
+    try:
+        return float(point["x"]), float(point["y"])
+    except (KeyError, TypeError, ValueError):
+        return None
+
+
+def _raw_stroke_points(stroke: dict[str, Any]) -> list[tuple[float, float]]:
+    points = stroke.get("points")
+    if not isinstance(points, list):
+        return []
+    return [xy for point in points if isinstance(point, dict) and (xy := _raw_point_xy(point)) is not None]
+
+
+def _segment_intersection_point(
+    a: tuple[float, float],
+    b: tuple[float, float],
+    c: tuple[float, float],
+    d: tuple[float, float],
+) -> tuple[float, float] | None:
+    denominator = (a[0] - b[0]) * (c[1] - d[1]) - (a[1] - b[1]) * (c[0] - d[0])
+    if abs(denominator) < 1e-6:
+        return None
+    x = (
+        (a[0] * b[1] - a[1] * b[0]) * (c[0] - d[0])
+        - (a[0] - b[0]) * (c[0] * d[1] - c[1] * d[0])
+    ) / denominator
+    y = (
+        (a[0] * b[1] - a[1] * b[0]) * (c[1] - d[1])
+        - (a[1] - b[1]) * (c[0] * d[1] - c[1] * d[0])
+    ) / denominator
+    tolerance = 2.0
+    if (
+        min(a[0], b[0]) - tolerance <= x <= max(a[0], b[0]) + tolerance
+        and min(a[1], b[1]) - tolerance <= y <= max(a[1], b[1]) + tolerance
+        and min(c[0], d[0]) - tolerance <= x <= max(c[0], d[0]) + tolerance
+        and min(c[1], d[1]) - tolerance <= y <= max(c[1], d[1]) + tolerance
+    ):
+        return x, y
+    return None
+
+
+def _stroke_axis(points: list[tuple[float, float]]) -> tuple[tuple[float, float], tuple[float, float], int] | None:
+    if len(points) < 2:
+        return None
+    start, end = points[0], points[-1]
+    length = math.hypot(end[0] - start[0], end[1] - start[1])
+    if length < 18:
+        return None
+    angle = math.atan2(end[1] - start[1], end[0] - start[0])
+    orientation_bin = int(round((angle % math.pi) / (math.pi / 6))) % 6
+    return start, end, orientation_bin
+
+
+def _raw_points_bbox(points: list[tuple[float, float]]) -> dict[str, float] | None:
+    if not points:
+        return None
+    xs = [point[0] for point in points]
+    ys = [point[1] for point in points]
+    return {
+        "x": min(xs),
+        "y": min(ys),
+        "width": max(xs) - min(xs),
+        "height": max(ys) - min(ys),
+    }
+
+
+def _single_stroke_has_star_like_shape(stroke: dict[str, Any]) -> bool:
+    points = _raw_stroke_points(stroke)
+    if len(points) < 5:
+        return False
+    bbox = _raw_points_bbox(points)
+    if bbox is None or bbox["width"] < 18 or bbox["height"] < 18:
+        return False
+
+    candidates = compute_geometry_symbol_candidates({
+        "strokes": [stroke],
+        "bbox": bbox,
+        "strokeCount": 1,
+        "pointCount": len(points),
+    })
+    for candidate in candidates:
+        if candidate.get("symbol") != "star" or not candidate.get("accepted"):
+            continue
+        try:
+            confidence = float(candidate.get("confidence") or 0.0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        if confidence >= 0.6:
+            return True
+    return False
+
+
+def _cluster_has_loose_star_like_crossing(cluster: dict[str, Any]) -> bool:
+    strokes = [stroke for stroke in cluster.get("strokes", []) if isinstance(stroke, dict)]
+    if any(_single_stroke_has_star_like_shape(stroke) for stroke in strokes):
+        return True
+    if len(strokes) < 4:
+        return False
+    axes = [axis for stroke in strokes if (axis := _stroke_axis(_raw_stroke_points(stroke))) is not None]
+    if len(axes) < 4 or len({axis[2] for axis in axes}) < 3:
+        return False
+
+    intersections: list[tuple[float, float]] = []
+    for left_index, left in enumerate(axes):
+        for right in axes[left_index + 1:]:
+            if left[2] == right[2]:
+                continue
+            intersection = _segment_intersection_point(left[0], left[1], right[0], right[1])
+            if intersection is not None:
+                intersections.append(intersection)
+    if len(intersections) < 3:
+        return False
+
+    best_close_count = 0
+    for anchor in intersections:
+        close_count = sum(1 for point in intersections if math.hypot(point[0] - anchor[0], point[1] - anchor[1]) <= 24)
+        best_close_count = max(best_close_count, close_count)
+    return best_close_count >= 3
+
+
+def _near_star_anchor(cluster: dict[str, Any], star_bboxes: list[dict[str, float]]) -> bool:
+    bbox = _cluster_bbox(cluster)
+    if bbox is None:
+        return False
+    for star_bbox in star_bboxes:
+        anchor_size = max(star_bbox["width"], star_bbox["height"], 32.0)
+        proximity_limit = max(90.0, min(260.0, anchor_size * 2.6))
+        if _bbox_gap(bbox, star_bbox) <= proximity_limit:
+            return True
+    return False
+
+
+def _geometry_star_anchors(geometry: dict[str, Any]) -> tuple[set[str], list[dict[str, float]]]:
+    cluster_ids: set[str] = set()
+    bboxes: list[dict[str, float]] = []
+    clusters = geometry.get("clusters") if isinstance(geometry.get("clusters"), list) else []
+    for cluster in clusters:
+        if not isinstance(cluster, dict) or not _cluster_has_star_or_star_like_candidate(cluster):
+            continue
+        cluster_id = _cluster_id(cluster)
+        if cluster_id:
+            cluster_ids.add(cluster_id)
+        bbox = _cluster_bbox(cluster)
+        if bbox is not None:
+            bboxes.append(bbox)
+    return cluster_ids, bboxes
+
+
+def _geometry_has_star_anchor(geometry: dict[str, Any]) -> bool:
+    if "star" in _cluster_symbols(geometry):
+        return True
+    star_cluster_ids, star_bboxes = _geometry_star_anchors(geometry)
+    return bool(star_cluster_ids or star_bboxes)
+
+
+def _vision_star_anchors(
+    geometry: dict[str, Any],
+    raw_clusters: list[dict[str, Any]],
+) -> tuple[set[str], list[dict[str, float]]]:
+    cluster_ids, bboxes = _geometry_star_anchors(geometry)
+    for cluster in raw_clusters:
+        if not isinstance(cluster, dict) or not _cluster_has_loose_star_like_crossing(cluster):
+            continue
+        cluster_id = _cluster_id(cluster)
+        if cluster_id:
+            cluster_ids.add(cluster_id)
+        bbox = _cluster_bbox(cluster)
+        if bbox is not None:
+            bboxes.append(bbox)
+    return cluster_ids, bboxes
+
+
+def _has_vision_star_anchor(geometry: dict[str, Any], raw_clusters: list[dict[str, Any]]) -> bool:
+    if _geometry_has_star_anchor(geometry):
+        return True
+    star_cluster_ids, star_bboxes = _vision_star_anchors(geometry, raw_clusters)
+    return bool(star_cluster_ids or star_bboxes)
+
+
+def _cluster_has_star_or_star_like_candidate(cluster: dict[str, Any]) -> bool:
+    if "star" in _cluster_symbols(cluster):
+        return True
+    candidates = cluster.get("symbolCandidates")
+    if not isinstance(candidates, list):
+        return False
+    for candidate in candidates:
+        if not isinstance(candidate, dict) or candidate.get("symbol") != "star":
+            continue
+        try:
+            confidence = float(candidate.get("confidence") or 0.0)
+        except (TypeError, ValueError):
+            confidence = 0.0
+        if (
+            not candidate.get("accepted")
+            and confidence >= VISION_STAR_LIKE_CONFIDENCE_THRESHOLD
+            and candidate.get("rejectionReason") == "text-like cluster"
+        ):
+            return True
+    return False
+
+
+def _cluster_has_keyword_anchor_shape(cluster: dict[str, Any]) -> bool:
+    try:
+        text_like_score = float(cluster.get("textLikeScore") or 0.0)
+    except (TypeError, ValueError):
+        text_like_score = 0.0
+    cluster_kind = cluster.get("clusterKind")
+    if cluster_kind == "symbol_like" and text_like_score < 0.55:
+        return False
+    return (
+        _cluster_looks_text_like(cluster)
+        or cluster_kind in {"text_like", "mixed"}
+        or text_like_score >= 0.55
+    )
+
+
+def _cluster_has_loose_handwriting_shape(cluster: dict[str, Any]) -> bool:
+    bbox = _cluster_bbox(cluster)
+    if bbox is None:
+        return False
+    try:
+        stroke_count = int(cluster.get("strokeCount") or 0)
+        point_count = int(cluster.get("pointCount") or 0)
+        text_like_score = float(cluster.get("textLikeScore") or 0.0)
+    except (TypeError, ValueError):
+        return False
+
+    width = bbox["width"]
+    height = bbox["height"]
+    if point_count < 5 or width < 14 or height < 8:
+        return False
+    if stroke_count > 32 or max(width, height) > 520:
+        return False
+    if _cluster_has_keyword_anchor_shape(cluster):
+        return True
+
+    cluster_kind = cluster.get("clusterKind")
+    if cluster_kind == "symbol_like" and text_like_score < 0.18:
+        return False
+    if point_count >= 8 and width >= 20 and height >= 10:
+        return True
+    if stroke_count >= 2 and point_count >= 6 and max(width, height) >= 18:
+        return True
+    return False
+
+
+def _star_cluster_has_attached_handwriting_shape(cluster: dict[str, Any]) -> bool:
+    if _cluster_has_keyword_anchor_shape(cluster):
+        return True
+    bbox = _cluster_bbox(cluster)
+    if bbox is None:
+        return False
+    try:
+        stroke_count = int(cluster.get("strokeCount") or 0)
+        point_count = int(cluster.get("pointCount") or 0)
+        text_like_score = float(cluster.get("textLikeScore") or 0.0)
+    except (TypeError, ValueError):
+        return False
+    width = max(1.0, bbox["width"])
+    height = max(1.0, bbox["height"])
+    aspect = max(width, height) / max(1.0, min(width, height))
+    cluster_kind = cluster.get("clusterKind")
+    if cluster_kind == "symbol_like" and aspect <= 1.35 and stroke_count <= 5 and text_like_score < 0.35:
+        return False
+    return (
+        point_count >= 8
+        and max(width, height) >= 24
+        and (text_like_score >= 0.35 or stroke_count >= 6 or aspect >= 1.45)
+    )
+
+
+def _vision_candidate_clusters_for_star_page(
+    geometry: dict[str, Any],
+    raw_clusters: list[dict[str, Any]],
+    *,
+    force: bool,
+) -> list[dict[str, Any]]:
+    star_cluster_ids, star_bboxes = _vision_star_anchors(geometry, raw_clusters)
+    if not (star_cluster_ids or star_bboxes):
+        return []
+
+    candidates: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for cluster in raw_clusters:
+        if not isinstance(cluster, dict):
+            continue
+        cluster_id = _cluster_id(cluster)
+        is_star_cluster = bool(cluster_id and cluster_id in star_cluster_ids)
+        is_handwriting_like = _cluster_has_loose_handwriting_shape(cluster)
+        if is_handwriting_like and not is_star_cluster:
+            candidates.append(cluster)
+            if cluster_id:
+                seen_ids.add(cluster_id)
+
+    # If a star and a short label were merged into one cluster, keep that cluster.
+    for cluster in raw_clusters:
+        cluster_id = _cluster_id(cluster)
+        if not cluster_id or cluster_id in seen_ids or cluster_id not in star_cluster_ids:
+            continue
+        if _star_cluster_has_attached_handwriting_shape(cluster):
+            candidates.append(cluster)
+            seen_ids.add(cluster_id)
+    return candidates
+
+
 def _needs_vision_fallback(geometry: dict[str, Any], raw_clusters: list[dict[str, Any]], *, force: bool) -> bool:
+    if not _has_vision_star_anchor(geometry, raw_clusters):
+        return False
     if force:
         return True
     confidence = _recognition_confidence(geometry)
@@ -142,7 +488,7 @@ def _needs_vision_fallback(geometry: dict[str, Any], raw_clusters: list[dict[str
         return True
     if symbols and confidence < 0.78:
         return True
-    if not keywords and any(_cluster_looks_text_like(cluster) for cluster in raw_clusters):
+    if not keywords and _vision_candidate_clusters_for_star_page(geometry, raw_clusters, force=force):
         return True
     return False
 
@@ -281,6 +627,14 @@ def _apply_vision_fallback_if_needed(
             analyzed_cluster_count=analyzed_cluster_count,
             vision_analyzed_cluster_count=0,
         )
+    if not _has_vision_star_anchor(geometry, raw_clusters):
+        return _add_handwriting_metadata(
+            geometry,
+            vision_used=False,
+            vision_skipped_reason="no-star-anchor",
+            analyzed_cluster_count=analyzed_cluster_count,
+            vision_analyzed_cluster_count=0,
+        )
     if not _needs_vision_fallback(geometry, raw_clusters, force=force):
         return _add_handwriting_metadata(
             geometry,
@@ -295,15 +649,14 @@ def _apply_vision_fallback_if_needed(
     max_clusters = vision_max_clusters_per_page()
     candidate_clusters = [
         cluster
-        for cluster in raw_clusters
+        for cluster in _vision_candidate_clusters_for_star_page(geometry, raw_clusters, force=force)
         if int(cluster.get("strokeCount") or 0) >= min_strokes
-        and (force or _cluster_looks_text_like(cluster) or _recognition_confidence(geometry) < 0.65)
     ]
     if not candidate_clusters:
         return _add_handwriting_metadata(
             geometry,
             vision_used=False,
-            vision_skipped_reason="no-eligible-clusters",
+            vision_skipped_reason="no-star-text-anchor",
             analyzed_cluster_count=analyzed_cluster_count,
             vision_analyzed_cluster_count=0,
         )
@@ -350,6 +703,28 @@ def _consume_note_vision_budget(use_vision_fallback: bool, used_pages: int) -> t
     if max_pages <= 0 or used_pages >= max_pages:
         return False, "page-limit", used_pages
     return True, None, used_pages + 1
+
+
+def _vision_page_limit_allows(use_vision_fallback: bool, used_pages: int) -> tuple[bool, str | None]:
+    if not use_vision_fallback:
+        return True, None
+    max_pages = vision_max_pages_per_note()
+    if max_pages <= 0 or used_pages >= max_pages:
+        return False, "page-limit"
+    return True, None
+
+
+def _vision_analyzed_cluster_count(content: str | None) -> int:
+    state = parse_page_state(content)
+    if not state:
+        return 0
+    recognition = state.get("handwritingRecognition")
+    if not isinstance(recognition, dict):
+        return 0
+    try:
+        return max(0, int(recognition.get("visionAnalyzedClusterCount") or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _analyze_page_handwriting_content(
@@ -845,7 +1220,7 @@ def analyze_note_handwriting(
     vision_pages_used = 0
 
     for page in pages:
-        vision_allowed, vision_skip_reason, vision_pages_used = _consume_note_vision_budget(
+        vision_allowed, vision_skip_reason = _vision_page_limit_allows(
             use_vision_fallback,
             vision_pages_used,
         )
@@ -856,6 +1231,8 @@ def analyze_note_handwriting(
             vision_allowed=vision_allowed,
             vision_skip_reason=vision_skip_reason,
         )
+        if use_vision_fallback and vision_allowed and _vision_analyzed_cluster_count(next_content) > 0:
+            vision_pages_used += 1
         if status == "skipped":
             summary["pages_skipped"] += 1
             continue

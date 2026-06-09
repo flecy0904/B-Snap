@@ -18,6 +18,9 @@
 @property(nonatomic, strong) MLKDigitalInkRecognitionModel *koreanModel;
 @property(nonatomic, strong) MLKModelManager *koreanModelManager;
 @property(nonatomic, strong) MLKDigitalInkRecognizer *koreanRecognizer;
+@property(nonatomic, strong) NSMutableDictionary<NSString *, MLKDigitalInkRecognizer *> *activeRecognizers;
+@property(nonatomic, strong) NSMutableDictionary<NSString *, MLKInk *> *activeRecognitionInks;
+@property(nonatomic, strong) NSMutableDictionary<NSString *, MLKDigitalInkRecognitionModel *> *activeRecognitionModels;
 @property(nonatomic, strong) NSProgress *koreanModelDownloadProgress;
 @property(nonatomic, copy) NSString *koreanModelDownloadState;
 @property(nonatomic, copy) NSString *koreanModelDownloadDetail;
@@ -136,10 +139,15 @@ RCT_EXPORT_METHOD(recognizeKoreanInk:(NSArray *)inkStrokes
     resolve([self failedRecognitionWithDetail:@"Korean Digital Ink recognizer could not be created."]);
     return;
   }
+  NSString *requestId = [[NSUUID UUID] UUIDString];
+  [self retainRecognizer:recognizer ink:ink model:model forRequestId:requestId];
   [recognizer recognizeInk:ink completion:^(MLKDigitalInkRecognitionResult *_Nullable result, NSError *_Nullable error) {
-    (void)recognizer;
+    MLKDigitalInkRecognizer *retainedRecognizer = [self recognizerForRequestId:requestId];
+    (void)retainedRecognizer;
     if (error != nil) {
-      resolve([self failedRecognitionWithDetail:error.localizedDescription ?: @"ML Kit recognition failed."]);
+      NSDictionary *response = [self failedRecognitionWithDetail:error.localizedDescription ?: @"ML Kit recognition failed."];
+      [self releaseRecognitionRequestWithId:requestId];
+      resolve(response);
       return;
     }
 
@@ -159,7 +167,7 @@ RCT_EXPORT_METHOD(recognizeKoreanInk:(NSArray *)inkStrokes
       @"confidence": @(confidence),
       @"source": @"mlkit-digital-ink",
     };
-    resolve(@{
+    NSDictionary *response = @{
       @"status": candidates.count > 0 ? @"ready" : @"unavailable",
       @"engine": @"mlkit-digital-ink",
       @"text": text ?: @"",
@@ -170,7 +178,9 @@ RCT_EXPORT_METHOD(recognizeKoreanInk:(NSArray *)inkStrokes
       @"candidates": candidates,
       @"modelState": @"ready",
       @"detail": candidates.count > 0 ? @"ML Kit Digital Ink recognition completed." : @"ML Kit returned no candidates.",
-    });
+    };
+    [self releaseRecognitionRequestWithId:requestId];
+    resolve(response);
   }];
 #else
   resolve([self unavailableRecognitionWithDetail:@"GoogleMLKit/DigitalInkRecognition is not installed. Run pod install for a development build."]);
@@ -278,6 +288,56 @@ RCT_EXPORT_METHOD(recognizeGestureInk:(NSArray *)inkStrokes
   }
 }
 
+- (void)retainRecognizer:(MLKDigitalInkRecognizer *)recognizer
+                     ink:(MLKInk *)ink
+                   model:(MLKDigitalInkRecognitionModel *)model
+            forRequestId:(NSString *)requestId
+{
+  if (recognizer == nil || requestId.length == 0) {
+    return;
+  }
+  @synchronized(self) {
+    if (self.activeRecognizers == nil) {
+      self.activeRecognizers = [NSMutableDictionary dictionary];
+    }
+    if (self.activeRecognitionInks == nil) {
+      self.activeRecognitionInks = [NSMutableDictionary dictionary];
+    }
+    if (self.activeRecognitionModels == nil) {
+      self.activeRecognitionModels = [NSMutableDictionary dictionary];
+    }
+    self.activeRecognizers[requestId] = recognizer;
+    if (ink != nil) {
+      self.activeRecognitionInks[requestId] = ink;
+    }
+    if (model != nil) {
+      self.activeRecognitionModels[requestId] = model;
+    }
+  }
+}
+
+- (MLKDigitalInkRecognizer *)recognizerForRequestId:(NSString *)requestId
+{
+  if (requestId.length == 0) {
+    return nil;
+  }
+  @synchronized(self) {
+    return self.activeRecognizers[requestId];
+  }
+}
+
+- (void)releaseRecognitionRequestWithId:(NSString *)requestId
+{
+  if (requestId.length == 0) {
+    return;
+  }
+  @synchronized(self) {
+    [self.activeRecognizers removeObjectForKey:requestId];
+    [self.activeRecognitionInks removeObjectForKey:requestId];
+    [self.activeRecognitionModels removeObjectForKey:requestId];
+  }
+}
+
 - (NSDictionary *)inkFromBsnStrokes:(NSArray *)inkStrokes
 {
   NSMutableArray<MLKStroke *> *mlkStrokes = [NSMutableArray array];
@@ -287,6 +347,8 @@ RCT_EXPORT_METHOD(recognizeGestureInk:(NSArray *)inkStrokes
   CGFloat maxY = -CGFLOAT_MAX;
   NSInteger pageNumber = 1;
   NSInteger syntheticTime = 0;
+  NSInteger timeBase = 0;
+  BOOL hasTimeBase = NO;
 
   for (id rawStroke in inkStrokes) {
     if (![rawStroke isKindOfClass:[NSDictionary class]]) {
@@ -328,7 +390,15 @@ RCT_EXPORT_METHOD(recognizeGestureInk:(NSArray *)inkStrokes
       maxY = MAX(maxY, y);
 
       NSNumber *timeValue = [point[@"t"] isKindOfClass:[NSNumber class]] ? point[@"t"] : nil;
-      NSInteger t = timeValue != nil ? timeValue.integerValue : lastTime + 16;
+      NSInteger t = lastTime + 16;
+      if (timeValue != nil) {
+        NSInteger rawTime = timeValue.integerValue;
+        if (!hasTimeBase) {
+          timeBase = rawTime;
+          hasTimeBase = YES;
+        }
+        t = rawTime - timeBase;
+      }
       if (t <= lastTime) {
         t = lastTime + 1;
       }

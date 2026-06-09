@@ -20,6 +20,10 @@ function formatVisionSkipReason(reason?: string | null) {
       return 'cluster-limit-exceeded';
     case 'page-limit':
       return 'note-page-limit-exceeded';
+    case 'no-star-anchor':
+      return 'no-star-anchor';
+    case 'no-star-text-anchor':
+      return 'no-star-text-anchor';
     default:
       return reason || '없음';
   }
@@ -28,6 +32,7 @@ function formatVisionSkipReason(reason?: string | null) {
 export function HandwritingDebugFloatingPanel() {
   const globalContext = useNotesGlobalContext();
   const [expanded, setExpanded] = React.useState(true);
+  const [showAdvanced, setShowAdvanced] = React.useState(false);
   const recognition = globalContext.currentPageHandwritingRecognition;
   const mlKit = globalContext.mlKitHandwritingDebug;
   const handwritingBusy = globalContext.handwritingAnalysisBusy;
@@ -121,38 +126,59 @@ export function HandwritingDebugFloatingPanel() {
               ready {debugReadyText}
             </Text>
             <Text style={rowTextStyle} numberOfLines={2}>
-              ids doc {readiness?.studyDocumentId ?? '없음'} · note {readiness?.backendNoteId ?? '없음'} · page {readiness?.pageNumber ?? '없음'} · pageId {readiness?.pageId ?? '없음'}
+              persist {readiness?.handwritingSaveState ?? 'idle'} · persisted {readiness?.handwritingPersisted === null || readiness?.handwritingPersisted === undefined ? 'unknown' : readiness.handwritingPersisted ? 'yes' : 'no'}
             </Text>
-            <Text style={rowTextStyle} numberOfLines={2}>
-              state platform {readiness?.platform ?? Platform.OS} · api {readiness?.backendApiEnabled ? 'on' : 'off'} · url {readiness?.backendUrlPresent ? 'env' : 'default'}
-            </Text>
-            <Text style={rowTextStyle} numberOfLines={2}>
-              sync hydrated {readiness?.workspaceHydrated ? 'yes' : 'no'} · backendPages {readiness?.currentDocumentHasBackendPages ? 'yes' : 'no'} · pageCount {readiness?.backendPageCount ?? 0} · save {readiness?.pendingPageSaveCount ?? 0}/{readiness?.savingPageCount ?? 0}/{readiness?.failedPageSaveCount ?? 0}
-            </Text>
-            <Text style={rowTextStyle} numberOfLines={1}>hash {recognition?.strokeHash ? recognition.strokeHash.slice(0, 12) : '없음'}</Text>
-            <Text style={rowTextStyle} numberOfLines={2}>text {recognition?.text || '없음'}</Text>
+            {readiness?.lastHandwritingSaveError ? (
+              <Text style={[rowTextStyle, { color: '#B45309' }]} numberOfLines={2}>
+                save error {readiness.lastHandwritingSaveError}
+              </Text>
+            ) : null}
             <Text style={rowTextStyle} numberOfLines={2}>keywords {recognition?.keywords?.length ? recognition.keywords.join(', ') : '없음'}</Text>
             <Text style={rowTextStyle} numberOfLines={2}>symbols {recognition?.symbols?.length ? recognition.symbols.join(', ') : '없음'}</Text>
             <Text style={rowTextStyle} numberOfLines={2}>
               clusters {recognition?.analyzedClusterCount ?? recognition?.clusters?.length ?? 0} · vision {recognition?.visionAnalyzedClusterCount ?? 0} · skipped {formatVisionSkipReason(recognition?.visionFallbackSkippedReason)}
             </Text>
-            {firstCluster ? (
-              <Text style={rowTextStyle} numberOfLines={2}>
-                cluster {firstCluster.clusterKind ?? 'unknown'} · text {typeof firstCluster.textLikeScore === 'number' ? Math.round(firstCluster.textLikeScore * 100) : 0}% · symbol {typeof firstCluster.symbolLikeScore === 'number' ? Math.round(firstCluster.symbolLikeScore * 100) : 0}%
-              </Text>
-            ) : null}
-            {rejectedSymbolCandidate ? (
-              <Text style={rowTextStyle} numberOfLines={2}>
-                rejected {rejectedSymbolCandidate.symbol} {Math.round((rejectedSymbolCandidate.confidence ?? 0) * 100)}% · {rejectedSymbolCandidate.rejectionReason ?? 'below threshold'}
-              </Text>
-            ) : null}
             <Text style={rowTextStyle} numberOfLines={2}>
               mlkit {mlKit?.available === null ? 'unknown' : mlKit?.available ? 'available' : 'unavailable'} · model {mlKit?.modelState ?? (mlKit?.modelReady === null ? 'unknown' : mlKit?.modelReady ? 'ready' : 'missing')}
             </Text>
             <Text style={rowTextStyle} numberOfLines={2}>
+              mlkit keywords {mlKit?.result?.keywords?.length ? mlKit.result.keywords.join(', ') : '없음'} · clusters {mlKit?.result?.clusters?.length ?? 0}
+            </Text>
+            <Text style={rowTextStyle} numberOfLines={2}>
               candidates {mlKit?.result?.candidates?.length ? mlKit.result.candidates.slice(0, 2).map((candidate) => candidate.text).join(' · ') : '없음'}
             </Text>
-            {mlKit?.detail ? <Text style={rowTextStyle} numberOfLines={2}>detail {mlKit.detail}</Text> : null}
+            <Pressable onPress={() => setShowAdvanced((current) => !current)} style={{ alignSelf: 'flex-start', paddingVertical: 2 }}>
+              <Text style={[buttonTextStyle, { fontSize: 11 }]}>{showAdvanced ? '상세 숨기기' : '상세 보기'}</Text>
+            </Pressable>
+            {showAdvanced ? (
+              <>
+                <Text style={rowTextStyle} numberOfLines={2}>
+                  ids doc {readiness?.studyDocumentId ?? '없음'} · note {readiness?.backendNoteId ?? '없음'} · page {readiness?.pageNumber ?? '없음'} · pageId {readiness?.pageId ?? '없음'}
+                </Text>
+                <Text style={rowTextStyle} numberOfLines={2}>
+                  state platform {readiness?.platform ?? Platform.OS} · api {readiness?.backendApiEnabled ? 'on' : 'off'} · url {readiness?.backendUrlPresent ? 'env' : 'default'}
+                </Text>
+                <Text style={rowTextStyle} numberOfLines={2}>
+                  sync hydrated {readiness?.workspaceHydrated ? 'yes' : 'no'} · backendPages {readiness?.currentDocumentHasBackendPages ? 'yes' : 'no'} · pageCount {readiness?.backendPageCount ?? 0}
+                </Text>
+                <Text style={rowTextStyle} numberOfLines={2}>
+                  autosave queue p/s/f {readiness?.pendingPageSaveCount ?? 0}/{readiness?.savingPageCount ?? 0}/{readiness?.failedPageSaveCount ?? 0}
+                </Text>
+                <Text style={rowTextStyle} numberOfLines={1}>hash {recognition?.strokeHash ? recognition.strokeHash.slice(0, 12) : '없음'}</Text>
+                <Text style={rowTextStyle} numberOfLines={2}>text {recognition?.text || '없음'}</Text>
+                {firstCluster ? (
+                  <Text style={rowTextStyle} numberOfLines={2}>
+                    cluster {firstCluster.clusterKind ?? 'unknown'} · text {typeof firstCluster.textLikeScore === 'number' ? Math.round(firstCluster.textLikeScore * 100) : 0}% · symbol {typeof firstCluster.symbolLikeScore === 'number' ? Math.round(firstCluster.symbolLikeScore * 100) : 0}%
+                  </Text>
+                ) : null}
+                {rejectedSymbolCandidate ? (
+                  <Text style={rowTextStyle} numberOfLines={2}>
+                    rejected {rejectedSymbolCandidate.symbol} {Math.round((rejectedSymbolCandidate.confidence ?? 0) * 100)}% · {rejectedSymbolCandidate.rejectionReason ?? 'below threshold'}
+                  </Text>
+                ) : null}
+                {mlKit?.detail ? <Text style={rowTextStyle} numberOfLines={2}>detail {mlKit.detail}</Text> : null}
+              </>
+            ) : null}
             <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, paddingTop: 4 }}>
               <Pressable style={[primaryButtonStyle, disabled && { opacity: 0.5 }]} disabled={disabled} onPress={globalContext.analyzeCurrentPageHandwriting}>
                 <Text style={primaryButtonTextStyle}>{handwritingBusy === 'page' ? '분석 중' : 'geometry 저장'}</Text>

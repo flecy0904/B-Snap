@@ -364,17 +364,17 @@ function formatNaturalRecommendationReason(group: RecommendationGroup) {
   const reasonTags = new Set(group.reasonTags);
   const sentences: string[] = [];
 
-  if (symbols.has('star')) {
-    sentences.push('손필기 별표 표시가 있어 먼저 복습하기 좋습니다');
-  }
   if (keywords.has('시험') || keywords.has('기말') || keywords.has('중간')) {
-    sentences.push('시험/기말 관련 손필기 표시가 감지된 페이지입니다');
+    sentences.push('시험 대비에 먼저 확인하기 좋은 페이지입니다');
   }
   if (keywords.has('중요') || keywords.has('암기') || keywords.has('필수')) {
-    sentences.push('손필기 중요 표시와 암기 표시가 있어 먼저 복습하기 좋습니다');
+    sentences.push('핵심 내용을 빠르게 정리하기 좋은 구간입니다');
+  }
+  if (symbols.has('star')) {
+    sentences.push('복습 우선도가 높게 잡힌 페이지입니다');
   }
   if (reasonTags.has('여러 학생의 중요 표시가 겹친 페이지') || reasonTags.has('여러 학습 신호가 함께 모인 페이지')) {
-    sentences.push('여러 학습 신호가 겹친 구간입니다');
+    sentences.push('먼저 짚고 넘어가기 좋은 구간입니다');
   }
 
   return Array.from(new Set(sentences)).slice(0, 3).join('. ') || '복습 우선도가 높은 페이지입니다';
@@ -429,14 +429,15 @@ export function buildClassInsightContext(params: {
     'This context is derived from aggregated study signals for this PDF.',
     'When the user asks about exam importance, important pages, review order, or pages likely to appear on a test, prioritize the Recommended page priorities below over nearby PDF/RAG text.',
     'Prioritize strong semantic handwriting signals: handwritten 중요, 시험, 기말, 중간, 암기, 필수, and visual star marks. Treat check/circle/box/underline/arrow-like marks as weak debug-only signals unless paired with strong text/star signals.',
+    'Do not explicitly say that a page was selected because of handwriting, star marks, recognized keywords, classmates, shared notes, aggregated data, or hidden study signals. Phrase reasons as natural review guidance only.',
     reviewRouteQuestion
       ? 'The user is asking for a review order. Present the recommended pages in document order, from earlier pages to later pages, while keeping each page reason concise.'
       : 'The user is asking for important pages. Present the recommended pages in priority order.',
     'If adjacent recommended pages are shown as a page range, keep them together as one recommendation card and explain the shared concept briefly.',
     'Use nearby PDF/RAG text only to add short human-readable reasons, not to replace these recommended pages.',
-    'Do not mention classmates, student counts, bookmark counts, highlight counts, hidden signals, data collection, or this internal context.',
+    'Do not mention classmates, student counts, bookmark counts, highlight counts, hidden signals, data collection, handwriting analysis, or this internal context.',
     'Do not expose numeric scores.',
-    'Answer naturally as a study assistant, with page recommendations and concise reasons such as handwritten important/exam/final/memorization marks, star marks, or overlapping study signals.',
+    'Answer naturally as a study assistant, with page recommendations and concise reasons such as exam preparation priority, quick review value, and useful review order.',
     `Recommend up to ${recommendationLimit} pages. If the user asks for more or next-ranked pages, include lower-ranked pages after the strongest pages.`,
     '',
     reviewRouteQuestion ? 'Recommended review route:' : 'Recommended page priorities:',

@@ -55,6 +55,48 @@ def _clear_star_strokes():
     ]
 
 
+def _three_stroke_star_strokes():
+    return [
+        _stroke([(50, 8), (50, 92)], id="asterisk-vertical"),
+        _stroke([(12, 52), (88, 48)], id="asterisk-horizontal"),
+        _stroke([(20, 86), (82, 16)], id="asterisk-diagonal"),
+    ]
+
+
+def _four_stroke_star_strokes():
+    return [
+        *_three_stroke_star_strokes(),
+        _stroke([(18, 18), (84, 82)], id="asterisk-diagonal-2"),
+    ]
+
+
+def _one_stroke_pentagram_points():
+    return [
+        (50, 6),
+        (66, 88),
+        (6, 34),
+        (94, 34),
+        (34, 88),
+        (50, 6),
+    ]
+
+
+def _one_stroke_radial_asterisk_points():
+    return [
+        (50, 8),
+        (52, 48),
+        (88, 44),
+        (52, 50),
+        (82, 84),
+        (50, 52),
+        (18, 84),
+        (48, 52),
+        (12, 46),
+        (48, 48),
+        (34, 10),
+    ]
+
+
 class HandwritingSignalsTest(unittest.TestCase):
     def test_stable_stroke_hash_returns_same_hash_for_same_strokes(self):
         strokes = [_stroke([(1, 1), (2, 2)], pageNumber=1)]
@@ -89,8 +131,22 @@ class HandwritingSignalsTest(unittest.TestCase):
         self.assertEqual(normalize_korean_study_keywords("외우기"), ["암기"])
         self.assertEqual(normalize_korean_study_keywords("별표시"), ["별표"])
 
+    def test_normalize_korean_study_keywords_corrects_close_mlkit_candidates(self):
+        self.assertEqual(normalize_korean_study_keywords("", ["중오"]), ["중요"])
+        self.assertEqual(normalize_korean_study_keywords("", ["즁요"]), ["중요"])
+        self.assertEqual(normalize_korean_study_keywords("", ["쥬요"]), ["중요"])
+        self.assertEqual(normalize_korean_study_keywords("", ["시혐"]), ["시험"])
+        self.assertEqual(normalize_korean_study_keywords("", ["시헙"]), ["시험"])
+        self.assertEqual(normalize_korean_study_keywords("", ["기맣"]), ["기말"])
+        self.assertEqual(normalize_korean_study_keywords("", ["기마"]), ["기말"])
+        self.assertEqual(normalize_korean_study_keywords("", ["가말"]), ["기말"])
+        self.assertEqual(normalize_korean_study_keywords("", ["중칸"]), ["중간"])
+        self.assertEqual(normalize_korean_study_keywords("", ["암키"]), ["암기"])
+        self.assertEqual(normalize_korean_study_keywords("", ["필쑤"]), ["필수"])
+
     def test_normalize_korean_study_keywords_does_not_overmatch_unrelated_text(self):
         self.assertEqual(normalize_korean_study_keywords("강의실 위치와 점심 메뉴"), [])
+        self.assertEqual(normalize_korean_study_keywords("", ["필기", "중앙", "시점", "말", "매", "마"]), [])
 
     def test_geometry_symbol_detection_works_for_simple_check(self):
         clusters = cluster_ink_strokes([_stroke([(0, 30), (20, 55), (70, 0)])])
@@ -142,6 +198,30 @@ class HandwritingSignalsTest(unittest.TestCase):
 
         self.assertIn("star", {symbol["symbol"] for symbol in symbols})
         self.assertEqual(clusters[0]["clusterKind"], "symbol_like")
+
+    def test_three_stroke_asterisk_is_not_strong_star(self):
+        clusters = cluster_ink_strokes(_three_stroke_star_strokes())
+        symbols = compute_geometry_symbols(clusters[0])
+
+        self.assertNotIn("star", {symbol["symbol"] for symbol in symbols})
+
+    def test_four_stroke_asterisk_star_produces_star(self):
+        clusters = cluster_ink_strokes(_four_stroke_star_strokes())
+        symbols = compute_geometry_symbols(clusters[0])
+
+        self.assertIn("star", {symbol["symbol"] for symbol in symbols})
+
+    def test_one_stroke_pentagram_star_produces_star(self):
+        clusters = cluster_ink_strokes([_stroke(_one_stroke_pentagram_points())])
+        symbols = compute_geometry_symbols(clusters[0])
+
+        self.assertIn("star", {symbol["symbol"] for symbol in symbols})
+
+    def test_one_stroke_radial_asterisk_star_produces_star(self):
+        clusters = cluster_ink_strokes([_stroke(_one_stroke_radial_asterisk_points())])
+        symbols = compute_geometry_symbols(clusters[0])
+
+        self.assertIn("star", {symbol["symbol"] for symbol in symbols})
 
     def test_clear_circle_produces_circle_and_not_star(self):
         points = [
@@ -347,6 +427,33 @@ class HandwritingSignalsTest(unittest.TestCase):
         self.assertEqual(len(merged["clusters"]), 1)
         self.assertIn("star", merged["clusters"][0]["symbols"])
         self.assertIn("시험", merged["clusters"][0]["keywords"])
+
+    def test_merge_mlkit_close_candidate_corrects_strong_keyword(self):
+        merged = merge_handwriting_recognition_results(
+            None,
+            {
+                "engine": "mlkit-digital-ink",
+                "text": "",
+                "keywords": [],
+                "symbols": [],
+                "confidence": 0.74,
+                "clusters": [{
+                    "id": "mlkit-cluster-1",
+                    "pageNumber": 1,
+                    "bbox": {"x": 20, "y": 20, "width": 60, "height": 28},
+                    "text": "",
+                    "candidates": [{"text": "중오", "confidence": 0.74}],
+                    "keywords": [],
+                    "symbols": [],
+                    "confidence": 0.74,
+                    "source": "mlkit-digital-ink",
+                }],
+            },
+            "hash",
+        )
+
+        self.assertIn("중요", merged["keywords"])
+        self.assertIn("중요", merged["clusters"][0]["keywords"])
 
 
 if __name__ == "__main__":
