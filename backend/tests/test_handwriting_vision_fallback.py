@@ -409,6 +409,53 @@ class HandwritingVisionFallbackTest(unittest.TestCase):
         self.assertEqual(forced_status, "analyzed")
         self.assertNotEqual(forced_content, content)
 
+    def test_vision_request_retries_same_hash_when_previous_result_was_geometry_only(self):
+        strokes = [
+            *_star_strokes(),
+            *_keyword_like_strokes(190, 24, prefix="near"),
+        ]
+        stroke_hash = stable_stroke_hash(strokes)
+        content = _content(strokes, {
+            "status": "ready",
+            "strokeHash": stroke_hash,
+            "engine": "geometry",
+            "text": "",
+            "keywords": [],
+            "symbols": ["star"],
+            "confidence": 0.9,
+            "clusters": [],
+            "visionFallbackUsed": False,
+            "visionFallbackSkippedReason": "not-requested",
+        })
+
+        with patch.dict(
+            "os.environ",
+            {
+                "HANDWRITING_VISION_FALLBACK_ENABLED": "true",
+                "OPENAI_API_KEY": "test",
+                "HANDWRITING_VISION_MAX_CLUSTERS_PER_PAGE": "2",
+                "HANDWRITING_VISION_MIN_CLUSTER_STROKES": "1",
+            },
+            clear=False,
+        ):
+            with patch("backend.app.routes.notes.analyze_handwriting_image_with_openai", return_value={
+                "status": "ready",
+                "text": "중요",
+                "keywords": ["중요"],
+                "symbols": [],
+                "confidence": 0.9,
+            }) as openai_mock:
+                next_content, status = _analyze_page_handwriting_content(
+                    content,
+                    use_vision_fallback=True,
+                )
+
+        recognition = parse_page_state(next_content)["handwritingRecognition"]
+        self.assertEqual(status, "analyzed")
+        self.assertEqual(openai_mock.call_count, 1)
+        self.assertTrue(recognition["visionFallbackUsed"])
+        self.assertIn("중요", recognition["keywords"])
+
     def test_use_vision_fallback_false_never_calls_openai(self):
         with patch("backend.app.routes.notes.analyze_handwriting_image_with_openai") as openai_mock:
             _analyze_page_handwriting_content(

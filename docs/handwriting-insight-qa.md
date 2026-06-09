@@ -15,6 +15,9 @@ Frontend debug flags:
 ```bash
 EXPO_PUBLIC_ENABLE_HANDWRITING_DEBUG=true
 EXPO_PUBLIC_ENABLE_HANDWRITING_AUTO_ANALYZE=true
+# Optional opt-out. When omitted, auto analysis may request backend Vision fallback,
+# but the backend still only calls OpenAI for star-anchored eligible pages.
+EXPO_PUBLIC_ENABLE_HANDWRITING_AUTO_VISION=false
 ```
 
 Optional Vision fallback:
@@ -31,7 +34,8 @@ HANDWRITING_VISION_CACHE_TTL_DAYS=14
 Current demo policy:
 
 - Core recommendation works without OpenAI: star, bookmarks, highlights, AI questions, memos, group overlap, and weak ink density.
-- Vision fallback is cost-controlled and should run only for pages where geometry detects a star anchor.
+- When auto analyze is enabled, the frontend asks the backend to run cost-controlled Vision fallback automatically.
+- The backend should call OpenAI only for pages where geometry detects a star anchor and eligible handwriting clusters.
 - Vision analyzes only nearby B-Snap overlay ink clusters. It must not include the original PDF background.
 - ML Kit is optional. If it is unavailable or inaccurate, the app should continue with geometry/Vision.
 
@@ -80,10 +84,10 @@ Notes:
 
 1. Start backend with `HANDWRITING_VISION_FALLBACK_ENABLED=true` and `OPENAI_API_KEY`.
 2. Draw a star and nearby short handwriting such as `중요`, `시험`, or `기말`.
-3. Run `Vision fallback` from the debug panel.
+3. Wait for autosave and auto analysis, or run `Vision fallback` from the debug panel to force a manual check.
 4. Confirm only rendered overlay ink near the star is analyzed. Original PDF content must never be included.
 5. Confirm `visionFallbackUsed`, `visionFallbackSkippedReason`, `analyzedClusterCount`, and `visionAnalyzedClusterCount` display clearly.
-6. Draw Korean handwriting without a star and run Vision fallback.
+6. Draw Korean handwriting without a star and wait for auto analysis, or run Vision fallback manually.
 7. Expected: Vision is skipped with `no-star-anchor`; OpenAI should not be called.
 8. Remove `OPENAI_API_KEY` or disable the env flag and rerun.
 9. Expected: analysis fails safely with `missing-api-key` or `fallback-disabled`; note save/PDF/chat/canvas flows keep working.

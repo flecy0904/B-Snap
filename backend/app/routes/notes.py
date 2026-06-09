@@ -727,6 +727,23 @@ def _vision_analyzed_cluster_count(content: str | None) -> int:
         return 0
 
 
+def _can_skip_existing_handwriting_recognition(
+    current_recognition: Any,
+    stroke_hash: str,
+    *,
+    force: bool,
+    use_vision_fallback: bool,
+) -> bool:
+    if force or not isinstance(current_recognition, dict) or current_recognition.get("strokeHash") != stroke_hash:
+        return False
+    if not use_vision_fallback:
+        return True
+    if current_recognition.get("visionFallbackUsed") is True:
+        return True
+    retryable_skip_reasons = {None, "", "not-requested", "disabled", "missing-api-key", "unavailable", "failed"}
+    return current_recognition.get("visionFallbackSkippedReason") not in retryable_skip_reasons
+
+
 def _analyze_page_handwriting_content(
     content: str | None,
     *,
@@ -742,7 +759,12 @@ def _analyze_page_handwriting_content(
     ink_strokes = extract_page_ink_strokes(state)
     stroke_hash = stable_stroke_hash(ink_strokes)
     current_recognition = state.get("handwritingRecognition")
-    if not force and isinstance(current_recognition, dict) and current_recognition.get("strokeHash") == stroke_hash:
+    if _can_skip_existing_handwriting_recognition(
+        current_recognition,
+        stroke_hash,
+        force=force,
+        use_vision_fallback=use_vision_fallback,
+    ):
         return content, "skipped"
 
     try:
