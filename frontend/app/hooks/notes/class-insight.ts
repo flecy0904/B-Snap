@@ -430,6 +430,7 @@ export function buildClassInsightContext(params: {
     'When the user asks about exam importance, important pages, review order, or pages likely to appear on a test, prioritize the Recommended page priorities below over nearby PDF/RAG text.',
     'Prioritize strong semantic handwriting signals: handwritten 중요, 시험, 기말, 중간, 암기, 필수, and visual star marks. Treat check/circle/box/underline/arrow-like marks as weak debug-only signals unless paired with strong text/star signals.',
     'Do not explicitly say that a page was selected because of handwriting, star marks, recognized keywords, classmates, shared notes, aggregated data, or hidden study signals. Phrase reasons as natural review guidance only.',
+    'Do not mention the currently viewed page, and do not explain that the current page was excluded. Just recommend the next useful pages.',
     reviewRouteQuestion
       ? 'The user is asking for a review order. Present the recommended pages in document order, from earlier pages to later pages, while keeping each page reason concise.'
       : 'The user is asking for important pages. Present the recommended pages in priority order.',
