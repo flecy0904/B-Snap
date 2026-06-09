@@ -76,6 +76,12 @@ const nativeModule = Platform.OS === 'ios'
   ? NativeModules.BsnHandwritingRecognition as NativeHandwritingRecognitionModule | undefined
   : undefined;
 
+function getNativeModuleUnavailableDetail() {
+  if (Platform.OS === 'web') return 'web fallback';
+  if (Platform.OS === 'android') return 'android native module unavailable; Android uses backend geometry/Vision handwriting analysis';
+  return 'native module unavailable';
+}
+
 const CANONICAL_KEYWORDS = [
   '중요',
   '시험',
@@ -372,7 +378,7 @@ export async function isHandwritingRecognitionAvailable(): Promise<boolean> {
 
 export async function getHandwritingRecognitionAvailability(): Promise<HandwritingRecognitionAvailabilityResult> {
   if (!nativeModule?.isAvailable) {
-    return { available: false, state: 'missing', detail: Platform.OS === 'web' ? 'web fallback' : 'native module unavailable' };
+    return { available: false, state: 'missing', detail: getNativeModuleUnavailableDetail() };
   }
   try {
     return await nativeModule.isAvailable();
@@ -383,7 +389,7 @@ export async function getHandwritingRecognitionAvailability(): Promise<Handwriti
 
 export async function ensureKoreanHandwritingModel(): Promise<HandwritingRecognitionAvailabilityResult> {
   if (!nativeModule?.ensureKoreanModel) {
-    return { available: false, state: 'missing', detail: Platform.OS === 'web' ? 'web fallback' : 'native module unavailable' };
+    return { available: false, state: 'missing', detail: getNativeModuleUnavailableDetail() };
   }
   try {
     return await nativeModule.ensureKoreanModel();
@@ -396,7 +402,7 @@ export async function recognizeKoreanHandwriting(
   strokes: InkStroke[],
   options?: Record<string, unknown>,
 ): Promise<HandwritingRecognitionResult> {
-  if (!nativeModule?.recognizeKoreanInk) return unavailableHandwriting();
+  if (!nativeModule?.recognizeKoreanInk) return unavailableHandwriting(getNativeModuleUnavailableDetail());
   try {
     return normalizeRecognitionResult(await nativeModule.recognizeKoreanInk(strokes, options));
   } catch (error) {

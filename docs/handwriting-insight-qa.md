@@ -10,15 +10,17 @@ Backend:
 DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/bsnap
 ```
 
-Frontend debug flags:
+Frontend flags:
 
 ```bash
-EXPO_PUBLIC_ENABLE_HANDWRITING_DEBUG=true
+EXPO_PUBLIC_ENABLE_HANDWRITING_DEBUG=false
 EXPO_PUBLIC_ENABLE_HANDWRITING_AUTO_ANALYZE=true
-# Optional opt-out. When omitted, auto analysis may request backend Vision fallback,
+# Optional opt-out. When omitted or true, auto analysis may request backend Vision fallback,
 # but the backend still only calls OpenAI for star-anchored eligible pages.
-EXPO_PUBLIC_ENABLE_HANDWRITING_AUTO_VISION=false
+EXPO_PUBLIC_ENABLE_HANDWRITING_AUTO_VISION=true
 ```
+
+For debug QA, temporarily set `EXPO_PUBLIC_ENABLE_HANDWRITING_DEBUG=true`.
 
 Optional Vision fallback:
 
@@ -37,7 +39,8 @@ Current demo policy:
 - When auto analyze is enabled, the frontend asks the backend to run cost-controlled Vision fallback automatically.
 - The backend should call OpenAI only for pages where geometry detects a star anchor and eligible handwriting clusters.
 - Vision analyzes only nearby B-Snap overlay ink clusters. It must not include the original PDF background.
-- ML Kit is optional. If it is unavailable or inaccurate, the app should continue with geometry/Vision.
+- ML Kit is optional. If it is unavailable or inaccurate, the app should continue with backend geometry/Vision.
+- Web and Android use the same backend `inkStrokes` analysis path as iOS. Android ML Kit is intentionally not part of this PR.
 
 ## Run Locally
 
@@ -53,6 +56,13 @@ Frontend web:
 ```bash
 cd /Users/angibeom/B-Snap-team/frontend
 EXPO_PUBLIC_ENABLE_HANDWRITING_DEBUG=true EXPO_PUBLIC_ENABLE_HANDWRITING_AUTO_ANALYZE=true npm start
+```
+
+Frontend Android dev build:
+
+```bash
+cd /Users/angibeom/B-Snap-team/frontend
+EXPO_PUBLIC_ENABLE_HANDWRITING_DEBUG=true EXPO_PUBLIC_ENABLE_HANDWRITING_AUTO_ANALYZE=true npm run android
 ```
 
 iOS dev build check:
@@ -79,6 +89,42 @@ Notes:
 - `check`, `circle`, `box`, `underline`, `bracket`, `arrow`, and `exclamation` may appear in debug metadata.
 - They should not make a page high/very-high by themselves.
 - Raw stroke density alone should remain a weak backup signal.
+
+## Web/Android Product Flow QA
+
+This is the real non-debug flow used for demo and team testing.
+
+1. Set frontend env:
+   - `EXPO_PUBLIC_ENABLE_HANDWRITING_DEBUG=false`
+   - `EXPO_PUBLIC_ENABLE_HANDWRITING_AUTO_ANALYZE=true`
+   - `EXPO_PUBLIC_ENABLE_HANDWRITING_AUTO_VISION=true`
+2. Start backend with Vision enabled only if you want Korean keyword fallback:
+   - `HANDWRITING_VISION_FALLBACK_ENABLED=true`
+   - `OPENAI_API_KEY=...`
+3. Open the same backend-synced PDF note on web or Android.
+4. Draw B-Snap overlay ink on a PDF page.
+5. Wait for page autosave. The frontend should automatically request backend handwriting analysis for that page.
+6. Expected:
+   - Star-only pages are saved as semantic symbol pages through geometry.
+   - Star plus nearby `중요`, `시험`, `기말`, `중간`, `암기`, or `필수` can use cost-controlled Vision if backend env allows it.
+   - Pages without a star are not sent to Vision automatically, even if they contain general handwriting.
+   - Asking `중요 페이지 추천해줘` should use the saved `handwritingRecognition` data.
+7. Web expected ML Kit behavior: unavailable is normal.
+8. Android expected ML Kit behavior: unavailable is normal in this PR; Android still uses backend geometry/Vision after autosave.
+
+Suggested three-account demo pattern:
+
+- Page 2: star only
+- Page 5: star + `시험`
+- Page 6: star + `기말`
+- Page 10: star only
+- Page 11: lots of ordinary handwriting without star
+
+Expected ranking:
+
+- Star + recognized strong keyword pages should rank above star-only pages.
+- Star-only pages should rank above raw-stroke-heavy ordinary pages.
+- A page with only lots of handwriting should not beat pages with explicit star/keyword signals.
 
 ## Vision Fallback QA
 
