@@ -1,6 +1,8 @@
 import json
 from typing import Any
 
+from backend.app.services.handwriting_signals import stable_stroke_hash
+
 
 PAGE_STATE_KIND = "bsnap-page-state"
 PAGE_STATE_VERSION = 1
@@ -116,6 +118,28 @@ def merge_handwriting_recognition(content: str | None, recognition: dict[str, An
     return json.dumps(normalize_page_state_for_save(state), ensure_ascii=False, separators=(",", ":"))
 
 
+def _page_state_stroke_hash(state: dict[str, Any] | None) -> str:
+    if not state:
+        return stable_stroke_hash([])
+    ink_strokes = state.get("inkStrokes")
+    return stable_stroke_hash(ink_strokes if isinstance(ink_strokes, list) else [])
+
+
+def _stale_handwriting_recognition(recognition: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "status": "unavailable",
+        "strokeHash": str(recognition.get("strokeHash") or ""),
+        "engine": recognition.get("engine") if recognition.get("engine") in {"geometry", "mlkit-digital-ink", "openai-vision", "hybrid"} else "geometry",
+        "text": "",
+        "keywords": [],
+        "symbols": [],
+        "confidence": 0.0,
+        "clusters": [],
+        "stale": True,
+        "cached": False,
+    }
+
+
 def merge_page_state_content(
     current_content: str | None,
     next_content: str | None,
@@ -138,7 +162,15 @@ def merge_page_state_content(
         merged["pdfText"] = pdf_text
 
     if current_state and current_state.get("handwritingRecognition") and "handwritingRecognition" not in merged:
-        merged["handwritingRecognition"] = current_state["handwritingRecognition"]
+        recognition = current_state["handwritingRecognition"]
+        if isinstance(recognition, dict):
+            current_stroke_hash = _page_state_stroke_hash(current_state)
+            next_stroke_hash = _page_state_stroke_hash(merged)
+            recognition_stroke_hash = str(recognition.get("strokeHash") or "")
+            if current_stroke_hash == next_stroke_hash and recognition_stroke_hash == next_stroke_hash:
+                merged["handwritingRecognition"] = recognition
+            else:
+                merged["handwritingRecognition"] = _stale_handwriting_recognition(recognition)
 
     return json.dumps(normalize_page_state_for_save(merged), ensure_ascii=False, separators=(",", ":"))
 

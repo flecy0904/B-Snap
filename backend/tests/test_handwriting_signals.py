@@ -333,6 +333,78 @@ class HandwritingSignalsTest(unittest.TestCase):
         self.assertEqual(state["handwritingRecognition"]["visionFallbackSkippedReason"], "not-requested")
         self.assertEqual(state["handwritingRecognition"]["analyzedClusterCount"], 2)
 
+    def test_merge_page_state_content_preserves_recognition_when_strokes_unchanged(self):
+        strokes = [_stroke([(1, 1), (4, 4)], id="same")]
+        stroke_hash = stable_stroke_hash(strokes)
+        current = json.dumps({
+            "kind": "bsnap-page-state",
+            "version": 1,
+            "inkStrokes": strokes,
+            "textAnnotations": [],
+            "imageAnnotations": [],
+            "handwritingRecognition": {
+                "status": "ready",
+                "strokeHash": stroke_hash,
+                "engine": "geometry",
+                "text": "",
+                "keywords": [],
+                "symbols": ["star"],
+                "confidence": 0.9,
+                "clusters": [],
+            },
+        })
+        next_content = json.dumps({
+            "kind": "bsnap-page-state",
+            "version": 1,
+            "inkStrokes": strokes,
+            "textAnnotations": [],
+            "imageAnnotations": [],
+        })
+
+        merged = merge_page_state_content(current, next_content)
+        recognition = parse_page_state(merged)["handwritingRecognition"]
+
+        self.assertEqual(recognition["status"], "ready")
+        self.assertEqual(recognition["symbols"], ["star"])
+        self.assertFalse(recognition.get("stale", False))
+
+    def test_merge_page_state_content_marks_recognition_stale_when_strokes_change(self):
+        old_strokes = [_stroke([(1, 1), (4, 4)], id="old")]
+        new_strokes = [_stroke([(10, 10), (14, 14)], id="new")]
+        current = json.dumps({
+            "kind": "bsnap-page-state",
+            "version": 1,
+            "inkStrokes": old_strokes,
+            "textAnnotations": [],
+            "imageAnnotations": [],
+            "handwritingRecognition": {
+                "status": "ready",
+                "strokeHash": stable_stroke_hash(old_strokes),
+                "engine": "geometry",
+                "text": "중요",
+                "keywords": ["중요"],
+                "symbols": ["star"],
+                "confidence": 0.9,
+                "clusters": [{"id": "old-cluster", "symbols": ["star"]}],
+            },
+        })
+        next_content = json.dumps({
+            "kind": "bsnap-page-state",
+            "version": 1,
+            "inkStrokes": new_strokes,
+            "textAnnotations": [],
+            "imageAnnotations": [],
+        })
+
+        merged = merge_page_state_content(current, next_content)
+        recognition = parse_page_state(merged)["handwritingRecognition"]
+
+        self.assertEqual(recognition["status"], "unavailable")
+        self.assertTrue(recognition["stale"])
+        self.assertEqual(recognition["keywords"], [])
+        self.assertEqual(recognition["symbols"], [])
+        self.assertEqual(recognition["clusters"], [])
+
     def test_merge_mlkit_result_preserves_geometry_symbol_and_becomes_hybrid(self):
         merged = merge_handwriting_recognition_results(
             {
