@@ -10,6 +10,7 @@ from backend.app.routes.class_insights import (
     _collect_active_signal_sources,
     _extract_content_hint,
     _is_other_user_signal,
+    _should_include_page_signal,
 )
 from backend.scripts.seed_handwriting_semantic_demo import build_demo_page_state
 from backend.app.services.note_page_content import merge_page_state_content, parse_page_state
@@ -243,6 +244,42 @@ class ClassInsightSignalTest(unittest.TestCase):
         self.assertLess(noisy.score(), 35)
         self.assertGreater(semantic.score(), noisy.score())
         self.assertEqual(semantic.score(), 100)
+
+    def test_raw_stroke_only_page_is_kept_as_low_ranked_candidate(self):
+        noisy = PageInsightAccumulator(page_number=1)
+        semantic = PageInsightAccumulator(page_number=2)
+        _apply_page_state(
+            noisy,
+            {
+                "kind": "bsnap-page-state",
+                "version": 1,
+                "inkStrokes": [
+                    {
+                        "points": [
+                            {"x": index, "y": index},
+                            {"x": index + 1, "y": index + 1},
+                        ],
+                        "style": "pen",
+                    }
+                    for index in range(160)
+                ],
+                "textAnnotations": [],
+            },
+            user_id=8,
+            note_id=12,
+        )
+        _apply_page_state(
+            semantic,
+            _recognition_state(keywords=["중요"], symbols=["star"]),
+            user_id=9,
+            note_id=13,
+        )
+
+        noisy_score = noisy.score()
+        self.assertGreater(noisy_score, 0)
+        self.assertLess(noisy_score, 35)
+        self.assertTrue(_should_include_page_signal(noisy, noisy_score))
+        self.assertGreater(semantic.score(), noisy_score)
 
     def test_multiple_participants_with_same_keyword_get_consensus_boost(self):
         one = PageInsightAccumulator(page_number=1)

@@ -549,6 +549,10 @@ def _priority(score: int) -> str:
     return "medium"
 
 
+def _should_include_page_signal(accumulator: PageInsightAccumulator, score: int) -> bool:
+    return score > 0 and accumulator.signal_count > 0
+
+
 def _collect_active_signal_sources(
     accumulators: dict[int, PageInsightAccumulator],
 ) -> tuple[set[int], set[int]]:
@@ -721,7 +725,7 @@ def get_class_insights(
             semantic_symbols=sorted(accumulator.semantic_symbols),
         )
         for accumulator in accumulators.values()
-        if (score := accumulator.score()) >= 35
+        if _should_include_page_signal(accumulator, score := accumulator.score())
     ]
     pages.sort(key=lambda page: page.importance_score, reverse=True)
     active_participant_ids, active_note_ids = _collect_active_signal_sources(accumulators)

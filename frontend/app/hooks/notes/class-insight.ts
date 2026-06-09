@@ -299,7 +299,7 @@ function rankSignals(signals: PageSignal[], pageCount: number, limit: number) {
         priority: importanceScore >= 80 ? 'very-high' : importanceScore >= 58 ? 'high' : 'medium',
       };
     })
-    .filter((signal) => signal.importanceScore >= 35)
+    .filter((signal) => signal.importanceScore > 0)
     .sort((left, right) => right.importanceScore - left.importanceScore)
     .slice(0, limit);
 }
