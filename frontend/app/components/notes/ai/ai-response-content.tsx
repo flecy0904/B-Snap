@@ -11,6 +11,8 @@ type AiResponseContentProps = {
   textStyle?: any;
   linkStyle?: any;
   onOpenPage?: (pageNumber: number) => void;
+  onRequestMoreRecommendations?: () => void;
+  moreRecommendationsDisabled?: boolean;
 };
 
 type TextBlock = {
@@ -240,6 +242,8 @@ export function AiResponseContent({
   textStyle,
   linkStyle,
   onOpenPage,
+  onRequestMoreRecommendations,
+  moreRecommendationsDisabled,
 }: AiResponseContentProps) {
   const maxPage = pageCount && pageCount > 0 ? pageCount : Number.POSITIVE_INFINITY;
   const blocks = React.useMemo(() => parseAiContent(content), [content]);
@@ -315,6 +319,19 @@ export function AiResponseContent({
                 );
               })}
             </View>
+            {onRequestMoreRecommendations ? (
+              <Pressable
+                style={[
+                  styles.aiPageRecommendationMoreButton,
+                  moreRecommendationsDisabled && styles.aiPageRecommendationMoreButtonDisabled,
+                ]}
+                onPress={onRequestMoreRecommendations}
+                disabled={moreRecommendationsDisabled}
+              >
+                <MaterialCommunityIcons name="plus" size={14} color="#4F68D2" />
+                <Text style={styles.aiPageRecommendationMoreText}>추가로 보기</Text>
+              </Pressable>
+            ) : null}
           </View>
         );
       })}

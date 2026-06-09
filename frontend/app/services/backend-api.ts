@@ -136,6 +136,10 @@ export type BackendClassInsightPageSignal = {
   photo_reference_count?: number;
   ai_question_count?: number;
   memo_page_count?: number;
+  handwriting_keyword_hits?: number;
+  handwriting_symbol_count?: number;
+  semantic_keywords?: string[];
+  semantic_symbols?: string[];
 };
 
 export type BackendClassInsight = {
@@ -171,6 +175,41 @@ export type BackendPdfTextExtractionResponse = {
   note_id: number;
   pages_extracted: number;
   pages: BackendNotePage[];
+};
+
+export type BackendHandwritingAnalysisResponse = {
+  note_id: number;
+  pages_analyzed: number;
+  pages_skipped: number;
+  pages_failed: number;
+};
+
+export type BackendRecognitionCandidateWrite = {
+  text: string;
+  confidence?: number | null;
+};
+
+export type BackendRecognizedClusterWrite = {
+  id?: string | null;
+  pageNumber?: number | null;
+  bbox?: { x: number; y: number; width: number; height: number } | null;
+  text?: string;
+  candidates?: BackendRecognitionCandidateWrite[];
+  keywords?: string[];
+  symbols?: string[];
+  confidence?: number;
+  source?: string;
+};
+
+export type BackendHandwritingRecognitionWrite = {
+  stroke_hash?: string | null;
+  engine?: string;
+  text?: string;
+  keywords?: string[];
+  symbols?: string[];
+  confidence?: number;
+  clusters?: BackendRecognizedClusterWrite[];
+  force?: boolean;
 };
 
 export type BackendUpload = {
@@ -662,6 +701,50 @@ export async function updateBackendNotePage(payload: {
       content: payload.content,
       image_url: payload.imageUrl,
     },
+  });
+  return {
+    ...page,
+    image_url: resolveBackendAssetUrl(page.image_url) ?? page.image_url,
+  };
+}
+
+export async function analyzeBackendNotePageHandwriting(pageId: number, options?: {
+  force?: boolean;
+  useVisionFallback?: boolean;
+}) {
+  const query = new URLSearchParams();
+  if (options?.force) query.set('force', 'true');
+  if (options?.useVisionFallback) query.set('use_vision_fallback', 'true');
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+  const page = await request<BackendNotePage>(`/note-pages/${pageId}/analyze-handwriting${suffix}`, {
+    method: 'POST',
+  });
+  return {
+    ...page,
+    image_url: resolveBackendAssetUrl(page.image_url) ?? page.image_url,
+  };
+}
+
+export function analyzeBackendNoteHandwriting(noteId: number, options?: {
+  force?: boolean;
+  useVisionFallback?: boolean;
+}) {
+  const query = new URLSearchParams();
+  if (options?.force) query.set('force', 'true');
+  if (options?.useVisionFallback) query.set('use_vision_fallback', 'true');
+  const suffix = query.toString() ? `?${query.toString()}` : '';
+  return request<BackendHandwritingAnalysisResponse>(`/notes/${noteId}/analyze-handwriting${suffix}`, {
+    method: 'POST',
+  });
+}
+
+export async function persistBackendNotePageHandwritingRecognition(
+  pageId: number,
+  payload: BackendHandwritingRecognitionWrite,
+) {
+  const page = await request<BackendNotePage>(`/note-pages/${pageId}/handwriting-recognition`, {
+    method: 'POST',
+    body: payload,
   });
   return {
     ...page,

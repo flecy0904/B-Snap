@@ -84,6 +84,16 @@ type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
 const WEB_PDF_ZOOM_STEP = 0.15;
 const WEB_PDF_PAGE_GAP = 10;
 
+type HandwritingDebugCluster = {
+  id?: string;
+  pageNumber?: number;
+  bbox?: { x: number; y: number; width: number; height: number };
+  keywords?: string[];
+  symbols?: string[];
+  confidence?: number;
+  source?: string;
+};
+
 function getCaptureAssetSummary(asset: CaptureAsset | null | undefined) {
   if (!asset) return '';
   return cleanAiDisplayText(asset.analysisSummary || asset.summary);
@@ -199,6 +209,70 @@ function SelectionLassoOverlay(props: { points: InkPoint[]; pageWidth: number; p
         opacity={0.9}
       />
     </Svg>
+  );
+}
+
+function HandwritingDebugClusterOverlay(props: {
+  clusters: HandwritingDebugCluster[];
+  pageWidth: number;
+  pageHeight: number;
+}) {
+  if (!props.clusters.length) return null;
+  return (
+    <div style={{ position: 'absolute', inset: 0, zIndex: 18, pointerEvents: 'none' }}>
+      {props.clusters.map((cluster, index) => {
+        const bbox = cluster.bbox;
+        if (!bbox || bbox.width <= 0 || bbox.height <= 0) return null;
+        const labelParts = [
+          typeof cluster.confidence === 'number' ? `${Math.round(cluster.confidence * 100)}%` : null,
+          ...[...(cluster.keywords ?? []), ...(cluster.symbols ?? [])].slice(0, 2),
+        ].filter(Boolean);
+        const sourceLabel = cluster.source === 'mlkit-digital-ink'
+          ? 'mlkit'
+          : cluster.source === 'openai-vision'
+            ? 'vision'
+            : cluster.source ?? 'geometry';
+        return (
+          <div
+            key={cluster.id ?? `${bbox.x}-${bbox.y}-${index}`}
+            style={{
+              position: 'absolute',
+              left: percent(bbox.x, props.pageWidth),
+              top: percent(bbox.y, props.pageHeight),
+              width: percent(bbox.width, props.pageWidth),
+              height: percent(bbox.height, props.pageHeight),
+              minWidth: 24,
+              minHeight: 18,
+              border: '2px solid rgba(236, 72, 153, 0.92)',
+              backgroundColor: 'rgba(236, 72, 153, 0.08)',
+              boxShadow: '0 0 0 1px rgba(255,255,255,0.75) inset',
+              boxSizing: 'border-box',
+            }}
+          >
+            <div
+              style={{
+                position: 'absolute',
+                left: 0,
+                top: -22,
+                maxWidth: 220,
+                padding: '2px 6px',
+                borderRadius: 4,
+                backgroundColor: 'rgba(157, 23, 77, 0.92)',
+                color: '#FFFFFF',
+                fontSize: 11,
+                fontWeight: 800,
+                lineHeight: '16px',
+                whiteSpace: 'nowrap',
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}
+            >
+              {[sourceLabel, ...labelParts].join(' · ') || 'handwriting'}
+            </div>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -825,6 +899,7 @@ export function PdfPreview(props: {
   activeGeneratedPageId?: string | null;
   pageCaptureReferences?: PageCaptureReference[];
   incomingAssetSuggestion?: CaptureAsset | null;
+  handwritingDebugClusters?: HandwritingDebugCluster[];
   onAcceptIncomingAsset?: () => void;
   onArchiveIncomingAsset?: () => void;
   onDismissIncomingAsset?: () => void;
@@ -1286,15 +1361,24 @@ export function PdfPreview(props: {
     const incomingAsset = active ? props.incomingAssetSuggestion : null;
     const incomingAssetImage = incomingAsset ? getCaptureOriginalImageSource(incomingAsset) : null;
     const incomingAssetSummary = getCaptureAssetSummary(incomingAsset);
+    const handwritingDebugClusters = (props.handwritingDebugClusters ?? []).filter((cluster) => (
+      page.pageNumber && cluster.pageNumber === page.pageNumber
+    ));
     const targetMeta = {
       key: page.id,
       pageNumber: page.pageNumber,
       generatedPageId: page.generatedPageId,
       sourcePageNumber: page.pageNumber ?? page.insertAfterPage,
     };
-    const getPointerPoint = (event: React.PointerEvent<HTMLElement>, mode: 'draw' | 'annotate' = 'draw') => (
-      engine.screenToTargetPoint(page.id, event.clientX, event.clientY, mode)
-    );
+    const getPointerPoint = (event: React.PointerEvent<HTMLElement>, mode: 'draw' | 'annotate' = 'draw') => {
+      const point = engine.screenToTargetPoint(page.id, event.clientX, event.clientY, mode);
+      if (!point) return point;
+      return {
+        ...point,
+        t: Date.now(),
+        pressure: typeof event.pressure === 'number' && event.pressure > 0 ? event.pressure : undefined,
+      };
+    };
     const clearPointerInteraction = () => {
       activePointerIdRef.current = null;
       activePointerPageRef.current = null;
@@ -1544,6 +1628,12 @@ export function PdfPreview(props: {
           }}
           onRemove={props.onRemoveTextAnnotation}
           variant={props.textAnnotationVariant}
+        />
+
+        <HandwritingDebugClusterOverlay
+          clusters={handwritingDebugClusters}
+          pageWidth={frame.width}
+          pageHeight={frame.height}
         />
 
         {pageReferences.length ? (

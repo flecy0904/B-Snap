@@ -14,6 +14,10 @@ class ClassInsightPageSignalRead(BaseModel):
     photo_reference_count: int = Field(default=0, ge=0)
     ai_question_count: int = Field(default=0, ge=0)
     memo_page_count: int = Field(default=0, ge=0)
+    handwriting_keyword_hits: int = Field(default=0, ge=0)
+    handwriting_symbol_count: int = Field(default=0, ge=0)
+    semantic_keywords: list[str] = Field(default_factory=list)
+    semantic_symbols: list[str] = Field(default_factory=list)
 
 
 class ClassInsightRead(BaseModel):

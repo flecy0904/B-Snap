@@ -11,7 +11,7 @@ export type InkBrushSettings = {
   pressure: number;
 };
 export type InkPageSize = { pageWidth?: number; pageHeight?: number };
-export type InkPoint = { x: number; y: number; pageNumber?: number; generatedPageId?: string } & InkPageSize;
+export type InkPoint = { x: number; y: number; t?: number; pressure?: number; pageNumber?: number; generatedPageId?: string } & InkPageSize;
 export type InkStroke = {
   id: string;
   points: InkPoint[];

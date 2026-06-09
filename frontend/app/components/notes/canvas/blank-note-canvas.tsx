@@ -363,6 +363,7 @@ function BlankNotePageCanvas(props: BlankNotePageCanvasProps) {
   const clampPointToPage = (x: number, y: number): InkPoint => ({
     x: Math.max(0, Math.min(pageSize.width || 1000, x)),
     y: Math.max(0, Math.min(pageSize.height || 1000, y)),
+    t: Date.now(),
     pageNumber: props.generatedPageId ? undefined : props.pageNumber ?? 1,
     generatedPageId: props.generatedPageId,
     pageWidth: pageSize.width || 1000,
