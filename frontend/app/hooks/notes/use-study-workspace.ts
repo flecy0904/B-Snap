@@ -314,11 +314,11 @@ export function useStudyWorkspace(props: {
     busy: false,
     result: null,
   });
-  const [handwritingAutoAnalyzeRequest, setHandwritingAutoAnalyzeRequest] = useState<{
+  const [handwritingAutoAnalyzeQueue, setHandwritingAutoAnalyzeQueue] = useState<{
     documentId: number;
     pageNumber: number;
     requestId: number;
-  } | null>(null);
+  }[]>([]);
   const classInsightFetchKeyRef = useRef<Record<number, string>>({});
   const classInsightRefreshTimerRef = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
   const handwritingAutoAnalyzeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -556,10 +556,18 @@ export function useStudyWorkspace(props: {
   const handlePageSaveSuccess = useCallback((documentId: number, pageNumber: number) => {
     scheduleClassInsightRefresh(documentId);
     if (!HANDWRITING_AUTO_ANALYZE_ENABLED) return;
-    setHandwritingAutoAnalyzeRequest({
-      documentId,
-      pageNumber,
-      requestId: Date.now(),
+    setHandwritingAutoAnalyzeQueue((current) => {
+      const nextRequest = {
+        documentId,
+        pageNumber,
+        requestId: Date.now() + Math.random(),
+      };
+      return [
+        ...current.filter((request) => (
+          request.documentId !== documentId || request.pageNumber !== pageNumber
+        )),
+        nextRequest,
+      ];
     });
   }, [scheduleClassInsightRefresh]);
 
@@ -602,12 +610,24 @@ export function useStudyWorkspace(props: {
     onBackendPagesLoaded: rememberHandwritingRecognitionFromPages,
   });
   useEffect(() => {
-    if (!HANDWRITING_AUTO_ANALYZE_ENABLED || !handwritingAutoAnalyzeRequest) return undefined;
-    const { documentId, pageNumber } = handwritingAutoAnalyzeRequest;
+    if (!HANDWRITING_AUTO_ANALYZE_ENABLED || !handwritingAutoAnalyzeQueue.length) return undefined;
+    const request = handwritingAutoAnalyzeQueue.find(({ documentId, pageNumber }) => (
+      Boolean(backendPageIdsByDocument[documentId]?.[pageNumber])
+    ));
+    if (!request) return undefined;
+
+    const { documentId, pageNumber, requestId } = request;
     const pageId = backendPageIdsByDocument[documentId]?.[pageNumber];
     if (!pageId) return undefined;
 
     if (handwritingAutoAnalyzeTimerRef.current) clearTimeout(handwritingAutoAnalyzeTimerRef.current);
+    const removeRequest = () => {
+      setHandwritingAutoAnalyzeQueue((current) => current.filter((item) => (
+        item.documentId !== documentId
+        || item.pageNumber !== pageNumber
+        || item.requestId !== requestId
+      )));
+    };
     handwritingAutoAnalyzeTimerRef.current = setTimeout(() => {
       handwritingAutoAnalyzeTimerRef.current = null;
       analyzeBackendNotePageHandwriting(pageId, {
@@ -621,6 +641,9 @@ export function useStudyWorkspace(props: {
         })
         .catch(() => {
           // Debug-only automatic analysis should never interrupt normal page save flow.
+        })
+        .finally(() => {
+          removeRequest();
         });
     }, 2000);
 
@@ -632,7 +655,7 @@ export function useStudyWorkspace(props: {
     };
   }, [
     backendPageIdsByDocument,
-    handwritingAutoAnalyzeRequest,
+    handwritingAutoAnalyzeQueue,
     rememberHandwritingRecognitionFromPage,
     rememberSavedBackendNotePage,
     scheduleClassInsightRefresh,
