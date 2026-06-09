@@ -11,6 +11,7 @@ from backend.app.routes.folders import router as folders_router
 from backend.app.routes.health import router as health_router
 from backend.app.routes.notes import router as notes_router
 from backend.app.routes.rag import router as rag_router
+from backend.app.routes.rag_debug import router as rag_debug_router
 from backend.app.routes.uploads import router as uploads_router
 from backend.app.routes.ws import router as ws_router
 
@@ -33,6 +34,7 @@ app.include_router(chats_router)
 app.include_router(class_insights_router)
 app.include_router(ai_canvas_notes_router)
 app.include_router(rag_router)
+app.include_router(rag_debug_router)
 app.include_router(uploads_router)
 app.include_router(ws_router)
 app.mount("/uploads", StaticFiles(directory=settings.upload_path), name="uploads")

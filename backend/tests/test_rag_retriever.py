@@ -1,13 +1,23 @@
 import json
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
+from fastapi import HTTPException
 from pydantic import ValidationError
 
+from backend.app.core.config import Settings
+from backend.app.routes.rag_debug import (
+    RagDebugEvaluateCreate,
+    _ensure_rag_debug_enabled,
+    evaluate_chat_session_rag_debug,
+    get_note_rag_debug_index,
+)
 from backend.app.schemas.rag import QuizQuestion, RAGAskRequest, RAGSummaryRequest, RetrievedContext
 from backend.app.routes.chats import normalize_rag_scope, rag_scope_search_targets
+from backend.app.schemas.chats import RagScope, RagScopeSource
 from backend.app.services.ai_context_builder import build_ai_context, format_answer_sources, select_rag_context_pages
-from backend.app.services.ai_context_router import route_ai_context
+from backend.app.services.ai_context_router import AiContextRoute, route_ai_context
 from backend.app.services.document_chunk_index import (
     collect_canvas_index_sources,
     collect_note_index_sources,
@@ -91,6 +101,103 @@ class RAGRetrieverTest(unittest.TestCase):
         self.assertTrue(debug["fallback"])
         self.assertEqual(debug["fallback_reason"], "vector_empty")
         self.assertEqual(debug["retrieved_chunk_count"], 1)
+
+    def test_rag_debug_is_disabled_outside_development_envs(self):
+        with self.assertRaises(HTTPException) as raised:
+            _ensure_rag_debug_enabled(SimpleNamespace(app_env="production"))
+
+        self.assertEqual(raised.exception.status_code, 404)
+
+    def test_rag_debug_index_returns_page_text_and_chunk_snippets(self):
+        page_state = json.dumps({"kind": "bsnap-page-state", "version": 1, "pdfText": "TCP congestion control text."})
+        with patch("backend.app.routes.rag_debug.fetch_one") as fetch_one, patch("backend.app.routes.rag_debug.fetch_all") as fetch_all:
+            fetch_one.return_value = {"id": 3, "folder_id": 2, "title": "Network"}
+            fetch_all.side_effect = [
+                [{"id": 10, "page_number": 1, "content": page_state, "updated_at": None}],
+                [{"source_type": "pdf_page", "count": 1}],
+                [{
+                    "source_type": "pdf_page",
+                    "source_id": "10",
+                    "title": "Network - 1페이지",
+                    "content": "TCP congestion control text.",
+                    "folder_id": 2,
+                    "note_id": 3,
+                    "page_number": 1,
+                    "chunk_index": 1,
+                    "metadata": {"page_label": "1페이지"},
+                    "indexed_at": None,
+                    "updated_at": None,
+                }],
+            ]
+
+            result = get_note_rag_debug_index(
+                3,
+                connection=object(),
+                current_user={"id": 7},
+                settings=Settings(app_env="local"),
+            )
+
+        self.assertEqual(result["summary"]["chunk_count"], 1)
+        self.assertEqual(result["summary"]["chunks_returned"], 1)
+        self.assertEqual(result["summary"]["source_counts"], {"pdf_page": 1})
+        self.assertEqual(result["pages"][0]["text_length"], len("TCP congestion control text."))
+        self.assertEqual(result["pages"][0]["text"], "TCP congestion control text.")
+        self.assertIn("TCP congestion", result["chunks"][0]["content_snippet"])
+        self.assertEqual(result["chunks"][0]["content"], "TCP congestion control text.")
+
+    def test_rag_debug_evaluate_uses_router_scope_and_retrieval_without_saving_messages(self):
+        retrieved = RetrievedContext(
+            source_type="pdf_page",
+            source_id="10",
+            title="Network - 1페이지",
+            content="TCP congestion control text.",
+            score=0.82,
+            note_id=3,
+            page_number=1,
+            chunk_index=1,
+        )
+        with patch("backend.app.routes.rag_debug.fetch_one") as fetch_one, patch("backend.app.routes.rag_debug.fetch_all") as debug_fetch_all, patch(
+            "backend.app.routes.chats.fetch_all",
+        ) as chats_fetch_all, patch(
+            "backend.app.routes.rag_debug.route_ai_context",
+            return_value=AiContextRoute(mode="rag", rewritten_query="TCP congestion", reason="rule"),
+        ), patch(
+            "backend.app.routes.rag_debug.retrieve_rag_contexts_with_debug",
+            return_value=([retrieved], {"fallback": False, "fallback_reason": None, "retrieved_source_count": 1, "retrieved_chunk_count": 1}),
+        ) as retrieve:
+            fetch_one.return_value = {
+                "id": 2,
+                "note_id": 3,
+                "title": "Chat",
+                "model": None,
+                "rag_scope": None,
+                "folder_id": 2,
+                "note_title": "Network",
+            }
+            debug_fetch_all.return_value = [
+                {"id": 30, "page_number": 1, "content": {"pdfText": "TCP congestion control text."}, "updated_at": None},
+            ]
+            chats_fetch_all.side_effect = [[{"id": 3, "title": "Network"}], []]
+
+            result = evaluate_chat_session_rag_debug(
+                2,
+                RagDebugEvaluateCreate(
+                    content="이 페이지 설명해줘",
+                    rag_scope=RagScope(sources=[RagScopeSource(id="3", type="note", title="Network")]),
+                ),
+                connection=object(),
+                current_user={"id": 7},
+                settings=Settings(app_env="local"),
+            )
+
+        retrieve.assert_called_once()
+        self.assertEqual(result["mode"], "rag")
+        self.assertEqual(result["search_targets"], {"note_ids": [3], "canvas_note_ids": []})
+        self.assertEqual(result["debug"]["retrieved_chunk_count"], 1)
+        self.assertEqual(result["context"]["retrieved_chunk_count"], 1)
+        self.assertTrue(result["context"]["current_page_included"] is False)
+        self.assertEqual(result["results"][0]["score"], 0.82)
+        self.assertEqual(result["results"][0]["content"], "TCP congestion control text.")
 
     def test_normalize_rag_scope_keeps_current_folder_sources_only(self):
         with patch("backend.app.routes.chats.fetch_all") as fetch_all:
