@@ -1,7 +1,8 @@
 import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
-import { ActivityIndicator, Animated, Image, PanResponder, Platform, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
+import { ActivityIndicator, Animated, Image, Keyboard, PanResponder, Platform, Pressable, ScrollView, Text, TextInput, useWindowDimensions, View } from 'react-native';
 import { hasEnoughClassInsightData, isClassInsightTargetDocument } from '../../../hooks/notes/class-insight';
+import { useAppKeyboardInset } from '../../../hooks/notes/use-app-keyboard-inset';
 import { useDelayedTooltip } from '../../../hooks/notes/use-delayed-tooltip';
 import {
   evaluateBackendRagDebug,
@@ -464,6 +465,7 @@ export function NotesAiAssistantPanel() {
     && workspace.aiPanelMode === 'floating',
   );
   const appChatSidebar = Boolean(workspace.isAppChatSidebarPanel);
+  const appKeyboardInset = useAppKeyboardInset(workspace.usesAppAiPanelLayout && (appChatSidebar || appFloatingChat));
   const requestedFloatingPanelSize = workspace.aiFloatingPanelSize ?? {
     width: appFloatingChat ? APP_DETACHED_PANEL_WIDTH : FLOATING_PANEL_WIDTH,
     height: FLOATING_PANEL_HEIGHT,
@@ -1093,6 +1095,10 @@ export function NotesAiAssistantPanel() {
     scrollToLatestMessage();
   }, [workspace.aiMessages.length, workspace.aiLoading, workspace.activeAiChatSessionId, scrollToLatestMessage]);
 
+  React.useEffect(() => {
+    if (appKeyboardInset > 0) scrollToLatestMessage();
+  }, [appKeyboardInset, scrollToLatestMessage]);
+
   if (!workspace.aiPanelOpen && !appChatSidebar) return null;
   const webSidebarAttachedPanel = Platform.OS === 'web' && !workspace.usesAppAiPanelLayout && workspace.aiPanelMode === 'sidebar';
   const panelStyle = appChatSidebar
@@ -1113,6 +1119,7 @@ export function NotesAiAssistantPanel() {
     : workspace.aiPanelMode === 'floating'
       ? [workspace.styles.aiPanel, { left: floatingAnimatedPosition.x, top: floatingAnimatedPosition.y, bottom: undefined, width: floatingPanelWidth, height: floatingAnimatedHeight }]
       : [workspace.styles.aiPanel, workspace.styles.aiPanelSidebar, { width: sidebarWidth }];
+  const appKeyboardAvoidingStyle = appKeyboardInset > 0 ? { paddingBottom: appKeyboardInset + 12 } : null;
   const renderAiTooltip = (id: string, label: string, placement: 'above' | 'below' = 'below') => (
     activeTooltipId === id ? (
       <View
@@ -1132,7 +1139,7 @@ export function NotesAiAssistantPanel() {
   ];
 
   return (
-    <Animated.View style={panelStyle} {...webFloatingDragProps}>
+    <Animated.View style={[panelStyle, appKeyboardAvoidingStyle]} {...webFloatingDragProps}>
       {menuSessionId ? (
         <Pressable {...webFloatingDragExcludeProps} style={workspace.styles.aiMenuDismissLayer} onPress={closeOpenMenus} />
       ) : null}
@@ -1489,8 +1496,13 @@ export function NotesAiAssistantPanel() {
               showsVerticalScrollIndicator={false}
               scrollEventThrottle={16}
               onScroll={handleMessagesScroll}
+              onScrollBeginDrag={() => {
+                if (Platform.OS !== 'web') Keyboard.dismiss();
+              }}
               onLayout={updateMessagesViewportHeight}
               onContentSizeChange={updateMessagesContentHeight}
+              keyboardDismissMode={Platform.OS === 'ios' ? 'interactive' : 'on-drag'}
+              keyboardShouldPersistTaps="handled"
             >
           {hasChatHistory ? workspace.aiMessages.map((message: any) => {
             const isUser = message.role === 'user';

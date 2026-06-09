@@ -49,6 +49,13 @@ function isNativeStylusPointer(pointerType: string | number | undefined) {
   return normalized === 'stylus' || normalized === 'pen' || normalized === 'pencil';
 }
 
+function isNativeMousePointer(pointerType: string | number | undefined) {
+  'worklet';
+  if (pointerType === 2) return true;
+  const normalized = String(pointerType ?? '').toLowerCase();
+  return normalized === 'mouse';
+}
+
 function hasNativeStylusData(stylusData: NativeStylusData | undefined) {
   'worklet';
   if (!stylusData) return false;
@@ -69,15 +76,17 @@ export function shouldActivateNativeInkGesture(
   event: NativeInkTouchEvent | NativeInkGestureEvent,
   fingerDrawingEnabled: boolean | undefined,
   allowUnknownPointerAsStylus = false,
+  allowMousePointer = false,
 ) {
   'worklet';
   const pointerCount = (event as NativeInkTouchEvent).numberOfTouches ?? (event as NativeInkGestureEvent).numberOfPointers;
   if ((pointerCount ?? 1) > 1) return false;
   const pointerType = event.pointerType;
   const hasPointerType = pointerType !== undefined && pointerType !== null && String(pointerType).length > 0;
+  const mouseEvent = allowMousePointer && isNativeMousePointer(pointerType);
   const stylusEvent = isNativeStylusEvent(event)
     || (allowUnknownPointerAsStylus && !hasPointerType && !hasNativeStylusData(event.stylusData));
-  if (tool === 'select') return stylusEvent;
-  if (isNativeStylusOnlyTool(tool)) return Boolean(fingerDrawingEnabled) || stylusEvent;
-  return tool === 'text' && stylusEvent;
+  if (tool === 'select') return stylusEvent || mouseEvent;
+  if (isNativeStylusOnlyTool(tool)) return Boolean(fingerDrawingEnabled) || stylusEvent || mouseEvent;
+  return tool === 'text' && (stylusEvent || mouseEvent);
 }

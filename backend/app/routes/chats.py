@@ -39,6 +39,8 @@ MAX_AI_CANVAS_NOTES_PER_NOTE = 3
 DEFAULT_CANVAS_TITLE = "Canvas Note"
 DEFAULT_CANVAS_MARKDOWN = ""
 DEFAULT_CANVAS_DOCUMENT_JSON = {"type": "doc", "content": []}
+RAG_SEARCH_UNAVAILABLE_MESSAGE = "지금은 자료 검색을 사용할 수 없습니다. 잠시 후 다시 시도해 주세요."
+RAG_NO_RESULTS_MESSAGE = "관련된 자료를 찾지 못했습니다."
 
 CANVAS_TARGET_KEYWORDS = (
     "canvas",
@@ -385,6 +387,16 @@ def rag_scope_search_targets(scope: dict) -> tuple[list[int], list[int]]:
     return note_ids, canvas_note_ids
 
 
+def get_rag_failure_answer(debug: dict | None, *, has_local_context: bool) -> str | None:
+    if has_local_context or not debug:
+        return None
+    if debug.get("rag_unavailable"):
+        return RAG_SEARCH_UNAVAILABLE_MESSAGE
+    if debug.get("no_results"):
+        return RAG_NO_RESULTS_MESSAGE
+    return None
+
+
 @router.post("/notes/{note_id}/chat-sessions", response_model=ChatSessionRead)
 def create_chat_session(
     note_id: int,
@@ -637,6 +649,17 @@ def create_ai_chat_message(
         rag_sources=rag_sources,
         rag_debug=rag_debug,
     )
+    rag_failure_answer = get_rag_failure_answer(
+        rag_debug,
+        has_local_context=bool(
+            has_selection_context
+            or payload.context_hint
+            or payload.canvas_block_context
+            or built_context.context_pages
+        ),
+    )
+    if rag_failure_answer:
+        canvas_action = "chat_only"
 
     if canvas_origin_request and canvas_action == "canvas_create":
         canvas_action = "chat_only"
@@ -651,7 +674,9 @@ def create_ai_chat_message(
         else:
             canvas_note = get_canvas_note_for_chat(payload.canvas_note_id, session["note_id"], connection)
 
-    if canvas_action in {"canvas_edit", "canvas_create"} and canvas_note is not None:
+    if rag_failure_answer:
+        answer = rag_failure_answer
+    elif canvas_action in {"canvas_edit", "canvas_create"} and canvas_note is not None:
         try:
             current_canvas_markdown = (
                 payload.canvas_markdown

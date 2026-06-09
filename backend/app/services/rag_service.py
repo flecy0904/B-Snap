@@ -27,16 +27,10 @@ from backend.app.services.prompts.rag import (
     build_summary_prompt,
     format_contexts_for_prompt,
 )
-from backend.app.services.rag_retriever import (
-    Document,
-    build_mock_contexts,
-    retrieve_relevant_contexts,
-    split_text_into_chunks,
-)
-
 
 logger = logging.getLogger(__name__)
 JSON_FENCE_PATTERN = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
+Document = dict[str, Any]
 
 
 def load_note_documents(
@@ -200,17 +194,6 @@ def load_canvas_documents(
     return documents
 
 
-def ask_with_rag(
-    *,
-    question: str,
-    documents: list[Document],
-    top_k: int = 5,
-    model: str | None = None,
-) -> RAGAnswer:
-    contexts = _retrieve_or_mock(question, documents, top_k)
-    return answer_with_retrieved_contexts(question=question, contexts=contexts, model=model)
-
-
 def answer_with_retrieved_contexts(
     *,
     question: str,
@@ -296,13 +279,14 @@ def retrieve_rag_contexts_with_debug(
             debug["retrieved_source_count"] = len({f"{context.source_type}:{context.source_id}" for context in contexts})
             debug["retrieved_chunk_count"] = len(contexts)
             return contexts, debug
-        debug["fallback"] = True
         debug["fallback_reason"] = "vector_empty"
+        debug["no_results"] = True
     except Exception as exc:
         debug["fallback"] = True
         debug["fallback_reason"] = "vector_error"
+        debug["rag_unavailable"] = True
         logger.warning(
-            "vector RAG retrieval failed; falling back to keyword retrieval: user_id=%s note_ids=%s folder_id=%s canvas_note_ids=%s error=%s",
+            "vector RAG retrieval failed: user_id=%s note_ids=%s folder_id=%s canvas_note_ids=%s error=%s",
             user_id,
             note_ids,
             folder_id,
@@ -310,55 +294,15 @@ def retrieve_rag_contexts_with_debug(
             exc,
         )
 
-    if documents is None:
-        documents = []
-        if note_ids or folder_id is not None:
-            documents.extend(load_note_documents(
-                connection,
-                note_ids=note_ids,
-                folder_id=folder_id,
-                user_id=user_id,
-                include_canvas_notes=not exclude_canvas_for_notes,
-            ))
-        if canvas_note_ids:
-            documents.extend(load_canvas_documents(
-                connection,
-                canvas_note_ids=canvas_note_ids,
-                user_id=user_id,
-            ))
-    contexts = retrieve_relevant_contexts(question, documents, top_k=top_k)
-    debug["retrieved_source_count"] = len({f"{context.source_type}:{context.source_id}" for context in contexts})
-    debug["retrieved_chunk_count"] = len(contexts)
-    return contexts, debug
+    return [], debug
 
 
-def build_rag_context_hint(
+def summarize_retrieved_contexts(
     *,
-    question: str,
-    documents: list[Document],
-    top_k: int = 5,
-) -> str | None:
-    contexts = retrieve_relevant_contexts(question, documents, top_k=top_k)
-    if not contexts:
-        return None
-
-    return "\n\n".join(
-        [
-            "Retrieved study context for this user question:",
-            format_contexts_for_prompt(contexts),
-        ]
-    )
-
-
-def summarize_note_with_prompt(
-    *,
-    documents: list[Document],
-    top_k: int = 5,
+    contexts: list[RetrievedContext],
     mode: str = "note",
     model: str | None = None,
 ) -> RAGAnswer:
-    query = "시험 대비 핵심 개념 예상 문제" if mode == "exam" else "노트 핵심 요약 중요 개념"
-    contexts = _retrieve_or_mock(query, documents, top_k, fallback_to_documents=True)
     selected_model = model or get_settings().default_ai_model
     instructions = EXAM_SUMMARY_PROMPT if mode == "exam" else NOTE_SUMMARY_PROMPT
     mock_response = _mock_summary(contexts, mode)
@@ -373,21 +317,19 @@ def summarize_note_with_prompt(
     return RAGAnswer(
         answer=answer,
         sections=[
-            NoteSummarySection(title="요약", body=answer, tone=tone),
-            NoteSummarySection(title="참고 자료", body=_sources_text(contexts), tone="muted"),
+            NoteSummarySection(title="Summary", body=answer, tone=tone),
+            NoteSummarySection(title="Sources", body=_sources_text(contexts), tone="muted"),
         ],
         sources=contexts,
     )
 
 
-def generate_quiz_from_context(
+def generate_quiz_from_retrieved_contexts(
     *,
-    documents: list[Document],
-    top_k: int = 5,
+    contexts: list[RetrievedContext],
     count: int = 5,
     model: str | None = None,
 ) -> RAGQuizResponse:
-    contexts = _retrieve_or_mock("퀴즈 문제 정답 설명 핵심 개념", documents, top_k, fallback_to_documents=True)
     selected_model = model or get_settings().default_ai_model
     mock_questions = _mock_quiz_questions(contexts, count)
     mock_response = json.dumps(
@@ -440,45 +382,6 @@ def _format_page_range(start: int | None, end: int | None) -> str:
     if end is None or end == start:
         return str(start)
     return f"{start}-{end}"
-
-
-def _retrieve_or_mock(
-    question: str,
-    documents: list[Document],
-    top_k: int,
-    *,
-    fallback_to_documents: bool = False,
-) -> list[RetrievedContext]:
-    contexts = retrieve_relevant_contexts(question, documents, top_k=top_k)
-    if contexts:
-        return contexts
-    if not documents:
-        return build_mock_contexts(question)
-    if fallback_to_documents:
-        return _first_contexts(documents, top_k)
-    return []
-
-
-def _first_contexts(documents: list[Document], top_k: int) -> list[RetrievedContext]:
-    contexts = []
-    for document in documents:
-        chunks = split_text_into_chunks(document.get("content") or "")
-        for chunk_index, chunk in enumerate(chunks):
-            source_id = str(document.get("source_id") or document.get("id") or "")
-            if len(chunks) > 1:
-                source_id = f"{source_id}#chunk-{chunk_index + 1}"
-            contexts.append(
-                RetrievedContext(
-                    source_type=str(document.get("source_type") or "document"),
-                    source_id=source_id,
-                    title=str(document.get("title") or "Untitled"),
-                    content=chunk,
-                    score=0.0,
-                )
-            )
-            if len(contexts) >= top_k:
-                return contexts
-    return contexts
 
 
 def _mock_answer(question: str, contexts: list[RetrievedContext]) -> str:

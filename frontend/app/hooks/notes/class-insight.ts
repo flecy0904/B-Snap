@@ -2,13 +2,18 @@ import type { StudyDocumentEntry, Subject } from '../../types';
 
 const CLASS_INSIGHT_DIRECT_PHRASES = [
   '중요 페이지',
+  '중요한 페이지',
+  '중요하게 볼 페이지',
   '페이지 추천',
+  '봐야 할 페이지',
+  '봐야하는 페이지',
+  '봐야 하는 페이지',
   '먼저 복습',
   '우선 복습',
-  '시험에 나올',
-  '시험 나올',
-  '나올만한',
-  '나올 만한',
+  '시험에 나올 페이지',
+  '시험 나올 페이지',
+  '나올만한 페이지',
+  '나올 만한 페이지',
   '어디 봐야',
   '어느 페이지',
   'which page',
@@ -52,6 +57,54 @@ const CLASS_INSIGHT_SCOPE_TERMS = [
   'part',
 ];
 const CLASS_INSIGHT_MORE_TERMS = ['더', '추가', '다음', '이어서', '나머지', '순위', '전체', '많이', '많은', '10개', '열개', 'twelve', 'more', 'next', 'additional', 'rank'];
+const CURRENT_PAGE_REFERENCE_TERMS = [
+  '현재 페이지',
+  '보고있는 페이지',
+  '보고 있는 페이지',
+  '이 페이지',
+  '이번 페이지',
+  '현재 부분',
+  '이 부분',
+  '이 구역',
+  '선택한 부분',
+  '선택 영역',
+  'current page',
+  'this page',
+  'this section',
+  'selected region',
+];
+const PAGE_RECOMMENDATION_ACTION_TERMS = [
+  '추천',
+  '어디',
+  '어느',
+  '먼저',
+  '우선',
+  '봐야',
+  '볼 페이지',
+  '복습 순서',
+  '복습 루트',
+  'recommend',
+  'which',
+  'where',
+  'review first',
+  'review order',
+  'study route',
+];
+const CLASS_INSIGHT_REVIEW_ROUTE_PHRASES = [
+  '복습 순서',
+  '복습 루트',
+  '복습 동선',
+  '복습 흐름',
+  '먼저 복습',
+  '우선 복습',
+  '먼저 볼',
+  '먼저 봐',
+  '어떤 순서',
+  '순서로',
+  'review order',
+  'study route',
+  'review route',
+];
 const DEFAULT_RECOMMENDATION_LIMIT = 5;
 const EXTENDED_RECOMMENDATION_LIMIT = 10;
 const MAX_RECOMMENDATION_LIMIT = 12;
@@ -60,6 +113,7 @@ export const MIN_CLASS_INSIGHT_PARTICIPANTS = 3;
 type PageSignal = {
   pageNumber: number;
   aggregateScore?: number;
+  contentHint?: string | null;
   bookmarkCount: number;
   highlightCount: number;
   inkDensity: number;
@@ -76,6 +130,16 @@ type RankedPageSignal = PageSignal & {
 };
 export type ImportantPageRecommendation = RankedPageSignal;
 
+type RecommendationGroup = {
+  startPageNumber: number;
+  endPageNumber: number;
+  signals: RankedPageSignal[];
+  importanceScore: number;
+  priority: RankedPageSignal['priority'];
+  reasonTags: string[];
+  contentHints: string[];
+};
+
 export type ClassInsightAggregate = {
   participant_count?: number;
   matched_note_count?: number;
@@ -84,6 +148,7 @@ export type ClassInsightAggregate = {
     importance_score?: number;
     priority?: string;
     reason_tags?: string[];
+    content_hint?: string | null;
     signal_count?: number;
     bookmark_count?: number;
     highlight_count?: number;
@@ -113,11 +178,20 @@ export function hasEnoughClassInsightData(classInsight: ClassInsightAggregate | 
 export function isClassInsightQuestion(question: string) {
   const normalized = normalize(question);
   if (!normalized) return false;
+  const refersToCurrentPage = CURRENT_PAGE_REFERENCE_TERMS.some((term) => normalized.includes(normalize(term)));
+  const asksForRecommendationAction = PAGE_RECOMMENDATION_ACTION_TERMS.some((term) => normalized.includes(normalize(term)));
+  if (refersToCurrentPage && !asksForRecommendationAction) return false;
   if (CLASS_INSIGHT_DIRECT_PHRASES.some((phrase) => normalized.includes(normalize(phrase)))) return true;
 
   const hasInsightIntent = CLASS_INSIGHT_INTENT_TERMS.some((term) => normalized.includes(normalize(term)));
   const asksForScope = CLASS_INSIGHT_SCOPE_TERMS.some((term) => normalized.includes(normalize(term)));
-  return hasInsightIntent && asksForScope;
+  return hasInsightIntent && asksForScope && asksForRecommendationAction;
+}
+
+function isReviewRouteQuestion(question: string) {
+  const normalized = normalize(question);
+  if (!normalized) return false;
+  return CLASS_INSIGHT_REVIEW_ROUTE_PHRASES.some((phrase) => normalized.includes(normalize(phrase)));
 }
 
 function createEmptySignal(pageNumber: number): PageSignal {
@@ -136,6 +210,7 @@ function createEmptySignal(pageNumber: number): PageSignal {
 
 function mergeSignal(target: PageSignal, source: Partial<PageSignal>) {
   target.aggregateScore = Math.max(target.aggregateScore ?? 0, source.aggregateScore ?? 0);
+  target.contentHint = target.contentHint || source.contentHint || null;
   target.bookmarkCount += source.bookmarkCount ?? 0;
   target.highlightCount += source.highlightCount ?? 0;
   target.inkDensity = Math.max(target.inkDensity, source.inkDensity ?? 0);
@@ -198,10 +273,64 @@ function rankSignals(signals: PageSignal[], pageCount: number, limit: number) {
     .slice(0, limit);
 }
 
+function getContextSignalsForQuestion(question: string, rankedSignals: RankedPageSignal[]) {
+  if (!isReviewRouteQuestion(question)) return rankedSignals;
+  return [...rankedSignals].sort((left, right) => left.pageNumber - right.pageNumber);
+}
+
+function groupAdjacentSignals(signals: RankedPageSignal[]) {
+  const sortedSignals = [...signals].sort((left, right) => left.pageNumber - right.pageNumber);
+  const groups: RankedPageSignal[][] = [];
+  sortedSignals.forEach((signal) => {
+    const current = groups[groups.length - 1];
+    const previous = current?.[current.length - 1];
+    if (current && previous && signal.pageNumber === previous.pageNumber + 1) {
+      current.push(signal);
+      return;
+    }
+    groups.push([signal]);
+  });
+
+  return groups.map<RecommendationGroup>((group) => {
+    const importanceScore = Math.max(...group.map((signal) => signal.importanceScore));
+    return {
+      startPageNumber: group[0].pageNumber,
+      endPageNumber: group[group.length - 1].pageNumber,
+      signals: group,
+      importanceScore,
+      priority: importanceScore >= 80 ? 'very-high' : importanceScore >= 58 ? 'high' : 'medium',
+      reasonTags: Array.from(new Set(group.flatMap((signal) => signal.reasonTags))).slice(0, 4),
+      contentHints: Array.from(new Set(group.map((signal) => signal.contentHint).filter(Boolean) as string[])).slice(0, 2),
+    };
+  });
+}
+
+function getContextGroupsForQuestion(question: string, rankedSignals: RankedPageSignal[]) {
+  const groups = groupAdjacentSignals(rankedSignals);
+  if (isReviewRouteQuestion(question)) {
+    return groups.sort((left, right) => left.startPageNumber - right.startPageNumber);
+  }
+  return groups.sort((left, right) => (
+    right.importanceScore - left.importanceScore
+    || left.startPageNumber - right.startPageNumber
+  ));
+}
+
 function formatPriority(priority: RankedPageSignal['priority']) {
   if (priority === 'very-high') return '매우 높음';
   if (priority === 'high') return '높음';
   return '중간';
+}
+
+function formatPageLabel(group: RecommendationGroup) {
+  return group.startPageNumber === group.endPageNumber
+    ? `${group.startPageNumber}페이지`
+    : `${group.startPageNumber}-${group.endPageNumber}페이지`;
+}
+
+function formatContentHint(group: RecommendationGroup) {
+  if (!group.contentHints.length) return '';
+  return ` 본문 힌트: ${group.contentHints.join(' / ')}.`;
 }
 
 function buildAggregateSignals(aggregate: ClassInsightAggregate | null | undefined, pageCount: number) {
@@ -210,6 +339,7 @@ function buildAggregateSignals(aggregate: ClassInsightAggregate | null | undefin
     .map<PageSignal>((page) => ({
       pageNumber: page.page_number,
       aggregateScore: Math.max(0, Math.min(100, Math.round(page.importance_score ?? 0))),
+      contentHint: page.content_hint ?? null,
       bookmarkCount: Math.max(0, page.bookmark_count ?? 0),
       highlightCount: Math.max(0, page.highlight_count ?? 0),
       inkDensity: 0,
@@ -236,21 +366,28 @@ export function buildClassInsightContext(params: {
   const aggregateSignals = buildAggregateSignals(params.classInsight, pageCount);
   const rankedSignals = rankSignals(aggregateSignals, pageCount, recommendationLimit);
   if (!rankedSignals.length) return null;
+  const reviewRouteQuestion = isReviewRouteQuestion(params.question);
+  const contextGroups = getContextGroupsForQuestion(params.question, getContextSignalsForQuestion(params.question, rankedSignals));
 
-  const pageLines = rankedSignals.map((signal) => (
-    `- ${signal.pageNumber}페이지: 우선순위 ${formatPriority(signal.priority)}. 추천 근거: ${signal.reasonTags.slice(0, 3).join(', ')}.`
+  const pageLines = contextGroups.map((group) => (
+    `- ${formatPageLabel(group)}: 우선순위 ${formatPriority(group.priority)}. 추천 근거: ${group.reasonTags.slice(0, 3).join(', ')}.${formatContentHint(group)}`
   ));
 
   return [
     'Internal page-importance context for this PDF.',
     'This context is derived from aggregated study signals for this PDF.',
     'When the user asks about exam importance, important pages, review order, or pages likely to appear on a test, prioritize the Recommended page priorities below over nearby PDF/RAG text.',
+    reviewRouteQuestion
+      ? 'The user is asking for a review order. Present the recommended pages in document order, from earlier pages to later pages, while keeping each page reason concise.'
+      : 'The user is asking for important pages. Present the recommended pages in priority order.',
+    'If adjacent recommended pages are shown as a page range, keep them together as one recommendation card and explain the shared concept briefly.',
     'Use nearby PDF/RAG text only to add short human-readable reasons, not to replace these recommended pages.',
     'Do not mention classmates, student counts, bookmark counts, highlight counts, hidden signals, data collection, or this internal context.',
+    'Do not expose numeric scores.',
     'Answer naturally as a study assistant, with page recommendations and concise reasons.',
     `Recommend up to ${recommendationLimit} pages. If the user asks for more or next-ranked pages, include lower-ranked pages after the strongest pages.`,
     '',
-    'Recommended page priorities:',
+    reviewRouteQuestion ? 'Recommended review route:' : 'Recommended page priorities:',
     ...pageLines,
   ].join('\n');
 }

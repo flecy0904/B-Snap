@@ -15,6 +15,7 @@ type PdfJsDocument = {
 type PdfJsDocumentSource = string | { url: string; withCredentials?: boolean; disableWorker?: boolean } | { data: Uint8Array; disableWorker?: boolean };
 
 export type WebPdfZoomMode = 'fit' | 'manual';
+type WebPdfPageAlign = 'center' | 'start' | 'end';
 
 export type WebPdfPageFrame = {
   pageNumber: number;
@@ -86,19 +87,23 @@ type WebPdfViewportEngineCallbacks = {
 
 type UseWebPdfViewportEngineOptions = WebPdfViewportEngineCallbacks & {
   sourceUri: string | null;
+  viewStateKey?: string | null;
   currentPage: number;
   pageGap: number;
+  pageAlign?: WebPdfPageAlign;
 };
 
 const WEB_PDF_MIN_ZOOM = 0.5;
 const WEB_PDF_MAX_ZOOM = 3;
+const WEB_PDF_MAX_AUTO_FIT_ZOOM = 1.35;
 const WEB_PDF_RENDER_IDLE_MS = 50;
 const WEB_PDF_HI_RES_RENDER_IDLE_MS = 120;
 const WEB_PDF_VIEWPORT_NOTIFY_MS = 32;
 const WEB_PDF_PAGE_NOTIFY_MS = 80;
 const WEB_PDF_WHEEL_ZOOM_SENSITIVITY = 0.0016;
 const WEB_PDF_ZOOM_GESTURE_IDLE_MS = 180;
-const WEB_PDF_HORIZONTAL_PADDING = 40;
+const WEB_PDF_HORIZONTAL_PADDING = 16;
+const WEB_PDF_VERTICAL_PADDING = 26;
 const WEB_PDF_TOP_PADDING = 0;
 const WEB_PDF_BOTTOM_PADDING = 18;
 const WEB_PDF_FALLBACK_WIDTH = 820;
@@ -111,6 +116,17 @@ const WEB_PDF_HI_RES_MAX_REGION_AREA = 12000000;
 const WEB_PDF_HI_RES_OVERSCAN_RATIO = 0.3;
 
 pdfjsLib.GlobalWorkerOptions.workerSrc = WEB_PDF_WORKER_SRC;
+
+type WebPdfCachedViewState = {
+  currentPage: number;
+  zoomMode: WebPdfZoomMode;
+  scale: number;
+  panX: number;
+  panY: number;
+};
+
+const WEB_PDF_VIEW_STATE_CACHE_LIMIT = 80;
+const webPdfViewStateCache = new Map<string, WebPdfCachedViewState>();
 
 function clampZoom(value: number) {
   return Math.max(WEB_PDF_MIN_ZOOM, Math.min(WEB_PDF_MAX_ZOOM, value));
@@ -244,6 +260,9 @@ export class WebPdfViewportEngine {
   private lastNotifiedPage = 0;
   private manualScale = 1;
   private pageGap: number;
+  private pageAlign: WebPdfPageAlign = 'center';
+  private viewStateKey: string | null = null;
+  private snapshotViewStateKey: string | null = null;
 
   constructor(notifySnapshot: (snapshot: WebPdfViewportSnapshot) => void, pageGap: number) {
     this.notifySnapshot = notifySnapshot;
@@ -252,6 +271,13 @@ export class WebPdfViewportEngine {
 
   setCallbacks(callbacks: WebPdfViewportEngineCallbacks) {
     this.callbacks = callbacks;
+  }
+
+  setViewStateKey(key: string | null | undefined) {
+    const nextKey = key || null;
+    if (this.viewStateKey === nextKey) return;
+    this.persistViewState();
+    this.viewStateKey = nextKey;
   }
 
   setRootElement(element: HTMLDivElement | null) {
@@ -273,6 +299,13 @@ export class WebPdfViewportEngine {
   setCallbacksPageGap(pageGap: number) {
     if (this.pageGap === pageGap) return;
     this.pageGap = pageGap;
+    this.relayoutKeepingViewportCenter();
+  }
+
+  setPageAlign(pageAlign: WebPdfPageAlign | null | undefined) {
+    const nextAlign = pageAlign ?? 'center';
+    if (this.pageAlign === nextAlign) return;
+    this.pageAlign = nextAlign;
     this.relayoutKeepingViewportCenter();
   }
 
@@ -363,6 +396,7 @@ export class WebPdfViewportEngine {
   async setSourceUri(uri: string | null) {
     this.loadGeneration += 1;
     const generation = this.loadGeneration;
+    this.persistViewState();
     this.cancelAllRenders();
     this.cancelHiResOverlayRenders(true);
     this.loadTask?.destroy?.();
@@ -370,6 +404,7 @@ export class WebPdfViewportEngine {
     this.document = null;
     this.loadTask = null;
     this.naturalPages = {};
+    this.snapshotViewStateKey = null;
     this.snapshot = {
       ...makeDefaultSnapshot(),
       currentPage: Math.max(1, this.snapshot.currentPage),
@@ -404,22 +439,33 @@ export class WebPdfViewportEngine {
       for (let pageNumber = 1; pageNumber <= document.numPages; pageNumber += 1) {
         this.naturalPages[pageNumber] = { width: firstViewport.width, height: firstViewport.height };
       }
+      const restoredViewState = this.getCachedViewState();
+      const restoredPage = restoredViewState?.currentPage
+        ? Math.min(Math.max(1, restoredViewState.currentPage), Math.max(1, document.numPages))
+        : null;
+      const nextCurrentPage = restoredPage ?? clampedPage;
       this.snapshot = {
         ...this.snapshot,
         isLoading: false,
         pageCount: document.numPages,
-        currentPage: clampedPage,
-        zoomMode: 'fit',
-        scale: 1,
-        panX: 0,
-        panY: 0,
+        currentPage: nextCurrentPage,
+        zoomMode: restoredViewState?.zoomMode ?? 'fit',
+        scale: restoredViewState?.scale ?? 1,
+        panX: restoredViewState?.panX ?? 0,
+        panY: restoredViewState?.panY ?? 0,
         pages: {},
         loadError: null,
       };
+      this.snapshotViewStateKey = this.viewStateKey;
+      if (restoredViewState?.zoomMode === 'manual') {
+        this.manualScale = clampZoom(restoredViewState.scale);
+      }
       this.callbacks.onDocumentLoaded?.(document.numPages);
-      if (requestedPage !== clampedPage) this.callbacks.onPageChanged?.(clampedPage);
+      if (requestedPage !== nextCurrentPage) this.callbacks.onPageChanged?.(nextCurrentPage);
       this.layoutPages();
-      this.panToPage(clampedPage, false);
+      if (!restoredViewState) {
+        this.panToPage(clampedPage, false);
+      }
       this.scheduleVisibleRenders(0);
       this.scheduleHiResOverlayRender(WEB_PDF_HI_RES_RENDER_IDLE_MS);
       void this.loadNaturalPageSizes(document, generation);
@@ -431,6 +477,7 @@ export class WebPdfViewportEngine {
         isLoading: false,
         loadError: 'Failed to load PDF.',
       };
+      this.snapshotViewStateKey = null;
       this.emitSnapshotNow();
     }
   }
@@ -644,6 +691,7 @@ export class WebPdfViewportEngine {
   }
 
   dispose() {
+    this.persistViewState();
     this.setRootElement(null);
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
@@ -708,6 +756,7 @@ export class WebPdfViewportEngine {
     const rect = this.rootElement.getBoundingClientRect();
     const width = Math.max(0, Math.floor(rect.width));
     const height = Math.max(0, Math.floor(rect.height));
+    if (width < 240 || height < 240) return;
     if (width === this.snapshot.viewportWidth && height === this.snapshot.viewportHeight) return;
     const anchor = this.resolvePageAnchor(this.getViewportCenterAnchor());
     this.snapshot = {
@@ -728,9 +777,15 @@ export class WebPdfViewportEngine {
   }
 
   private calculateFitScale() {
-    const currentNatural = this.naturalPages[this.snapshot.currentPage] ?? this.naturalPages[1] ?? { width: WEB_PDF_FALLBACK_WIDTH };
-    const targetWidth = Math.max(320, this.snapshot.viewportWidth || WEB_PDF_FALLBACK_WIDTH) - WEB_PDF_HORIZONTAL_PADDING * 2;
-    return clampZoom(targetWidth / Math.max(1, currentNatural.width));
+    const currentNatural = this.naturalPages[this.snapshot.currentPage] ?? this.naturalPages[1] ?? {
+      width: WEB_PDF_FALLBACK_WIDTH,
+      height: WEB_PDF_FALLBACK_HEIGHT,
+    };
+    const targetHeight = Math.max(260, this.snapshot.viewportHeight || WEB_PDF_FALLBACK_HEIGHT) - WEB_PDF_VERTICAL_PADDING * 2;
+    const targetWidth = Math.max(260, this.snapshot.viewportWidth || WEB_PDF_FALLBACK_WIDTH) - WEB_PDF_HORIZONTAL_PADDING * 2;
+    const heightFitScale = targetHeight / Math.max(1, currentNatural.height);
+    const widthFitScale = targetWidth / Math.max(1, currentNatural.width);
+    return Math.min(WEB_PDF_MAX_AUTO_FIT_ZOOM, clampZoom(Math.min(heightFitScale, widthFitScale)));
   }
 
   private layoutPages(anchor?: PageAnchor | null) {
@@ -768,7 +823,11 @@ export class WebPdfViewportEngine {
     this.targetFrames.clear();
     this.layoutFrames = [];
     measuredPages.forEach((page) => {
-      const x = Math.max(0, Math.round((contentWidth - page.width) / 2));
+      const x = this.pageAlign === 'start' && contentWidth > page.width
+        ? WEB_PDF_HORIZONTAL_PADDING
+        : this.pageAlign === 'end' && contentWidth > page.width
+          ? Math.max(0, Math.round(contentWidth - page.width - WEB_PDF_HORIZONTAL_PADDING))
+          : Math.max(0, Math.round((contentWidth - page.width) / 2));
       const frame: WebPdfPageFrame = {
         pageNumber: page.sourcePageNumber,
         naturalWidth: page.naturalWidth,
@@ -1256,7 +1315,35 @@ export class WebPdfViewportEngine {
       window.clearTimeout(this.snapshotTimer);
       this.snapshotTimer = null;
     }
+    this.persistViewState();
     this.notifySnapshot({ ...this.snapshot, pages: { ...this.snapshot.pages } });
+  }
+
+  private getCachedViewState() {
+    if (!this.viewStateKey) return null;
+    return webPdfViewStateCache.get(this.viewStateKey) ?? null;
+  }
+
+  private persistViewState() {
+    if (
+      !this.viewStateKey
+      || this.snapshotViewStateKey !== this.viewStateKey
+      || this.snapshot.isLoading
+      || this.snapshot.pageCount <= 0
+    ) return;
+    webPdfViewStateCache.delete(this.viewStateKey);
+    webPdfViewStateCache.set(this.viewStateKey, {
+      currentPage: this.snapshot.currentPage,
+      zoomMode: this.snapshot.zoomMode,
+      scale: clampZoom(this.snapshot.scale || 1),
+      panX: this.snapshot.panX,
+      panY: this.snapshot.panY,
+    });
+    while (webPdfViewStateCache.size > WEB_PDF_VIEW_STATE_CACHE_LIMIT) {
+      const oldestKey = webPdfViewStateCache.keys().next().value;
+      if (!oldestKey) break;
+      webPdfViewStateCache.delete(oldestKey);
+    }
   }
 
   private getFallbackFrame(): WebPdfPageFrame {
@@ -1358,6 +1445,14 @@ export function useWebPdfViewportEngine(options: UseWebPdfViewportEngineOptions)
   useEffect(() => {
     engine.setCallbacksPageGap(options.pageGap);
   }, [engine, options.pageGap]);
+
+  useEffect(() => {
+    engine.setPageAlign(options.pageAlign);
+  }, [engine, options.pageAlign]);
+
+  useEffect(() => {
+    engine.setViewStateKey(options.viewStateKey ?? options.sourceUri ?? null);
+  }, [engine, options.sourceUri, options.viewStateKey]);
 
   useEffect(() => {
     void engine.setSourceUri(options.sourceUri);

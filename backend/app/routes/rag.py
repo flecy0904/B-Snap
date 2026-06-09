@@ -13,10 +13,9 @@ from backend.app.schemas.rag import (
 )
 from backend.app.services.rag_service import (
     answer_with_retrieved_contexts,
-    generate_quiz_from_context,
-    load_note_documents,
     retrieve_rag_contexts,
-    summarize_note_with_prompt,
+    generate_quiz_from_retrieved_contexts,
+    summarize_retrieved_contexts,
 )
 from backend.app.services.document_chunk_index import reindex_note_background
 
@@ -87,16 +86,21 @@ def summarize_rag(
     connection: Connection = Depends(get_db_connection),
     current_user: dict = Depends(get_current_user),
 ):
-    documents = load_note_documents(
-        connection,
-        note_ids=payload.note_ids,
-        folder_id=payload.folder_id,
-        subject_id=payload.subject_id,
-        user_id=current_user["id"],
+    query = (
+        "exam preparation key concepts likely questions"
+        if payload.mode == "exam"
+        else "note summary key concepts"
     )
-    return summarize_note_with_prompt(
-        documents=documents,
+    contexts = retrieve_rag_contexts(
+        connection,
+        user_id=current_user["id"],
+        question=query,
+        note_ids=payload.note_ids,
+        folder_id=payload.folder_id or payload.subject_id,
         top_k=payload.top_k,
+    )
+    return summarize_retrieved_contexts(
+        contexts=contexts,
         mode=payload.mode,
         model=payload.model,
     )
@@ -108,16 +112,16 @@ def quiz_rag(
     connection: Connection = Depends(get_db_connection),
     current_user: dict = Depends(get_current_user),
 ):
-    documents = load_note_documents(
+    contexts = retrieve_rag_contexts(
         connection,
-        note_ids=payload.note_ids,
-        folder_id=payload.folder_id,
-        subject_id=payload.subject_id,
         user_id=current_user["id"],
-    )
-    return generate_quiz_from_context(
-        documents=documents,
+        question="quiz questions answers explanations key concepts",
+        note_ids=payload.note_ids,
+        folder_id=payload.folder_id or payload.subject_id,
         top_k=payload.top_k,
+    )
+    return generate_quiz_from_retrieved_contexts(
+        contexts=contexts,
         count=payload.count,
         model=payload.model,
     )

@@ -88,17 +88,31 @@ function buildBlankPdf(pageCount: number, template: NotebookPageTemplate) {
   return pdf;
 }
 
+function encodePdfDataUri(pdf: string) {
+  const encoder = (globalThis as unknown as { btoa?: (value: string) => string }).btoa;
+  if (typeof encoder === 'function') {
+    return `data:application/pdf;base64,${encoder(pdf)}`;
+  }
+  return `data:application/pdf,${encodeURIComponent(pdf)}`;
+}
+
 export async function persistBlankPdfDocument(params: {
   documentId: number;
   pageCount: number;
   template: NotebookPageTemplate;
 }) {
-  if (Platform.OS === 'web' || !FileSystem.documentDirectory) return null;
-
   const pageCount = Math.max(1, Math.floor(params.pageCount));
+  const pdf = buildBlankPdf(pageCount, params.template);
+
+  if (Platform.OS === 'web') {
+    return encodePdfDataUri(pdf);
+  }
+
+  if (!FileSystem.documentDirectory) return null;
+
   await FileSystem.makeDirectoryAsync(LOCAL_BLANK_PDF_DIR, { intermediates: true });
   const targetUri = `${LOCAL_BLANK_PDF_DIR}${params.documentId}-${pageCount}-${params.template}-${Date.now()}.pdf`;
-  await FileSystem.writeAsStringAsync(targetUri, buildBlankPdf(pageCount, params.template), {
+  await FileSystem.writeAsStringAsync(targetUri, pdf, {
     encoding: FileSystem.EncodingType.UTF8,
   });
   return targetUri;

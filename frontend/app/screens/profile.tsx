@@ -10,17 +10,18 @@ type SettingsItem = {
   tone?: 'default' | 'danger';
 };
 
-function SettingsSection(props: { title: string; items: SettingsItem[]; styles: any }) {
+function SettingsSection(props: { title: string; items: SettingsItem[]; styles: any; isWeb?: boolean }) {
   return (
-    <View style={props.styles.settingsSection}>
+    <View style={[props.styles.settingsSection, props.isWeb && props.styles.webSettingsSection]}>
       <Text style={props.styles.settingsTitle}>{props.title}</Text>
-      <View style={props.styles.settingsCard}>
+      <View style={[props.styles.settingsCard, props.isWeb && props.styles.webSettingsCard]}>
         {props.items.map((item, index) => (
           <Pressable
             key={item.label}
             onPress={item.onPress}
             style={({ pressed }) => [
               props.styles.settingsRow,
+              props.isWeb && props.styles.webSettingsRow,
               index < props.items.length - 1 && props.styles.settingsRowBorder,
               pressed && props.styles.settingsRowPressed,
             ]}
@@ -56,12 +57,13 @@ function ProfileContent(props: {
   onToggleHelp: () => void;
 }) {
   const [semesterDropdownOpen, setSemesterDropdownOpen] = useState(false);
+  const profileInitial = props.authUser.name.trim().slice(0, 1).toUpperCase() || 'B';
 
   return (
     <>
       <View style={[props.styles.profileCard, props.isWeb && props.styles.webProfileHero]}>
         <View style={props.styles.profileAvatar}>
-          <Text style={props.styles.profileAvatarText}>⌂</Text>
+          <Text style={props.styles.profileAvatarText}>{profileInitial}</Text>
         </View>
         <View style={props.styles.fill}>
           <Text style={props.styles.profileName}>{props.authUser.name}</Text>
@@ -119,7 +121,7 @@ function ProfileContent(props: {
               </Pressable>
 
               {semesterDropdownOpen ? (
-                <View style={{ backgroundColor: '#f9f9f9', paddingHorizontal: 16, paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#eee' }}>
+                <View style={props.styles.semesterDropdownPanel}>
                   {props.semesterSchedules.map(sem => (
                     <Pressable 
                       key={sem.id} 
@@ -127,10 +129,10 @@ function ProfileContent(props: {
                         props.onSelectSemester(sem.id);
                         setSemesterDropdownOpen(false);
                       }}
-                      style={{ paddingVertical: 12, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}
+                      style={props.styles.semesterDropdownRow}
                     >
-                      <Text style={{ fontSize: 15, color: '#333', fontWeight: sem.label === props.currentSemesterLabel ? '700' : '400' }}>{sem.label}</Text>
-                      {sem.label === props.currentSemesterLabel && <Text style={{ color: '#0055ff', fontSize: 14 }}>✓</Text>}
+                      <Text style={[props.styles.semesterDropdownText, sem.label === props.currentSemesterLabel && props.styles.semesterDropdownTextActive]}>{sem.label}</Text>
+                      {sem.label === props.currentSemesterLabel && <Text style={props.styles.semesterDropdownCheck}>✓</Text>}
                     </Pressable>
                   ))}
                 </View>
@@ -158,20 +160,39 @@ function ProfileContent(props: {
           <SettingsSection
             title="앱 설정"
             styles={props.styles}
+            isWeb={props.isWeb}
             items={[
               { label: '알림 설정', value: props.notificationsEnabled ? '켜짐' : '꺼짐', onPress: props.onToggleNotifications },
               { label: '로컬 저장', value: props.localSaveStatus, onPress: () => {} },
               { label: '저장 및 백업', onPress: props.onExportBackup },
-              { label: '로컬 데이터 초기화', onPress: props.onResetLocalData, tone: 'danger' },
             ]}
           />
           <SettingsSection
             title="지원"
             styles={props.styles}
+            isWeb={props.isWeb}
             items={[
               { label: props.helpOpen ? '도움말 닫기' : '도움말', onPress: props.onToggleHelp },
             ]}
           />
+          {props.isWeb ? (
+            <SettingsSection
+              title="위험 작업"
+              styles={props.styles}
+              isWeb={props.isWeb}
+              items={[
+                { label: '로컬 데이터 초기화', onPress: props.onResetLocalData, tone: 'danger' },
+              ]}
+            />
+          ) : (
+            <SettingsSection
+              title="위험 작업"
+              styles={props.styles}
+              items={[
+                { label: '로컬 데이터 초기화', onPress: props.onResetLocalData, tone: 'danger' },
+              ]}
+            />
+          )}
         </View>
       </View>
 

@@ -234,6 +234,7 @@ export function AppShell(props: {
                   onAddSubject={scheduleState.addSubject}
                   onRemoveSubject={scheduleState.removeSubject}
                   compact={desktopCompact}
+                  isWeb={isWeb}
                   styles={S}
                 />}
               {tab === 'notes' && (
@@ -460,6 +461,7 @@ export function AppShell(props: {
                   onCaptureId={scheduleState.setCaptureId}
                   onCaptureFromCamera={captureState.captureFromCamera}
                   onPickFromLibrary={captureState.pickImageFromLibrary}
+                  onImportDroppedFile={captureState.importDroppedFile}
                   onRetryUpload={captureState.retryLastFailedAction}
                   onConsumeCompletedPreviewAsset={captureState.consumeCompletedPreviewAsset}
                   onInsertInboxAsset={notesState.insertInboxAsset}

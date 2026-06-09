@@ -3,11 +3,11 @@ import { Pressable, Text, View } from 'react-native';
 import { TabKey } from '../../types';
 
 const TABS: TabKey[] = ['schedule', 'notes', 'capture', 'profile'];
-const TAB_META: Record<TabKey, { label: string; hint: string }> = {
-  schedule: { label: '시간표', hint: '이번 학기 흐름' },
-  notes: { label: '노트', hint: '문서와 판서 정리' },
-  capture: { label: '캡처', hint: '자료 업로드' },
-  profile: { label: '프로필', hint: '계정과 설정' },
+const TAB_LABEL: Record<TabKey, string> = {
+  schedule: '시간표',
+  notes: '노트',
+  capture: '캡처',
+  profile: '프로필',
 };
 
 export function Sidebar(props: {
@@ -18,15 +18,13 @@ export function Sidebar(props: {
   blueColor: string;
   isWeb?: boolean;
 }) {
-  const webMode = false;
+  const webMode = Boolean(props.isWeb);
 
   return (
-    <View style={[props.styles.sidebar, props.compact && props.styles.sidebarCompact, webMode && props.styles.webSidebar]}>
+    <View style={[props.styles.sidebar, props.compact && props.styles.sidebarCompact, webMode && props.styles.webSidebar, webMode && props.compact && props.styles.webSidebarCompact]}>
       {webMode ? (
         <View style={props.styles.webSidebarBrand}>
-          <Text style={props.styles.webSidebarEyebrow}>B-SNAP</Text>
-          <Text style={props.styles.webSidebarTitle}>Study Workspace</Text>
-          <Text style={props.styles.webSidebarBody}>수업 자료와 판서 정리를 하나의 웹 작업공간으로 관리합니다.</Text>
+          <Text style={props.styles.webSidebarEyebrow}>B</Text>
         </View>
       ) : null}
       {TABS.map((item) => {
@@ -45,18 +43,12 @@ export function Sidebar(props: {
             <TabIcon tab={item} active={active} styles={props.styles} blueColor={props.blueColor} />
             {webMode ? (
               <View style={props.styles.webSidebarButtonTextWrap}>
-                <Text style={[props.styles.webSidebarButtonLabel, active && props.styles.webSidebarButtonLabelActive]}>{TAB_META[item].label}</Text>
-                <Text style={[props.styles.webSidebarButtonHint, active && props.styles.webSidebarButtonHintActive]}>{TAB_META[item].hint}</Text>
+                <Text style={[props.styles.webSidebarButtonLabel, active && props.styles.webSidebarButtonLabelActive]}>{TAB_LABEL[item]}</Text>
               </View>
             ) : null}
           </Pressable>
         );
       })}
-      {webMode ? (
-        <View style={props.styles.webSidebarFoot}>
-          <Text style={props.styles.webSidebarFootText}>Web preview</Text>
-        </View>
-      ) : null}
     </View>
   );
 }

@@ -24,20 +24,13 @@ from backend.app.services.document_chunk_index import (
     replace_note_page_chunks,
     retrieve_chunk_contexts,
 )
-from backend.app.services.rag_chunker import IndexSource, build_text_chunks
+from backend.app.services.rag_chunker import IndexSource, build_text_chunks, split_text_into_chunks
 from backend.app.services.rag_service import (
     _parse_quiz_questions,
-    ask_with_rag,
-    build_rag_context_hint,
     load_canvas_documents,
     load_note_documents,
     retrieve_rag_contexts,
     retrieve_rag_contexts_with_debug,
-)
-from backend.app.services.rag_retriever import (
-    build_rag_context,
-    retrieve_relevant_contexts,
-    split_text_into_chunks,
 )
 
 
@@ -89,18 +82,15 @@ class RAGRetrieverTest(unittest.TestCase):
         self.assertNotIn("RAG support context", context.context_hint or "")
         self.assertIsNone(context.answer_sources_text)
 
-    def test_retrieve_rag_contexts_with_debug_marks_keyword_fallback(self):
-        fallback_context = RetrievedContext(source_type="pdf_page", source_id="1", title="Page 1", content="TCP", score=0.4)
-        with patch("backend.app.services.rag_service.retrieve_chunk_contexts", return_value=[]), patch(
-            "backend.app.services.rag_service.retrieve_relevant_contexts",
-            return_value=[fallback_context],
-        ):
+    def test_retrieve_rag_contexts_with_debug_does_not_keyword_fallback_on_empty_vector_results(self):
+        with patch("backend.app.services.rag_service.retrieve_chunk_contexts", return_value=[]):
             contexts, debug = retrieve_rag_contexts_with_debug(object(), user_id=7, question="TCP", documents=[])
 
-        self.assertEqual(contexts, [fallback_context])
-        self.assertTrue(debug["fallback"])
+        self.assertEqual(contexts, [])
+        self.assertFalse(debug["fallback"])
         self.assertEqual(debug["fallback_reason"], "vector_empty")
-        self.assertEqual(debug["retrieved_chunk_count"], 1)
+        self.assertTrue(debug["no_results"])
+        self.assertEqual(debug["retrieved_chunk_count"], 0)
 
     def test_rag_debug_is_disabled_outside_development_envs(self):
         with self.assertRaises(HTTPException) as raised:
@@ -411,75 +401,6 @@ class RAGRetrieverTest(unittest.TestCase):
         self.assertEqual(chunks[0], "abcdefghij")
         self.assertEqual(chunks[1], "ijklmnopqr")
 
-    def test_retrieve_relevant_contexts_orders_by_keyword_overlap(self):
-        documents = [
-            {
-                "source_type": "note_page",
-                "source_id": "1",
-                "title": "Stack",
-                "content": "Stack is a LIFO data structure. push and pop are key operations.",
-            },
-            {
-                "source_type": "note_page",
-                "source_id": "2",
-                "title": "Queue",
-                "content": "Queue is a FIFO data structure.",
-            },
-        ]
-
-        contexts = retrieve_relevant_contexts("LIFO stack pop", documents, top_k=1)
-
-        self.assertEqual(len(contexts), 1)
-        self.assertEqual(contexts[0].title, "Stack")
-        self.assertGreater(contexts[0].score, 0)
-
-    def test_retrieve_relevant_contexts_matches_korean_query_to_english_terms(self):
-        documents = [
-            {
-                "source_type": "note_page",
-                "source_id": "1",
-                "title": "자료구조",
-                "content": "Stack is a LIFO data structure. Queue is a FIFO data structure.",
-            }
-        ]
-
-        contexts = retrieve_relevant_contexts("스택은 후입선출 구조인가?", documents, top_k=1)
-
-        self.assertEqual(len(contexts), 1)
-        self.assertEqual(contexts[0].source_id, "1")
-        self.assertGreater(contexts[0].score, 0)
-
-    def test_retrieve_relevant_contexts_uses_title_keywords(self):
-        documents = [
-            {
-                "source_type": "note_page",
-                "source_id": "1",
-                "title": "해시 테이블",
-                "content": "충돌 해결 방식과 체이닝을 정리한 페이지입니다.",
-            }
-        ]
-
-        contexts = retrieve_relevant_contexts("hash table 설명", documents, top_k=1)
-
-        self.assertEqual(len(contexts), 1)
-        self.assertEqual(contexts[0].title, "해시 테이블")
-
-    def test_build_rag_context_includes_sources(self):
-        documents = [
-            {
-                "source_type": "note",
-                "source_id": "7",
-                "title": "자료구조",
-                "content": "Stack은 LIFO 구조입니다.",
-            }
-        ]
-        contexts = retrieve_relevant_contexts("Stack LIFO", documents, top_k=1)
-
-        rag_context = build_rag_context(contexts)
-
-        self.assertIn("자료구조", rag_context)
-        self.assertIn("note:7", rag_context)
-
     def test_load_note_documents_extracts_page_state_text_and_canvas_notes(self):
         page_state = json.dumps(
             {
@@ -541,7 +462,7 @@ class RAGRetrieverTest(unittest.TestCase):
         self.assertEqual(documents[0]["source_id"], "20")
         self.assertIn("Stack LIFO", documents[0]["content"])
 
-    def test_retrieve_rag_contexts_falls_back_to_selected_canvas_documents(self):
+    def test_retrieve_rag_contexts_does_not_keyword_fallback_on_vector_error(self):
         with patch("backend.app.services.rag_service.retrieve_chunk_contexts", side_effect=RuntimeError("vector failed")), patch(
             "backend.app.services.rag_service.load_canvas_documents",
             return_value=[
@@ -552,7 +473,7 @@ class RAGRetrieverTest(unittest.TestCase):
                     "content": "Stack LIFO 시험 포인트",
                 }
             ],
-        ):
+        ) as load_canvas_documents:
             contexts = retrieve_rag_contexts(
                 object(),
                 user_id=7,
@@ -561,28 +482,8 @@ class RAGRetrieverTest(unittest.TestCase):
                 top_k=1,
             )
 
-        self.assertEqual(len(contexts), 1)
-        self.assertEqual(contexts[0].source_type, "canvas_note")
-        self.assertEqual(contexts[0].source_id, "20")
-
-    def test_build_rag_context_hint_formats_retrieved_sources(self):
-        hint = build_rag_context_hint(
-            question="Stack LIFO 설명",
-            documents=[
-                {
-                    "source_type": "note_page",
-                    "source_id": "10",
-                    "title": "자료구조 - page 3",
-                    "content": "Stack은 LIFO 구조이고 push와 pop 연산을 사용합니다.",
-                }
-            ],
-            top_k=3,
-        )
-
-        self.assertIsNotNone(hint)
-        self.assertIn("Retrieved study context", hint or "")
-        self.assertIn("자료구조 - page 3", hint or "")
-        self.assertIn("Stack은 LIFO", hint or "")
+        self.assertEqual(contexts, [])
+        load_canvas_documents.assert_not_called()
 
     def test_parse_quiz_questions_accepts_fenced_json(self):
         fallback = [
@@ -619,28 +520,6 @@ class RAGRetrieverTest(unittest.TestCase):
     def test_rag_summary_request_restricts_mode(self):
         with self.assertRaises(ValidationError):
             RAGSummaryRequest(mode="brief")
-
-    def test_ask_with_rag_returns_answer_and_sources(self):
-        documents = [
-            {
-                "source_type": "note_page",
-                "source_id": "3",
-                "title": "자료구조 - page 1",
-                "content": "스택은 LIFO 구조이고 push와 pop 연산을 사용합니다.",
-            }
-        ]
-
-        with patch("backend.app.services.rag_service.generate_text_response", return_value="스택은 LIFO 구조입니다.") as llm:
-            response = ask_with_rag(question="스택 설명", documents=documents, top_k=1, model="test-model")
-
-        self.assertEqual(response.answer, "스택은 LIFO 구조입니다.")
-        self.assertEqual(len(response.sources), 1)
-        self.assertEqual(response.sources[0].source_id, "3")
-        self.assertEqual(response.sections[0].title, "핵심 답변")
-        llm_input = llm.call_args.kwargs["input_items"][0]["content"]
-        self.assertIn("User question:", llm_input)
-        self.assertIn("스택은 LIFO", llm_input)
-
 
 if __name__ == "__main__":
     unittest.main()
