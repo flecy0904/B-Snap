@@ -263,9 +263,94 @@ def collect_canvas_index_sources(connection: Connection, *, canvas_note_id: int,
     ]
 
 
+def _chunk_key(chunk: Any) -> tuple[int, str, str, int]:
+    return (
+        int(chunk.source.user_id),
+        str(chunk.source.source_type),
+        str(chunk.source.source_id),
+        int(chunk.chunk_index),
+    )
+
+
+def _fetch_existing_chunk_index(
+    connection: Connection,
+    chunks: list[Any],
+) -> dict[tuple[int, str, str, int], dict[str, Any]]:
+    if not chunks:
+        return {}
+
+    user_id = int(chunks[0].source.user_id)
+    note_ids = sorted({int(chunk.source.note_id) for chunk in chunks if chunk.source.note_id is not None})
+    if not note_ids:
+        return {}
+
+    rows = fetch_all(
+        connection,
+        """
+        SELECT user_id, source_type, source_id, chunk_index, content_hash, embedding_model
+        FROM document_chunks
+        WHERE user_id = %s AND note_id = ANY(%s::int[])
+        """,
+        (user_id, note_ids),
+    )
+    return {
+        (
+            int(row["user_id"]),
+            str(row["source_type"]),
+            str(row["source_id"]),
+            int(row["chunk_index"]),
+        ): row
+        for row in rows
+    }
+
+
+def _update_existing_chunk_metadata(connection: Connection, chunk: Any, *, next_content_hash: str) -> None:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE document_chunks
+            SET folder_id = %s,
+                note_id = %s,
+                page_number = %s,
+                title = %s,
+                content = %s,
+                content_hash = %s,
+                source_updated_at = %s,
+                metadata = %s,
+                indexed_at = now(),
+                updated_at = now()
+            WHERE user_id = %s
+              AND source_type = %s
+              AND source_id = %s
+              AND chunk_index = %s
+            """,
+            (
+                chunk.source.folder_id,
+                chunk.source.note_id,
+                chunk.source.page_number,
+                chunk.source.title,
+                chunk.content,
+                next_content_hash,
+                chunk.source.source_updated_at,
+                Jsonb(chunk.source.metadata),
+                chunk.source.user_id,
+                chunk.source.source_type,
+                chunk.source.source_id,
+                chunk.chunk_index,
+            ),
+        )
+
+
 def _insert_chunks(connection: Connection, chunks: list[Any], *, embedding_model: str) -> None:
+    existing_chunks = _fetch_existing_chunk_index(connection, chunks)
     with connection.cursor() as cursor:
         for chunk in chunks:
+            next_content_hash = content_hash(chunk.content)
+            existing = existing_chunks.get(_chunk_key(chunk))
+            if existing and existing.get("content_hash") == next_content_hash and existing.get("embedding_model") == embedding_model:
+                _update_existing_chunk_metadata(connection, chunk, next_content_hash=next_content_hash)
+                continue
+
             embedding = generate_embedding(chunk.content, model=embedding_model)
             cursor.execute(
                 """
@@ -300,7 +385,7 @@ def _insert_chunks(connection: Connection, chunks: list[Any], *, embedding_model
                     chunk.chunk_index,
                     chunk.source.title,
                     chunk.content,
-                    content_hash(chunk.content),
+                    next_content_hash,
                     embedding_to_vector_literal(embedding),
                     embedding_model,
                     chunk.source.source_updated_at,
@@ -309,15 +394,114 @@ def _insert_chunks(connection: Connection, chunks: list[Any], *, embedding_model
             )
 
 
+def _delete_obsolete_chunks_for_note(
+    connection: Connection,
+    *,
+    user_id: int,
+    note_id: int,
+    chunks: list[Any],
+) -> None:
+    keep_keys = [
+        (str(chunk.source.source_type), str(chunk.source.source_id), int(chunk.chunk_index))
+        for chunk in chunks
+    ]
+    with connection.cursor() as cursor:
+        if not keep_keys:
+            cursor.execute("DELETE FROM document_chunks WHERE user_id = %s AND note_id = %s", (user_id, note_id))
+            return
+
+        keep_clauses = []
+        params: list[Any] = [user_id, note_id]
+        for source_type, source_id, chunk_index in keep_keys:
+            keep_clauses.append("(source_type = %s AND source_id = %s AND chunk_index = %s)")
+            params.extend([source_type, source_id, chunk_index])
+        cursor.execute(
+            f"""
+            DELETE FROM document_chunks
+            WHERE user_id = %s
+              AND note_id = %s
+              AND NOT ({' OR '.join(keep_clauses)})
+            """,
+            tuple(params),
+        )
+
+
+def _delete_obsolete_chunks_for_page(
+    connection: Connection,
+    *,
+    page_id: int,
+    user_id: int,
+    chunks: list[Any],
+) -> None:
+    page_source_id = str(page_id)
+    page_source_prefix = f"{page_source_id}:%"
+    keep_keys = [
+        (str(chunk.source.source_type), str(chunk.source.source_id), int(chunk.chunk_index))
+        for chunk in chunks
+    ]
+    with connection.cursor() as cursor:
+        params: list[Any] = [user_id, list(PAGE_SOURCE_TYPES), page_source_id, page_source_prefix]
+        keep_sql = ""
+        if keep_keys:
+            keep_clauses = []
+            for source_type, source_id, chunk_index in keep_keys:
+                keep_clauses.append("(source_type = %s AND source_id = %s AND chunk_index = %s)")
+                params.extend([source_type, source_id, chunk_index])
+            keep_sql = f"AND NOT ({' OR '.join(keep_clauses)})"
+        cursor.execute(
+            f"""
+            DELETE FROM document_chunks
+            WHERE user_id = %s
+              AND source_type = ANY(%s::text[])
+              AND (
+                  source_id = %s
+                  OR source_id LIKE %s
+              )
+              {keep_sql}
+            """,
+            tuple(params),
+        )
+
+
+def _delete_obsolete_chunks_for_canvas(
+    connection: Connection,
+    *,
+    canvas_note_id: int,
+    user_id: int,
+    chunks: list[Any],
+) -> None:
+    keep_indexes = [int(chunk.chunk_index) for chunk in chunks]
+    with connection.cursor() as cursor:
+        if not keep_indexes:
+            cursor.execute(
+                "DELETE FROM document_chunks WHERE user_id = %s AND source_type = 'canvas_note' AND source_id = %s",
+                (user_id, str(canvas_note_id)),
+            )
+            return
+        cursor.execute(
+            """
+            DELETE FROM document_chunks
+            WHERE user_id = %s
+              AND source_type = 'canvas_note'
+              AND source_id = %s
+              AND NOT (chunk_index = ANY(%s::int[]))
+            """,
+            (user_id, str(canvas_note_id), keep_indexes),
+        )
+
+
 def replace_note_chunks(connection: Connection, *, note_id: int, user_id: int) -> int:
     sources = collect_note_index_sources(connection, note_id=note_id, user_id=user_id)
     chunks = [chunk for source in sources for chunk in build_text_chunks(source)]
     embedding_model = get_settings().openai_embedding_model
 
-    with connection.cursor() as cursor:
-        cursor.execute("DELETE FROM document_chunks WHERE user_id = %s AND note_id = %s", (user_id, note_id))
-    _insert_chunks(connection, chunks, embedding_model=embedding_model)
-    connection.commit()
+    try:
+        _delete_obsolete_chunks_for_note(connection, user_id=user_id, note_id=note_id, chunks=chunks)
+        _insert_chunks(connection, chunks, embedding_model=embedding_model)
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
     return len(chunks)
 
 
@@ -345,7 +529,7 @@ def replace_note_page_chunks(connection: Connection, *, page_id: int, user_id: i
     embedding_model = get_settings().openai_embedding_model
 
     try:
-        delete_note_page_chunks(connection, page_id=page_id, user_id=user_id)
+        _delete_obsolete_chunks_for_page(connection, page_id=page_id, user_id=user_id, chunks=chunks)
         _insert_chunks(connection, chunks, embedding_model=embedding_model)
         connection.commit()
     except Exception:
@@ -359,13 +543,13 @@ def replace_canvas_chunks(connection: Connection, *, canvas_note_id: int, user_i
     chunks = [chunk for source in sources for chunk in build_text_chunks(source)]
     embedding_model = get_settings().openai_embedding_model
 
-    with connection.cursor() as cursor:
-        cursor.execute(
-            "DELETE FROM document_chunks WHERE user_id = %s AND source_type = 'canvas_note' AND source_id = %s",
-            (user_id, str(canvas_note_id)),
-        )
-    _insert_chunks(connection, chunks, embedding_model=embedding_model)
-    connection.commit()
+    try:
+        _delete_obsolete_chunks_for_canvas(connection, canvas_note_id=canvas_note_id, user_id=user_id, chunks=chunks)
+        _insert_chunks(connection, chunks, embedding_model=embedding_model)
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
     return len(chunks)
 
 

@@ -5,6 +5,8 @@ from backend.app.core.auth import get_current_user
 from backend.app.db.crud import fetch_all, fetch_one, require_row
 from backend.app.db.session import get_db_connection
 from backend.app.schemas.rag import (
+    NoteSummarySection,
+    QuizQuestion,
     RAGAnswer,
     RAGAskRequest,
     RAGQuizRequest,
@@ -13,14 +15,32 @@ from backend.app.schemas.rag import (
 )
 from backend.app.services.rag_service import (
     answer_with_retrieved_contexts,
-    retrieve_rag_contexts,
     generate_quiz_from_retrieved_contexts,
+    retrieve_rag_contexts_with_debug,
     summarize_retrieved_contexts,
 )
 from backend.app.services.document_chunk_index import reindex_note_background
 
 
 router = APIRouter(prefix="/ai/rag", tags=["rag"])
+RAG_SEARCH_UNAVAILABLE_MESSAGE = "지금은 자료 검색을 사용할 수 없습니다. 잠시 후 다시 시도해 주세요."
+RAG_NO_RESULTS_MESSAGE = "관련된 자료를 찾지 못했습니다."
+
+
+def _rag_status_message(debug: dict) -> str | None:
+    if debug.get("rag_unavailable"):
+        return RAG_SEARCH_UNAVAILABLE_MESSAGE
+    if debug.get("no_results"):
+        return RAG_NO_RESULTS_MESSAGE
+    return None
+
+
+def _rag_status_answer(message: str) -> RAGAnswer:
+    return RAGAnswer(
+        answer=message,
+        sections=[NoteSummarySection(title="안내", body=message, tone="muted")],
+        sources=[],
+    )
 
 
 @router.post("/reindex/notes/{note_id}")
@@ -65,7 +85,7 @@ def ask_rag(
     connection: Connection = Depends(get_db_connection),
     current_user: dict = Depends(get_current_user),
 ):
-    contexts = retrieve_rag_contexts(
+    contexts, debug = retrieve_rag_contexts_with_debug(
         connection,
         user_id=current_user["id"],
         question=payload.question,
@@ -73,6 +93,9 @@ def ask_rag(
         folder_id=payload.folder_id or payload.subject_id,
         top_k=payload.top_k,
     )
+    status_message = _rag_status_message(debug)
+    if status_message:
+        return _rag_status_answer(status_message)
     return answer_with_retrieved_contexts(
         question=payload.question,
         contexts=contexts,
@@ -91,7 +114,7 @@ def summarize_rag(
         if payload.mode == "exam"
         else "note summary key concepts"
     )
-    contexts = retrieve_rag_contexts(
+    contexts, debug = retrieve_rag_contexts_with_debug(
         connection,
         user_id=current_user["id"],
         question=query,
@@ -99,6 +122,9 @@ def summarize_rag(
         folder_id=payload.folder_id or payload.subject_id,
         top_k=payload.top_k,
     )
+    status_message = _rag_status_message(debug)
+    if status_message:
+        return _rag_status_answer(status_message)
     return summarize_retrieved_contexts(
         contexts=contexts,
         mode=payload.mode,
@@ -112,7 +138,7 @@ def quiz_rag(
     connection: Connection = Depends(get_db_connection),
     current_user: dict = Depends(get_current_user),
 ):
-    contexts = retrieve_rag_contexts(
+    contexts, debug = retrieve_rag_contexts_with_debug(
         connection,
         user_id=current_user["id"],
         question="quiz questions answers explanations key concepts",
@@ -120,6 +146,19 @@ def quiz_rag(
         folder_id=payload.folder_id or payload.subject_id,
         top_k=payload.top_k,
     )
+    status_message = _rag_status_message(debug)
+    if status_message:
+        return RAGQuizResponse(
+            questions=[
+                QuizQuestion(
+                    question="자료 검색 상태",
+                    answer=status_message,
+                    explanation=status_message,
+                    type="short_answer",
+                )
+            ],
+            sources=[],
+        )
     return generate_quiz_from_retrieved_contexts(
         contexts=contexts,
         count=payload.count,

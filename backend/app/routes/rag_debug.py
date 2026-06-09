@@ -83,6 +83,13 @@ def _format_debug_contexts(contexts: list[Any]) -> list[dict[str, Any]]:
     ]
 
 
+def _rollback_after_debug_query_error(connection: Connection) -> None:
+    try:
+        connection.rollback()
+    except Exception:
+        pass
+
+
 def _context_section(title: str, items: list[dict[str, Any]]) -> dict[str, Any]:
     return {
         "title": title,
@@ -243,39 +250,46 @@ def get_note_rag_debug_index(
         (note_id,),
     )
     safe_limit = max(1, min(int(limit or 200), 500))
-    chunk_summary_rows = fetch_all(
-        connection,
-        """
-        SELECT source_type, COUNT(*) AS count
-        FROM document_chunks
-        WHERE user_id = %s AND note_id = %s
-        GROUP BY source_type
-        ORDER BY source_type ASC
-        """,
-        (current_user["id"], note_id),
-    )
-    chunks = fetch_all(
-        connection,
-        """
-        SELECT source_type,
-               source_id,
-               title,
-               content,
-               folder_id,
-               note_id,
-               page_number,
-               chunk_index,
-               embedding_model,
-               metadata,
-               indexed_at,
-               updated_at
-        FROM document_chunks
-        WHERE user_id = %s AND note_id = %s
-        ORDER BY source_type ASC, page_number ASC NULLS LAST, source_id ASC, chunk_index ASC
-        LIMIT %s
-        """,
-        (current_user["id"], note_id, safe_limit),
-    )
+    index_error = None
+    try:
+        chunk_summary_rows = fetch_all(
+            connection,
+            """
+            SELECT source_type, COUNT(*) AS count
+            FROM document_chunks
+            WHERE user_id = %s AND note_id = %s
+            GROUP BY source_type
+            ORDER BY source_type ASC
+            """,
+            (current_user["id"], note_id),
+        )
+        chunks = fetch_all(
+            connection,
+            """
+            SELECT source_type,
+                   source_id,
+                   title,
+                   content,
+                   folder_id,
+                   note_id,
+                   page_number,
+                   chunk_index,
+                   embedding_model,
+                   metadata,
+                   indexed_at,
+                   updated_at
+            FROM document_chunks
+            WHERE user_id = %s AND note_id = %s
+            ORDER BY source_type ASC, page_number ASC NULLS LAST, source_id ASC, chunk_index ASC
+            LIMIT %s
+            """,
+            (current_user["id"], note_id, safe_limit),
+        )
+    except Exception as exc:
+        _rollback_after_debug_query_error(connection)
+        index_error = str(exc)
+        chunk_summary_rows = []
+        chunks = []
     source_counts = {str(row["source_type"]): int(row["count"]) for row in chunk_summary_rows}
     embedding_models = sorted({
         str(chunk["embedding_model"])
@@ -297,6 +311,8 @@ def get_note_rag_debug_index(
             "embedding_model": embedding_models[0] if embedding_models else None,
             "embedding_models": embedding_models,
             "last_indexed_at": last_indexed_at,
+            "index_status": "unavailable" if index_error else "ready",
+            "last_error": index_error,
         },
         "pages": [
             {
@@ -473,66 +489,75 @@ def get_chat_session_rag_debug_status(
         "SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'vector') AS available",
         (),
     )
-    total_row = fetch_one(
-        connection,
-        "SELECT COUNT(*) AS count FROM document_chunks WHERE user_id = %s",
-        (current_user["id"],),
-    )
-    current_note_row = fetch_one(
-        connection,
-        "SELECT COUNT(*) AS count FROM document_chunks WHERE user_id = %s AND note_id = %s",
-        (current_user["id"], session["note_id"]),
-    )
     scope_count = 0
-    if note_ids:
-        row = fetch_one(
+    status_error = None
+    try:
+        total_row = fetch_one(
+            connection,
+            "SELECT COUNT(*) AS count FROM document_chunks WHERE user_id = %s",
+            (current_user["id"],),
+        )
+        current_note_row = fetch_one(
+            connection,
+            "SELECT COUNT(*) AS count FROM document_chunks WHERE user_id = %s AND note_id = %s",
+            (current_user["id"], session["note_id"]),
+        )
+        if note_ids:
+            row = fetch_one(
+                connection,
+                """
+                SELECT COUNT(*) AS count
+                FROM document_chunks
+                WHERE user_id = %s
+                  AND note_id = ANY(%s::int[])
+                  AND source_type <> 'canvas_note'
+                """,
+                (current_user["id"], note_ids),
+            )
+            scope_count += int(row["count"]) if row else 0
+        if canvas_note_ids:
+            row = fetch_one(
+                connection,
+                """
+                SELECT COUNT(*) AS count
+                FROM document_chunks
+                WHERE user_id = %s
+                  AND source_type = 'canvas_note'
+                  AND source_id = ANY(%s::text[])
+                """,
+                (current_user["id"], [str(item) for item in canvas_note_ids]),
+            )
+            scope_count += int(row["count"]) if row else 0
+        recent_rows = fetch_all(
             connection,
             """
-            SELECT COUNT(*) AS count
+            SELECT note_id, source_type, COUNT(*) AS chunk_count, MAX(indexed_at) AS last_indexed_at
             FROM document_chunks
             WHERE user_id = %s
-              AND note_id = ANY(%s::int[])
-              AND source_type <> 'canvas_note'
+            GROUP BY note_id, source_type
+            ORDER BY MAX(indexed_at) DESC NULLS LAST
+            LIMIT 8
             """,
-            (current_user["id"], note_ids),
+            (current_user["id"],),
         )
-        scope_count += int(row["count"]) if row else 0
-    if canvas_note_ids:
-        row = fetch_one(
+        model_rows = fetch_all(
             connection,
             """
-            SELECT COUNT(*) AS count
+            SELECT embedding_model, COUNT(*) AS count
             FROM document_chunks
-            WHERE user_id = %s
-              AND source_type = 'canvas_note'
-              AND source_id = ANY(%s::text[])
+            WHERE user_id = %s AND embedding_model IS NOT NULL
+            GROUP BY embedding_model
+            ORDER BY count DESC
             """,
-            (current_user["id"], [str(item) for item in canvas_note_ids]),
+            (current_user["id"],),
         )
-        scope_count += int(row["count"]) if row else 0
-    recent_rows = fetch_all(
-        connection,
-        """
-        SELECT note_id, source_type, COUNT(*) AS chunk_count, MAX(indexed_at) AS last_indexed_at
-        FROM document_chunks
-        WHERE user_id = %s
-        GROUP BY note_id, source_type
-        ORDER BY MAX(indexed_at) DESC NULLS LAST
-        LIMIT 8
-        """,
-        (current_user["id"],),
-    )
-    model_rows = fetch_all(
-        connection,
-        """
-        SELECT embedding_model, COUNT(*) AS count
-        FROM document_chunks
-        WHERE user_id = %s AND embedding_model IS NOT NULL
-        GROUP BY embedding_model
-        ORDER BY count DESC
-        """,
-        (current_user["id"],),
-    )
+    except Exception as exc:
+        _rollback_after_debug_query_error(connection)
+        status_error = str(exc)
+        total_row = {"count": 0}
+        current_note_row = {"count": 0}
+        recent_rows = []
+        model_rows = []
     return {
         "pgvector_available": bool(vector_row and vector_row.get("available")),
         "document_chunks_total_count": int(total_row["count"]) if total_row else 0,
@@ -552,6 +577,6 @@ def get_chat_session_rag_debug_status(
             for row in recent_rows
         ],
         "failed_indexes": [],
-        "last_error": None,
+        "last_error": status_error,
         "rag_scope": rag_scope or default_rag_scope(note),
     }

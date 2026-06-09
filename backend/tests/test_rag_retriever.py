@@ -13,6 +13,7 @@ from backend.app.routes.rag_debug import (
     evaluate_chat_session_rag_debug,
     get_note_rag_debug_index,
 )
+from backend.app.routes.rag import ask_rag
 from backend.app.schemas.rag import QuizQuestion, RAGAskRequest, RAGSummaryRequest, RetrievedContext
 from backend.app.routes.chats import normalize_rag_scope, rag_scope_search_targets
 from backend.app.schemas.chats import RagScope, RagScopeSource
@@ -21,7 +22,9 @@ from backend.app.services.ai_context_router import AiContextRoute, route_ai_cont
 from backend.app.services.document_chunk_index import (
     collect_canvas_index_sources,
     collect_note_index_sources,
+    content_hash,
     replace_note_page_chunks,
+    replace_note_chunks,
     retrieve_chunk_contexts,
 )
 from backend.app.services.rag_chunker import IndexSource, build_text_chunks, split_text_into_chunks
@@ -29,7 +32,6 @@ from backend.app.services.rag_service import (
     _parse_quiz_questions,
     load_canvas_documents,
     load_note_documents,
-    retrieve_rag_contexts,
     retrieve_rag_contexts_with_debug,
 )
 
@@ -91,6 +93,21 @@ class RAGRetrieverTest(unittest.TestCase):
         self.assertEqual(debug["fallback_reason"], "vector_empty")
         self.assertTrue(debug["no_results"])
         self.assertEqual(debug["retrieved_chunk_count"], 0)
+
+    def test_rag_ask_returns_status_message_without_llm_when_vector_search_is_unavailable(self):
+        with patch(
+            "backend.app.routes.rag.retrieve_rag_contexts_with_debug",
+            return_value=([], {"fallback": True, "fallback_reason": "vector_error", "rag_unavailable": True}),
+        ), patch("backend.app.routes.rag.answer_with_retrieved_contexts") as answer_with_retrieved_contexts:
+            response = ask_rag(
+                RAGAskRequest(question="이 PDF에서 TCP 설명해줘"),
+                connection=object(),
+                current_user={"id": 7},
+            )
+
+        self.assertEqual(response.answer, "지금은 자료 검색을 사용할 수 없습니다. 잠시 후 다시 시도해 주세요.")
+        self.assertEqual(response.sources, [])
+        answer_with_retrieved_contexts.assert_not_called()
 
     def test_rag_debug_is_disabled_outside_development_envs(self):
         with self.assertRaises(HTTPException) as raised:
@@ -373,6 +390,60 @@ class RAGRetrieverTest(unittest.TestCase):
         self.assertEqual(delete_params[2], "10")
         self.assertEqual(delete_params[3], "10:%")
 
+    def test_replace_note_chunks_skips_embedding_when_content_hash_is_unchanged(self):
+        executed = []
+        source = IndexSource(
+            source_type="pdf_page",
+            source_id="10",
+            title="Network - page 1",
+            content="TCP congestion control keeps the network stable.",
+            user_id=7,
+            folder_id=2,
+            note_id=3,
+            page_number=1,
+            metadata={"page_label": "1"},
+        )
+
+        class FakeCursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def execute(self, query, params=None):
+                executed.append((query, params))
+
+        class FakeConnection:
+            def cursor(self):
+                return FakeCursor()
+
+            def commit(self):
+                executed.append(("COMMIT", None))
+
+            def rollback(self):
+                executed.append(("ROLLBACK", None))
+
+        with patch("backend.app.services.document_chunk_index.collect_note_index_sources", return_value=[source]), patch(
+            "backend.app.services.document_chunk_index.get_settings",
+            return_value=SimpleNamespace(openai_embedding_model="test-embedding-model"),
+        ), patch(
+            "backend.app.services.document_chunk_index.fetch_all",
+            return_value=[{
+                "user_id": 7,
+                "source_type": "pdf_page",
+                "source_id": "10",
+                "chunk_index": 1,
+                "content_hash": content_hash(source.content),
+                "embedding_model": "test-embedding-model",
+            }],
+        ), patch("backend.app.services.document_chunk_index.generate_embedding") as generate_embedding:
+            count = replace_note_chunks(FakeConnection(), note_id=3, user_id=7)
+
+        self.assertEqual(count, 1)
+        generate_embedding.assert_not_called()
+        self.assertTrue(any("UPDATE document_chunks" in query for query, _params in executed))
+
     def test_collect_canvas_index_sources_targets_one_canvas_note(self):
         with patch("backend.app.services.document_chunk_index.fetch_one") as fetch_one:
             fetch_one.return_value = {
@@ -474,7 +545,7 @@ class RAGRetrieverTest(unittest.TestCase):
                 }
             ],
         ) as load_canvas_documents:
-            contexts = retrieve_rag_contexts(
+            contexts, debug = retrieve_rag_contexts_with_debug(
                 object(),
                 user_id=7,
                 question="Stack 시험 포인트",
@@ -483,6 +554,8 @@ class RAGRetrieverTest(unittest.TestCase):
             )
 
         self.assertEqual(contexts, [])
+        self.assertTrue(debug["rag_unavailable"])
+        self.assertEqual(debug["fallback_reason"], "vector_error")
         load_canvas_documents.assert_not_called()
 
     def test_parse_quiz_questions_accepts_fenced_json(self):

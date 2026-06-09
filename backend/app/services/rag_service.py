@@ -220,32 +220,6 @@ def answer_with_retrieved_contexts(
     )
 
 
-def retrieve_rag_contexts(
-    connection: Connection,
-    *,
-    user_id: int,
-    question: str,
-    note_ids: list[int] | None = None,
-    folder_id: int | None = None,
-    canvas_note_ids: list[int] | None = None,
-    exclude_canvas_for_notes: bool = False,
-    documents: list[Document] | None = None,
-    top_k: int = 5,
-) -> list[RetrievedContext]:
-    contexts, _debug = retrieve_rag_contexts_with_debug(
-        connection,
-        user_id=user_id,
-        question=question,
-        note_ids=note_ids,
-        folder_id=folder_id,
-        canvas_note_ids=canvas_note_ids,
-        exclude_canvas_for_notes=exclude_canvas_for_notes,
-        documents=documents,
-        top_k=top_k,
-    )
-    return contexts
-
-
 def retrieve_rag_contexts_with_debug(
     connection: Connection,
     *,
@@ -317,8 +291,8 @@ def summarize_retrieved_contexts(
     return RAGAnswer(
         answer=answer,
         sections=[
-            NoteSummarySection(title="Summary", body=answer, tone=tone),
-            NoteSummarySection(title="Sources", body=_sources_text(contexts), tone="muted"),
+            NoteSummarySection(title="요약", body=answer, tone=tone),
+            NoteSummarySection(title="참고 자료", body=_sources_text(contexts), tone="muted"),
         ],
         sources=contexts,
     )
