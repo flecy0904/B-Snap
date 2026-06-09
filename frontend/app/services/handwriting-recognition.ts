@@ -72,7 +72,7 @@ type NativeHandwritingRecognitionModule = {
   ) => Promise<GestureRecognitionResult>;
 };
 
-const nativeModule = Platform.OS === 'ios'
+const nativeModule = Platform.OS === 'ios' || Platform.OS === 'android'
   ? NativeModules.BsnHandwritingRecognition as NativeHandwritingRecognitionModule | undefined
   : undefined;
 
