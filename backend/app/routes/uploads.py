@@ -13,10 +13,10 @@ from typing import Any, Callable
 from urllib.parse import unquote
 from uuid import uuid4
 
+import fitz  # type: ignore[import-untyped]
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
 from psycopg import Connection
 from psycopg.rows import dict_row
-from pypdf import PdfReader
 
 from backend.app.core.auth import get_current_user
 from backend.app.core.config import Settings, get_settings
@@ -24,11 +24,7 @@ from backend.app.db.session import get_db_connection
 from backend.app.services.document_matching import build_document_match_key, normalize_subject_key, sha256_file
 from backend.app.services.document_chunk_index import extract_pdf_text_and_reindex_background
 from backend.app.services.openai_service import generate_capture_image_analysis
-
-try:
-    import fitz  # type: ignore[import-untyped]
-except Exception:  # pragma: no cover - optional acceleration dependency
-    fitz = None
+from backend.app.services.pdf_parser import PdfParsingError, get_pdf_page_count
 
 
 router = APIRouter(prefix="/uploads", tags=["uploads"])
@@ -221,26 +217,18 @@ def _format_bytes(size: int) -> str:
     return f"{size}B"
 
 
-def _extract_pdf_page_count(path: Path) -> int | None:
-    try:
-        reader = PdfReader(str(path))
-        return max(1, len(reader.pages))
-    except Exception:
-        return None
-
-
 def _build_page_numbers(content_type: str, path: Path) -> list[int]:
     if content_type != "application/pdf":
         return [1]
 
-    page_count = _extract_pdf_page_count(path) or 1
+    try:
+        page_count = get_pdf_page_count(path)
+    except PdfParsingError as exc:
+        raise HTTPException(status_code=400, detail=str(exc) or "failed to read pdf") from exc
     return list(range(1, page_count + 1))
 
 
 def _render_pdf_first_page_thumbnail(path: Path, upload_root: Path, stored_filename: str) -> str | None:
-    if fitz is None:
-        return None
-
     thumbnail_dir = upload_root / "pdf-thumbnails"
     thumbnail_dir.mkdir(parents=True, exist_ok=True)
     image_name = f"{Path(stored_filename).stem}.png"
@@ -671,9 +659,6 @@ def _preprocess_upload_image(
 
 
 def _preprocess_image(path: Path, upload_root: Path, stored_filename: str) -> tuple[Path | None, str | None]:
-    if fitz is None:
-        return None, None
-
     processed_dir = upload_root / PROCESSED_IMAGE_DIR_NAME
     processed_dir.mkdir(parents=True, exist_ok=True)
     output_name = f"{Path(stored_filename).stem}.png"
@@ -818,9 +803,14 @@ async def _store_upload(file: UploadFile, settings: Settings, *, analyze_images:
     finally:
         await file.close()
 
-    page_numbers = _build_page_numbers(content_type, target)
-    file_sha256 = sha256_file(target)
-    thumbnail_url = _render_pdf_first_page_thumbnail(target, upload_root, stored_name) if content_type == "application/pdf" else None
+    try:
+        page_numbers = _build_page_numbers(content_type, target)
+        file_sha256 = sha256_file(target)
+        thumbnail_url = _render_pdf_first_page_thumbnail(target, upload_root, stored_name) if content_type == "application/pdf" else None
+    except Exception:
+        target.unlink(missing_ok=True)
+        (upload_root / "pdf-thumbnails" / f"{Path(stored_name).stem}.png").unlink(missing_ok=True)
+        raise
 
     upload = StoredUpload(
         filename=safe_name,

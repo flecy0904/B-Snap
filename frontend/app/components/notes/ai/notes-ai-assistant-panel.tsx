@@ -6,6 +6,7 @@ import { useAppKeyboardInset } from '../../../hooks/notes/use-app-keyboard-inset
 import { useDelayedTooltip } from '../../../hooks/notes/use-delayed-tooltip';
 import {
   evaluateBackendRagDebug,
+  extractBackendPdfText,
   getBackendRagDebugStatus,
   getBackendRagDebugIndex,
   reindexBackendNoteRag,
@@ -72,6 +73,28 @@ const RAG_DEV_TABS = ['search', 'index', 'context', 'status'] as const;
 
 type RagDevTab = typeof RAG_DEV_TABS[number];
 
+function formatRagDebugValue(value: unknown) {
+  if (typeof value === 'string' && value.trim()) return value.trim();
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+  return '-';
+}
+
+function formatRagDebugChunkMetadata(metadata?: Record<string, unknown>) {
+  if (!metadata) return '';
+  const parts = [
+    metadata.chunking_strategy ? `chunking ${formatRagDebugValue(metadata.chunking_strategy)}` : null,
+    metadata.extraction_strategy ? `extraction ${formatRagDebugValue(metadata.extraction_strategy)}` : null,
+    metadata.reading_order_strategy ? `order ${formatRagDebugValue(metadata.reading_order_strategy)}` : null,
+    metadata.block_start_order !== undefined || metadata.block_end_order !== undefined
+      ? `blocks ${formatRagDebugValue(metadata.block_start_order)}-${formatRagDebugValue(metadata.block_end_order)}`
+      : null,
+    metadata.block_count !== undefined ? `block count ${formatRagDebugValue(metadata.block_count)}` : null,
+    metadata.header_footer_candidate_count !== undefined ? `footer candidates ${formatRagDebugValue(metadata.header_footer_candidate_count)}` : null,
+    metadata.side_label_candidate_count !== undefined ? `side labels ${formatRagDebugValue(metadata.side_label_candidate_count)}` : null,
+  ].filter(Boolean);
+  return parts.join('\n');
+}
+
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
 }
@@ -133,7 +156,7 @@ export function NotesAiAssistantPanel() {
   const ragDevPositionRef = React.useRef(ragDevPosition);
   const webRagDevDragRef = React.useRef<WebFloatingDragState | null>(null);
   const [ragDebugQuery, setRagDebugQuery] = React.useState('');
-  const [ragDebugLoading, setRagDebugLoading] = React.useState<'evaluate' | 'index' | 'status' | 'reindex' | null>(null);
+  const [ragDebugLoading, setRagDebugLoading] = React.useState<'evaluate' | 'index' | 'status' | 'extract' | 'reindex' | null>(null);
   const [ragDebugError, setRagDebugError] = React.useState<string | null>(null);
   const [ragDebugEvaluation, setRagDebugEvaluation] = React.useState<BackendRagDebugEvaluateResponse | null>(null);
   const [ragDebugIndex, setRagDebugIndex] = React.useState<BackendRagDebugIndexResponse | null>(null);
@@ -245,20 +268,53 @@ export function NotesAiAssistantPanel() {
     if (ragDebugIndex) {
       const page = ragDebugIndex.pages.find((item) => `page:${item.id}` === ragDebugSelectedKey);
       if (page) {
+        const elements = Array.isArray(page.elements) ? page.elements : [];
+        const imageElements = elements.filter((element) => element.type === 'image');
+        const ragExtraction = page.rag_extraction ?? {};
+        const visualBlocks = Array.isArray(ragExtraction.visualBlocks) ? ragExtraction.visualBlocks : [];
+        const footerCandidates = Array.isArray(ragExtraction.headerFooterCandidates) ? ragExtraction.headerFooterCandidates : [];
+        const sideLabelCandidates = Array.isArray(ragExtraction.sideLabelCandidates) ? ragExtraction.sideLabelCandidates : [];
+        const metadataText = [
+          `parser ${page.parser ?? '-'}`,
+          `extraction ${page.extraction_strategy ?? '-'}`,
+          `order ${page.reading_order_strategy ?? '-'} / columns ${page.column_count ?? 1} / confidence ${page.column_confidence ?? 0}`,
+          `visual blocks ${page.visual_block_count ?? visualBlocks.length}`,
+          `text blocks ${page.text_block_count ?? 0}`,
+          `image blocks ${page.image_block_count ?? 0}`,
+          `footer candidates ${page.header_footer_candidate_count ?? footerCandidates.length}`,
+          `side labels ${page.side_label_candidate_count ?? sideLabelCandidates.length}`,
+          footerCandidates.length
+            ? `footer: ${footerCandidates.map((item: any) => item.textPreview ?? item.text ?? '').filter(Boolean).join(' | ')}`
+            : null,
+          sideLabelCandidates.length
+            ? `side labels: ${sideLabelCandidates.map((item: any) => item.textPreview ?? item.text ?? '').filter(Boolean).join(' | ')}`
+            : null,
+          imageElements.length
+            ? `images ${imageElements.map((element) => {
+              const bbox = Array.isArray(element.bbox) ? element.bbox.join(',') : '-';
+              const size = element.width && element.height ? `${element.width}x${element.height}` : '-';
+              return `[${bbox}] ${size} ${element.imageExt ?? element.image_ext ?? ''}`.trim();
+            }).join(' | ')}`
+            : null,
+          visualBlocks.length
+            ? `visual blocks:\n${visualBlocks.map((block: any, index) => `${index + 1}. ${block.role ?? '-'} [${Array.isArray(block.bbox) ? block.bbox.join(',') : '-'}] ${block.textPreview ?? block.text ?? ''}`).join('\n')}`
+            : null,
+        ].filter(Boolean).join('\n');
         return {
           title: `Page ${page.page_number}`,
           meta: `${page.text_length} chars extracted from current note page`,
-          text: page.text,
+          text: metadataText ? `${metadataText}\n\n${page.text}` : page.text,
         };
       }
       const chunk = ragDebugIndex.chunks.find((item, index) => (
         `chunk:${item.source_type}:${item.source_id}:${item.chunk_index ?? index}` === ragDebugSelectedKey
       ));
       if (chunk) {
+        const chunkMetadataText = formatRagDebugChunkMetadata(chunk.metadata);
         return {
           title: chunk.title,
           meta: `${chunk.source_type} · p.${chunk.page_number ?? '-'} · chunk ${chunk.chunk_index ?? '-'} · ${chunk.content_length} chars`,
-          text: chunk.content,
+          text: chunkMetadataText ? `${chunkMetadataText}\n\n${chunk.content}` : chunk.content,
         };
       }
     }
@@ -371,6 +427,25 @@ export function NotesAiAssistantPanel() {
       await runRagDevStatus();
     } catch (error: any) {
       setRagDebugError(error?.detail || error?.message || 'Current note reindex failed.');
+    } finally {
+      setRagDebugLoading(null);
+    }
+  }, [currentBackendNoteId, runRagDevIndex, runRagDevStatus]);
+  const runRagDevExtractText = React.useCallback(async () => {
+    if (!RAG_DEBUG_ENABLED) return;
+    const noteId = Number(currentBackendNoteId);
+    if (!Number.isFinite(noteId) || noteId <= 0) {
+      setRagDebugError('?꾩옱 note媛 backend note? ?곌껐?섏뼱 ?덉? ?딆뒿?덈떎.');
+      return;
+    }
+    setRagDebugLoading('extract');
+    setRagDebugError(null);
+    try {
+      await extractBackendPdfText({ noteId });
+      await runRagDevIndex();
+      await runRagDevStatus();
+    } catch (error: any) {
+      setRagDebugError(error?.detail || error?.message || 'Current note text extraction failed.');
     } finally {
       setRagDebugLoading(null);
     }
@@ -1380,26 +1455,36 @@ export function NotesAiAssistantPanel() {
                 <View style={workspace.styles.aiRagDevSection}>
                   <View style={workspace.styles.aiRagDevActions}>
                     <Pressable style={workspace.styles.aiRagDevPrimaryButton} onPress={runRagDevIndex} disabled={ragDebugLoading !== null}>
-                      <Text style={workspace.styles.aiRagDevPrimaryButtonText}>{ragDebugLoading === 'index' ? 'Loading' : 'Load Current Note Index'}</Text>
+                      <Text style={workspace.styles.aiRagDevPrimaryButtonText}>{ragDebugLoading === 'index' ? '불러오는 중' : '현재 Index 불러오기'}</Text>
+                    </Pressable>
+                    <Pressable style={workspace.styles.aiRagDevSecondaryButton} onPress={runRagDevExtractText} disabled={ragDebugLoading !== null}>
+                      <Text style={workspace.styles.aiRagDevSecondaryButtonText}>{ragDebugLoading === 'extract' ? '재추출 중' : '텍스트 재추출'}</Text>
                     </Pressable>
                     <Pressable style={workspace.styles.aiRagDevSecondaryButton} onPress={runRagDevReindex} disabled={ragDebugLoading !== null}>
-                      <Text style={workspace.styles.aiRagDevSecondaryButtonText}>{ragDebugLoading === 'reindex' ? 'Queued' : 'Reindex'}</Text>
+                      <Text style={workspace.styles.aiRagDevSecondaryButtonText}>{ragDebugLoading === 'reindex' ? '예약됨' : 'Index 다시 만들기'}</Text>
                     </Pressable>
                     <Pressable style={workspace.styles.aiRagDevSecondaryButton} onPress={refreshRagDevScope} disabled={ragDebugLoading !== null}>
-                      <Text style={workspace.styles.aiRagDevSecondaryButtonText}>Refresh Scope</Text>
+                      <Text style={workspace.styles.aiRagDevSecondaryButtonText}>Scope 새로고침</Text>
                     </Pressable>
                   </View>
+                  <Text style={workspace.styles.aiRagDevMeta}>
+                    텍스트 재추출은 PDF parser를 다시 실행합니다. Index 다시 만들기는 이미 저장된 텍스트로 chunk/embedding만 다시 만듭니다. 현재 Index 불러오기는 DB에 저장된 결과를 화면에 보여주기만 합니다.
+                  </Text>
                   {ragDebugIndex ? (
                     <View style={workspace.styles.aiRagDevSection}>
                       <Text style={workspace.styles.aiRagDevSectionTitle} numberOfLines={1}>{ragDebugIndex.note.title}</Text>
                       <Text style={workspace.styles.aiRagDevMeta}>pages {ragDebugIndex.summary.page_count} · chunks {ragDebugIndex.summary.chunk_count} · shown {ragDebugIndex.summary.chunks_returned}</Text>
-                      <Text style={workspace.styles.aiRagDevMeta} numberOfLines={1}>model {ragDebugIndex.summary.embedding_model ?? '-'} · last indexed {ragDebugIndex.summary.last_indexed_at ?? '-'}</Text>
+                      <Text style={workspace.styles.aiRagDevMeta} numberOfLines={1}>model {ragDebugIndex.summary.embedding_model ?? '-'} · parser {ragDebugIndex.summary.parser ?? '-'} · last indexed {ragDebugIndex.summary.last_indexed_at ?? '-'}</Text>
+                      <Text style={workspace.styles.aiRagDevMeta} numberOfLines={1}>extraction {(ragDebugIndex.summary.extraction_strategies ?? []).join(', ') || '-'}</Text>
+                      <Text style={workspace.styles.aiRagDevMeta}>visual blocks {ragDebugIndex.summary.visual_block_count ?? 0} · text blocks {ragDebugIndex.summary.text_block_count ?? 0} · image blocks {ragDebugIndex.summary.image_block_count ?? 0}</Text>
                       <Text style={workspace.styles.aiRagDevSectionTitle}>Extracted page text</Text>
                       {ragDebugIndex.pages.slice(0, 8).map((page) => {
                         const key = `page:${page.id}`;
                         return (
                           <Pressable key={key} style={[workspace.styles.aiRagDevCard, ragDebugSelectedKey === key && workspace.styles.aiRagDevCardActive]} onPress={() => setRagDebugSelectedKey(key)}>
                             <Text style={workspace.styles.aiRagDevCardTitle}>page {page.page_number} · {page.text_length} chars</Text>
+                            <Text style={workspace.styles.aiRagDevMeta} numberOfLines={1}>parser {page.parser ?? '-'} · {page.extraction_strategy ?? '-'} · order {page.reading_order_strategy ?? '-'} · visual {page.visual_block_count ?? 0} · text {page.text_block_count ?? 0} · image {page.image_block_count ?? 0}</Text>
+                            <Text style={workspace.styles.aiRagDevMeta} numberOfLines={1}>footer {page.header_footer_candidate_count ?? 0} · side labels {page.side_label_candidate_count ?? 0}</Text>
                             <Text style={workspace.styles.aiRagDevSnippet} numberOfLines={2}>{page.text_snippet || 'No extracted text.'}</Text>
                           </Pressable>
                         );
@@ -1407,10 +1492,12 @@ export function NotesAiAssistantPanel() {
                       <Text style={workspace.styles.aiRagDevSectionTitle}>Chunks</Text>
                       {ragDebugIndex.chunks.map((chunk, index) => {
                         const key = `chunk:${chunk.source_type}:${chunk.source_id}:${chunk.chunk_index ?? index}`;
+                        const metadata = chunk.metadata ?? {};
                         return (
                           <Pressable key={key} style={[workspace.styles.aiRagDevCard, ragDebugSelectedKey === key && workspace.styles.aiRagDevCardActive]} onPress={() => setRagDebugSelectedKey(key)}>
                             <Text style={workspace.styles.aiRagDevCardTitle} numberOfLines={1}>{chunk.title}</Text>
                             <Text style={workspace.styles.aiRagDevMeta} numberOfLines={1}>{chunk.source_type} · p.{chunk.page_number ?? '-'} · chunk {chunk.chunk_index ?? '-'} · {chunk.content_length} chars</Text>
+                            <Text style={workspace.styles.aiRagDevMeta} numberOfLines={1}>{formatRagDebugValue(metadata.chunking_strategy)} · blocks {formatRagDebugValue(metadata.block_start_order)}-{formatRagDebugValue(metadata.block_end_order)} · count {formatRagDebugValue(metadata.block_count)}</Text>
                             <Text style={workspace.styles.aiRagDevSnippet} numberOfLines={2}>{chunk.content_snippet}</Text>
                           </Pressable>
                         );

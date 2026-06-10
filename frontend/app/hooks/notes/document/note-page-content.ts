@@ -1,5 +1,7 @@
 import type { InkImageAnnotation, InkStroke, InkTextAnnotation } from '../../../ui-types';
 
+export type RagExtractionMetadata = Record<string, unknown>;
+
 export type StoredNotePageContent = {
   kind: 'bsnap-page-state';
   version: 1;
@@ -9,6 +11,7 @@ export type StoredNotePageContent = {
   bookmarked: boolean;
   photoReferenceCount: number;
   memoPageCount: number;
+  ragExtraction?: RagExtractionMetadata;
 };
 
 export function serializeNotePageContent(params: {
@@ -18,10 +21,11 @@ export function serializeNotePageContent(params: {
   bookmarked?: boolean;
   photoReferenceCount?: number;
   memoPageCount?: number;
+  ragExtraction?: RagExtractionMetadata | null;
 }) {
   const photoReferenceCount = Math.max(0, Math.floor(params.photoReferenceCount ?? 0));
   const memoPageCount = Math.max(0, Math.floor(params.memoPageCount ?? 0));
-  return JSON.stringify({
+  const nextContent: StoredNotePageContent = {
     kind: 'bsnap-page-state',
     version: 1,
     inkStrokes: params.inkStrokes,
@@ -30,7 +34,11 @@ export function serializeNotePageContent(params: {
     bookmarked: Boolean(params.bookmarked),
     photoReferenceCount,
     memoPageCount,
-  } satisfies StoredNotePageContent);
+  };
+  if (params.ragExtraction && typeof params.ragExtraction === 'object' && !Array.isArray(params.ragExtraction)) {
+    nextContent.ragExtraction = params.ragExtraction;
+  }
+  return JSON.stringify(nextContent);
 }
 
 function normalizeCount(value: unknown) {
@@ -72,6 +80,9 @@ export function parseNotePageContent(content: string | null): StoredNotePageCont
         normalizeCount(parsed.memoPages),
         normalizeCount(parsed.generatedMemoPages),
       ),
+      ragExtraction: parsed.ragExtraction && typeof parsed.ragExtraction === 'object' && !Array.isArray(parsed.ragExtraction)
+        ? parsed.ragExtraction as RagExtractionMetadata
+        : undefined,
     };
   } catch {
     return null;

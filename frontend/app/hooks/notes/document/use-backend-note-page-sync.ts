@@ -123,6 +123,7 @@ export function useBackendNotePageSync({
         bookmarked: storedPage.bookmarked,
         photoReferenceCount: storedPage.photoReferenceCount,
         memoPageCount: storedPage.memoPageCount,
+        ragExtraction: storedPage.ragExtraction,
       });
       documentInk.push(...normalizedInkStrokes);
       documentTextAnnotations.push(...normalizedTextAnnotations);
@@ -227,6 +228,7 @@ export function useBackendNotePageSync({
           page.pageKind === 'memo' && page.insertAfterPage === pageNumber
         )).length;
 
+        const previousSavedContent = parseNotePageContent(lastSavedPageContentRef.current[key] ?? null);
         const content = serializeNotePageContent({
           inkStrokes: pageInkStrokes,
           textAnnotations: pageTextAnnotations,
@@ -234,6 +236,7 @@ export function useBackendNotePageSync({
           bookmarked: pageBookmarked,
           photoReferenceCount,
           memoPageCount,
+          ragExtraction: previousSavedContent?.ragExtraction,
         });
         const savedContent = lastSavedPageContentRef.current[key];
         if (savedContent === undefined && content === EMPTY_PAGE_CONTENT) {

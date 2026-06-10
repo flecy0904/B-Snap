@@ -19,13 +19,13 @@ from backend.app.schemas.notes import (
     PdfTextExtractionCreate,
     PdfTextExtractionRead,
 )
-from backend.app.services.note_page_content import merge_page_state_content
 from backend.app.services.document_chunk_index import (
     delete_note_page_chunks_background,
     reindex_note_background,
     reindex_note_page_background,
 )
-from backend.app.services.pdf_text_extractor import extract_pdf_text_pages, extract_pdf_text_pages_from_path
+from backend.app.services.note_page_content import merge_page_state_content
+from backend.app.services.pdf_parser import PdfParsingError, parse_pdf_data_uri, parse_pdf_path
 
 
 router = APIRouter(tags=["notes"])
@@ -64,6 +64,19 @@ def _list_pages_for_note(connection: Connection, note_id: int) -> list[dict]:
         connection,
         """
         SELECT id, note_id, page_number, content, image_url, created_at, updated_at
+        FROM note_pages
+        WHERE note_id = %s
+        ORDER BY page_number ASC, id ASC
+        """,
+        (note_id,),
+    )
+
+
+def _list_page_refs_for_note(connection: Connection, note_id: int) -> list[dict]:
+    return fetch_all(
+        connection,
+        """
+        SELECT id, note_id, page_number, NULL::text AS content, image_url, created_at, updated_at
         FROM note_pages
         WHERE note_id = %s
         ORDER BY page_number ASC, id ASC
@@ -388,19 +401,22 @@ def extract_note_pdf_text(
     settings: Settings = Depends(get_settings),
 ):
     note = get_note_for_user(note_id, current_user["id"], connection)
-    if payload.pdf_data:
-        page_texts = extract_pdf_text_pages(payload.pdf_data)
-    else:
-        file_url = note.get("file_url")
-        if not file_url or not file_url.startswith("/uploads/"):
-            raise HTTPException(status_code=400, detail="stored pdf file is required")
+    try:
+        if payload.pdf_data:
+            parse_result = parse_pdf_data_uri(payload.pdf_data)
+        else:
+            file_url = note.get("file_url")
+            if not file_url or not file_url.startswith("/uploads/"):
+                raise HTTPException(status_code=400, detail="stored pdf file is required")
 
-        upload_root = settings.upload_path.resolve()
-        pdf_path = (upload_root / file_url.removeprefix("/uploads/")).resolve()
-        if upload_root not in pdf_path.parents or pdf_path.suffix.lower() != ".pdf" or not pdf_path.exists():
-            raise HTTPException(status_code=400, detail="stored pdf file is unavailable")
+            upload_root = settings.upload_path.resolve()
+            pdf_path = (upload_root / file_url.removeprefix("/uploads/")).resolve()
+            if upload_root not in pdf_path.parents or pdf_path.suffix.lower() != ".pdf" or not pdf_path.exists():
+                raise HTTPException(status_code=400, detail="stored pdf file is unavailable")
 
-        page_texts = extract_pdf_text_pages_from_path(pdf_path)
+            parse_result = parse_pdf_path(pdf_path)
+    except PdfParsingError as exc:
+        raise HTTPException(status_code=400, detail=str(exc) or "failed to read pdf") from exc
     existing_pages = fetch_all(
         connection,
         """
@@ -413,47 +429,57 @@ def extract_note_pdf_text(
     )
     pages_by_number = {page["page_number"]: page for page in existing_pages}
 
-    for index, pdf_text in enumerate(page_texts, start=1):
-        current = pages_by_number.get(index)
-        if current:
-            execute_returning(
-                connection,
-                """
-                UPDATE note_pages
-                SET content = %s, updated_at = now()
-                WHERE id = %s
-                RETURNING id, note_id, page_number, content, image_url, created_at, updated_at
-                """,
-                (
-                    merge_page_state_content(current["content"], None, pdf_text=pdf_text),
-                    current["id"],
-                ),
+    try:
+        with connection.cursor() as cursor:
+            for parsed_page in parse_result.pages:
+                current = pages_by_number.get(parsed_page.page_number)
+                if current:
+                    cursor.execute(
+                        """
+                        UPDATE note_pages
+                        SET content = %s, updated_at = now()
+                        WHERE id = %s
+                        """,
+                        (
+                            merge_page_state_content(
+                                current["content"],
+                                None,
+                                pdf_text=parsed_page.text,
+                                rag_extraction=parsed_page.extraction_metadata(),
+                            ),
+                            current["id"],
+                        ),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        INSERT INTO note_pages (note_id, page_number, content, image_url)
+                        VALUES (%s, %s, %s, NULL)
+                        """,
+                        (
+                            note_id,
+                            parsed_page.page_number,
+                            merge_page_state_content(
+                                None,
+                                None,
+                                pdf_text=parsed_page.text,
+                                rag_extraction=parsed_page.extraction_metadata(),
+                            ),
+                        ),
+                    )
+            cursor.execute(
+                "UPDATE notes SET page_count = GREATEST(COALESCE(page_count, 0), %s), updated_at = now() WHERE id = %s",
+                (parse_result.page_count, note_id),
             )
-        else:
-            execute_returning(
-                connection,
-                """
-                INSERT INTO note_pages (note_id, page_number, content, image_url)
-                VALUES (%s, %s, %s, NULL)
-                RETURNING id, note_id, page_number, content, image_url, created_at, updated_at
-                """,
-                (
-                    note_id,
-                    index,
-                    merge_page_state_content(None, None, pdf_text=pdf_text),
-                ),
-            )
-
-    execute_commit(
-        connection,
-        "UPDATE notes SET page_count = GREATEST(COALESCE(page_count, 0), %s), updated_at = now() WHERE id = %s",
-        (len(page_texts), note_id),
-    )
-    pages = _list_pages_for_note(connection, note_id)
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    pages = _list_page_refs_for_note(connection, note_id)
     _schedule_note_reindex(background_tasks, note_id, current_user["id"])
     return {
         "note_id": note_id,
-        "pages_extracted": len(page_texts),
+        "pages_extracted": parse_result.page_count,
         "pages": pages,
     }
 

@@ -242,6 +242,11 @@ export type BackendRagDebugIndexResponse = {
     embedding_model?: string | null;
     embedding_models?: string[];
     last_indexed_at?: string | null;
+    parser?: string | null;
+    text_block_count?: number;
+    image_block_count?: number;
+    visual_block_count?: number;
+    extraction_strategies?: string[];
   };
   pages: Array<{
     id: number;
@@ -250,6 +255,19 @@ export type BackendRagDebugIndexResponse = {
     text_snippet: string;
     text: string;
     updated_at?: string | null;
+    parser?: string | null;
+    extraction_strategy?: string | null;
+    reading_order_strategy?: string | null;
+    column_count?: number | null;
+    column_confidence?: number | null;
+    text_block_count?: number;
+    image_block_count?: number;
+    visual_block_count?: number;
+    header_footer_candidate_count?: number;
+    side_label_candidate_count?: number;
+    rag_extraction?: Record<string, unknown>;
+    elements?: Array<Record<string, unknown>>;
+    elements_returned?: number;
   }>;
   chunks: BackendRagDebugResult[];
 };
@@ -887,6 +905,7 @@ export async function extractBackendPdfText(payload: {
 }) {
   return request<BackendPdfTextExtractionResponse>(`/notes/${payload.noteId}/extract-pdf-text`, {
     method: 'POST',
+    timeoutMs: AI_MESSAGE_TIMEOUT_MS,
     body: payload.pdfData ? { pdf_data: payload.pdfData } : {},
   });
 }

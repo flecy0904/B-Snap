@@ -355,6 +355,173 @@ class RAGRetrieverTest(unittest.TestCase):
         canvas_source = next(source for source in sources if source.source_type == "canvas_note")
         self.assertEqual(canvas_source.metadata["block_ids"], ["b1"])
 
+    def test_collect_note_index_sources_preserves_layout_blocks_for_pdf_pages(self):
+        page_state = json.dumps(
+            {
+                "kind": "bsnap-page-state",
+                "version": 1,
+                "pdfText": "Main block text.\n\n[Figure labels]\nACK=100",
+                "ragExtraction": {
+                    "parser": "pymupdf",
+                    "extractionStrategy": "pymupdf_layout_blocks_v2",
+                    "readingOrderStrategy": "y_x_fallback",
+                    "textBlockCount": 2,
+                    "imageBlockCount": 0,
+                    "headerFooterCandidates": [{"textPreview": "Transport Layer3-8"}],
+                    "sideLabelCandidates": [{"textPreview": "ACK=100"}],
+                    "textBlocks": [
+                        {
+                            "type": "text",
+                            "role": "main_text",
+                            "readingOrder": 0,
+                            "blockIndex": 0,
+                            "bbox": [10, 10, 200, 40],
+                            "text": "Main block text.",
+                        },
+                        {
+                            "type": "text",
+                            "role": "side_label_candidate",
+                            "readingOrder": 1,
+                            "blockIndex": 1,
+                            "bbox": [250, 80, 320, 100],
+                            "text": "ACK=100",
+                        },
+                    ],
+                },
+            },
+            ensure_ascii=False,
+        )
+
+        with patch("backend.app.services.document_chunk_index.fetch_one") as fetch_one, patch(
+            "backend.app.services.document_chunk_index.fetch_all"
+        ) as fetch_all:
+            fetch_one.return_value = {
+                "id": 3,
+                "user_id": 7,
+                "folder_id": 2,
+                "title": "Network",
+                "summary": "",
+                "updated_at": None,
+            }
+            fetch_all.side_effect = [
+                [{"id": 10, "note_id": 3, "page_number": 1, "content": page_state, "image_url": None, "updated_at": None}],
+                [],
+            ]
+
+            sources = collect_note_index_sources(object(), note_id=3, user_id=7)
+
+        pdf_source = sources[0]
+        self.assertEqual(pdf_source.source_type, "pdf_page")
+        self.assertEqual(pdf_source.metadata["extraction_strategy"], "pymupdf_layout_blocks_v2")
+        self.assertEqual(pdf_source.metadata["header_footer_candidate_count"], 1)
+        self.assertEqual(pdf_source.metadata["side_label_candidate_count"], 1)
+        self.assertEqual(len(pdf_source.layout_blocks), 2)
+
+    def test_collect_note_index_sources_uses_native_text_without_layout_block_chunking(self):
+        page_state = json.dumps(
+            {
+                "kind": "bsnap-page-state",
+                "version": 1,
+                "pdfText": "Native text order should remain the chunk input.",
+                "ragExtraction": {
+                    "parser": "pymupdf",
+                    "extractionStrategy": "pymupdf_native_text_with_blocks_v2",
+                    "readingOrderStrategy": "pymupdf_native_text",
+                    "textBlockCount": 1,
+                    "imageBlockCount": 0,
+                    "textBlocks": [
+                        {
+                            "type": "text",
+                            "role": "main_text",
+                            "readingOrder": 0,
+                            "blockIndex": 0,
+                            "bbox": [10, 10, 200, 40],
+                            "text": "Block order metadata should not override native text.",
+                        },
+                    ],
+                },
+            },
+            ensure_ascii=False,
+        )
+
+        with patch("backend.app.services.document_chunk_index.fetch_one") as fetch_one, patch(
+            "backend.app.services.document_chunk_index.fetch_all"
+        ) as fetch_all:
+            fetch_one.return_value = {
+                "id": 3,
+                "user_id": 7,
+                "folder_id": 2,
+                "title": "Network",
+                "summary": "",
+                "updated_at": None,
+            }
+            fetch_all.side_effect = [
+                [{"id": 10, "note_id": 3, "page_number": 1, "content": page_state, "image_url": None, "updated_at": None}],
+                [],
+            ]
+
+            sources = collect_note_index_sources(object(), note_id=3, user_id=7)
+
+        pdf_source = sources[0]
+        self.assertEqual(pdf_source.source_type, "pdf_page")
+        self.assertEqual(pdf_source.metadata["reading_order_strategy"], "pymupdf_native_text")
+        self.assertEqual(pdf_source.layout_blocks, [])
+
+    def test_collect_note_index_sources_prefers_visual_blocks_for_pdf_pages(self):
+        page_state = json.dumps(
+            {
+                "kind": "bsnap-page-state",
+                "version": 1,
+                "pdfText": "[Title]\nNetwork\n\n[Content]\nTCP congestion control.",
+                "ragExtraction": {
+                    "parser": "pymupdf",
+                    "extractionStrategy": "pymupdf_visual_blocks_v3",
+                    "readingOrderStrategy": "visual_block_groups",
+                    "visualBlocks": [
+                        {
+                            "role": "title",
+                            "readingOrder": 0,
+                            "blockIndex": 0,
+                            "bbox": [10, 10, 300, 40],
+                            "text": "Network",
+                        },
+                        {
+                            "role": "content",
+                            "readingOrder": 1,
+                            "blockIndex": 1,
+                            "bbox": [10, 80, 300, 120],
+                            "text": "TCP congestion control.",
+                        },
+                    ],
+                },
+            },
+            ensure_ascii=False,
+        )
+
+        with patch("backend.app.services.document_chunk_index.fetch_one") as fetch_one, patch(
+            "backend.app.services.document_chunk_index.fetch_all"
+        ) as fetch_all:
+            fetch_one.return_value = {
+                "id": 3,
+                "user_id": 7,
+                "folder_id": 2,
+                "title": "Network",
+                "summary": "",
+                "updated_at": None,
+            }
+            fetch_all.side_effect = [
+                [{"id": 10, "note_id": 3, "page_number": 1, "content": page_state, "image_url": None, "updated_at": None}],
+                [],
+            ]
+
+            sources = collect_note_index_sources(object(), note_id=3, user_id=7)
+
+        pdf_source = sources[0]
+        self.assertEqual(pdf_source.metadata["reading_order_strategy"], "visual_block_groups")
+        self.assertEqual(len(pdf_source.layout_blocks), 2)
+        chunks = build_text_chunks(pdf_source)
+        self.assertTrue(chunks[0].content.startswith("[Title]\nNetwork"))
+
     def test_replace_note_page_chunks_deletes_legacy_page_sources_before_insert(self):
         executed = []
 
@@ -467,10 +634,15 @@ class RAGRetrieverTest(unittest.TestCase):
         self.assertEqual(sources[0].metadata["block_ids"], ["b1"])
 
     def test_split_text_into_chunks_uses_overlap(self):
+        chunks = split_text_into_chunks("alpha beta gamma delta epsilon zeta", chunk_size=18, overlap=6)
+
+        self.assertEqual(chunks[0], "alpha beta gamma")
+        self.assertTrue(chunks[1].startswith("gamma"))
+
+    def test_split_text_into_chunks_does_not_split_single_long_token(self):
         chunks = split_text_into_chunks("abcdefghijklmnopqrstuvwxyz", chunk_size=10, overlap=2)
 
-        self.assertEqual(chunks[0], "abcdefghij")
-        self.assertEqual(chunks[1], "ijklmnopqr")
+        self.assertEqual(chunks, ["abcdefghijklmnopqrstuvwxyz"])
 
     def test_load_note_documents_extracts_page_state_text_and_canvas_notes(self):
         page_state = json.dumps(

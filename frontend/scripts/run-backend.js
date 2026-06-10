@@ -105,6 +105,7 @@ function ensureRequirements() {
     "fastapi",
     "cv2",
     "numpy",
+    "fitz",
     "PIL",
     "pillow_heif",
     "ultralytics",

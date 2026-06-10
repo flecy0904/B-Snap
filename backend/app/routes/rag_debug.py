@@ -63,6 +63,35 @@ def _extract_page_pdf_text(content: object) -> str:
     return content if isinstance(content, str) else ""
 
 
+def _extract_page_rag_extraction(content: object) -> dict[str, Any]:
+    state = content if isinstance(content, dict) else parse_page_state(content)
+    if state is None:
+        return {}
+    rag_extraction = state.get("ragExtraction")
+    return rag_extraction if isinstance(rag_extraction, dict) else {}
+
+
+def _rag_extraction_count(rag_extraction: dict[str, Any], key: str) -> int:
+    value = rag_extraction.get(key)
+    if isinstance(value, (int, float)):
+        return max(0, int(value))
+    return 0
+
+
+def _rag_extraction_elements(rag_extraction: dict[str, Any]) -> list[dict[str, Any]]:
+    elements = rag_extraction.get("elements")
+    if not isinstance(elements, list):
+        return []
+    return [element for element in elements if isinstance(element, dict)]
+
+
+def _rag_extraction_visual_blocks(rag_extraction: dict[str, Any]) -> list[dict[str, Any]]:
+    visual_blocks = rag_extraction.get("visualBlocks")
+    if not isinstance(visual_blocks, list):
+        return []
+    return [block for block in visual_blocks if isinstance(block, dict)]
+
+
 def _format_debug_contexts(contexts: list[Any]) -> list[dict[str, Any]]:
     return [
         {
@@ -300,6 +329,44 @@ def get_note_rag_debug_index(
         (chunk.get("indexed_at") for chunk in chunks if chunk.get("indexed_at")),
         default=None,
     )
+    page_debug_items = []
+    text_block_count = 0
+    image_block_count = 0
+    visual_block_count = 0
+    for page in pages:
+        rag_extraction = _extract_page_rag_extraction(page.get("content"))
+        page_text_block_count = _rag_extraction_count(rag_extraction, "textBlockCount")
+        page_image_block_count = _rag_extraction_count(rag_extraction, "imageBlockCount")
+        visual_blocks = _rag_extraction_visual_blocks(rag_extraction)
+        header_footer_candidates = rag_extraction.get("headerFooterCandidates")
+        side_label_candidates = rag_extraction.get("sideLabelCandidates")
+        text_block_count += page_text_block_count
+        image_block_count += page_image_block_count
+        visual_block_count += len(visual_blocks)
+        elements = _rag_extraction_elements(rag_extraction)
+        page_debug_items.append(
+            {
+                "id": page["id"],
+                "page_number": page["page_number"],
+                "text_length": len(_extract_page_pdf_text(page.get("content"))),
+                "text_snippet": _snippet(_extract_page_pdf_text(page.get("content"))),
+                "text": _extract_page_pdf_text(page.get("content")),
+                "updated_at": page.get("updated_at"),
+                "parser": rag_extraction.get("parser"),
+                "extraction_strategy": rag_extraction.get("extractionStrategy"),
+                "reading_order_strategy": rag_extraction.get("readingOrderStrategy"),
+                "column_count": rag_extraction.get("columnCount"),
+                "column_confidence": rag_extraction.get("columnConfidence"),
+                "text_block_count": page_text_block_count,
+                "image_block_count": page_image_block_count,
+                "visual_block_count": len(visual_blocks),
+                "header_footer_candidate_count": len(header_footer_candidates) if isinstance(header_footer_candidates, list) else 0,
+                "side_label_candidate_count": len(side_label_candidates) if isinstance(side_label_candidates, list) else 0,
+                "rag_extraction": rag_extraction,
+                "elements": elements,
+                "elements_returned": len(elements),
+            }
+        )
     return {
         "note": {"id": note["id"], "folder_id": note["folder_id"], "title": note["title"]},
         "summary": {
@@ -313,18 +380,17 @@ def get_note_rag_debug_index(
             "last_indexed_at": last_indexed_at,
             "index_status": "unavailable" if index_error else "ready",
             "last_error": index_error,
+            "parser": "pymupdf" if any(item.get("parser") == "pymupdf" for item in page_debug_items) else None,
+            "text_block_count": text_block_count,
+            "image_block_count": image_block_count,
+            "visual_block_count": visual_block_count,
+            "extraction_strategies": sorted({
+                str(item["extraction_strategy"])
+                for item in page_debug_items
+                if item.get("extraction_strategy")
+            }),
         },
-        "pages": [
-            {
-                "id": page["id"],
-                "page_number": page["page_number"],
-                "text_length": len(_extract_page_pdf_text(page.get("content"))),
-                "text_snippet": _snippet(_extract_page_pdf_text(page.get("content"))),
-                "text": _extract_page_pdf_text(page.get("content")),
-                "updated_at": page.get("updated_at"),
-            }
-            for page in pages
-        ],
+        "pages": page_debug_items,
         "chunks": [
             {
                 "source_type": chunk["source_type"],

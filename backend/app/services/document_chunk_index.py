@@ -15,7 +15,7 @@ from backend.app.db.session import get_database_url
 from backend.app.schemas.rag import RetrievedContext
 from backend.app.services.embeddings import embedding_to_vector_literal, generate_embedding
 from backend.app.services.note_page_content import merge_page_state_content, parse_page_state
-from backend.app.services.pdf_text_extractor import extract_pdf_text_pages_from_path
+from backend.app.services.pdf_parser import PdfParsingError, parse_pdf_path
 from backend.app.services.rag_chunker import IndexSource, build_text_chunks, is_meaningful_text
 
 
@@ -29,6 +29,54 @@ def content_hash(content: str) -> str:
 
 def _metadata(value: dict[str, Any] | None) -> dict[str, Any]:
     return {key: item for key, item in (value or {}).items() if item is not None}
+
+
+def _rag_extraction_dict(state: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(state, dict):
+        return {}
+    rag_extraction = state.get("ragExtraction")
+    return rag_extraction if isinstance(rag_extraction, dict) else {}
+
+
+def _layout_blocks_from_rag_extraction(rag_extraction: dict[str, Any]) -> list[dict[str, Any]]:
+    visual_blocks = rag_extraction.get("visualBlocks")
+    if isinstance(visual_blocks, list):
+        return [block for block in visual_blocks if isinstance(block, dict)]
+    if rag_extraction.get("readingOrderStrategy") == "pymupdf_native_text":
+        return []
+    blocks = rag_extraction.get("textBlocks")
+    if not isinstance(blocks, list):
+        return []
+    return [block for block in blocks if isinstance(block, dict)]
+
+
+def _metadata_list_count(value: Any) -> int:
+    return len(value) if isinstance(value, list) else 0
+
+
+def _pdf_page_source_metadata(page: dict[str, Any], page_label: str, rag_extraction: dict[str, Any]) -> dict[str, Any]:
+    return _metadata({
+        "note_page_id": page["id"],
+        "page_label": page_label,
+        "parser": rag_extraction.get("parser"),
+        "extraction_strategy": rag_extraction.get("extractionStrategy"),
+        "reading_order_strategy": rag_extraction.get("readingOrderStrategy"),
+        "column_count": rag_extraction.get("columnCount"),
+        "column_confidence": rag_extraction.get("columnConfidence"),
+        "text_block_count": rag_extraction.get("textBlockCount"),
+        "image_block_count": rag_extraction.get("imageBlockCount"),
+        "visual_block_count": rag_extraction.get("visualBlockCount"),
+        "header_footer_candidate_count": _metadata_list_count(rag_extraction.get("headerFooterCandidates")),
+        "side_label_candidate_count": _metadata_list_count(rag_extraction.get("sideLabelCandidates")),
+    })
+
+
+def _chunk_metadata(chunk: Any) -> dict[str, Any]:
+    metadata = dict(chunk.source.metadata)
+    chunk_metadata = getattr(chunk, "metadata", None)
+    if isinstance(chunk_metadata, dict):
+        metadata.update(_metadata(chunk_metadata))
+    return metadata
 
 
 def _extract_canvas_block_ids(document_json: Any) -> list[str]:
@@ -75,6 +123,7 @@ def _collect_page_index_sources(note: dict, page: dict, *, user_id: int) -> list
 
     pdf_text = state.get("pdfText")
     if isinstance(pdf_text, str) and is_meaningful_text(pdf_text):
+        rag_extraction = _rag_extraction_dict(state)
         sources.append(
             IndexSource(
                 source_type="pdf_page",
@@ -86,7 +135,8 @@ def _collect_page_index_sources(note: dict, page: dict, *, user_id: int) -> list
                 note_id=note["id"],
                 page_number=page_number,
                 source_updated_at=page.get("updated_at"),
-                metadata={"note_page_id": page["id"], "page_label": page_label},
+                metadata=_pdf_page_source_metadata(page, page_label, rag_extraction),
+                layout_blocks=_layout_blocks_from_rag_extraction(rag_extraction),
             )
         )
 
@@ -332,7 +382,7 @@ def _update_existing_chunk_metadata(connection: Connection, chunk: Any, *, next_
                 chunk.content,
                 next_content_hash,
                 chunk.source.source_updated_at,
-                Jsonb(chunk.source.metadata),
+                Jsonb(_chunk_metadata(chunk)),
                 chunk.source.user_id,
                 chunk.source.source_type,
                 chunk.source.source_id,
@@ -389,7 +439,7 @@ def _insert_chunks(connection: Connection, chunks: list[Any], *, embedding_model
                     embedding_to_vector_literal(embedding),
                     embedding_model,
                     chunk.source.source_updated_at,
-                    Jsonb(chunk.source.metadata),
+                    Jsonb(_chunk_metadata(chunk)),
                 ),
             )
 
@@ -580,7 +630,7 @@ def delete_note_page_chunks_background(page_id: int, user_id: int) -> None:
 
 def extract_pdf_text_and_reindex_background(note_id: int, user_id: int, pdf_path: str) -> None:
     try:
-        page_texts = extract_pdf_text_pages_from_path(Path(pdf_path))
+        parse_result = parse_pdf_path(Path(pdf_path))
         with psycopg.connect(get_database_url(), row_factory=dict_row) as connection:
             note = fetch_one(
                 connection,
@@ -602,8 +652,8 @@ def extract_pdf_text_and_reindex_background(note_id: int, user_id: int, pdf_path
             )
             pages_by_number = {int(page["page_number"]): page for page in existing_pages}
             with connection.cursor() as cursor:
-                for index, pdf_text in enumerate(page_texts, start=1):
-                    current = pages_by_number.get(index)
+                for parsed_page in parse_result.pages:
+                    current = pages_by_number.get(parsed_page.page_number)
                     if current:
                         cursor.execute(
                             """
@@ -611,7 +661,15 @@ def extract_pdf_text_and_reindex_background(note_id: int, user_id: int, pdf_path
                             SET content = %s, updated_at = now()
                             WHERE id = %s
                             """,
-                            (merge_page_state_content(current["content"], None, pdf_text=pdf_text), current["id"]),
+                            (
+                                merge_page_state_content(
+                                    current["content"],
+                                    None,
+                                    pdf_text=parsed_page.text,
+                                    rag_extraction=parsed_page.extraction_metadata(),
+                                ),
+                                current["id"],
+                            ),
                         )
                     else:
                         cursor.execute(
@@ -619,13 +677,30 @@ def extract_pdf_text_and_reindex_background(note_id: int, user_id: int, pdf_path
                             INSERT INTO note_pages (note_id, page_number, content, image_url)
                             VALUES (%s, %s, %s, NULL)
                             """,
-                            (note_id, index, merge_page_state_content(None, None, pdf_text=pdf_text)),
+                            (
+                                note_id,
+                                parsed_page.page_number,
+                                merge_page_state_content(
+                                    None,
+                                    None,
+                                    pdf_text=parsed_page.text,
+                                    rag_extraction=parsed_page.extraction_metadata(),
+                                ),
+                            ),
                         )
                 cursor.execute(
                     "UPDATE notes SET page_count = GREATEST(COALESCE(page_count, 0), %s), updated_at = now() WHERE id = %s",
-                    (len(page_texts), note_id),
+                    (parse_result.page_count, note_id),
                 )
             replace_note_chunks(connection, note_id=note_id, user_id=user_id)
+    except PdfParsingError as exc:
+        logger.warning(
+            "failed to parse uploaded pdf with pymupdf: note_id=%s user_id=%s pdf_path=%s error=%s",
+            note_id,
+            user_id,
+            pdf_path,
+            exc,
+        )
     except Exception as exc:
         logger.warning(
             "failed to extract uploaded pdf text and reindex: note_id=%s user_id=%s pdf_path=%s error=%s",

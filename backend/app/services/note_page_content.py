@@ -41,21 +41,28 @@ def merge_page_state_content(
     next_content: str | None,
     *,
     pdf_text: str | None = None,
+    rag_extraction: dict[str, Any] | None = None,
 ) -> str | None:
-    if next_content is None and pdf_text is None:
+    if next_content is None and pdf_text is None and rag_extraction is None:
         return current_content
 
     current_state = parse_page_state(current_content)
     next_state = parse_page_state(next_content)
 
-    if next_content is not None and next_state is None and pdf_text is None:
+    if next_content is not None and next_state is None and pdf_text is None and rag_extraction is None:
         return next_content
 
     merged = next_state or current_state or _empty_page_state()
     if current_state and current_state.get("pdfText") and "pdfText" not in merged:
         merged["pdfText"] = current_state["pdfText"]
+    if current_state and isinstance(current_state.get("ragExtraction"), dict) and "ragExtraction" not in merged:
+        merged["ragExtraction"] = current_state["ragExtraction"]
     if pdf_text is not None:
         merged["pdfText"] = pdf_text
+    if rag_extraction is not None:
+        merged["ragExtraction"] = rag_extraction
+    if not isinstance(merged.get("ragExtraction"), dict):
+        merged.pop("ragExtraction", None)
 
     merged["inkStrokes"] = merged.get("inkStrokes") if isinstance(merged.get("inkStrokes"), list) else []
     merged["textAnnotations"] = (
