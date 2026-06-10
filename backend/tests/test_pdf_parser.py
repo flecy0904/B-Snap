@@ -64,6 +64,36 @@ def _visual_blocks_pdf_bytes() -> bytes:
     return document.tobytes()
 
 
+def _nested_indent_pdf_bytes() -> bytes:
+    document = fitz.open()
+    page = document.new_page(width=960, height=540)
+    page.insert_text((64, 44), "Nested list layout", fontsize=32)
+    page.insert_text((160, 130), "- loss indicated by timeout:", fontsize=22)
+    page.insert_text((195, 168), "* cwnd set to 1 MSS;", fontsize=18)
+    page.insert_text((195, 204), "* window grows exponentially to threshold", fontsize=18)
+    page.insert_text((220, 232), "(ssthresh), then grows linearly", fontsize=18)
+    page.insert_text((195, 268), "* when cwnd equals ssthresh, slow start ends", fontsize=18)
+    page.insert_text((220, 296), "and congestion avoidance starts", fontsize=18)
+    page.insert_text((160, 372), "- loss indicated by duplicate ACKs:", fontsize=22)
+    page.insert_text((195, 410), "* cwnd is cut in half", fontsize=18)
+    page.insert_text((790, 520), "Transport Layer3-103", fontsize=10)
+    return document.tobytes()
+
+
+def _indented_continuation_pdf_bytes() -> bytes:
+    document = fitz.open()
+    page = document.new_page(width=960, height=540)
+    page.insert_text((64, 44), "Transport vs. network layer", fontsize=32)
+    page.insert_text((150, 120), "household analogy:", fontsize=16)
+    page.insert_text((150, 180), "12 kids in one house sending letters", fontsize=18)
+    page.insert_text((150, 222), "- transport protocol demuxes", fontsize=18)
+    page.insert_text((185, 252), "to in-house siblings", fontsize=18)
+    page.insert_text((150, 304), "- network-layer protocol routes packets", fontsize=18)
+    page.insert_text((650, 176), "short diagram label", fontsize=14)
+    page.insert_text((790, 520), "Transport Layer3-8", fontsize=10)
+    return document.tobytes()
+
+
 class PdfParserTest(unittest.TestCase):
     def test_parse_pdf_bytes_extracts_page_text_and_text_metadata(self) -> None:
         result = parse_pdf_bytes(_simple_text_pdf_bytes())
@@ -128,7 +158,6 @@ class PdfParserTest(unittest.TestCase):
         page = result.pages[0]
         metadata = page.extraction_metadata()
         visual_blocks = metadata["visualBlocks"]
-        visual_texts = [block["text"] for block in visual_blocks]
 
         self.assertNotIn("Transport Layer3-100", page.text)
         self.assertGreaterEqual(len(visual_blocks), 5)
@@ -138,10 +167,41 @@ class PdfParserTest(unittest.TestCase):
         self.assertTrue(any(block["role"] == "content" and "sender limits transmission" in block["text"] for block in visual_blocks))
         self.assertTrue(any(block["role"] == "content" and "cwnd is dynamic" in block["text"] for block in visual_blocks))
         self.assertTrue(any(block["role"] == "content" and "TCP sending rate" in block["text"] for block in visual_blocks))
-        self.assertLess(
-            next(index for index, text in enumerate(visual_texts) if "sender limits transmission" in text),
-            next(index for index, text in enumerate(visual_texts) if "TCP sending rate" in text),
+
+    def test_nested_indent_list_groups_child_items_without_bullet_specific_rules(self) -> None:
+        result = parse_pdf_bytes(_nested_indent_pdf_bytes())
+
+        page = result.pages[0]
+        metadata = page.extraction_metadata()
+        visual_blocks = metadata["visualBlocks"]
+        content_blocks = [block["text"] for block in visual_blocks if block["role"] == "content"]
+
+        self.assertGreaterEqual(len(content_blocks), 4)
+        self.assertEqual(content_blocks[0], "- loss indicated by timeout:")
+        self.assertIn("* cwnd set to 1 MSS;", content_blocks[1])
+        self.assertIn("* window grows exponentially to threshold", content_blocks[1])
+        self.assertIn("(ssthresh), then grows linearly", content_blocks[1])
+        self.assertIn("* when cwnd equals ssthresh, slow start ends", content_blocks[1])
+        self.assertIn("and congestion avoidance starts", content_blocks[1])
+        self.assertEqual(content_blocks[2], "- loss indicated by duplicate ACKs:")
+        self.assertIn("* cwnd is cut in half", content_blocks[3])
+
+    def test_indented_continuation_stays_with_parent_item(self) -> None:
+        result = parse_pdf_bytes(_indented_continuation_pdf_bytes())
+
+        page = result.pages[0]
+        metadata = page.extraction_metadata()
+        visual_blocks = metadata["visualBlocks"]
+        content_blocks = [block["text"] for block in visual_blocks if block["role"] == "content"]
+
+        self.assertTrue(
+            any(
+                "- transport protocol demuxes\nto in-house siblings" in block
+                for block in content_blocks
+            )
         )
+        self.assertFalse(any(block == "to in-house siblings" for block in content_blocks))
+        self.assertNotIn("Transport Layer3-8", page.text)
 
     def test_block_aware_chunks_preserve_block_boundaries_and_metadata(self) -> None:
         blocks = [
