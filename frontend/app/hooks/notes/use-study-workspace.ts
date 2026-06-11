@@ -42,7 +42,13 @@ import { useAiChatActions } from './ai/use-ai-chat-actions';
 import { useAiChatDerivedState } from './ai/use-ai-chat-derived-state';
 import { isCanvasCreateRequest } from './ai-canvas/canvas-command-intent';
 import { useAiCanvasNotes } from './ai-canvas/use-ai-canvas-notes';
-import { buildClassInsightContext, buildImportantPageRecommendations, isClassInsightQuestion, isClassInsightTargetDocument } from './class-insight';
+import {
+  buildClassInsightContext,
+  buildImportantPageRecommendations,
+  extractRecommendedPageNumbersFromText,
+  isClassInsightQuestion,
+  isClassInsightTargetDocument,
+} from './class-insight';
 import { getStudyDocumentBackendNoteId } from './document/backend-sync';
 import { parseNotePageContent, type HandwritingRecognitionState } from './document/note-page-content';
 import { useStudyDocumentActions } from './document/use-study-document-actions';
@@ -1585,12 +1591,24 @@ export function useStudyWorkspace(props: {
       }
     },
     clearSelection: clearSelectionForCurrentDocument,
-    buildContextHint: async (question) => buildClassInsightContext({
-      question,
-      studyDocument,
-      subject,
-      classInsight: await refreshClassInsightForQuestion(question),
-    }),
+    buildContextHint: async (question) => {
+      const previouslyRecommendedPageNumbers = new Set<number>();
+      aiMessages
+        .filter((message) => message.role === 'assistant')
+        .forEach((message) => {
+          extractRecommendedPageNumbersFromText(message.content, studyDocument?.pageCount).forEach((pageNumber) => {
+            previouslyRecommendedPageNumbers.add(pageNumber);
+          });
+        });
+
+      return buildClassInsightContext({
+        question,
+        studyDocument,
+        subject,
+        classInsight: await refreshClassInsightForQuestion(question),
+        previouslyRecommendedPageNumbers,
+      });
+    },
   });
 
   const {
