@@ -71,7 +71,7 @@ function getFloatingPanelHeight(windowHeight: number, panelY: number, requestedH
 const CLASS_INSIGHT_QUICK_PROMPTS = [
   { label: '중요 페이지', question: '시험에 나올만한 중요 페이지 추천해줘' },
 ] as const;
-const MORE_IMPORTANT_PAGES_QUESTION = '중요 페이지 더 보여줘. 방금 추천한 페이지는 제외하고 다음 순위 페이지가 있으면 알려줘. 없으면 추가로 중요한 페이지는 확인되지 않는다고 자연스럽게 말해줘.';
+const MORE_IMPORTANT_PAGES_QUESTION = '중요 페이지 더 보여줘';
 
 export function NotesAiAssistantPanel() {
   const workspace = useNotesGlobalContext();
