@@ -6,12 +6,11 @@ import { useAppKeyboardInset } from '../../../hooks/notes/use-app-keyboard-inset
 import { useDelayedTooltip } from '../../../hooks/notes/use-delayed-tooltip';
 import {
   evaluateBackendRagDebug,
-  extractBackendPdfText,
+  getBackendRagDebugParserCompare,
   getBackendRagDebugStatus,
-  getBackendRagDebugIndex,
-  reindexBackendNoteRag,
+  type BackendRagDebugParserCompareResponse,
+  type BackendRagDebugParserName,
   type BackendRagDebugEvaluateResponse,
-  type BackendRagDebugIndexResponse,
   type BackendRagDebugStatusResponse,
   type BackendRagScopeSource,
 } from '../../../services/backend-api';
@@ -65,35 +64,14 @@ const WEB_MESSAGE_SCROLLBAR_MIN_THUMB_HEIGHT = 32;
 const AI_COMPOSER_INPUT_MIN_HEIGHT = 36;
 const AI_COMPOSER_INPUT_MAX_HEIGHT = 132;
 const RAG_DEV_PANEL_WIDTH = 480;
-const RAG_DEV_PANEL_DEFAULT_HEIGHT = 640;
+const RAG_DEV_PANEL_DEFAULT_HEIGHT = 9999;
 const RAG_DEV_PANEL_MARGIN = 16;
-const RAG_DEV_PANEL_TOP = 82;
+const RAG_DEV_PANEL_TOP = FLOATING_PANEL_TOP;
 const RAG_DEBUG_ENABLED = Platform.OS === 'web' && typeof __DEV__ !== 'undefined' && __DEV__;
 const RAG_DEV_TABS = ['search', 'index', 'context', 'status'] as const;
 
 type RagDevTab = typeof RAG_DEV_TABS[number];
-
-function formatRagDebugValue(value: unknown) {
-  if (typeof value === 'string' && value.trim()) return value.trim();
-  if (typeof value === 'number' && Number.isFinite(value)) return String(value);
-  return '-';
-}
-
-function formatRagDebugChunkMetadata(metadata?: Record<string, unknown>) {
-  if (!metadata) return '';
-  const parts = [
-    metadata.chunking_strategy ? `chunking ${formatRagDebugValue(metadata.chunking_strategy)}` : null,
-    metadata.extraction_strategy ? `extraction ${formatRagDebugValue(metadata.extraction_strategy)}` : null,
-    metadata.reading_order_strategy ? `order ${formatRagDebugValue(metadata.reading_order_strategy)}` : null,
-    metadata.block_start_order !== undefined || metadata.block_end_order !== undefined
-      ? `blocks ${formatRagDebugValue(metadata.block_start_order)}-${formatRagDebugValue(metadata.block_end_order)}`
-      : null,
-    metadata.block_count !== undefined ? `block count ${formatRagDebugValue(metadata.block_count)}` : null,
-    metadata.header_footer_candidate_count !== undefined ? `footer candidates ${formatRagDebugValue(metadata.header_footer_candidate_count)}` : null,
-    metadata.side_label_candidate_count !== undefined ? `side labels ${formatRagDebugValue(metadata.side_label_candidate_count)}` : null,
-  ].filter(Boolean);
-  return parts.join('\n');
-}
+type RagParserView = BackendRagDebugParserName;
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
@@ -153,13 +131,14 @@ export function NotesAiAssistantPanel() {
   const [ragDebugOpen, setRagDebugOpen] = React.useState(false);
   const [ragDevTab, setRagDevTab] = React.useState<RagDevTab>('search');
   const [ragDevPosition, setRagDevPosition] = React.useState({ x: Math.max(RAG_DEV_PANEL_MARGIN, width - RAG_DEV_PANEL_WIDTH - RAG_DEV_PANEL_MARGIN), y: RAG_DEV_PANEL_TOP });
+  const [ragParserView, setRagParserView] = React.useState<RagParserView>('pymupdf');
   const ragDevPositionRef = React.useRef(ragDevPosition);
   const webRagDevDragRef = React.useRef<WebFloatingDragState | null>(null);
   const [ragDebugQuery, setRagDebugQuery] = React.useState('');
-  const [ragDebugLoading, setRagDebugLoading] = React.useState<'evaluate' | 'index' | 'status' | 'extract' | 'reindex' | null>(null);
+  const [ragDebugLoading, setRagDebugLoading] = React.useState<'evaluate' | 'status' | 'parser' | null>(null);
   const [ragDebugError, setRagDebugError] = React.useState<string | null>(null);
   const [ragDebugEvaluation, setRagDebugEvaluation] = React.useState<BackendRagDebugEvaluateResponse | null>(null);
-  const [ragDebugIndex, setRagDebugIndex] = React.useState<BackendRagDebugIndexResponse | null>(null);
+  const [ragParserCompare, setRagParserCompare] = React.useState<BackendRagDebugParserCompareResponse | null>(null);
   const [ragDebugStatus, setRagDebugStatus] = React.useState<BackendRagDebugStatusResponse | null>(null);
   const [ragDebugSelectedKey, setRagDebugSelectedKey] = React.useState<string | null>(null);
   const aiQuestionInputRef = React.useRef<TextInput | null>(null);
@@ -198,6 +177,15 @@ export function NotesAiAssistantPanel() {
       ?? workspace.noteAiChatSessions.find((session: any) => session.id === workspace.activeAiChatSessionId)
       ?? null
     : null;
+  const activeSessionIdRef = React.useRef<number | null>(activeSession?.id ?? null);
+  React.useEffect(() => {
+    activeSessionIdRef.current = activeSession?.id ?? null;
+    setRagDebugEvaluation(null);
+    setRagDebugStatus(null);
+    setRagDebugSelectedKey(null);
+    setRagDebugError(null);
+    setRagDebugLoading((current) => (current === 'evaluate' || current === 'status' ? null : current));
+  }, [activeSession?.id]);
   const openLinkedPdfPage = React.useCallback((pageNumber: number) => {
     workspace.onSetCurrentPdfPage?.(pageNumber);
     workspace.onChangeInkTool?.('view');
@@ -222,6 +210,16 @@ export function NotesAiAssistantPanel() {
     if (document?.backendSyncStatus === 'synced' && typeof document?.id === 'number') return String(document.id);
     return null;
   }, [workspace.studyDocument]);
+  const currentBackendNoteIdRef = React.useRef(currentBackendNoteId);
+  React.useEffect(() => {
+    currentBackendNoteIdRef.current = currentBackendNoteId;
+    setRagDebugEvaluation(null);
+    setRagParserCompare(null);
+    setRagDebugStatus(null);
+    setRagDebugSelectedKey(null);
+    setRagDebugError(null);
+    setRagDebugLoading(null);
+  }, [currentBackendNoteId]);
   const ragScopeTitle = React.useMemo(() => {
     if (activeRagScopeSources.length === 0) {
       return '참고 자료 준비 중';
@@ -265,86 +263,30 @@ export function NotesAiAssistantPanel() {
         }
       }
     }
-    if (ragDebugIndex) {
-      const page = ragDebugIndex.pages.find((item) => `page:${item.id}` === ragDebugSelectedKey);
-      if (page) {
-        const elements = Array.isArray(page.elements) ? page.elements : [];
-        const imageElements = elements.filter((element) => element.type === 'image');
-        const ragExtraction = page.rag_extraction ?? {};
-        const visualBlocks = Array.isArray(ragExtraction.visualBlocks) ? ragExtraction.visualBlocks : [];
-        const footerCandidates = Array.isArray(ragExtraction.headerFooterCandidates) ? ragExtraction.headerFooterCandidates : [];
-        const sideLabelCandidates = Array.isArray(ragExtraction.sideLabelCandidates) ? ragExtraction.sideLabelCandidates : [];
-        const metadataText = [
-          `parser ${page.parser ?? '-'}`,
-          `extraction ${page.extraction_strategy ?? '-'}`,
-          `order ${page.reading_order_strategy ?? '-'} / columns ${page.column_count ?? 1} / confidence ${page.column_confidence ?? 0}`,
-          `visual blocks ${page.visual_block_count ?? visualBlocks.length}`,
-          `text blocks ${page.text_block_count ?? 0}`,
-          `image blocks ${page.image_block_count ?? 0}`,
-          `footer candidates ${page.header_footer_candidate_count ?? footerCandidates.length}`,
-          `side labels ${page.side_label_candidate_count ?? sideLabelCandidates.length}`,
-          footerCandidates.length
-            ? `footer: ${footerCandidates.map((item: any) => item.textPreview ?? item.text ?? '').filter(Boolean).join(' | ')}`
-            : null,
-          sideLabelCandidates.length
-            ? `side labels: ${sideLabelCandidates.map((item: any) => item.textPreview ?? item.text ?? '').filter(Boolean).join(' | ')}`
-            : null,
-          imageElements.length
-            ? `images ${imageElements.map((element) => {
-              const bbox = Array.isArray(element.bbox) ? element.bbox.join(',') : '-';
-              const size = element.width && element.height ? `${element.width}x${element.height}` : '-';
-              return `[${bbox}] ${size} ${element.imageExt ?? element.image_ext ?? ''}`.trim();
-            }).join(' | ')}`
-            : null,
-          visualBlocks.length
-            ? `visual blocks:\n${visualBlocks.map((block: any, index) => `${index + 1}. ${block.role ?? '-'} [${Array.isArray(block.bbox) ? block.bbox.join(',') : '-'}] ${block.textPreview ?? block.text ?? ''}`).join('\n')}`
-            : null,
-        ].filter(Boolean).join('\n');
+    if (ragParserCompare) {
+      const parserChunk = ragParserCompare.chunks.find((chunk) => (
+        `parser:${ragParserCompare.summary.parser}:page:${chunk.page_number}:chunk:${chunk.chunk_index}` === ragDebugSelectedKey
+      ));
+      if (parserChunk) {
         return {
-          title: `Page ${page.page_number}`,
-          meta: `${page.text_length} chars extracted from current note page`,
-          text: metadataText ? `${metadataText}\n\n${page.text}` : page.text,
+          title: `${ragParserCompare.summary.parser} Page ${parserChunk.page_number} / chunk ${parserChunk.chunk_index}`,
+          meta: `${parserChunk.content_length} chars · embedding 직전 content`,
+          text: parserChunk.content,
         };
       }
-      const chunk = ragDebugIndex.chunks.find((item, index) => (
-        `chunk:${item.source_type}:${item.source_id}:${item.chunk_index ?? index}` === ragDebugSelectedKey
+      const parserPage = ragParserCompare.pages.find((page) => (
+        `parser:${ragParserCompare.summary.parser}:page:${page.page_number}` === ragDebugSelectedKey
       ));
-      if (chunk) {
-        const chunkMetadataText = formatRagDebugChunkMetadata(chunk.metadata);
+      if (parserPage) {
         return {
-          title: chunk.title,
-          meta: `${chunk.source_type} · p.${chunk.page_number ?? '-'} · chunk ${chunk.chunk_index ?? '-'} · ${chunk.content_length} chars`,
-          text: chunkMetadataText ? `${chunkMetadataText}\n\n${chunk.content}` : chunk.content,
+          title: `${ragParserCompare.summary.parser} Page ${parserPage.page_number}`,
+          meta: `${parserPage.text_length} chars · extracted page text`,
+          text: parserPage.text,
         };
       }
     }
     return null;
-  }, [ragDebugEvaluation, ragDebugIndex, ragDebugSelectedKey]);
-  const runRagDebugIndex = React.useCallback(async () => {
-    if (!RAG_DEBUG_ENABLED) return;
-    const noteId = Number(currentBackendNoteId);
-    if (!Number.isFinite(noteId) || noteId <= 0) {
-      setRagDebugError('현재 노트가 backend note와 연결되어 있지 않습니다.');
-      return;
-    }
-    setRagDebugLoading('index');
-    setRagDebugError(null);
-    try {
-      const result = await getBackendRagDebugIndex(noteId);
-      setRagDebugIndex(result);
-      if (result.pages[0]) {
-        setRagDebugSelectedKey(`page:${result.pages[0].id}`);
-      } else if (result.chunks[0]) {
-        setRagDebugSelectedKey(`chunk:${result.chunks[0].source_type}:${result.chunks[0].source_id}:${result.chunks[0].chunk_index ?? 0}`);
-      } else {
-        setRagDebugSelectedKey(null);
-      }
-    } catch (error: any) {
-      setRagDebugError(error?.detail || error?.message || 'RAG index 확인에 실패했습니다.');
-    } finally {
-      setRagDebugLoading(null);
-    }
-  }, [currentBackendNoteId]);
+  }, [ragDebugEvaluation, ragDebugSelectedKey, ragParserCompare]);
   const runRagDevEvaluate = React.useCallback(async () => {
     if (!RAG_DEBUG_ENABLED) return;
     const question = (ragDebugQuery || workspace.aiQuestion || latestUserMessageContent).trim();
@@ -352,7 +294,9 @@ export function NotesAiAssistantPanel() {
       setRagDebugError('Search query를 입력하세요.');
       return;
     }
-    if (!activeSession?.id) {
+    const sessionId = activeSession?.id ?? null;
+    const noteId = currentBackendNoteIdRef.current;
+    if (!sessionId) {
       setRagDebugError('Active AI Chat session이 없습니다.');
       return;
     }
@@ -361,7 +305,7 @@ export function NotesAiAssistantPanel() {
     setRagDebugError(null);
     try {
       const result = await evaluateBackendRagDebug({
-        sessionId: activeSession.id,
+        sessionId,
         content: question,
         pageNumber: workspace.currentPdfPage ?? null,
         selectionImageUri: workspace.selectionPreviewUri ?? null,
@@ -369,14 +313,18 @@ export function NotesAiAssistantPanel() {
         ragScope: workspace.activeAiRagScope ?? null,
         topK: 10,
       });
+      if (activeSessionIdRef.current !== sessionId || currentBackendNoteIdRef.current !== noteId) return;
       setRagDebugEvaluation(result);
       setRagDebugSelectedKey(result.results[0]
         ? `result:${result.results[0].source_type}:${result.results[0].source_id}:${result.results[0].chunk_index ?? 0}`
         : null);
     } catch (error: any) {
+      if (activeSessionIdRef.current !== sessionId || currentBackendNoteIdRef.current !== noteId) return;
       setRagDebugError(error?.detail || error?.message || 'RAG search evaluation failed.');
     } finally {
-      setRagDebugLoading(null);
+      if (activeSessionIdRef.current === sessionId && currentBackendNoteIdRef.current === noteId) {
+        setRagDebugLoading(null);
+      }
     }
   }, [
     activeSession?.id,
@@ -388,13 +336,41 @@ export function NotesAiAssistantPanel() {
     workspace.selectionPreviewUri,
     workspace.selectionRect,
   ]);
-  const runRagDevIndex = React.useCallback(async () => {
+  const runRagDevParserCompare = React.useCallback(async (parserName: RagParserView) => {
     if (!RAG_DEBUG_ENABLED) return;
-    await runRagDebugIndex();
-  }, [runRagDebugIndex]);
+    const noteId = Number(currentBackendNoteId);
+    if (!Number.isFinite(noteId) || noteId <= 0) {
+      setRagDebugError('현재 note가 backend note와 연결되어 있지 않습니다.');
+      return;
+    }
+    setRagParserView(parserName);
+    setRagDebugLoading('parser');
+    setRagDebugError(null);
+    setRagParserCompare(null);
+    setRagDebugSelectedKey(null);
+    try {
+      const result = await getBackendRagDebugParserCompare(noteId, parserName);
+      if (currentBackendNoteIdRef.current !== String(noteId)) return;
+      setRagParserCompare(result);
+      setRagDebugSelectedKey(result.chunks[0]
+        ? `parser:${result.summary.parser}:page:${result.chunks[0].page_number}:chunk:${result.chunks[0].chunk_index}`
+        : result.pages[0]
+          ? `parser:${result.summary.parser}:page:${result.pages[0].page_number}`
+        : null);
+    } catch (error: any) {
+      if (currentBackendNoteIdRef.current !== String(noteId)) return;
+      setRagDebugError(error?.detail || error?.message || `${parserName} parser comparison failed.`);
+    } finally {
+      if (currentBackendNoteIdRef.current === String(noteId)) {
+        setRagDebugLoading(null);
+      }
+    }
+  }, [currentBackendNoteId]);
   const runRagDevStatus = React.useCallback(async () => {
     if (!RAG_DEBUG_ENABLED) return;
-    if (!activeSession?.id) {
+    const sessionId = activeSession?.id ?? null;
+    const noteId = currentBackendNoteIdRef.current;
+    if (!sessionId) {
       setRagDebugError('Active AI Chat session이 없습니다.');
       return;
     }
@@ -402,63 +378,20 @@ export function NotesAiAssistantPanel() {
     setRagDebugError(null);
     try {
       const result = await getBackendRagDebugStatus({
-        sessionId: activeSession.id,
+        sessionId,
         ragScope: workspace.activeAiRagScope ?? null,
       });
+      if (activeSessionIdRef.current !== sessionId || currentBackendNoteIdRef.current !== noteId) return;
       setRagDebugStatus(result);
     } catch (error: any) {
+      if (activeSessionIdRef.current !== sessionId || currentBackendNoteIdRef.current !== noteId) return;
       setRagDebugError(error?.detail || error?.message || 'RAG status check failed.');
     } finally {
-      setRagDebugLoading(null);
+      if (activeSessionIdRef.current === sessionId && currentBackendNoteIdRef.current === noteId) {
+        setRagDebugLoading(null);
+      }
     }
   }, [activeSession?.id, workspace.activeAiRagScope]);
-  const runRagDevReindex = React.useCallback(async () => {
-    if (!RAG_DEBUG_ENABLED) return;
-    const noteId = Number(currentBackendNoteId);
-    if (!Number.isFinite(noteId) || noteId <= 0) {
-      setRagDebugError('현재 note가 backend note와 연결되어 있지 않습니다.');
-      return;
-    }
-    setRagDebugLoading('reindex');
-    setRagDebugError(null);
-    try {
-      await reindexBackendNoteRag(noteId);
-      await runRagDevIndex();
-      await runRagDevStatus();
-    } catch (error: any) {
-      setRagDebugError(error?.detail || error?.message || 'Current note reindex failed.');
-    } finally {
-      setRagDebugLoading(null);
-    }
-  }, [currentBackendNoteId, runRagDevIndex, runRagDevStatus]);
-  const runRagDevExtractText = React.useCallback(async () => {
-    if (!RAG_DEBUG_ENABLED) return;
-    const noteId = Number(currentBackendNoteId);
-    if (!Number.isFinite(noteId) || noteId <= 0) {
-      setRagDebugError('?꾩옱 note媛 backend note? ?곌껐?섏뼱 ?덉? ?딆뒿?덈떎.');
-      return;
-    }
-    setRagDebugLoading('extract');
-    setRagDebugError(null);
-    try {
-      await extractBackendPdfText({ noteId });
-      await runRagDevIndex();
-      await runRagDevStatus();
-    } catch (error: any) {
-      setRagDebugError(error?.detail || error?.message || 'Current note text extraction failed.');
-    } finally {
-      setRagDebugLoading(null);
-    }
-  }, [currentBackendNoteId, runRagDevIndex, runRagDevStatus]);
-  const refreshRagDevScope = React.useCallback(async () => {
-    await Promise.all([
-      runRagDevIndex(),
-      runRagDevStatus(),
-    ]);
-    if ((ragDebugQuery || workspace.aiQuestion || latestUserMessageContent).trim()) {
-      await runRagDevEvaluate();
-    }
-  }, [latestUserMessageContent, ragDebugQuery, runRagDevEvaluate, runRagDevIndex, runRagDevStatus, workspace.aiQuestion]);
   const removeMentionToken = React.useCallback((value: string) => (
     value.replace(/(^|\s)@[^\s@]*$/, (match, prefix) => prefix.trimEnd())
   ).trimStart(), []);
@@ -560,9 +493,9 @@ export function NotesAiAssistantPanel() {
   const floatingMaxX = Math.max(FLOATING_PANEL_MARGIN, width - floatingPanelWidth - FLOATING_PANEL_MARGIN);
   const floatingMaxY = Math.max(FLOATING_PANEL_TOP, height - floatingPanelHeight - FLOATING_PANEL_MARGIN);
   const ragDevPanelWidth = Math.min(RAG_DEV_PANEL_WIDTH, Math.max(320, width - RAG_DEV_PANEL_MARGIN * 2));
-  const ragDevPanelHeight = Math.min(RAG_DEV_PANEL_DEFAULT_HEIGHT, Math.max(360, height - RAG_DEV_PANEL_MARGIN * 2));
+  const ragDevPanelHeight = Math.min(RAG_DEV_PANEL_DEFAULT_HEIGHT, Math.max(360, height - RAG_DEV_PANEL_TOP - RAG_DEV_PANEL_MARGIN));
   const ragDevMaxX = Math.max(RAG_DEV_PANEL_MARGIN, width - ragDevPanelWidth - RAG_DEV_PANEL_MARGIN);
-  const ragDevMaxY = Math.max(RAG_DEV_PANEL_MARGIN, height - ragDevPanelHeight - RAG_DEV_PANEL_MARGIN);
+  const ragDevMaxY = Math.max(RAG_DEV_PANEL_TOP, height - ragDevPanelHeight - RAG_DEV_PANEL_MARGIN);
   const sidebarMaxWidth = Math.max(SIDEBAR_MIN_WIDTH, Math.floor(width * 0.5));
   const useWebFloatingDrag = Platform.OS === 'web' && !appChatSidebar && workspace.aiPanelMode === 'floating';
   const useWebSidebarResize = Platform.OS === 'web' && !workspace.usesAppAiPanelLayout && workspace.aiPanelMode === 'sidebar';
@@ -595,7 +528,7 @@ export function NotesAiAssistantPanel() {
     setRagDevPosition((current) => {
       const next = {
         x: clamp(current.x, RAG_DEV_PANEL_MARGIN, ragDevMaxX),
-        y: clamp(current.y, RAG_DEV_PANEL_MARGIN, ragDevMaxY),
+        y: clamp(current.y, RAG_DEV_PANEL_TOP, ragDevMaxY),
       };
       return next.x === current.x && next.y === current.y ? current : next;
     });
@@ -643,7 +576,7 @@ export function NotesAiAssistantPanel() {
       if (!drag) return;
       if (drag.pointerId !== null && event.pointerId !== drag.pointerId) return;
       const nextX = clamp(drag.startPanelX + event.clientX - drag.startClientX, RAG_DEV_PANEL_MARGIN, ragDevMaxX);
-      const nextY = clamp(drag.startPanelY + event.clientY - drag.startClientY, RAG_DEV_PANEL_MARGIN, ragDevMaxY);
+      const nextY = clamp(drag.startPanelY + event.clientY - drag.startClientY, RAG_DEV_PANEL_TOP, ragDevMaxY);
       setRagDevPosition({ x: nextX, y: nextY });
     };
     const handlePointerUp = (event: PointerEvent) => {
@@ -1454,56 +1387,72 @@ export function NotesAiAssistantPanel() {
               {ragDevTab === 'index' ? (
                 <View style={workspace.styles.aiRagDevSection}>
                   <View style={workspace.styles.aiRagDevActions}>
-                    <Pressable style={workspace.styles.aiRagDevPrimaryButton} onPress={runRagDevIndex} disabled={ragDebugLoading !== null}>
-                      <Text style={workspace.styles.aiRagDevPrimaryButtonText}>{ragDebugLoading === 'index' ? '불러오는 중' : '현재 Index 불러오기'}</Text>
+                    <Pressable
+                      style={[workspace.styles.aiRagDevParserButton, ragParserView === 'pymupdf' && workspace.styles.aiRagDevParserButtonActive]}
+                      onPress={() => runRagDevParserCompare('pymupdf')}
+                      disabled={ragDebugLoading !== null}
+                    >
+                      <Text style={[workspace.styles.aiRagDevParserButtonText, ragParserView === 'pymupdf' && workspace.styles.aiRagDevParserButtonTextActive]}>
+                        {ragDebugLoading === 'parser' && ragParserView === 'pymupdf' ? '추출 중' : 'PyMuPDF block 추출'}
+                      </Text>
                     </Pressable>
-                    <Pressable style={workspace.styles.aiRagDevSecondaryButton} onPress={runRagDevExtractText} disabled={ragDebugLoading !== null}>
-                      <Text style={workspace.styles.aiRagDevSecondaryButtonText}>{ragDebugLoading === 'extract' ? '재추출 중' : '텍스트 재추출'}</Text>
+                    <Pressable
+                      style={[workspace.styles.aiRagDevParserButton, ragParserView === 'pypdf_plain' && workspace.styles.aiRagDevParserButtonActive]}
+                      onPress={() => runRagDevParserCompare('pypdf_plain')}
+                      disabled={ragDebugLoading !== null}
+                    >
+                      <Text style={[workspace.styles.aiRagDevParserButtonText, ragParserView === 'pypdf_plain' && workspace.styles.aiRagDevParserButtonTextActive]}>
+                        {ragDebugLoading === 'parser' && ragParserView === 'pypdf_plain' ? '추출 중' : 'pypdf plain 추출'}
+                      </Text>
                     </Pressable>
-                    <Pressable style={workspace.styles.aiRagDevSecondaryButton} onPress={runRagDevReindex} disabled={ragDebugLoading !== null}>
-                      <Text style={workspace.styles.aiRagDevSecondaryButtonText}>{ragDebugLoading === 'reindex' ? '예약됨' : 'Index 다시 만들기'}</Text>
-                    </Pressable>
-                    <Pressable style={workspace.styles.aiRagDevSecondaryButton} onPress={refreshRagDevScope} disabled={ragDebugLoading !== null}>
-                      <Text style={workspace.styles.aiRagDevSecondaryButtonText}>Scope 새로고침</Text>
+                    <Pressable
+                      style={[workspace.styles.aiRagDevParserButton, ragParserView === 'docling' && workspace.styles.aiRagDevParserButtonActive]}
+                      onPress={() => runRagDevParserCompare('docling')}
+                      disabled={ragDebugLoading !== null}
+                    >
+                      <Text style={[workspace.styles.aiRagDevParserButtonText, ragParserView === 'docling' && workspace.styles.aiRagDevParserButtonTextActive]}>
+                        {ragDebugLoading === 'parser' && ragParserView === 'docling' ? '추출 중' : 'Docling 추출'}
+                      </Text>
                     </Pressable>
                   </View>
                   <Text style={workspace.styles.aiRagDevMeta}>
-                    텍스트 재추출은 PDF parser를 다시 실행합니다. Index 다시 만들기는 이미 저장된 텍스트로 chunk/embedding만 다시 만듭니다. 현재 Index 불러오기는 DB에 저장된 결과를 화면에 보여주기만 합니다.
+                    세 버튼은 DB 저장, chunk, embedding을 건드리지 않고 현재 PDF 파일을 각 parser로만 추출해 비교합니다.
                   </Text>
-                  {ragDebugIndex ? (
+                  {ragParserCompare ? (
                     <View style={workspace.styles.aiRagDevSection}>
-                      <Text style={workspace.styles.aiRagDevSectionTitle} numberOfLines={1}>{ragDebugIndex.note.title}</Text>
-                      <Text style={workspace.styles.aiRagDevMeta}>pages {ragDebugIndex.summary.page_count} · chunks {ragDebugIndex.summary.chunk_count} · shown {ragDebugIndex.summary.chunks_returned}</Text>
-                      <Text style={workspace.styles.aiRagDevMeta} numberOfLines={1}>model {ragDebugIndex.summary.embedding_model ?? '-'} · parser {ragDebugIndex.summary.parser ?? '-'} · last indexed {ragDebugIndex.summary.last_indexed_at ?? '-'}</Text>
-                      <Text style={workspace.styles.aiRagDevMeta} numberOfLines={1}>extraction {(ragDebugIndex.summary.extraction_strategies ?? []).join(', ') || '-'}</Text>
-                      <Text style={workspace.styles.aiRagDevMeta}>visual blocks {ragDebugIndex.summary.visual_block_count ?? 0} · text blocks {ragDebugIndex.summary.text_block_count ?? 0} · image blocks {ragDebugIndex.summary.image_block_count ?? 0}</Text>
-                      <Text style={workspace.styles.aiRagDevSectionTitle}>Extracted page text</Text>
-                      {ragDebugIndex.pages.slice(0, 8).map((page) => {
-                        const key = `page:${page.id}`;
-                        return (
-                          <Pressable key={key} style={[workspace.styles.aiRagDevCard, ragDebugSelectedKey === key && workspace.styles.aiRagDevCardActive]} onPress={() => setRagDebugSelectedKey(key)}>
-                            <Text style={workspace.styles.aiRagDevCardTitle}>page {page.page_number} · {page.text_length} chars</Text>
-                            <Text style={workspace.styles.aiRagDevMeta} numberOfLines={1}>parser {page.parser ?? '-'} · {page.extraction_strategy ?? '-'} · order {page.reading_order_strategy ?? '-'} · visual {page.visual_block_count ?? 0} · text {page.text_block_count ?? 0} · image {page.image_block_count ?? 0}</Text>
-                            <Text style={workspace.styles.aiRagDevMeta} numberOfLines={1}>footer {page.header_footer_candidate_count ?? 0} · side labels {page.side_label_candidate_count ?? 0}</Text>
-                            <Text style={workspace.styles.aiRagDevSnippet} numberOfLines={2}>{page.text_snippet || 'No extracted text.'}</Text>
-                          </Pressable>
-                        );
-                      })}
-                      <Text style={workspace.styles.aiRagDevSectionTitle}>Chunks</Text>
-                      {ragDebugIndex.chunks.map((chunk, index) => {
-                        const key = `chunk:${chunk.source_type}:${chunk.source_id}:${chunk.chunk_index ?? index}`;
-                        const metadata = chunk.metadata ?? {};
-                        return (
-                          <Pressable key={key} style={[workspace.styles.aiRagDevCard, ragDebugSelectedKey === key && workspace.styles.aiRagDevCardActive]} onPress={() => setRagDebugSelectedKey(key)}>
-                            <Text style={workspace.styles.aiRagDevCardTitle} numberOfLines={1}>{chunk.title}</Text>
-                            <Text style={workspace.styles.aiRagDevMeta} numberOfLines={1}>{chunk.source_type} · p.{chunk.page_number ?? '-'} · chunk {chunk.chunk_index ?? '-'} · {chunk.content_length} chars</Text>
-                            <Text style={workspace.styles.aiRagDevMeta} numberOfLines={1}>{formatRagDebugValue(metadata.chunking_strategy)} · blocks {formatRagDebugValue(metadata.block_start_order)}-{formatRagDebugValue(metadata.block_end_order)} · count {formatRagDebugValue(metadata.block_count)}</Text>
-                            <Text style={workspace.styles.aiRagDevSnippet} numberOfLines={2}>{chunk.content_snippet}</Text>
-                          </Pressable>
-                        );
+                      <Text style={workspace.styles.aiRagDevSectionTitle} numberOfLines={1}>{ragParserCompare.note.title}</Text>
+                      <Text style={workspace.styles.aiRagDevMeta}>
+                        parser {ragParserCompare.summary.parser} · pages {ragParserCompare.summary.page_start ?? '-'}-{ragParserCompare.summary.page_end ?? '-'} · {ragParserCompare.summary.page_count} pages · {ragParserCompare.summary.chunk_count} chunks · {ragParserCompare.summary.elapsed_ms}ms
+                      </Text>
+                      <Text style={workspace.styles.aiRagDevSectionTitle}>
+                        Embedding 직전 content
+                      </Text>
+                      {ragParserCompare.pages.map((page) => {
+                        const pageNumber = Number(page.page_number);
+                        const pageChunks = ragParserCompare.chunks.filter((chunk) => Number(chunk.page_number) === pageNumber);
+                        if (!pageChunks.length) {
+                          return (
+                            <View key={`parser:${ragParserCompare.summary.parser}:page:${pageNumber}:empty`} style={workspace.styles.aiRagDevCard}>
+                              <Text style={workspace.styles.aiRagDevCardTitle}>page {pageNumber} · 0 chunks</Text>
+                              <Text style={workspace.styles.aiRagDevEmpty}>Embedding할 content 없음</Text>
+                            </View>
+                          );
+                        }
+                        return pageChunks.map((chunk) => {
+                          const key = `parser:${ragParserCompare.summary.parser}:page:${chunk.page_number}:chunk:${chunk.chunk_index}`;
+                          return (
+                            <Pressable key={key} style={[workspace.styles.aiRagDevCard, ragDebugSelectedKey === key && workspace.styles.aiRagDevCardActive]} onPress={() => setRagDebugSelectedKey(key)}>
+                              <Text style={workspace.styles.aiRagDevCardTitle}>page {chunk.page_number} · chunk {chunk.chunk_index} · {chunk.content_length} chars</Text>
+                              <Text style={workspace.styles.aiRagDevMeta} numberOfLines={1}>parser {chunk.parser ?? ragParserCompare.summary.parser}</Text>
+                              <Text style={workspace.styles.aiRagDevSnippet} numberOfLines={3}>{chunk.content_snippet || 'No content.'}</Text>
+                            </Pressable>
+                          );
+                        });
                       })}
                     </View>
-                  ) : null}
+                  ) : (
+                    <Text style={workspace.styles.aiRagDevEmpty}>비교할 parser 버튼을 누르면 추출 결과가 여기에 표시됩니다.</Text>
+                  )}
                 </View>
               ) : null}
               {ragDevTab === 'context' ? (
@@ -1560,14 +1509,20 @@ export function NotesAiAssistantPanel() {
                   ) : null}
                 </View>
               ) : null}
+            </ScrollView>
+            <View style={workspace.styles.aiRagDevDetail}>
               {ragDebugDetail ? (
-                <View style={workspace.styles.aiRagDevDetail}>
+                <>
                   <Text style={workspace.styles.aiRagDevDetailTitle} numberOfLines={2}>{ragDebugDetail.title}</Text>
                   <Text style={workspace.styles.aiRagDevMeta} numberOfLines={2}>{ragDebugDetail.meta}</Text>
-                  <Text style={workspace.styles.aiRagDevDetailText}>{ragDebugDetail.text || 'No full text.'}</Text>
-                </View>
-              ) : null}
-            </ScrollView>
+                  <ScrollView style={workspace.styles.aiRagDevDetailScroll} contentContainerStyle={workspace.styles.aiRagDevDetailScrollContent} showsVerticalScrollIndicator>
+                    <Text style={workspace.styles.aiRagDevDetailText}>{ragDebugDetail.text || 'No full text.'}</Text>
+                  </ScrollView>
+                </>
+              ) : (
+                <Text style={workspace.styles.aiRagDevEmpty}>위 목록에서 page 또는 chunk를 선택하면 전체 텍스트가 여기에 표시됩니다.</Text>
+              )}
+            </View>
           </View>
         ) : null}
 

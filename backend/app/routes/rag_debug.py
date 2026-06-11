@@ -1,4 +1,7 @@
+import time
+from pathlib import Path
 from typing import Any
+from urllib.parse import unquote, urlparse
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -12,7 +15,11 @@ from backend.app.routes.chats import default_rag_scope, normalize_rag_scope, rag
 from backend.app.schemas.chats import RagScope, SelectionRectPayload
 from backend.app.services.ai_context_builder import build_ai_context, format_context_mode_instruction
 from backend.app.services.ai_context_router import AiContextRoute, route_ai_context
+from backend.app.services.docling_parser import DoclingParsingError, parse_pdf_pages_with_docling
 from backend.app.services.note_page_content import parse_page_state
+from backend.app.services.pdf_parser import PdfParsingError, get_pdf_page_count, parse_pdf_path
+from backend.app.services.pypdf_plain_parser import PypdfPlainParsingError, parse_pdf_pages_with_pypdf_plain
+from backend.app.services.rag_chunker import IndexSource, build_text_chunks
 from backend.app.services.rag_service import retrieve_rag_contexts_with_debug
 
 
@@ -20,6 +27,7 @@ router = APIRouter(tags=["rag-debug"])
 RAG_DEBUG_ENVS = {"local", "dev", "development", "test"}
 MAX_DEBUG_SNIPPET_LENGTH = 420
 MAX_DEBUG_RESULTS = 5
+PARSER_COMPARE_NAMES = {"pymupdf", "pypdf_plain", "docling"}
 
 
 class RagDebugEvaluateCreate(BaseModel):
@@ -117,6 +125,109 @@ def _rollback_after_debug_query_error(connection: Connection) -> None:
         connection.rollback()
     except Exception:
         pass
+
+
+def _stored_note_pdf_path(note: dict[str, Any], settings: Settings) -> Path:
+    file_url = str(note.get("file_url") or "")
+    if not file_url:
+        raise HTTPException(status_code=400, detail="stored pdf file is required")
+
+    path = urlparse(file_url).path
+    if not path.startswith("/uploads/"):
+        raise HTTPException(status_code=400, detail="stored pdf file is required")
+
+    upload_root = settings.upload_path.resolve()
+    pdf_path = (upload_root / unquote(path.removeprefix("/uploads/"))).resolve()
+    if upload_root not in pdf_path.parents or pdf_path.suffix.lower() != ".pdf" or not pdf_path.exists():
+        raise HTTPException(status_code=400, detail="stored pdf file is unavailable")
+    return pdf_path
+
+
+def _parser_compare_page(
+    *,
+    page_number: int,
+    text: str,
+    parser: str,
+    elapsed_ms: float | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    return {
+        "page_number": page_number,
+        "text_length": len(text),
+        "text_snippet": _snippet(text, max_length=1200),
+        "text": text,
+        "elapsed_ms": elapsed_ms,
+        "metadata": metadata or {},
+        "parser": parser,
+    }
+
+
+def _parser_compare_response(
+    *,
+    note: dict[str, Any],
+    parser: str,
+    pages: list[dict[str, Any]],
+    chunks: list[dict[str, Any]],
+    elapsed_ms: float,
+) -> dict[str, Any]:
+    return {
+        "note": {"id": note["id"], "folder_id": note["folder_id"], "title": note["title"]},
+        "summary": {
+            "parser": parser,
+            "page_count": len(pages),
+            "chunk_count": len(chunks),
+            "text_length": sum(int(page.get("text_length") or 0) for page in pages),
+            "elapsed_ms": elapsed_ms,
+            "page_start": pages[0]["page_number"] if pages else None,
+            "page_end": pages[-1]["page_number"] if pages else None,
+        },
+        "pages": pages,
+        "chunks": chunks,
+    }
+
+
+def _parser_compare_chunks(
+    *,
+    note: dict[str, Any],
+    parser: str,
+    pages: list[dict[str, Any]],
+    user_id: int,
+) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    for page in pages:
+        page_number = int(page["page_number"])
+        metadata = page.get("metadata") if isinstance(page.get("metadata"), dict) else {}
+        layout_blocks = metadata.get("visualBlocks") if isinstance(metadata.get("visualBlocks"), list) else []
+        source = IndexSource(
+            source_type="pdf_page",
+            source_id=f"parser:{parser}:page:{page_number}",
+            title=f"{note['title']} - {page_number}페이지",
+            content=str(page.get("text") or ""),
+            user_id=user_id,
+            folder_id=note.get("folder_id"),
+            note_id=note.get("id"),
+            page_number=page_number,
+            metadata={
+                "parser": parser,
+                "comparison_only": True,
+                "page_label": f"{page_number}페이지",
+                "extraction_strategy": metadata.get("extractionStrategy"),
+                "reading_order_strategy": metadata.get("readingOrderStrategy"),
+            },
+            layout_blocks=layout_blocks if parser == "pymupdf" else [],
+        )
+        for chunk in build_text_chunks(source):
+            results.append(
+                {
+                    "parser": parser,
+                    "page_number": page_number,
+                    "chunk_index": chunk.chunk_index,
+                    "content_length": len(chunk.content),
+                    "content_snippet": _snippet(chunk.content, max_length=1200),
+                    "content": chunk.content,
+                }
+            )
+    return results
 
 
 def _context_section(title: str, items: list[dict[str, Any]]) -> dict[str, Any]:
@@ -411,6 +522,101 @@ def get_note_rag_debug_index(
             for chunk in chunks
         ],
     }
+
+
+@router.get("/notes/{note_id}/rag-debug/parser/{parser_name}")
+def get_note_rag_debug_parser_compare(
+    note_id: int,
+    parser_name: str,
+    connection: Connection = Depends(get_db_connection),
+    current_user: dict = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
+):
+    _ensure_rag_debug_enabled(settings)
+    parser = parser_name.strip().lower()
+    if parser not in PARSER_COMPARE_NAMES:
+        raise HTTPException(status_code=400, detail="unsupported parser")
+    note = require_row(
+        fetch_one(
+            connection,
+            "SELECT id, folder_id, title, file_url FROM notes WHERE id = %s AND user_id = %s",
+            (note_id, current_user["id"]),
+        ),
+        "note not found",
+    )
+    pdf_path = _stored_note_pdf_path(note, settings)
+
+    if parser == "pymupdf":
+        started_at = time.perf_counter()
+        try:
+            result = parse_pdf_path(pdf_path)
+        except PdfParsingError as exc:
+            raise HTTPException(status_code=400, detail=str(exc) or "failed to parse pdf with pymupdf") from exc
+        elapsed_ms = round((time.perf_counter() - started_at) * 1000, 1)
+        pages = [
+            _parser_compare_page(
+                page_number=page.page_number,
+                text=page.text,
+                parser="pymupdf",
+                metadata={
+                    "extractionStrategy": page.extraction_strategy,
+                    "readingOrderStrategy": page.reading_order_strategy,
+                    "columnCount": page.column_count,
+                    "columnConfidence": round(page.column_confidence, 3),
+                    "textBlockCount": page.text_block_count,
+                    "imageBlockCount": page.image_block_count,
+                    "visualBlockCount": len(page.visual_blocks),
+                    "visualBlocks": [block.to_metadata() for block in page.visual_blocks],
+                    "elements": [element.to_metadata() for element in page.elements],
+                },
+            )
+            for page in result.pages
+        ]
+        chunks = _parser_compare_chunks(note=note, parser="pymupdf", pages=pages, user_id=current_user["id"])
+        return _parser_compare_response(note=note, parser="pymupdf", pages=pages, chunks=chunks, elapsed_ms=elapsed_ms)
+
+    if parser == "pypdf_plain":
+        try:
+            result = parse_pdf_pages_with_pypdf_plain(pdf_path)
+        except PypdfPlainParsingError as exc:
+            raise HTTPException(status_code=400, detail=str(exc) or "failed to parse pdf with pypdf plain") from exc
+        pages = [
+            _parser_compare_page(
+                page_number=page.page_number,
+                text=page.text,
+                parser="pypdf_plain",
+                elapsed_ms=page.elapsed_ms,
+                metadata={"extractionMode": "plain"},
+            )
+            for page in result.pages
+        ]
+        chunks = _parser_compare_chunks(note=note, parser=result.parser, pages=pages, user_id=current_user["id"])
+        return _parser_compare_response(note=note, parser=result.parser, pages=pages, chunks=chunks, elapsed_ms=result.elapsed_ms)
+
+    try:
+        page_count = get_pdf_page_count(pdf_path)
+        result = parse_pdf_pages_with_docling(pdf_path, list(range(1, page_count + 1)))
+    except DoclingParsingError as exc:
+        raise HTTPException(status_code=400, detail=str(exc) or "failed to parse pdf with docling") from exc
+    except PdfParsingError as exc:
+        raise HTTPException(status_code=400, detail=str(exc) or "failed to read pdf page count") from exc
+    pages = [
+        _parser_compare_page(
+            page_number=page.page_number,
+            text=page.markdown,
+            parser="docling",
+            elapsed_ms=page.elapsed_ms,
+            metadata={
+                "textItemCount": page.text_item_count,
+                "tableCount": page.table_count,
+                "pictureCount": page.picture_count,
+                "format": "markdown",
+            },
+        )
+        for page in result.pages
+    ]
+    chunks = _parser_compare_chunks(note=note, parser=result.parser, pages=pages, user_id=current_user["id"])
+    return _parser_compare_response(note=note, parser=result.parser, pages=pages, chunks=chunks, elapsed_ms=result.elapsed_ms)
 
 
 @router.post("/chat-sessions/{session_id}/rag-debug/evaluate")

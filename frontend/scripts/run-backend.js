@@ -106,6 +106,7 @@ function ensureRequirements() {
     "cv2",
     "numpy",
     "fitz",
+    "docling",
     "PIL",
     "pillow_heif",
     "ultralytics",

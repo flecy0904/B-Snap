@@ -227,49 +227,40 @@ export type BackendRagDebugResult = {
   updated_at?: string | null;
 };
 
-export type BackendRagDebugIndexResponse = {
+export type BackendRagDebugParserName = 'pymupdf' | 'pypdf_plain' | 'docling';
+
+export type BackendRagDebugParserCompareResponse = {
   note: {
     id: number;
     folder_id: number;
     title: string;
   };
   summary: {
+    parser: BackendRagDebugParserName | string;
     page_count: number;
     chunk_count: number;
-    chunks_returned: number;
-    chunk_limit: number;
-    source_counts: Record<string, number>;
-    embedding_model?: string | null;
-    embedding_models?: string[];
-    last_indexed_at?: string | null;
-    parser?: string | null;
-    text_block_count?: number;
-    image_block_count?: number;
-    visual_block_count?: number;
-    extraction_strategies?: string[];
+    text_length: number;
+    elapsed_ms: number;
+    page_start: number | null;
+    page_end: number | null;
   };
   pages: Array<{
-    id: number;
     page_number: number;
     text_length: number;
     text_snippet: string;
     text: string;
-    updated_at?: string | null;
-    parser?: string | null;
-    extraction_strategy?: string | null;
-    reading_order_strategy?: string | null;
-    column_count?: number | null;
-    column_confidence?: number | null;
-    text_block_count?: number;
-    image_block_count?: number;
-    visual_block_count?: number;
-    header_footer_candidate_count?: number;
-    side_label_candidate_count?: number;
-    rag_extraction?: Record<string, unknown>;
-    elements?: Array<Record<string, unknown>>;
-    elements_returned?: number;
+    elapsed_ms?: number | null;
+    metadata?: Record<string, unknown>;
+    parser?: string;
   }>;
-  chunks: BackendRagDebugResult[];
+  chunks: Array<{
+    parser: string;
+    page_number: number;
+    chunk_index: number;
+    content_length: number;
+    content_snippet: string;
+    content: string;
+  }>;
 };
 
 export type BackendRagDebugContextSection = {
@@ -1073,8 +1064,10 @@ export async function sendBackendAiMessage(payload: {
   }).then(normalizeBackendAiMessageResponse);
 }
 
-export function getBackendRagDebugIndex(noteId: number) {
-  return request<BackendRagDebugIndexResponse>(`/notes/${noteId}/rag-debug/index`);
+export function getBackendRagDebugParserCompare(noteId: number, parserName: BackendRagDebugParserName) {
+  return request<BackendRagDebugParserCompareResponse>(`/notes/${noteId}/rag-debug/parser/${parserName}`, {
+    timeoutMs: 10 * 60 * 1000,
+  });
 }
 
 export function reindexBackendNoteRag(noteId: number) {
