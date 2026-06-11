@@ -100,8 +100,8 @@ export type HandwritingDebugReadiness = {
 };
 
 const DEFAULT_AI_FLOATING_PANEL_SIZE: AiFloatingPanelSize = { width: 380, height: 620 };
-const HANDWRITING_AUTO_ANALYZE_ENABLED = process.env.EXPO_PUBLIC_ENABLE_HANDWRITING_AUTO_ANALYZE !== 'false';
-const HANDWRITING_AUTO_VISION_FALLBACK_ENABLED = process.env.EXPO_PUBLIC_ENABLE_HANDWRITING_AUTO_VISION !== 'false';
+const HANDWRITING_AUTO_ANALYZE_ENABLED = process.env.EXPO_PUBLIC_ENABLE_HANDWRITING_AUTO_ANALYZE === 'true';
+const HANDWRITING_AUTO_VISION_FALLBACK_ENABLED = process.env.EXPO_PUBLIC_ENABLE_HANDWRITING_AUTO_VISION === 'true';
 
 function buildMlKitRecognitionWritePayload(
   result: HandwritingRecognitionResult,
