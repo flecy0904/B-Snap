@@ -7,7 +7,10 @@ import com.facebook.react.uimanager.ViewManager
 
 class PdfPageRendererPackage : ReactPackage {
   override fun createNativeModules(reactContext: ReactApplicationContext): List<NativeModule> =
-    listOf(PdfPageRendererModule(reactContext))
+    listOf(
+      PdfPageRendererModule(reactContext),
+      HandwritingRecognitionModule(reactContext)
+    )
 
   override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> =
     listOf(PdfViewportViewManager(reactContext))

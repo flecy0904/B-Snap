@@ -5,24 +5,13 @@ import { useDocumentContext } from './document-context';
 import { NotebookPage, NotebookPageTemplate } from '../../../types';
 import { useDesktopNotesWorkspaceContext } from './notes-workspace-context';
 import { FloatingToolPalette } from './floating-tool-palette';
+import { PageDrawerThumbnail } from './page-drawer-thumbnail';
 
 export function NotesPageListOverlay() {
   const workspaceContext = useDesktopNotesWorkspaceContext();
   const documentContext = useDocumentContext();
   
   if (!workspaceContext.pageListOpen) return null;
-
-  const getNotebookPageIcon = (page: NotebookPage): React.ComponentProps<typeof MaterialCommunityIcons>['name'] => {
-    if (page.kind === 'blank') return 'note-edit-outline';
-    if (page.kind === 'summary') return 'star-four-points-outline';
-    return 'file-pdf-box';
-  };
-
-  const getNotebookPageMeta = (page: NotebookPage) => {
-    if (page.kind === 'blank') return '빈 페이지';
-    if (page.kind === 'summary') return 'AI 정리';
-    return '원본 PDF';
-  };
 
   const getNotebookPageLabel = (page: NotebookPage, index: number) => {
     if (page.kind === 'pdf' && page.pageNumber) return `${page.pageNumber}`;
@@ -46,6 +35,9 @@ export function NotesPageListOverlay() {
 
   const notebookPages = documentContext.notebookPages.length ? documentContext.notebookPages : [];
   const originalPageCount = documentContext.totalDocumentPageCount || notebookPages.filter((page) => page.kind === 'pdf').length || notebookPages.length;
+  const studyDocumentId = documentContext.studyDocument?.id ?? null;
+  const documentInkStrokes = studyDocumentId ? workspaceContext.inkByDocument[studyDocumentId] ?? [] : [];
+  const documentTextAnnotations = studyDocumentId ? workspaceContext.textAnnotationsByDocument[studyDocumentId] ?? [] : [];
 
   const navigateToPage = (page: NotebookPage) => {
     if (page.kind === 'pdf' && page.pageNumber) documentContext.onSetCurrentPdfPage(page.pageNumber);
@@ -64,22 +56,8 @@ export function NotesPageListOverlay() {
             <MaterialCommunityIcons name="close" size={22} color="#C9CDD6" />
           </Pressable>
         </View>
-        <View style={workspaceContext.styles.pageDrawerTabs}>
-          <View style={[workspaceContext.styles.pageDrawerTab, workspaceContext.styles.pageDrawerTabActive]}>
-            <MaterialCommunityIcons name="file-document-outline" size={16} color="#FFFFFF" />
-          </View>
-          <View style={workspaceContext.styles.pageDrawerTab}>
-            <MaterialCommunityIcons name="format-list-bulleted" size={16} color="#B9C0CC" />
-          </View>
-          <View style={workspaceContext.styles.pageDrawerTab}>
-            <MaterialCommunityIcons name="bookmark-multiple-outline" size={16} color="#B9C0CC" />
-          </View>
-        </View>
-        <View style={workspaceContext.styles.pageDrawerFilterRow}>
-          <View style={workspaceContext.styles.pageDrawerFilterChip}>
-            <Text style={workspaceContext.styles.pageDrawerFilterText}>모든 페이지</Text>
-            <MaterialCommunityIcons name="chevron-down" size={14} color="#78B8FF" />
-          </View>
+        <View style={workspaceContext.styles.pageDrawerSummaryRow}>
+          <Text style={workspaceContext.styles.pageDrawerSummaryText}>전체 {notebookPages.length}페이지</Text>
           <Text style={workspaceContext.styles.pageDrawerTotalText}>원본 {originalPageCount}p</Text>
         </View>
         <ScrollView
@@ -104,15 +82,17 @@ export function NotesPageListOverlay() {
                 style={[workspaceContext.styles.pageDrawerCard, isActive && workspaceContext.styles.pageDrawerCardActive]}
                 onPress={() => navigateToPage(page)}
               >
-                <View style={[workspaceContext.styles.pageDrawerPreview, page.kind !== 'pdf' && workspaceContext.styles.pageDrawerPreviewGenerated, isActive && workspaceContext.styles.pageDrawerPreviewActive]}>
-                  <MaterialCommunityIcons name={getNotebookPageIcon(page)} size={24} color={isActive ? '#82B3FF' : '#8D96A5'} />
-                  <Text style={workspaceContext.styles.pageDrawerPreviewLabel}>{getNotebookPageMeta(page)}</Text>
-                  {bookmarked ? (
-                    <View style={workspaceContext.styles.pageDrawerBookmarkBadge}>
-                      <MaterialCommunityIcons name="star" size={12} color="#FBBF24" />
-                    </View>
-                  ) : null}
-                </View>
+                <PageDrawerThumbnail
+                  page={page}
+                  studyDocument={documentContext.studyDocument}
+                  generatedPage={page.generatedPageId ? documentContext.generatedWorkspacePages.find((value) => value.id === page.generatedPageId) ?? null : null}
+                  documentInkStrokes={documentInkStrokes}
+                  documentTextAnnotations={documentTextAnnotations}
+                  isActive={isActive}
+                  bookmarked={bookmarked}
+                  renderOrder={index}
+                  styles={workspaceContext.styles}
+                />
                 <View style={workspaceContext.styles.pageDrawerPageRow}>
                   <View style={workspaceContext.styles.pageDrawerPageTextBox}>
                     <Text style={[workspaceContext.styles.pageDrawerPageNumber, isActive && workspaceContext.styles.pageDrawerPageNumberActive]} numberOfLines={1}>

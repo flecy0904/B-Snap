@@ -42,7 +42,13 @@ import { useAiChatActions } from './ai/use-ai-chat-actions';
 import { useAiChatDerivedState } from './ai/use-ai-chat-derived-state';
 import { isCanvasCreateRequest } from './ai-canvas/canvas-command-intent';
 import { useAiCanvasNotes } from './ai-canvas/use-ai-canvas-notes';
-import { buildClassInsightContext, buildImportantPageRecommendations, isClassInsightQuestion, isClassInsightTargetDocument } from './class-insight';
+import {
+  buildClassInsightContext,
+  buildImportantPageRecommendations,
+  extractRecommendedPageNumbersFromText,
+  isClassInsightQuestion,
+  isClassInsightTargetDocument,
+} from './class-insight';
 import { getStudyDocumentBackendNoteId } from './document/backend-sync';
 import { parseNotePageContent, type HandwritingRecognitionState } from './document/note-page-content';
 import { useStudyDocumentActions } from './document/use-study-document-actions';
@@ -95,7 +101,7 @@ export type HandwritingDebugReadiness = {
 
 const DEFAULT_AI_FLOATING_PANEL_SIZE: AiFloatingPanelSize = { width: 380, height: 620 };
 const HANDWRITING_AUTO_ANALYZE_ENABLED = process.env.EXPO_PUBLIC_ENABLE_HANDWRITING_AUTO_ANALYZE === 'true';
-const HANDWRITING_AUTO_VISION_FALLBACK_ENABLED = process.env.EXPO_PUBLIC_ENABLE_HANDWRITING_AUTO_VISION !== 'false';
+const HANDWRITING_AUTO_VISION_FALLBACK_ENABLED = process.env.EXPO_PUBLIC_ENABLE_HANDWRITING_AUTO_VISION === 'true';
 
 function buildMlKitRecognitionWritePayload(
   result: HandwritingRecognitionResult,
@@ -187,6 +193,9 @@ function formatMlKitUnavailableFeedback(detail?: string) {
   if (Platform.OS === 'web' || normalized.includes('web fallback')) {
     return '웹에서는 ML Kit native module이 없어 unavailable이 정상입니다. geometry/Vision debug flow를 사용하세요.';
   }
+  if (Platform.OS === 'android' || normalized.includes('android')) {
+    return 'Android ML Kit bridge는 아직 연결하지 않았어요. Android에서는 저장된 inkStrokes를 백엔드 geometry/Vision 경로로 분석합니다.';
+  }
   if (normalized.includes('download is in progress') || normalized.includes('downloading')) {
     return 'ML Kit 한국어 모델을 다운로드 중입니다. 완료 후 다시 실행해주세요.';
   }
@@ -197,7 +206,7 @@ function formatMlKitUnavailableFeedback(detail?: string) {
     return 'ML Kit 한국어 모델이 아직 없습니다. 먼저 한국어 모델 준비를 실행하세요.';
   }
   if (normalized.includes('native module unavailable')) {
-    return 'ML Kit native module을 찾지 못했어요. iOS dev build에서 확인해주세요.';
+    return 'ML Kit native module을 찾지 못했어요. iOS dev build에서는 모듈 연결을, Web/Android에서는 백엔드 분석 경로를 확인해주세요.';
   }
   return `ML Kit unavailable: ${detail ?? 'unknown'}`;
 }
@@ -311,11 +320,11 @@ export function useStudyWorkspace(props: {
     busy: false,
     result: null,
   });
-  const [handwritingAutoAnalyzeRequest, setHandwritingAutoAnalyzeRequest] = useState<{
+  const [handwritingAutoAnalyzeQueue, setHandwritingAutoAnalyzeQueue] = useState<{
     documentId: number;
     pageNumber: number;
     requestId: number;
-  } | null>(null);
+  }[]>([]);
   const classInsightFetchKeyRef = useRef<Record<number, string>>({});
   const classInsightRefreshTimerRef = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
   const handwritingAutoAnalyzeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -553,10 +562,18 @@ export function useStudyWorkspace(props: {
   const handlePageSaveSuccess = useCallback((documentId: number, pageNumber: number) => {
     scheduleClassInsightRefresh(documentId);
     if (!HANDWRITING_AUTO_ANALYZE_ENABLED) return;
-    setHandwritingAutoAnalyzeRequest({
-      documentId,
-      pageNumber,
-      requestId: Date.now(),
+    setHandwritingAutoAnalyzeQueue((current) => {
+      const nextRequest = {
+        documentId,
+        pageNumber,
+        requestId: Date.now() + Math.random(),
+      };
+      return [
+        ...current.filter((request) => (
+          request.documentId !== documentId || request.pageNumber !== pageNumber
+        )),
+        nextRequest,
+      ];
     });
   }, [scheduleClassInsightRefresh]);
 
@@ -599,12 +616,24 @@ export function useStudyWorkspace(props: {
     onBackendPagesLoaded: rememberHandwritingRecognitionFromPages,
   });
   useEffect(() => {
-    if (!HANDWRITING_AUTO_ANALYZE_ENABLED || !handwritingAutoAnalyzeRequest) return undefined;
-    const { documentId, pageNumber } = handwritingAutoAnalyzeRequest;
+    if (!HANDWRITING_AUTO_ANALYZE_ENABLED || !handwritingAutoAnalyzeQueue.length) return undefined;
+    const request = handwritingAutoAnalyzeQueue.find(({ documentId, pageNumber }) => (
+      Boolean(backendPageIdsByDocument[documentId]?.[pageNumber])
+    ));
+    if (!request) return undefined;
+
+    const { documentId, pageNumber, requestId } = request;
     const pageId = backendPageIdsByDocument[documentId]?.[pageNumber];
     if (!pageId) return undefined;
 
     if (handwritingAutoAnalyzeTimerRef.current) clearTimeout(handwritingAutoAnalyzeTimerRef.current);
+    const removeRequest = () => {
+      setHandwritingAutoAnalyzeQueue((current) => current.filter((item) => (
+        item.documentId !== documentId
+        || item.pageNumber !== pageNumber
+        || item.requestId !== requestId
+      )));
+    };
     handwritingAutoAnalyzeTimerRef.current = setTimeout(() => {
       handwritingAutoAnalyzeTimerRef.current = null;
       analyzeBackendNotePageHandwriting(pageId, {
@@ -618,6 +647,9 @@ export function useStudyWorkspace(props: {
         })
         .catch(() => {
           // Debug-only automatic analysis should never interrupt normal page save flow.
+        })
+        .finally(() => {
+          removeRequest();
         });
     }, 2000);
 
@@ -629,7 +661,7 @@ export function useStudyWorkspace(props: {
     };
   }, [
     backendPageIdsByDocument,
-    handwritingAutoAnalyzeRequest,
+    handwritingAutoAnalyzeQueue,
     rememberHandwritingRecognitionFromPage,
     rememberSavedBackendNotePage,
     scheduleClassInsightRefresh,
@@ -1559,12 +1591,24 @@ export function useStudyWorkspace(props: {
       }
     },
     clearSelection: clearSelectionForCurrentDocument,
-    buildContextHint: async (question) => buildClassInsightContext({
-      question,
-      studyDocument,
-      subject,
-      classInsight: await refreshClassInsightForQuestion(question),
-    }),
+    buildContextHint: async (question) => {
+      const previouslyRecommendedPageNumbers = new Set<number>();
+      aiMessages
+        .filter((message) => message.role === 'assistant')
+        .forEach((message) => {
+          extractRecommendedPageNumbersFromText(message.content, studyDocument?.pageCount).forEach((pageNumber) => {
+            previouslyRecommendedPageNumbers.add(pageNumber);
+          });
+        });
+
+      return buildClassInsightContext({
+        question,
+        studyDocument,
+        subject,
+        classInsight: await refreshClassInsightForQuestion(question),
+        previouslyRecommendedPageNumbers,
+      });
+    },
   });
 
   const {

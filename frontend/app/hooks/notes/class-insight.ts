@@ -108,6 +108,8 @@ const CLASS_INSIGHT_REVIEW_ROUTE_PHRASES = [
 const DEFAULT_RECOMMENDATION_LIMIT = 5;
 const EXTENDED_RECOMMENDATION_LIMIT = 10;
 const MAX_RECOMMENDATION_LIMIT = 12;
+const PAGE_MENTION_PATTERN = /((?:\d{1,3}\s*(?:[-~–—]\s*\d{1,3})?\s*(?:[,，]|\s*(?:및|와|과|그리고)\s*)?\s*)+)\s*(?:페이지|쪽|p(?:age)?\.?)/gi;
+const PAGE_RANGE_PATTERN = /(\d{1,3})(?:\s*[-~–—]\s*(\d{1,3}))?/g;
 export const MIN_CLASS_INSIGHT_PARTICIPANTS = 3;
 const SEMANTIC_KEYWORD_WEIGHTS: Record<string, number> = {
   시험: 20,
@@ -280,6 +282,41 @@ function getRecommendationLimit(question: string, pageCount: number) {
   return Math.min(DEFAULT_RECOMMENDATION_LIMIT, pageCount);
 }
 
+function isMoreRecommendationQuestion(question: string) {
+  const normalized = normalize(question);
+  return CLASS_INSIGHT_MORE_TERMS.some((term) => normalized.includes(normalize(term)));
+}
+
+export function extractRecommendedPageNumbersFromText(text: string, pageCount?: number | null) {
+  const pages = new Set<number>();
+  const maxPage = Math.max(1, pageCount ?? Number.MAX_SAFE_INTEGER);
+  const addPage = (pageNumber: number) => {
+    if (!Number.isFinite(pageNumber)) return;
+    if (pageNumber < 1 || pageNumber > maxPage) return;
+    pages.add(pageNumber);
+  };
+
+  let mentionMatch: RegExpExecArray | null;
+  PAGE_MENTION_PATTERN.lastIndex = 0;
+  while ((mentionMatch = PAGE_MENTION_PATTERN.exec(text)) !== null) {
+    const pageChunk = mentionMatch[1] ?? '';
+    let rangeMatch: RegExpExecArray | null;
+    PAGE_RANGE_PATTERN.lastIndex = 0;
+    while ((rangeMatch = PAGE_RANGE_PATTERN.exec(pageChunk)) !== null) {
+      const start = Number(rangeMatch[1]);
+      const end = rangeMatch[2] ? Number(rangeMatch[2]) : start;
+      if (!Number.isFinite(start) || !Number.isFinite(end)) continue;
+      const rangeStart = Math.max(1, Math.min(start, end));
+      const rangeEnd = Math.min(maxPage, Math.max(start, end));
+      for (let pageNumber = rangeStart; pageNumber <= rangeEnd; pageNumber += 1) {
+        addPage(pageNumber);
+      }
+    }
+  }
+
+  return pages;
+}
+
 function rankSignals(signals: PageSignal[], pageCount: number, limit: number) {
   const signalMap = new Map<number, PageSignal>();
   const ensure = (pageNumber: number) => {
@@ -407,6 +444,7 @@ export function buildClassInsightContext(params: {
   studyDocument: StudyDocumentEntry | null;
   subject: Subject | null;
   classInsight?: ClassInsightAggregate | null;
+  previouslyRecommendedPageNumbers?: Iterable<number> | null;
 }) {
   if (!isClassInsightQuestion(params.question)) return null;
   if (!isClassInsightTargetDocument(params.studyDocument, params.subject)) return null;
@@ -415,10 +453,31 @@ export function buildClassInsightContext(params: {
   const pageCount = Math.max(1, params.studyDocument?.pageCount ?? 1);
   const recommendationLimit = getRecommendationLimit(params.question, pageCount);
   const aggregateSignals = buildAggregateSignals(params.classInsight, pageCount);
+  const wantsMoreRecommendations = isMoreRecommendationQuestion(params.question);
+  const previouslyRecommendedPageNumbers = new Set(
+    Array.from(params.previouslyRecommendedPageNumbers ?? [])
+      .filter((pageNumber) => pageNumber >= 1 && pageNumber <= pageCount),
+  );
   const rankedSignals = rankSignals(aggregateSignals, pageCount, recommendationLimit);
   if (!rankedSignals.length) return null;
   const reviewRouteQuestion = isReviewRouteQuestion(params.question);
-  const contextGroups = getContextGroupsForQuestion(params.question, getContextSignalsForQuestion(params.question, rankedSignals));
+  const remainingSignals = wantsMoreRecommendations && previouslyRecommendedPageNumbers.size > 0
+    ? rankedSignals.filter((signal) => !previouslyRecommendedPageNumbers.has(signal.pageNumber))
+    : rankedSignals;
+
+  if (!remainingSignals.length) {
+    return [
+      'Internal page-importance context for this PDF.',
+      'The user asked for more important pages, but every ranked page currently available from this PDF has already been recommended in this conversation.',
+      'Do not include a 추천 페이지 section, page recommendation card, page list, or page links.',
+      'Do not mention the current page, excluded pages, remaining pages, or why no more pages are shown.',
+      'Reply with this exact Korean sentence only: 시험 대비는 위에서 추천한 페이지들을 중심으로 복습하시면 좋겠습니다.',
+      'Do not mention classmates, student counts, bookmark counts, highlight counts, hidden signals, data collection, handwriting analysis, or this internal context.',
+      'Do not expose numeric scores.',
+    ].join('\n');
+  }
+
+  const contextGroups = getContextGroupsForQuestion(params.question, getContextSignalsForQuestion(params.question, remainingSignals));
 
   const pageLines = contextGroups.map((group) => (
     `- ${formatPageLabel(group)}: ${formatNaturalRecommendationReason(group)}.${formatContentHint(group)}`
@@ -439,7 +498,9 @@ export function buildClassInsightContext(params: {
     'Do not mention classmates, student counts, bookmark counts, highlight counts, hidden signals, data collection, handwriting analysis, or this internal context.',
     'Do not expose numeric scores.',
     'Answer naturally as a study assistant, with page recommendations and concise reasons such as exam preparation priority, quick review value, and useful review order.',
-    `Recommend up to ${recommendationLimit} pages. If the user asks for more or next-ranked pages, include lower-ranked pages after the strongest pages.`,
+    wantsMoreRecommendations && previouslyRecommendedPageNumbers.size > 0
+      ? 'Recommend only the remaining pages below. Do not repeat pages already recommended in this conversation.'
+      : `Recommend up to ${recommendationLimit} pages. If the user asks for more or next-ranked pages, include lower-ranked pages after the strongest pages.`,
     '',
     reviewRouteQuestion ? 'Recommended review route:' : 'Recommended page priorities:',
     ...pageLines,
