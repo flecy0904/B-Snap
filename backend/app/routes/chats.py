@@ -30,6 +30,8 @@ from backend.app.services.openai_service import (
     generate_chat_title,
     generate_note_chat_answer,
 )
+from backend.app.services.docling_batch_pipeline import note_rag_text_ready
+from backend.app.services.pdf_image_recheck import ImageRecheckResult, maybe_recheck_pdf_images_for_chat
 from backend.app.services.rag_service import retrieve_rag_contexts_with_debug
 
 
@@ -41,6 +43,7 @@ DEFAULT_CANVAS_MARKDOWN = ""
 DEFAULT_CANVAS_DOCUMENT_JSON = {"type": "doc", "content": []}
 RAG_SEARCH_UNAVAILABLE_MESSAGE = "지금은 자료 검색을 사용할 수 없습니다. 잠시 후 다시 시도해 주세요."
 RAG_NO_RESULTS_MESSAGE = "관련된 자료를 찾지 못했습니다."
+RAG_TEXT_PROCESSING_MESSAGE = "자료를 읽는 중입니다. 잠시 후 다시 질문해 주세요."
 
 CANVAS_TARGET_KEYWORDS = (
     "canvas",
@@ -625,40 +628,44 @@ def create_ai_chat_message(
         )
     rag_sources = []
     rag_debug = None
+    rag_processing_answer = None
+    image_recheck = ImageRecheckResult()
     if context_route.mode == "rag":
         note_ids, canvas_note_ids = rag_scope_search_targets(rag_scope)
-        rag_sources, rag_debug = retrieve_rag_contexts_with_debug(
-            connection,
-            user_id=current_user["id"],
-            question=context_route.rewritten_query,
-            note_ids=note_ids,
-            canvas_note_ids=canvas_note_ids,
-            exclude_canvas_for_notes=True,
-            documents=None,
-            top_k=payload.top_k,
-        )
-    context_mode_instruction = format_context_mode_instruction(
-        context_route.mode,
-        has_rag_sources=bool(rag_sources),
-    )
-    built_context = build_ai_context(
-        mode=context_route.mode,
-        pages=pages,
-        page_number=payload.page_number,
-        base_context_hints=[context_mode_instruction] if context_route.mode == "general" else [context_mode_instruction, payload.context_hint],
-        rag_sources=rag_sources,
-        rag_debug=rag_debug,
-    )
+        text_ready, pending_job = note_rag_text_ready(connection, note_ids=note_ids, user_id=current_user["id"])
+        if not text_ready:
+            rag_debug = {
+                "fallback": True,
+                "fallback_reason": "text_processing",
+                "retrieved_source_count": 0,
+                "retrieved_chunk_count": 0,
+                "rag_job": pending_job,
+            }
+            rag_processing_answer = RAG_TEXT_PROCESSING_MESSAGE
+        else:
+            rag_sources, rag_debug = retrieve_rag_contexts_with_debug(
+                connection,
+                user_id=current_user["id"],
+                question=context_route.rewritten_query,
+                note_ids=note_ids,
+                canvas_note_ids=canvas_note_ids,
+                exclude_canvas_for_notes=True,
+                documents=None,
+                top_k=payload.top_k,
+            )
+    preliminary_context_pages = [] if context_route.mode == "general" else select_rag_context_pages(pages, payload.page_number)
     rag_failure_answer = get_rag_failure_answer(
         rag_debug,
         has_local_context=bool(
             has_selection_context
             or payload.context_hint
             or payload.canvas_block_context
-            or built_context.context_pages
+            or preliminary_context_pages
         ),
     )
     if rag_failure_answer:
+        canvas_action = "chat_only"
+    if rag_processing_answer:
         canvas_action = "chat_only"
 
     if canvas_origin_request and canvas_action == "canvas_create":
@@ -674,7 +681,35 @@ def create_ai_chat_message(
         else:
             canvas_note = get_canvas_note_for_chat(payload.canvas_note_id, session["note_id"], connection)
 
-    if rag_failure_answer:
+    if context_route.mode == "rag" and canvas_action == "chat_only" and not rag_processing_answer and not rag_failure_answer:
+        image_recheck = maybe_recheck_pdf_images_for_chat(
+            connection,
+            note=note,
+            user_id=current_user["id"],
+            model=model,
+            user_question=payload.content,
+            current_page_number=payload.page_number,
+            rag_sources=rag_sources,
+        )
+
+    context_mode_instruction = format_context_mode_instruction(
+        context_route.mode,
+        has_rag_sources=bool(rag_sources),
+    )
+    built_context = build_ai_context(
+        mode=context_route.mode,
+        pages=pages,
+        page_number=payload.page_number,
+        base_context_hints=[context_mode_instruction] if context_route.mode == "general" else [context_mode_instruction, payload.context_hint],
+        rag_sources=rag_sources,
+        rag_debug=rag_debug,
+        priority_context_hints=[image_recheck.context_hint],
+        extra_answer_sources_text=image_recheck.answer_sources_text,
+    )
+
+    if rag_processing_answer:
+        answer = rag_processing_answer
+    elif rag_failure_answer:
         answer = rag_failure_answer
     elif canvas_action in {"canvas_edit", "canvas_create"} and canvas_note is not None:
         try:
@@ -761,6 +796,7 @@ def create_ai_chat_message(
             selection_image_url=payload.selection_image_url,
             context_hint=built_context.context_hint,
             canvas_block_context=payload.canvas_block_context,
+            rag_image_inputs=image_recheck.image_inputs,
         )
         if built_context.answer_sources_text:
             answer = f"{answer.rstrip()}\n\n{built_context.answer_sources_text}"
@@ -823,6 +859,7 @@ def create_ai_chat_message(
             "mode": context_route.mode,
             "scope_count": len(rag_scope.get("sources", [])),
             "router_reason": context_route.reason,
+            "image_recheck": image_recheck.debug,
         },
     }
 

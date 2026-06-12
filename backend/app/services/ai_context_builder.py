@@ -92,12 +92,14 @@ def build_ai_context(
     base_context_hints: list[str | None],
     rag_sources: list[RetrievedContext],
     rag_debug: dict[str, Any] | None = None,
+    priority_context_hints: list[str | None] | None = None,
+    extra_answer_sources_text: str | None = None,
 ) -> BuiltAiContext:
     context_pages = [] if mode == "general" else select_rag_context_pages(pages, page_number)
     rag_support_hint = format_rag_support_context(rag_sources) if mode == "rag" else None
     context_hint = "\n\n".join(
         hint
-        for hint in [*base_context_hints, rag_support_hint]
+        for hint in [*base_context_hints, *(priority_context_hints or []), rag_support_hint]
         if hint
     ) or None
     debug = {
@@ -108,9 +110,16 @@ def build_ai_context(
     }
     if rag_debug:
         debug.update(rag_debug)
+    answer_sources_text = format_answer_sources(rag_sources, max_sources=4) if mode == "rag" else None
+    if extra_answer_sources_text and mode == "rag":
+        answer_sources_text = "\n".join(
+            part
+            for part in [answer_sources_text, extra_answer_sources_text]
+            if part
+        )
     return BuiltAiContext(
         context_pages=context_pages,
         context_hint=context_hint,
-        answer_sources_text=format_answer_sources(rag_sources, max_sources=4) if mode == "rag" else None,
+        answer_sources_text=answer_sources_text,
         debug=debug,
     )
