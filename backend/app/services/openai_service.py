@@ -59,6 +59,7 @@ def build_response_input(
     selection_image_url: str | None = None,
     context_hint: str | None = None,
     session_summary: str | None = None,
+    memory_facts: str | None = None,
     canvas_block_context: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     active_page_number = current_page_number if current_page_number is not None else page_number
@@ -81,14 +82,15 @@ def build_response_input(
             ),
         })
 
-    if session_summary:
+    if session_summary or memory_facts:
         input_items.append({
             "role": "user",
             "content": (
-                "Compressed summary of older conversation follows. "
-                "Use it only for continuity, user preferences, decisions, and ongoing task state. "
+                "Compressed session continuity context follows. "
+                "Use session_summary for older conversation state and memory_facts for stable user preferences, course scope, and repeated concepts. "
                 "Do not treat it as note or PDF source content.\n\n"
-                f"{session_summary}"
+                f"session_summary:\n{session_summary or '(none)'}\n\n"
+                f"memory_facts:\n{memory_facts or '(none)'}"
             ),
         })
 
@@ -259,6 +261,7 @@ def generate_note_chat_answer(
     selection_image_url: str | None = None,
     context_hint: str | None = None,
     session_summary: str | None = None,
+    memory_facts: str | None = None,
     canvas_block_context: dict[str, Any] | None = None,
 ) -> str:
     return generate_text_response(
@@ -276,6 +279,7 @@ def generate_note_chat_answer(
             selection_image_url=selection_image_url,
             context_hint=context_hint,
             session_summary=session_summary,
+            memory_facts=memory_facts,
             canvas_block_context=canvas_block_context,
         ),
     )
@@ -391,26 +395,41 @@ def generate_chat_session_summary(
     *,
     model: str,
     previous_summary: str | None,
+    previous_memory_facts: str | None = None,
     messages: list[dict[str, Any]],
-) -> str:
+) -> dict[str, str]:
     conversation_text = format_chat_messages_for_summary(messages)
     if not conversation_text:
-        return previous_summary or ""
+        return {
+            "session_summary": previous_summary or "",
+            "memory_facts": previous_memory_facts or "",
+        }
     raw = generate_text_response(
         model=model,
         instructions=CHAT_SESSION_SUMMARY_INSTRUCTIONS,
         input_items=[{
             "role": "user",
             "content": "\n\n".join([
-                "Previous session summary:",
+                "Previous session_summary:",
                 previous_summary or "(none)",
+                "Previous memory_facts:",
+                previous_memory_facts or "(none)",
                 "New older conversation messages to fold into the summary:",
                 conversation_text,
-                "Update the session summary now.",
+                "Update session_summary and memory_facts now.",
             ]),
         }],
     )
-    return raw.strip()[:4000]
+    parsed = _parse_json_object(raw)
+    if parsed is None:
+        return {
+            "session_summary": raw.strip()[:4000],
+            "memory_facts": previous_memory_facts or "",
+        }
+    return {
+        "session_summary": str(parsed.get("session_summary") or previous_summary or "").strip()[:4000],
+        "memory_facts": str(parsed.get("memory_facts") or previous_memory_facts or "").strip()[:3000],
+    }
 
 ALLOWED_CANVAS_OPERATION_TYPES = {"insert_after", "insert_before", "replace", "delete"}
 ALLOWED_CANVAS_ROOT_NODE_TYPES = {
@@ -518,6 +537,7 @@ def generate_ai_canvas_operations_from_chat(
     selection_image_url: str | None = None,
     context_hint: str | None = None,
     session_summary: str | None = None,
+    memory_facts: str | None = None,
     canvas_block_context: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     block_context_text = format_canvas_block_context(canvas_block_context)
@@ -544,14 +564,15 @@ def generate_ai_canvas_operations_from_chat(
         }
     ]
 
-    if session_summary:
+    if session_summary or memory_facts:
         input_items.append({
             "role": "user",
             "content": (
-                "Compressed summary of older conversation follows. "
-                "Use it only for continuity, user preferences, decisions, and ongoing task state. "
+                "Compressed session continuity context follows. "
+                "Use session_summary for older conversation state and memory_facts for stable user preferences, course scope, and repeated concepts. "
                 "Do not treat it as note, PDF, or Canvas source content.\n\n"
-                f"{session_summary}"
+                f"session_summary:\n{session_summary or '(none)'}\n\n"
+                f"memory_facts:\n{memory_facts or '(none)'}"
             ),
         })
 
