@@ -16,7 +16,9 @@ from backend.app.services.prompts.ai_chat import AI_CHAT_INSTRUCTIONS
 from backend.app.services.prompts.canvas_intent import CANVAS_INTENT_INSTRUCTIONS
 from backend.app.services.prompts.canvas_title import CANVAS_TITLE_INSTRUCTIONS
 from backend.app.services.prompts.chat_title import CHAT_TITLE_INSTRUCTIONS
-from backend.app.services.prompts.vision import CAPTURE_IMAGE_ANALYSIS_INSTRUCTIONS
+from backend.app.services.prompts.capture_vision import CAPTURE_IMAGE_ANALYSIS_INSTRUCTIONS
+from backend.app.services.prompts.pdf_image_rag import PDF_IMAGE_RAG_SUMMARY_INSTRUCTIONS
+from backend.app.services.prompts.pdf_image_recheck import PDF_IMAGE_RECHECK_JUDGE_INSTRUCTIONS
 
 
 logger = logging.getLogger(__name__)
@@ -54,6 +56,7 @@ def build_response_input(
     selection_image_url: str | None = None,
     context_hint: str | None = None,
     canvas_block_context: dict[str, Any] | None = None,
+    rag_image_inputs: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     active_page_number = current_page_number if current_page_number is not None else page_number
     input_items: list[dict[str, Any]] = [
@@ -101,19 +104,38 @@ def build_response_input(
         input_items.append({"role": role, "content": message["content"]})
 
     selection_context = build_selection_context(selection_rect=selection_rect, page_number=page_number)
+    final_text = f"{selection_context}\n\n{user_content}".strip()
+    content_parts: list[dict[str, Any]] = [{"type": "input_text", "text": final_text}]
     image_url = _prepare_input_image_url(selection_image or selection_image_url)
     if image_url:
+        content_parts.append({"type": "input_image", "image_url": image_url})
+
+    for item in rag_image_inputs or []:
+        item_image_url = _prepare_input_image_url(str(item.get("image_data_uri") or item.get("image_url") or ""))
+        if not item_image_url:
+            continue
+        page_label = f"page {item.get('page_number')}" if item.get("page_number") else "page unknown"
+        content_parts.append({
+            "type": "input_text",
+            "text": (
+                "Original PDF image recheck source for this question. "
+                "Use this image directly when it is relevant, and prioritize it over the earlier image summary.\n"
+                f"Source: {item.get('title') or 'PDF image'} ({page_label}, mode={item.get('image_mode') or 'context_crop'}, "
+                f"image_ai_summary_id={item.get('image_ai_summary_id') or '-'})\n"
+                f"Retrieved image summary:\n{item.get('image_summary') or ''}"
+            ),
+        })
+        content_parts.append({"type": "input_image", "image_url": item_image_url})
+
+    if len(content_parts) > 1:
         input_items.append(
             {
                 "role": "user",
-                "content": [
-                    {"type": "input_text", "text": f"{selection_context}\n\nUser question: {user_content}".strip()},
-                    {"type": "input_image", "image_url": image_url},
-                ],
+                "content": content_parts,
             }
         )
     else:
-        input_items.append({"role": "user", "content": f"{selection_context}\n\n{user_content}".strip()})
+        input_items.append({"role": "user", "content": final_text})
     return input_items
 
 
@@ -221,6 +243,7 @@ def generate_note_chat_answer(
     selection_image_url: str | None = None,
     context_hint: str | None = None,
     canvas_block_context: dict[str, Any] | None = None,
+    rag_image_inputs: list[dict[str, Any]] | None = None,
 ) -> str:
     return generate_text_response(
         model=model,
@@ -237,6 +260,7 @@ def generate_note_chat_answer(
             selection_image_url=selection_image_url,
             context_hint=context_hint,
             canvas_block_context=canvas_block_context,
+            rag_image_inputs=rag_image_inputs,
         ),
     )
 
@@ -558,6 +582,110 @@ def generate_capture_image_analysis(
         "keywords": normalized_keywords,
         "confidence": confidence_value,
     }
+
+
+def generate_pdf_image_rag_summary(
+    *,
+    model: str,
+    image_data_uri: str,
+    note_title: str,
+    page_number: int,
+    candidate_type: str,
+) -> dict[str, Any]:
+    image_url = _prepare_input_image_url(image_data_uri)
+    if not image_url:
+        raise HTTPException(status_code=400, detail="invalid image crop for summary")
+
+    raw = generate_text_response(
+        model=model,
+        instructions=PDF_IMAGE_RAG_SUMMARY_INSTRUCTIONS,
+        input_items=[{
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": (
+                        f"Note title: {note_title}\n"
+                        f"PDF page: {page_number}\n"
+                        f"Candidate type: {candidate_type}\n"
+                        "Summarize this context crop for RAG indexing. Return JSON only."
+                    ),
+                },
+                {"type": "input_image", "image_url": image_url},
+            ],
+        }],
+        allow_mock=False,
+    )
+    parsed = _parse_json_object(raw)
+    if parsed is None:
+        raise HTTPException(status_code=502, detail="AI returned invalid image summary JSON")
+
+    confidence = _normalize_level(parsed.get("confidence"), default="low")
+    importance = _normalize_level(parsed.get("importance"), default="medium")
+    summary = " ".join(str(parsed.get("summary") or "").split()).strip()
+    ocr_text = str(parsed.get("ocr_text") or "").strip()
+    confidence_reason = " ".join(str(parsed.get("confidence_reason") or "").split()).strip()
+    importance_reason = " ".join(str(parsed.get("importance_reason") or "").split()).strip()
+    if not summary:
+        raise HTTPException(status_code=502, detail="AI returned empty image summary")
+    return {
+        "summary": summary[:1400],
+        "ocr_text": ocr_text[:1000],
+        "confidence": confidence,
+        "importance": importance,
+        "confidence_reason": confidence_reason[:500],
+        "importance_reason": importance_reason[:500],
+    }
+
+
+def judge_pdf_image_recheck(
+    *,
+    model: str,
+    user_question: str,
+    current_page_number: int | None = None,
+    text_contexts: list[dict[str, Any]],
+    image_candidates: list[dict[str, Any]],
+) -> dict[str, Any]:
+    raw = generate_text_response(
+        model=model,
+        instructions=PDF_IMAGE_RECHECK_JUDGE_INSTRUCTIONS,
+        input_items=[{
+            "role": "user",
+            "content": (
+                  "Decide whether original PDF image recheck is needed.\n\n"
+                  f"User question:\n{user_question}\n\n"
+                  f"Current visible PDF page: {current_page_number if current_page_number is not None else 'unknown'}\n\n"
+                  "Top text chunks:\n"
+                f"{json.dumps(text_contexts, ensure_ascii=False)}\n\n"
+                "Image summary candidates:\n"
+                f"{json.dumps(image_candidates, ensure_ascii=False)}"
+            ),
+        }],
+        allow_mock=False,
+    )
+    parsed = _parse_json_object(raw)
+    if parsed is None:
+        raise HTTPException(status_code=502, detail="AI returned invalid image recheck judge JSON")
+
+    selected_ids = parsed.get("image_ai_summary_ids")
+    if not isinstance(selected_ids, list):
+        selected_ids = []
+    preferred_mode = str(parsed.get("preferred_image_mode") or "context_crop").strip()
+    if preferred_mode not in {"context_crop", "page_image"}:
+        preferred_mode = "context_crop"
+
+    return {
+        "needs_image_recheck": bool(parsed.get("needs_image_recheck")),
+        "image_ai_summary_ids": [str(item).strip() for item in selected_ids if str(item).strip()],
+        "allow_multiple": bool(parsed.get("allow_multiple")),
+        "preferred_image_mode": preferred_mode,
+        "reason": " ".join(str(parsed.get("reason") or "").split()).strip()[:500],
+    }
+
+
+def _normalize_level(value: Any, *, default: str) -> str:
+    text = str(value or "").strip().lower()
+    return text if text in {"high", "medium", "low"} else default
 
 
 def _parse_json_object(raw: str) -> dict[str, Any] | None:
