@@ -722,40 +722,47 @@ def create_ai_chat_message(
                 canvas_block_context=payload.canvas_block_context,
                 canvas_recommendation_mode=payload.canvas_recommendation_mode,
             )
-            canvas_title = canvas_note["title"]
-            should_generate_canvas_title = canvas_action == "canvas_create" or (
-                payload.canvas_note_needs_title and is_default_canvas_title(canvas_note["title"])
-            )
-            if should_generate_canvas_title:
-                try:
-                    operations_text = extract_canvas_operations_text(operations)
-                    title_source_markdown = "\n\n".join(
-                        part for part in (current_canvas_markdown, operations_text) if part.strip()
-                    )
-                    generated_canvas_title = generate_ai_canvas_title(
-                        model=model,
-                        note=note,
-                        user_content=payload.content,
-                        canvas_markdown=title_source_markdown,
-                    )
-                    canvas_title = normalize_generated_canvas_title(generated_canvas_title, canvas_note["title"])
-                except Exception:
-                    canvas_title = canvas_note["title"]
+            if not operations and canvas_action == "canvas_create" and created_canvas_note:
+                execute_commit(connection, "DELETE FROM ai_canvas_notes WHERE id = %s", (canvas_note["id"],))
+                created_canvas_note = False
+                canvas_note = None
+                canvas_action = "chat_only"
 
-            if canvas_title != canvas_note["title"]:
-                canvas_note = execute_returning(
-                    connection,
-                    """
-                    UPDATE ai_canvas_notes
-                    SET title = %s, updated_at = now()
-                    WHERE id = %s
-                    RETURNING id, folder_id, note_id, title, markdown, document_json, revision, source_page_start, source_page_end, created_at, updated_at
-                    """,
-                    (
-                        canvas_title,
-                        canvas_note["id"],
-                    ),
+            if canvas_note is not None:
+                canvas_title = canvas_note["title"]
+                should_generate_canvas_title = canvas_action == "canvas_create" or (
+                    payload.canvas_note_needs_title and is_default_canvas_title(canvas_note["title"])
                 )
+                if should_generate_canvas_title:
+                    try:
+                        operations_text = extract_canvas_operations_text(operations)
+                        title_source_markdown = "\n\n".join(
+                            part for part in (current_canvas_markdown, operations_text) if part.strip()
+                        )
+                        generated_canvas_title = generate_ai_canvas_title(
+                            model=model,
+                            note=note,
+                            user_content=payload.content,
+                            canvas_markdown=title_source_markdown,
+                        )
+                        canvas_title = normalize_generated_canvas_title(generated_canvas_title, canvas_note["title"])
+                    except Exception:
+                        canvas_title = canvas_note["title"]
+
+                if canvas_title != canvas_note["title"]:
+                    canvas_note = execute_returning(
+                        connection,
+                        """
+                        UPDATE ai_canvas_notes
+                        SET title = %s, updated_at = now()
+                        WHERE id = %s
+                        RETURNING id, folder_id, note_id, title, markdown, document_json, revision, source_page_start, source_page_end, created_at, updated_at
+                        """,
+                        (
+                            canvas_title,
+                            canvas_note["id"],
+                        ),
+                    )
         except Exception:
             if created_canvas_note:
                 try:
@@ -769,15 +776,18 @@ def create_ai_chat_message(
                 if canvas_action == "canvas_create"
                 else "Canvas에 반영했습니다."
             )
+        elif canvas_note is None:
+            answer = "적용할 만한 Canvas 변경이 없어 새 Canvas를 만들지 않았습니다."
         else:
             answer = "적용할 만한 Canvas 변경이 없어 현재 내용을 유지했습니다."
-        canvas_edit = {
-            "action": canvas_action,
-            "canvas_note_id": canvas_note["id"],
-            "title": canvas_note["title"],
-            "canvas_note": canvas_note,
-            "operations": operations,
-        }
+        if canvas_note is not None:
+            canvas_edit = {
+                "action": canvas_action,
+                "canvas_note_id": canvas_note["id"],
+                "title": canvas_note["title"],
+                "canvas_note": canvas_note,
+                "operations": operations,
+            }
     elif payload.use_rag:
         documents = load_note_documents(connection, note_ids=[session["note_id"]], user_id=current_user["id"])
         rag_context_hint = build_hybrid_rag_context_hint(
