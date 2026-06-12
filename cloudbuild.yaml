@@ -34,8 +34,8 @@ steps:
       - --add-cloudsql-instances=${_SQL_INSTANCE}
       - --add-volume=name=uploads,type=cloud-storage,bucket=${_BUCKET}
       - --add-volume-mount=volume=uploads,mount-path=/mnt/uploads
-      - --set-env-vars=APP_ENV=production,APP_NAME=B-Snap API,AI_PROVIDER=openai,OPENAI_DEFAULT_MODEL=gpt-4.1-mini,UPLOAD_DIR=/mnt/uploads,UPLOAD_MAX_BYTES=31457280,AI_IMAGE_MAX_BYTES=29360128
-      - --set-secrets=DATABASE_URL=bsnap-database-url:latest,JWT_SECRET_KEY=bsnap-jwt-secret-key:latest,OPENAI_API_KEY=bsnap-openai-api-key:latest
+      - --set-env-vars=APP_ENV=production,APP_NAME=B-Snap API,AI_PROVIDER=gemini,GEMINI_DEFAULT_MODEL=gemini-3.1-flash-lite,UPLOAD_DIR=/mnt/uploads,UPLOAD_MAX_BYTES=31457280,AI_IMAGE_MAX_BYTES=29360128
+      - --set-secrets=DATABASE_URL=bsnap-database-url:latest,JWT_SECRET_KEY=bsnap-jwt-secret-key:latest,GEMINI_API_KEY=bsnap-gemini-api-key:latest,OPENAI_API_KEY=bsnap-openai-api-key:latest
 
 images:
   - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE}:${SHORT_SHA}
