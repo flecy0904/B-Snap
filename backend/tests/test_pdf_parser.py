@@ -3,6 +3,7 @@ import unittest
 from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import fitz  # type: ignore[import-untyped]
 from fastapi import HTTPException
@@ -10,6 +11,8 @@ from PIL import Image
 
 from backend.app.routes.uploads import _store_upload
 from backend.app.services.note_page_content import merge_page_state_content, parse_page_state
+from backend.app.services.docling_batch_pipeline import DoclingBatchError, _parse_docling_pages_with_fallback
+from backend.app.services.docling_crop_debug import _docling_bbox_to_pdf_bbox, _expand_bbox
 from backend.app.services.pdf_parser import PdfParsingError, parse_pdf_bytes, parse_pdf_path
 from backend.app.services.rag_chunker import IndexSource, build_text_chunks
 
@@ -95,6 +98,88 @@ def _indented_continuation_pdf_bytes() -> bytes:
 
 
 class PdfParserTest(unittest.TestCase):
+    def test_docling_fallback_splits_failed_20_page_batch_into_10_page_ranges(self):
+        calls = []
+
+        def fake_parse_once(*, pdf_path, page_start, page_end):
+            calls.append((page_start, page_end))
+            if page_end - page_start + 1 > 10:
+                raise RuntimeError("simulated docling allocation failure")
+            return [SimpleNamespace(page_number=page_number) for page_number in range(page_start, page_end + 1)]
+
+        with patch("backend.app.services.docling_batch_pipeline._parse_docling_pages_once", side_effect=fake_parse_once):
+            with self.assertLogs("backend.app.services.docling_batch_pipeline", level="WARNING"):
+                pages = _parse_docling_pages_with_fallback(
+                    pdf_path=Path("sample.pdf"),
+                    page_start=1,
+                    page_end=20,
+                    fallback_sizes=[10, 5],
+                )
+
+        self.assertEqual(calls, [(1, 20), (1, 10), (11, 20)])
+        self.assertEqual([page.page_number for page in pages], list(range(1, 21)))
+
+    def test_docling_fallback_splits_failed_10_page_range_into_5_page_ranges(self):
+        calls = []
+
+        def fake_parse_once(*, pdf_path, page_start, page_end):
+            calls.append((page_start, page_end))
+            if page_end - page_start + 1 > 5:
+                raise RuntimeError("simulated docling allocation failure")
+            return [SimpleNamespace(page_number=page_number) for page_number in range(page_start, page_end + 1)]
+
+        with patch("backend.app.services.docling_batch_pipeline._parse_docling_pages_once", side_effect=fake_parse_once):
+            with self.assertLogs("backend.app.services.docling_batch_pipeline", level="WARNING"):
+                pages = _parse_docling_pages_with_fallback(
+                    pdf_path=Path("sample.pdf"),
+                    page_start=1,
+                    page_end=10,
+                    fallback_sizes=[10, 5],
+                )
+
+        self.assertEqual(calls, [(1, 10), (1, 5), (6, 10)])
+        self.assertEqual([page.page_number for page in pages], list(range(1, 11)))
+
+    def test_docling_fallback_does_not_retry_dependency_errors(self):
+        calls = []
+
+        def fake_parse_once(*, pdf_path, page_start, page_end):
+            calls.append((page_start, page_end))
+            raise DoclingBatchError("docling dependency is not installed")
+
+        with patch("backend.app.services.docling_batch_pipeline._parse_docling_pages_once", side_effect=fake_parse_once):
+            with self.assertRaises(DoclingBatchError):
+                _parse_docling_pages_with_fallback(
+                    pdf_path=Path("sample.pdf"),
+                    page_start=1,
+                    page_end=20,
+                    fallback_sizes=[10, 5],
+                )
+
+        self.assertEqual(calls, [(1, 20)])
+
+    def test_docling_bottom_left_bbox_converts_to_pymupdf_top_left_bbox(self):
+        bbox = _docling_bbox_to_pdf_bbox(
+            (514.79, 85.09, 819.15, 452.78),
+            coord_origin="BOTTOMLEFT",
+            docling_page_width=960,
+            docling_page_height=540,
+            pdf_page_width=960,
+            pdf_page_height=540,
+        )
+
+        self.assertEqual(tuple(round(value, 2) for value in bbox), (514.79, 87.22, 819.15, 454.91))
+
+    def test_docling_crop_margin_is_clamped_to_page_bounds(self):
+        bbox = _expand_bbox(
+            (0, 10, 100, 110),
+            margin_ratio=0.2,
+            page_width=960,
+            page_height=540,
+        )
+
+        self.assertEqual(tuple(round(value, 2) for value in bbox), (0.0, 0.0, 120.0, 130.0))
+
     def test_parse_pdf_bytes_extracts_page_text_and_text_metadata(self) -> None:
         result = parse_pdf_bytes(_simple_text_pdf_bytes())
 
