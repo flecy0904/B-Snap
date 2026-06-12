@@ -471,6 +471,30 @@ class RAGRetrieverTest(unittest.TestCase):
         self.assertIn("message 6", text_items)
         self.assertIn("현재 질문", text_items[-1])
 
+    def test_chat_context_keeps_recent_selection_image_attachments(self):
+        image_data_uri = "data:image/png;base64,ZmFrZQ=="
+        input_items = build_response_input(
+            {"title": "강화학습", "summary": ""},
+            [{"page_number": 11, "content": "Gradient descent", "image_url": None}],
+            [{
+                "id": 1,
+                "role": "user",
+                "content": "이 선택 영역 설명해줘",
+                "selection_image_url": image_data_uri,
+            }],
+            "그 이미지에서 핵심만 다시 말해줘",
+        )
+
+        previous_message_item = next(
+            item
+            for item in input_items
+            if isinstance(item["content"], list)
+            and any(part.get("image_url") == image_data_uri for part in item["content"])
+        )
+
+        self.assertEqual(previous_message_item["role"], "user")
+        self.assertIn("attached selection image", previous_message_item["content"][0]["text"])
+
     def test_canvas_context_uses_session_summary_rag_and_eight_recent_messages(self):
         messages = [
             {"id": index, "role": "user" if index % 2 else "assistant", "content": f"canvas message {index}"}
@@ -530,13 +554,20 @@ class RAGRetrieverTest(unittest.TestCase):
             summary = generate_chat_session_summary(
                 model="gpt-test",
                 previous_summary="현재 목표: 네트워크 복습",
-                messages=[{"id": 10, "role": "user", "source": "chat", "content": "TCP 설명 선호"}],
+                messages=[{
+                    "id": 10,
+                    "role": "user",
+                    "source": "chat",
+                    "content": "TCP 설명 선호",
+                    "selection_image_url": "data:image/png;base64,ZmFrZQ==",
+                }],
             )
 
         self.assertIn("현재 목표", summary)
         self.assertIn("현재 목표", captured["instructions"])
         self.assertIn("Previous session summary", captured["input_items"][0]["content"])
         self.assertIn("TCP 설명 선호", captured["input_items"][0]["content"])
+        self.assertIn("selection image attached", captured["input_items"][0]["content"])
 
 
 if __name__ == "__main__":

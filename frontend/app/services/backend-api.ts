@@ -152,15 +152,7 @@ export type BackendClassInsight = {
 export type BackendAiMessageResponse = {
   model: string;
   user_message: BackendChatMessage;
-  assistant_message: {
-    id: number;
-    session_id: number;
-    role: 'assistant';
-    content: string;
-    source: string;
-    model: string | null;
-    created_at: string;
-  };
+  assistant_message: BackendChatMessage;
   chat_session?: BackendChatSession | null;
   canvas_edit?: {
     action: 'canvas_edit' | 'canvas_create';
@@ -281,6 +273,7 @@ function getBackendUrl() {
 
 export function resolveBackendAssetUrl(url: string | null | undefined) {
   if (!url) return null;
+  if (/^(data:|blob:)/i.test(url)) return url;
   if (/^https?:\/\//i.test(url)) {
     try {
       const parsed = new URL(url);
@@ -317,15 +310,23 @@ function normalizeBackendAiCanvasNote(note: any): BackendAiCanvasNote {
   } as BackendAiCanvasNote;
 }
 
+function normalizeBackendChatMessage(message: any): BackendChatMessage {
+  return {
+    ...message,
+    selection_image_url: resolveBackendAssetUrl(message?.selection_image_url) ?? message?.selection_image_url ?? null,
+  } as BackendChatMessage;
+}
+
 function normalizeBackendAiMessageResponse(response: BackendAiMessageResponse): BackendAiMessageResponse {
-  if (!response.canvas_edit) return response;
   return {
     ...response,
-    canvas_edit: {
+    user_message: normalizeBackendChatMessage(response.user_message),
+    assistant_message: normalizeBackendChatMessage(response.assistant_message),
+    canvas_edit: response.canvas_edit ? {
       ...response.canvas_edit,
       operations: Array.isArray(response.canvas_edit.operations) ? response.canvas_edit.operations : [],
       canvas_note: normalizeBackendAiCanvasNote(response.canvas_edit.canvas_note),
-    },
+    } : null,
   };
 }
 
@@ -900,7 +901,8 @@ export function deleteBackendChatSession(sessionId: number) {
 }
 
 export function listBackendChatMessages(sessionId: number) {
-  return request<BackendChatMessage[]>(`/chat-sessions/${sessionId}/messages`);
+  return request<BackendChatMessage[]>(`/chat-sessions/${sessionId}/messages`)
+    .then((messages) => messages.map(normalizeBackendChatMessage));
 }
 
 export async function sendBackendAiMessage(payload: {

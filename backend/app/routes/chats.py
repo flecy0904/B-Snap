@@ -268,6 +268,21 @@ def select_chat_context_pages(pages: list[dict], page_number: int | None) -> lis
     return selected_pages or pages[:3]
 
 
+def resolve_selection_image_url_for_history(payload: ChatAiMessageCreate | ChatMessageCreate) -> str | None:
+    candidates = []
+    selection_image = getattr(payload, "selection_image", None)
+    if selection_image:
+        candidates.append(selection_image)
+    selection_image_url = getattr(payload, "selection_image_url", None)
+    if selection_image_url:
+        candidates.append(selection_image_url)
+
+    for candidate in candidates:
+        if candidate.startswith(("data:image/", "http://", "https://", "/uploads/")):
+            return candidate
+    return selection_image_url
+
+
 def maybe_update_chat_session_summary(
     connection: Connection,
     *,
@@ -413,7 +428,7 @@ def get_chat_session(
     session["messages"] = fetch_all(
         connection,
         """
-        SELECT id, session_id, role, content, COALESCE(source, 'chat') AS source, model, created_at
+        SELECT id, session_id, role, content, COALESCE(source, 'chat') AS source, selection_image_url, model, created_at
         FROM chat_messages
         WHERE session_id = %s
         ORDER BY created_at ASC, id ASC
@@ -468,11 +483,11 @@ def create_chat_message(
     message = execute_returning(
         connection,
         """
-        INSERT INTO chat_messages (session_id, role, content, source, model)
-        VALUES (%s, %s, %s, %s, %s)
-        RETURNING id, session_id, role, content, COALESCE(source, 'chat') AS source, model, created_at
+        INSERT INTO chat_messages (session_id, role, content, source, selection_image_url, model)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        RETURNING id, session_id, role, content, COALESCE(source, 'chat') AS source, selection_image_url, model, created_at
         """,
-        (session_id, payload.role, payload.content, payload.source, payload.model),
+        (session_id, payload.role, payload.content, payload.source, resolve_selection_image_url_for_history(payload), payload.model),
     )
     execute_commit(connection, "UPDATE chat_sessions SET updated_at = now() WHERE id = %s", (session_id,))
     return message
@@ -500,7 +515,7 @@ def create_ai_chat_message(
     previous_messages = fetch_all(
         connection,
         """
-        SELECT id, session_id, role, content, COALESCE(source, 'chat') AS source, model, created_at
+        SELECT id, session_id, role, content, COALESCE(source, 'chat') AS source, selection_image_url, model, created_at
         FROM chat_messages
         WHERE session_id = %s
           AND COALESCE(source, 'chat') <> 'canvas-mini'
@@ -693,18 +708,18 @@ def create_ai_chat_message(
     user_message = execute_returning(
         connection,
         """
-        INSERT INTO chat_messages (session_id, role, content, source, model)
-        VALUES (%s, 'user', %s, %s, %s)
-        RETURNING id, session_id, role, content, COALESCE(source, 'chat') AS source, model, created_at
+        INSERT INTO chat_messages (session_id, role, content, source, selection_image_url, model)
+        VALUES (%s, 'user', %s, %s, %s, %s)
+        RETURNING id, session_id, role, content, COALESCE(source, 'chat') AS source, selection_image_url, model, created_at
         """,
-        (session_id, payload.content, payload.source, model),
+        (session_id, payload.content, payload.source, resolve_selection_image_url_for_history(payload), model),
     )
     assistant_message = execute_returning(
         connection,
         """
-        INSERT INTO chat_messages (session_id, role, content, source, model)
-        VALUES (%s, 'assistant', %s, %s, %s)
-        RETURNING id, session_id, role, content, COALESCE(source, 'chat') AS source, model, created_at
+        INSERT INTO chat_messages (session_id, role, content, source, selection_image_url, model)
+        VALUES (%s, 'assistant', %s, %s, NULL, %s)
+        RETURNING id, session_id, role, content, COALESCE(source, 'chat') AS source, selection_image_url, model, created_at
         """,
         (session_id, answer, payload.source, model),
     )
@@ -753,7 +768,7 @@ def list_chat_messages(
     return fetch_all(
         connection,
         """
-        SELECT id, session_id, role, content, COALESCE(source, 'chat') AS source, model, created_at
+        SELECT id, session_id, role, content, COALESCE(source, 'chat') AS source, selection_image_url, model, created_at
         FROM chat_messages
         WHERE session_id = %s
         ORDER BY created_at ASC, id ASC

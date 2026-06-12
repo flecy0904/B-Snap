@@ -114,8 +114,7 @@ def build_response_input(
         })
 
     for message in messages[-CHAT_RECENT_MESSAGE_LIMIT:]:
-        role = message["role"] if message["role"] in {"user", "assistant"} else "user"
-        input_items.append({"role": role, "content": message["content"]})
+        input_items.append(build_conversation_message_input(message))
 
     selection_context = build_selection_context(selection_rect=selection_rect, page_number=page_number)
     image_url = _prepare_input_image_url(selection_image or selection_image_url)
@@ -140,6 +139,28 @@ def _prepare_input_image_url(image_url: str | None) -> str | None:
     if image_url.startswith("data:image/"):
         return image_url
     return _local_upload_image_data_uri(image_url) or image_url
+
+
+def build_conversation_message_input(message: dict[str, Any]) -> dict[str, Any]:
+    role = message["role"] if message.get("role") in {"user", "assistant"} else "user"
+    content = str(message.get("content") or "")
+    selection_image_url = message.get("selection_image_url") if role == "user" else None
+    image_url = _prepare_input_image_url(str(selection_image_url)) if selection_image_url else None
+    if image_url:
+        return {
+            "role": role,
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": "\n\n".join([
+                        content,
+                        "This previous user message included the attached selection image.",
+                    ]).strip(),
+                },
+                {"type": "input_image", "image_url": image_url},
+            ],
+        }
+    return {"role": role, "content": content}
 
 
 def _local_upload_image_data_uri(image_url: str) -> str | None:
@@ -354,7 +375,8 @@ def format_chat_messages_for_summary(messages: list[dict[str, Any]], max_chars: 
         content = " ".join(str(message.get("content") or "").split())
         if not content:
             continue
-        line = f"{role} ({source}, id={message.get('id')}): {content[:1800]}"
+        attachment_note = " [selection image attached]" if message.get("selection_image_url") else ""
+        line = f"{role} ({source}, id={message.get('id')}){attachment_note}: {content[:1800]}"
         if used_chars + len(line) > max_chars:
             remaining = max_chars - used_chars
             if remaining > 200:
@@ -553,8 +575,7 @@ def generate_ai_canvas_operations_from_chat(
             ),
         })
         for message in messages[-CANVAS_RECENT_MESSAGE_LIMIT:]:
-            role = message["role"] if message["role"] in {"user", "assistant"} else "user"
-            input_items.append({"role": role, "content": message["content"]})
+            input_items.append(build_conversation_message_input(message))
 
     input_items.append({
         "role": "user",

@@ -14,6 +14,7 @@ class ChatMessage(Base):
     role: Mapped[str] = mapped_column(String(32))
     content: Mapped[str] = mapped_column(Text)
     source: Mapped[str] = mapped_column(String(32), nullable=False, server_default="chat")
+    selection_image_url: Mapped[str] = mapped_column(Text, nullable=True)
     model: Mapped[str] = mapped_column(String(100), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

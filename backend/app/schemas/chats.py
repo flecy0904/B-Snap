@@ -34,6 +34,7 @@ class ChatMessageCreate(BaseModel):
     content: str
     model: str | None = None
     source: ChatMessageSource = "chat"
+    selection_image_url: str | None = None
 
 
 class SelectionRectPayload(BaseModel):
@@ -71,6 +72,7 @@ class ChatMessageRead(BaseModel):
     role: str
     content: str
     source: str = "chat"
+    selection_image_url: str | None = None
     model: str | None = None
     created_at: datetime
 
