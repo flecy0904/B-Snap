@@ -268,6 +268,21 @@ def select_chat_context_pages(pages: list[dict], page_number: int | None) -> lis
     return selected_pages or pages[:3]
 
 
+def resolve_selection_image_url_for_history(payload: ChatAiMessageCreate | ChatMessageCreate) -> str | None:
+    candidates = []
+    selection_image = getattr(payload, "selection_image", None)
+    if selection_image:
+        candidates.append(selection_image)
+    selection_image_url = getattr(payload, "selection_image_url", None)
+    if selection_image_url:
+        candidates.append(selection_image_url)
+
+    for candidate in candidates:
+        if candidate.startswith(("data:image/", "http://", "https://", "/uploads/")):
+            return candidate
+    return selection_image_url
+
+
 def maybe_update_chat_session_summary(
     connection: Connection,
     *,
@@ -275,24 +290,25 @@ def maybe_update_chat_session_summary(
     messages: list[dict],
     model: str,
     recent_message_limit: int,
-) -> str | None:
+) -> tuple[str | None, str | None]:
     eligible_messages = [
         message
         for message in messages
         if message.get("role") in {"user", "assistant"} and str(message.get("content") or "").strip()
     ]
     if len(eligible_messages) <= recent_message_limit:
-        return session.get("summary")
+        return session.get("summary"), session.get("memory_facts")
 
     older_messages = eligible_messages[:-recent_message_limit]
     if not older_messages:
-        return session.get("summary")
+        return session.get("summary"), session.get("memory_facts")
 
     previous_summary = session.get("summary")
+    previous_memory_facts = session.get("memory_facts")
     summarized_message_id = session.get("summarized_message_id")
     latest_older_message_id = older_messages[-1]["id"]
     if summarized_message_id is not None and summarized_message_id >= latest_older_message_id:
-        return previous_summary
+        return previous_summary, previous_memory_facts
 
     if summarized_message_id is None:
         messages_to_summarize = older_messages
@@ -303,35 +319,40 @@ def maybe_update_chat_session_summary(
             if message["id"] > summarized_message_id
         ]
     if not messages_to_summarize:
-        return previous_summary
+        return previous_summary, previous_memory_facts
 
     try:
-        next_summary = generate_chat_session_summary(
+        next_memory = generate_chat_session_summary(
             model=model,
             previous_summary=previous_summary,
+            previous_memory_facts=previous_memory_facts,
             messages=messages_to_summarize,
         )
     except Exception:
-        return previous_summary
+        return previous_summary, previous_memory_facts
 
-    if not next_summary:
-        return previous_summary
+    next_summary = next_memory.get("session_summary") or previous_summary
+    next_memory_facts = next_memory.get("memory_facts") or previous_memory_facts
+    if not next_summary and not next_memory_facts:
+        return previous_summary, previous_memory_facts
 
     execute_commit(
         connection,
         """
         UPDATE chat_sessions
         SET summary = %s,
+            memory_facts = %s,
             summarized_message_id = %s,
             summary_updated_at = now(),
             updated_at = now()
         WHERE id = %s
         """,
-        (next_summary, latest_older_message_id, session["id"]),
+        (next_summary, next_memory_facts, latest_older_message_id, session["id"]),
     )
     session["summary"] = next_summary
+    session["memory_facts"] = next_memory_facts
     session["summarized_message_id"] = latest_older_message_id
-    return next_summary
+    return next_summary, next_memory_facts
 
 
 @router.post("/notes/{note_id}/chat-sessions", response_model=ChatSessionRead)
@@ -401,7 +422,7 @@ def get_chat_session(
             connection,
             """
             SELECT s.id, s.note_id, s.title, s.model, s.created_at, s.updated_at
-                   , s.summary, s.summarized_message_id, s.summary_updated_at
+                   , s.summary, s.memory_facts, s.summarized_message_id, s.summary_updated_at
             FROM chat_sessions s
             JOIN notes n ON n.id = s.note_id
             WHERE s.id = %s AND n.user_id = %s
@@ -413,7 +434,7 @@ def get_chat_session(
     session["messages"] = fetch_all(
         connection,
         """
-        SELECT id, session_id, role, content, COALESCE(source, 'chat') AS source, model, created_at
+        SELECT id, session_id, role, content, COALESCE(source, 'chat') AS source, selection_image_url, model, created_at
         FROM chat_messages
         WHERE session_id = %s
         ORDER BY created_at ASC, id ASC
@@ -468,11 +489,11 @@ def create_chat_message(
     message = execute_returning(
         connection,
         """
-        INSERT INTO chat_messages (session_id, role, content, source, model)
-        VALUES (%s, %s, %s, %s, %s)
-        RETURNING id, session_id, role, content, COALESCE(source, 'chat') AS source, model, created_at
+        INSERT INTO chat_messages (session_id, role, content, source, selection_image_url, model)
+        VALUES (%s, %s, %s, %s, %s, %s)
+        RETURNING id, session_id, role, content, COALESCE(source, 'chat') AS source, selection_image_url, model, created_at
         """,
-        (session_id, payload.role, payload.content, payload.source, payload.model),
+        (session_id, payload.role, payload.content, payload.source, resolve_selection_image_url_for_history(payload), payload.model),
     )
     execute_commit(connection, "UPDATE chat_sessions SET updated_at = now() WHERE id = %s", (session_id,))
     return message
@@ -500,7 +521,7 @@ def create_ai_chat_message(
     previous_messages = fetch_all(
         connection,
         """
-        SELECT id, session_id, role, content, COALESCE(source, 'chat') AS source, model, created_at
+        SELECT id, session_id, role, content, COALESCE(source, 'chat') AS source, selection_image_url, model, created_at
         FROM chat_messages
         WHERE session_id = %s
           AND COALESCE(source, 'chat') <> 'canvas-mini'
@@ -529,7 +550,7 @@ def create_ai_chat_message(
         if canvas_action in {"canvas_edit", "canvas_create"}
         else CHAT_RECENT_MESSAGE_LIMIT
     )
-    session_summary = maybe_update_chat_session_summary(
+    session_summary, memory_facts = maybe_update_chat_session_summary(
         connection,
         session=session,
         messages=previous_messages,
@@ -583,6 +604,7 @@ def create_ai_chat_message(
                 selection_image_url=payload.selection_image_url,
                 context_hint=rag_context_hint,
                 session_summary=session_summary,
+                memory_facts=memory_facts,
                 canvas_block_context=payload.canvas_block_context,
             )
             canvas_title = canvas_note["title"]
@@ -658,6 +680,7 @@ def create_ai_chat_message(
             selection_image_url=payload.selection_image_url,
             context_hint=context_hint,
             session_summary=session_summary,
+            memory_facts=memory_facts,
             canvas_block_context=payload.canvas_block_context,
         )
     else:
@@ -688,23 +711,24 @@ def create_ai_chat_message(
             selection_image_url=payload.selection_image_url,
             context_hint=context_hint,
             session_summary=session_summary,
+            memory_facts=memory_facts,
             canvas_block_context=payload.canvas_block_context,
         )
     user_message = execute_returning(
         connection,
         """
-        INSERT INTO chat_messages (session_id, role, content, source, model)
-        VALUES (%s, 'user', %s, %s, %s)
-        RETURNING id, session_id, role, content, COALESCE(source, 'chat') AS source, model, created_at
+        INSERT INTO chat_messages (session_id, role, content, source, selection_image_url, model)
+        VALUES (%s, 'user', %s, %s, %s, %s)
+        RETURNING id, session_id, role, content, COALESCE(source, 'chat') AS source, selection_image_url, model, created_at
         """,
-        (session_id, payload.content, payload.source, model),
+        (session_id, payload.content, payload.source, resolve_selection_image_url_for_history(payload), model),
     )
     assistant_message = execute_returning(
         connection,
         """
-        INSERT INTO chat_messages (session_id, role, content, source, model)
-        VALUES (%s, 'assistant', %s, %s, %s)
-        RETURNING id, session_id, role, content, COALESCE(source, 'chat') AS source, model, created_at
+        INSERT INTO chat_messages (session_id, role, content, source, selection_image_url, model)
+        VALUES (%s, 'assistant', %s, %s, NULL, %s)
+        RETURNING id, session_id, role, content, COALESCE(source, 'chat') AS source, selection_image_url, model, created_at
         """,
         (session_id, answer, payload.source, model),
     )
@@ -753,7 +777,7 @@ def list_chat_messages(
     return fetch_all(
         connection,
         """
-        SELECT id, session_id, role, content, COALESCE(source, 'chat') AS source, model, created_at
+        SELECT id, session_id, role, content, COALESCE(source, 'chat') AS source, selection_image_url, model, created_at
         FROM chat_messages
         WHERE session_id = %s
         ORDER BY created_at ASC, id ASC

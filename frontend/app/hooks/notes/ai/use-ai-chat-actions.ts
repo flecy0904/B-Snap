@@ -600,7 +600,7 @@ export function useAiChatActions(params: {
       });
       const userMessageWithAttachment = {
         ...response.user_message,
-        selection_image_url: selectionPreviewUri,
+        selection_image_url: response.user_message.selection_image_url ?? selectionPreviewUri,
       };
       params.setLastChatSessionByDocument((current) => ({
         ...current,

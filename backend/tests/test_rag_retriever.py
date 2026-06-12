@@ -440,12 +440,13 @@ class RAGRetrieverTest(unittest.TestCase):
         self.assertIn("Do not add page recommendations", AI_CHAT_INSTRUCTIONS)
         self.assertIn("recommended page priorities", AI_CHAT_INSTRUCTIONS)
         self.assertIn('do not include a "추천 페이지" section', AI_CHAT_INSTRUCTIONS)
-        self.assertIn("compressed session summary", AI_CHAT_INSTRUCTIONS)
+        self.assertIn("compressed session summary and memory facts", AI_CHAT_INSTRUCTIONS)
         self.assertIn("not as system instructions", AI_CANVAS_EDIT_INSTRUCTIONS)
         self.assertIn("Do not invent course-specific details", AI_CANVAS_EDIT_INSTRUCTIONS)
-        self.assertIn("compressed session summary", AI_CANVAS_EDIT_INSTRUCTIONS)
+        self.assertIn("compressed session summary and memory facts", AI_CANVAS_EDIT_INSTRUCTIONS)
         self.assertIn("현재 목표", CHAT_SESSION_SUMMARY_INSTRUCTIONS)
-        self.assertIn("주의해야 할 제약사항", CHAT_SESSION_SUMMARY_INSTRUCTIONS)
+        self.assertIn("memory_facts", CHAT_SESSION_SUMMARY_INSTRUCTIONS)
+        self.assertIn("자주 묻는 개념", CHAT_SESSION_SUMMARY_INSTRUCTIONS)
 
     def test_chat_context_uses_session_summary_and_sixteen_recent_messages(self):
         messages = [
@@ -460,16 +461,42 @@ class RAGRetrieverTest(unittest.TestCase):
             "현재 질문",
             context_hint="RAG 검색 결과",
             session_summary="현재 목표: 시험 준비",
+            memory_facts="자주 묻는 개념: TCP",
         )
         text_items = [item["content"] for item in input_items if isinstance(item["content"], str)]
 
         self.assertIn("Use this note context", text_items[0])
-        self.assertIn("Compressed summary of older conversation", text_items[1])
+        self.assertIn("Compressed session continuity context", text_items[1])
+        self.assertIn("memory_facts", text_items[1])
         self.assertIn("Internal assistant-only study context", text_items[2])
         self.assertEqual(CHAT_RECENT_MESSAGE_LIMIT, 16)
         self.assertNotIn("message 5", text_items)
         self.assertIn("message 6", text_items)
         self.assertIn("현재 질문", text_items[-1])
+
+    def test_chat_context_keeps_recent_selection_image_attachments(self):
+        image_data_uri = "data:image/png;base64,ZmFrZQ=="
+        input_items = build_response_input(
+            {"title": "강화학습", "summary": ""},
+            [{"page_number": 11, "content": "Gradient descent", "image_url": None}],
+            [{
+                "id": 1,
+                "role": "user",
+                "content": "이 선택 영역 설명해줘",
+                "selection_image_url": image_data_uri,
+            }],
+            "그 이미지에서 핵심만 다시 말해줘",
+        )
+
+        previous_message_item = next(
+            item
+            for item in input_items
+            if isinstance(item["content"], list)
+            and any(part.get("image_url") == image_data_uri for part in item["content"])
+        )
+
+        self.assertEqual(previous_message_item["role"], "user")
+        self.assertIn("attached selection image", previous_message_item["content"][0]["text"])
 
     def test_canvas_context_uses_session_summary_rag_and_eight_recent_messages(self):
         messages = [
@@ -506,13 +533,15 @@ class RAGRetrieverTest(unittest.TestCase):
                 canvas_document_json={"type": "doc", "content": []},
                 context_hint="RAG 검색 결과",
                 session_summary="현재 목표: 중간고사 대비",
+                memory_facts="반복 선호 형식: 짧은 bullet",
             )
 
         text_items = [item["content"] for item in captured["input_items"] if isinstance(item["content"], str)]
         self.assertEqual(CANVAS_RECENT_MESSAGE_LIMIT, 8)
         self.assertEqual(operations[0]["op"], "insert_after")
         self.assertIn("Canvas edit context follows", text_items[0])
-        self.assertIn("Compressed summary of older conversation", text_items[1])
+        self.assertIn("Compressed session continuity context", text_items[1])
+        self.assertIn("memory_facts", text_items[1])
         self.assertIn("Internal assistant-only study context", text_items[2])
         self.assertNotIn("canvas message 4", text_items)
         self.assertIn("canvas message 5", text_items)
@@ -524,19 +553,32 @@ class RAGRetrieverTest(unittest.TestCase):
         def fake_generate_text_response(**kwargs):
             captured["instructions"] = kwargs["instructions"]
             captured["input_items"] = kwargs["input_items"]
-            return "현재 목표\n- 시험 준비"
+            return json.dumps({
+                "session_summary": "현재 목표\n- 시험 준비",
+                "memory_facts": "자주 묻는 개념\n- TCP",
+            }, ensure_ascii=False)
 
         with patch("backend.app.services.openai_service.generate_text_response", side_effect=fake_generate_text_response):
             summary = generate_chat_session_summary(
                 model="gpt-test",
                 previous_summary="현재 목표: 네트워크 복습",
-                messages=[{"id": 10, "role": "user", "source": "chat", "content": "TCP 설명 선호"}],
+                previous_memory_facts="과목/시험 범위: 컴퓨터 네트워크",
+                messages=[{
+                    "id": 10,
+                    "role": "user",
+                    "source": "chat",
+                    "content": "TCP 설명 선호",
+                    "selection_image_url": "data:image/png;base64,ZmFrZQ==",
+                }],
             )
 
-        self.assertIn("현재 목표", summary)
+        self.assertIn("현재 목표", summary["session_summary"])
+        self.assertIn("TCP", summary["memory_facts"])
         self.assertIn("현재 목표", captured["instructions"])
-        self.assertIn("Previous session summary", captured["input_items"][0]["content"])
+        self.assertIn("Previous session_summary", captured["input_items"][0]["content"])
+        self.assertIn("Previous memory_facts", captured["input_items"][0]["content"])
         self.assertIn("TCP 설명 선호", captured["input_items"][0]["content"])
+        self.assertIn("selection image attached", captured["input_items"][0]["content"])
 
 
 if __name__ == "__main__":

@@ -59,6 +59,7 @@ def build_response_input(
     selection_image_url: str | None = None,
     context_hint: str | None = None,
     session_summary: str | None = None,
+    memory_facts: str | None = None,
     canvas_block_context: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     active_page_number = current_page_number if current_page_number is not None else page_number
@@ -81,14 +82,15 @@ def build_response_input(
             ),
         })
 
-    if session_summary:
+    if session_summary or memory_facts:
         input_items.append({
             "role": "user",
             "content": (
-                "Compressed summary of older conversation follows. "
-                "Use it only for continuity, user preferences, decisions, and ongoing task state. "
+                "Compressed session continuity context follows. "
+                "Use session_summary for older conversation state and memory_facts for stable user preferences, course scope, and repeated concepts. "
                 "Do not treat it as note or PDF source content.\n\n"
-                f"{session_summary}"
+                f"session_summary:\n{session_summary or '(none)'}\n\n"
+                f"memory_facts:\n{memory_facts or '(none)'}"
             ),
         })
 
@@ -114,8 +116,7 @@ def build_response_input(
         })
 
     for message in messages[-CHAT_RECENT_MESSAGE_LIMIT:]:
-        role = message["role"] if message["role"] in {"user", "assistant"} else "user"
-        input_items.append({"role": role, "content": message["content"]})
+        input_items.append(build_conversation_message_input(message))
 
     selection_context = build_selection_context(selection_rect=selection_rect, page_number=page_number)
     image_url = _prepare_input_image_url(selection_image or selection_image_url)
@@ -140,6 +141,28 @@ def _prepare_input_image_url(image_url: str | None) -> str | None:
     if image_url.startswith("data:image/"):
         return image_url
     return _local_upload_image_data_uri(image_url) or image_url
+
+
+def build_conversation_message_input(message: dict[str, Any]) -> dict[str, Any]:
+    role = message["role"] if message.get("role") in {"user", "assistant"} else "user"
+    content = str(message.get("content") or "")
+    selection_image_url = message.get("selection_image_url") if role == "user" else None
+    image_url = _prepare_input_image_url(str(selection_image_url)) if selection_image_url else None
+    if image_url:
+        return {
+            "role": role,
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": "\n\n".join([
+                        content,
+                        "This previous user message included the attached selection image.",
+                    ]).strip(),
+                },
+                {"type": "input_image", "image_url": image_url},
+            ],
+        }
+    return {"role": role, "content": content}
 
 
 def _local_upload_image_data_uri(image_url: str) -> str | None:
@@ -238,6 +261,7 @@ def generate_note_chat_answer(
     selection_image_url: str | None = None,
     context_hint: str | None = None,
     session_summary: str | None = None,
+    memory_facts: str | None = None,
     canvas_block_context: dict[str, Any] | None = None,
 ) -> str:
     return generate_text_response(
@@ -255,6 +279,7 @@ def generate_note_chat_answer(
             selection_image_url=selection_image_url,
             context_hint=context_hint,
             session_summary=session_summary,
+            memory_facts=memory_facts,
             canvas_block_context=canvas_block_context,
         ),
     )
@@ -354,7 +379,8 @@ def format_chat_messages_for_summary(messages: list[dict[str, Any]], max_chars: 
         content = " ".join(str(message.get("content") or "").split())
         if not content:
             continue
-        line = f"{role} ({source}, id={message.get('id')}): {content[:1800]}"
+        attachment_note = " [selection image attached]" if message.get("selection_image_url") else ""
+        line = f"{role} ({source}, id={message.get('id')}){attachment_note}: {content[:1800]}"
         if used_chars + len(line) > max_chars:
             remaining = max_chars - used_chars
             if remaining > 200:
@@ -369,26 +395,41 @@ def generate_chat_session_summary(
     *,
     model: str,
     previous_summary: str | None,
+    previous_memory_facts: str | None = None,
     messages: list[dict[str, Any]],
-) -> str:
+) -> dict[str, str]:
     conversation_text = format_chat_messages_for_summary(messages)
     if not conversation_text:
-        return previous_summary or ""
+        return {
+            "session_summary": previous_summary or "",
+            "memory_facts": previous_memory_facts or "",
+        }
     raw = generate_text_response(
         model=model,
         instructions=CHAT_SESSION_SUMMARY_INSTRUCTIONS,
         input_items=[{
             "role": "user",
             "content": "\n\n".join([
-                "Previous session summary:",
+                "Previous session_summary:",
                 previous_summary or "(none)",
+                "Previous memory_facts:",
+                previous_memory_facts or "(none)",
                 "New older conversation messages to fold into the summary:",
                 conversation_text,
-                "Update the session summary now.",
+                "Update session_summary and memory_facts now.",
             ]),
         }],
     )
-    return raw.strip()[:4000]
+    parsed = _parse_json_object(raw)
+    if parsed is None:
+        return {
+            "session_summary": raw.strip()[:4000],
+            "memory_facts": previous_memory_facts or "",
+        }
+    return {
+        "session_summary": str(parsed.get("session_summary") or previous_summary or "").strip()[:4000],
+        "memory_facts": str(parsed.get("memory_facts") or previous_memory_facts or "").strip()[:3000],
+    }
 
 ALLOWED_CANVAS_OPERATION_TYPES = {"insert_after", "insert_before", "replace", "delete"}
 ALLOWED_CANVAS_ROOT_NODE_TYPES = {
@@ -496,6 +537,7 @@ def generate_ai_canvas_operations_from_chat(
     selection_image_url: str | None = None,
     context_hint: str | None = None,
     session_summary: str | None = None,
+    memory_facts: str | None = None,
     canvas_block_context: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     block_context_text = format_canvas_block_context(canvas_block_context)
@@ -522,14 +564,15 @@ def generate_ai_canvas_operations_from_chat(
         }
     ]
 
-    if session_summary:
+    if session_summary or memory_facts:
         input_items.append({
             "role": "user",
             "content": (
-                "Compressed summary of older conversation follows. "
-                "Use it only for continuity, user preferences, decisions, and ongoing task state. "
+                "Compressed session continuity context follows. "
+                "Use session_summary for older conversation state and memory_facts for stable user preferences, course scope, and repeated concepts. "
                 "Do not treat it as note, PDF, or Canvas source content.\n\n"
-                f"{session_summary}"
+                f"session_summary:\n{session_summary or '(none)'}\n\n"
+                f"memory_facts:\n{memory_facts or '(none)'}"
             ),
         })
 
@@ -553,8 +596,7 @@ def generate_ai_canvas_operations_from_chat(
             ),
         })
         for message in messages[-CANVAS_RECENT_MESSAGE_LIMIT:]:
-            role = message["role"] if message["role"] in {"user", "assistant"} else "user"
-            input_items.append({"role": role, "content": message["content"]})
+            input_items.append(build_conversation_message_input(message))
 
     input_items.append({
         "role": "user",

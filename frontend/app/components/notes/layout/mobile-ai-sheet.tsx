@@ -1,7 +1,7 @@
 import React from 'react';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import BottomSheet, { BottomSheetBackdrop, BottomSheetScrollView, BottomSheetTextInput, type BottomSheetBackdropProps } from '@gorhom/bottom-sheet';
-import { ActivityIndicator, Pressable, ScrollView, Text, View } from 'react-native';
+import { ActivityIndicator, Image, Pressable, ScrollView, Text, View } from 'react-native';
 import { hasEnoughClassInsightData, isClassInsightTargetDocument } from '../../../hooks/notes/class-insight';
 import { AiResponseContent } from '../ai/ai-response-content';
 import type { MobileNotesViewProps } from './mobile-notes-view';
@@ -183,7 +183,12 @@ export function MobileAiSheet(props: MobileNotesViewProps) {
                 <View key={message.id} style={props.styles.aiResponseSection}>
                   <Text style={props.styles.aiResponseSectionTitle}>{message.role === 'user' ? '나' : 'AI'}</Text>
                   {message.role === 'user' ? (
-                    <Text style={props.styles.aiResponseBody}>{message.content}</Text>
+                    <>
+                      {message.selection_image_url ? (
+                        <Image source={{ uri: message.selection_image_url }} style={props.styles.aiMessageAttachmentImage} resizeMode="cover" />
+                      ) : null}
+                      <Text style={props.styles.aiResponseBody}>{message.content}</Text>
+                    </>
                   ) : (
                     <AiResponseContent
                       content={message.content}
