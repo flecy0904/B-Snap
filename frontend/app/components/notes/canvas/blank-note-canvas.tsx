@@ -17,7 +17,7 @@ import type { NotebookPageTemplate } from '../../../types';
 import { useCanvasContext } from './canvas-context';
 import { shouldActivateNativeInkGesture, type NativeGestureStateManager, type NativeInkGestureEvent, type NativeInkTouchEvent } from './native-ink-gesture-policy';
 import { getPencilEraserRadius, getPencilHoverPoint, getPencilHoverSize, isPencilHoverFarEnough, isStylusHoverEvent, shouldPreviewPencilHover, type PencilHoverPoint } from './native-pencil-hover';
-import { useDesktopNotesWorkspaceContext } from '../workspace/notes-workspace-context';
+import { useNotesGlobalContext } from '../workspace/notes-global-context';
 import { useDocumentContext } from '../workspace/document-context';
 
 type ResizeCorner = 'nw' | 'ne' | 'sw' | 'se';
@@ -184,7 +184,7 @@ function BlankNoteTemplateLayer(props: {
 
 function BlankNotePageCanvas(props: BlankNotePageCanvasProps) {
   const canvasCtx = useCanvasContext();
-  const workspaceContext = useDesktopNotesWorkspaceContext();
+  const workspaceContext = useNotesGlobalContext();
   const {
     inkTool,
     fingerDrawingEnabled,
