@@ -18,13 +18,16 @@ from backend.app.schemas.chats import (
     ChatSessionUpdate,
 )
 from backend.app.services.openai_service import (
+    CANVAS_RECENT_MESSAGE_LIMIT,
+    CHAT_RECENT_MESSAGE_LIMIT,
     generate_ai_canvas_intent,
     generate_ai_canvas_operations_from_chat,
     generate_ai_canvas_title,
+    generate_chat_session_summary,
     generate_chat_title,
     generate_note_chat_answer,
 )
-from backend.app.services.rag_service import ask_with_hybrid_rag, build_hybrid_rag_context_hint, load_note_documents
+from backend.app.services.rag_service import build_hybrid_rag_context_hint, load_note_documents
 
 
 router = APIRouter(tags=["chats"])
@@ -265,6 +268,72 @@ def select_chat_context_pages(pages: list[dict], page_number: int | None) -> lis
     return selected_pages or pages[:3]
 
 
+def maybe_update_chat_session_summary(
+    connection: Connection,
+    *,
+    session: dict,
+    messages: list[dict],
+    model: str,
+    recent_message_limit: int,
+) -> str | None:
+    eligible_messages = [
+        message
+        for message in messages
+        if message.get("role") in {"user", "assistant"} and str(message.get("content") or "").strip()
+    ]
+    if len(eligible_messages) <= recent_message_limit:
+        return session.get("summary")
+
+    older_messages = eligible_messages[:-recent_message_limit]
+    if not older_messages:
+        return session.get("summary")
+
+    previous_summary = session.get("summary")
+    summarized_message_id = session.get("summarized_message_id")
+    latest_older_message_id = older_messages[-1]["id"]
+    if summarized_message_id is not None and summarized_message_id >= latest_older_message_id:
+        return previous_summary
+
+    if summarized_message_id is None:
+        messages_to_summarize = older_messages
+    else:
+        messages_to_summarize = [
+            message
+            for message in older_messages
+            if message["id"] > summarized_message_id
+        ]
+    if not messages_to_summarize:
+        return previous_summary
+
+    try:
+        next_summary = generate_chat_session_summary(
+            model=model,
+            previous_summary=previous_summary,
+            messages=messages_to_summarize,
+        )
+    except Exception:
+        return previous_summary
+
+    if not next_summary:
+        return previous_summary
+
+    execute_commit(
+        connection,
+        """
+        UPDATE chat_sessions
+        SET summary = %s,
+            summarized_message_id = %s,
+            summary_updated_at = now(),
+            updated_at = now()
+        WHERE id = %s
+        """,
+        (next_summary, latest_older_message_id, session["id"]),
+    )
+    session["summary"] = next_summary
+    session["summarized_message_id"] = latest_older_message_id
+    return next_summary
+
+
 @router.post("/notes/{note_id}/chat-sessions", response_model=ChatSessionRead)
 def create_chat_session(
     note_id: int,
@@ -332,6 +401,7 @@ def get_chat_session(
             connection,
             """
             SELECT s.id, s.note_id, s.title, s.model, s.created_at, s.updated_at
+                   , s.summary, s.summarized_message_id, s.summary_updated_at
             FROM chat_sessions s
             JOIN notes n ON n.id = s.note_id
             WHERE s.id = %s AND n.user_id = %s
@@ -454,6 +524,19 @@ def create_ai_chat_message(
     if canvas_origin_request and canvas_action == "canvas_create":
         canvas_action = "chat_only"
 
+    recent_message_limit = (
+        CANVAS_RECENT_MESSAGE_LIMIT
+        if canvas_action in {"canvas_edit", "canvas_create"}
+        else CHAT_RECENT_MESSAGE_LIMIT
+    )
+    session_summary = maybe_update_chat_session_summary(
+        connection,
+        session=session,
+        messages=previous_messages,
+        model=model,
+        recent_message_limit=recent_message_limit,
+    )
+
     if canvas_action in {"canvas_edit", "canvas_create"}:
         if canvas_origin_request and not payload.canvas_note_id:
             canvas_action = "chat_only"
@@ -477,6 +560,15 @@ def create_ai_chat_message(
                 if canvas_action == "canvas_edit" and payload.canvas_document_json is not None
                 else canvas_note["document_json"]
             )
+            documents = load_note_documents(connection, note_ids=[session["note_id"]], user_id=current_user["id"])
+            rag_context_hint = build_hybrid_rag_context_hint(
+                connection,
+                user_id=current_user["id"],
+                question=payload.content,
+                documents=documents,
+                note_ids=[session["note_id"]],
+                top_k=payload.top_k,
+            )
             operations = generate_ai_canvas_operations_from_chat(
                 model=model,
                 note=note,
@@ -489,6 +581,8 @@ def create_ai_chat_message(
                 current_page_number=payload.page_number,
                 selection_image=payload.selection_image,
                 selection_image_url=payload.selection_image_url,
+                context_hint=rag_context_hint,
+                session_summary=session_summary,
                 canvas_block_context=payload.canvas_block_context,
             )
             canvas_title = canvas_note["title"]
@@ -538,15 +632,34 @@ def create_ai_chat_message(
         }
     elif payload.use_rag:
         documents = load_note_documents(connection, note_ids=[session["note_id"]], user_id=current_user["id"])
-        answer = ask_with_hybrid_rag(
+        rag_context_hint = build_hybrid_rag_context_hint(
             connection,
             user_id=current_user["id"],
             question=payload.content,
             documents=documents,
             note_ids=[session["note_id"]],
             top_k=payload.top_k,
+        )
+        context_hint = "\n\n".join(
+            hint
+            for hint in [payload.context_hint, rag_context_hint]
+            if hint
+        ) or None
+        context_pages = select_chat_context_pages(pages, payload.page_number)
+        answer = generate_note_chat_answer(
             model=model,
-        ).answer
+            note=note,
+            pages=context_pages,
+            messages=previous_messages,
+            user_content=payload.content,
+            selection_image=payload.selection_image,
+            selection_rect=payload.selection_rect.model_dump() if payload.selection_rect else None,
+            page_number=payload.page_number,
+            selection_image_url=payload.selection_image_url,
+            context_hint=context_hint,
+            session_summary=session_summary,
+            canvas_block_context=payload.canvas_block_context,
+        )
     else:
         context_pages = select_chat_context_pages(pages, payload.page_number)
         documents = load_note_documents(connection, note_ids=[session["note_id"]], user_id=current_user["id"])
@@ -574,6 +687,7 @@ def create_ai_chat_message(
             page_number=payload.page_number,
             selection_image_url=payload.selection_image_url,
             context_hint=context_hint,
+            session_summary=session_summary,
             canvas_block_context=payload.canvas_block_context,
         )
     user_message = execute_returning(
