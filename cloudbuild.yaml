@@ -26,10 +26,10 @@ steps:
       - --allow-unauthenticated
       - --execution-environment=gen2
       - --port=8080
-      - --cpu=2
-      - --memory=4Gi
+      - --cpu=4
+      - --memory=8Gi
       - --timeout=900
-      - --min-instances=1
+      - --min-instances=0
       - --max-instances=2
       - --add-cloudsql-instances=${_SQL_INSTANCE}
       - --add-volume=name=uploads,type=cloud-storage,bucket=${_BUCKET}
