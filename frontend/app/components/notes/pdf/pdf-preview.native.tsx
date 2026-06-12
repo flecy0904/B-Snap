@@ -240,6 +240,7 @@ export function PdfPreview(props: {
   file: number | string | { uri: string };
   viewStateKey?: string | null;
   pageAlign?: 'center' | 'start' | 'end';
+  viewportSafeArea?: { left: number; right: number };
   page: number;
   inkTool: InkTool;
   fingerDrawingEnabled?: boolean;

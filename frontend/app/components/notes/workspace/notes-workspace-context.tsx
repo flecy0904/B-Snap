@@ -1,7 +1,7 @@
 import React from 'react';
 import type { BackendChatMessage, BackendChatSession, BackendClassInsight } from '../../../services/backend-api';
 import type { UseAiCanvasNotesResult } from '../../../hooks/notes/ai-canvas/use-ai-canvas-notes';
-import type { AiCanvasBlockContext } from '../../../types/ai-canvas';
+import type { AiCanvasBlockContext, AiCanvasRecommendationMode } from '../../../types/ai-canvas';
 import type { ImportantPageRecommendation } from '../../../hooks/notes/class-insight';
 import type { HandwritingRecognitionState } from '../../../hooks/notes/document/note-page-content';
 import type { MlKitHandwritingDebugState } from '../../../services/handwriting-recognition';
@@ -29,6 +29,7 @@ export type DesktopNotesWorkspaceContextValue = {
   studyInteractionMode: StudyInteractionMode;
   webChatSidebarWidth: number;
   webAiCanvasPanelWidth: number;
+  webPdfViewportSafeArea: { left: number; right: number };
   focusedWorkspaceTarget: WorkspaceFocusTarget | null;
   canUndoFocusedWorkspaceAction: boolean;
   canRedoFocusedWorkspaceAction: boolean;
@@ -151,6 +152,8 @@ export type DesktopNotesWorkspaceContextValue = {
     canvasAction?: 'auto' | 'chat_only' | 'canvas_edit';
     source?: 'canvas-mini' | 'canvas-block';
     canvasBlockContext?: AiCanvasBlockContext | null;
+    canvasNoteNeedsTitle?: boolean;
+    canvasRecommendationMode?: AiCanvasRecommendationMode | null;
   }) => Promise<boolean>;
   onInsertAiAnswerPage: () => void;
   onGoToPreviousDocumentPage: () => void;

@@ -258,20 +258,17 @@ export const NotesDocumentViewer = React.memo(function NotesDocumentViewer() {
       : canvasContext.imageAnnotations;
     const readMode = globalContext.studyInteractionMode === 'read';
     const effectiveInkTool = readMode ? 'view' : canvasContext.inkTool;
-    const webChatSidebarOpen = !globalContext.usesAppAiPanelLayout && globalContext.aiPanelOpen && globalContext.aiPanelMode === 'sidebar';
-    const webAiCanvasSidebarOpen = !globalContext.usesAppAiPanelLayout && globalContext.aiCanvas.isOpen;
-    const pdfPageAlign = webChatSidebarOpen && !webAiCanvasSidebarOpen
-      ? 'start'
-      : webAiCanvasSidebarOpen && !webChatSidebarOpen
-        ? 'end'
-        : 'center';
+    const pdfViewportSafeArea = globalContext.usesAppAiPanelLayout
+      ? { left: 0, right: 0 }
+      : globalContext.webPdfViewportSafeArea;
 
     return (
       <View style={{ flex: 1 }}>
         <PdfPreview
           file={pdfSurfaceFile}
           viewStateKey={documentContext.studyDocument?.id ? `study-document:${documentContext.studyDocument.id}` : null}
-          pageAlign={pdfPageAlign}
+          pageAlign="center"
+          viewportSafeArea={pdfViewportSafeArea}
           page={documentContext.currentPdfPage}
           inkTool={effectiveInkTool}
           fingerDrawingEnabled={readMode ? false : globalContext.fingerDrawingEnabled}
