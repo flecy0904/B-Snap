@@ -68,7 +68,7 @@ import { useWorkspaceCaptureIntents } from './workspace/use-workspace-capture-in
 import { useWorkspaceAiIntents } from './workspace/use-workspace-ai-intents';
 import { isSameDocumentPage, isShapeTool } from '../../ui-helpers';
 import type { InkBrush, InkBrushSettings, InkEraserMode, InkImageAnnotation, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../ui-types';
-import type { AiCanvasBlockContext } from '../../types/ai-canvas';
+import type { AiCanvasBlockContext, AiCanvasRecommendationMode } from '../../types/ai-canvas';
 import type { AiAnswer, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../types';
 
 export type WorkspaceFocusTarget = 'document' | 'aiCanvas';
@@ -700,7 +700,7 @@ export function useStudyWorkspace(props: {
     enabled: workspaceHydrated && isBackendApiEnabled() && !!studyDocumentBackendNoteId && currentDocumentHasBackendPages,
     currentPageNumber: currentAiCanvasPageNumber ?? null,
     onFeedback: setWorkspaceFeedback,
-    onRecordWorkspaceAction: () => recordWorkspaceActionTarget('aiCanvas'),
+    onRecordWorkspaceAction: () => setFocusedWorkspaceTarget('aiCanvas'),
   });
   const currentClassInsight = studyDocumentId ? classInsightByDocument[studyDocumentId] ?? null : null;
   const importantPageRecommendations = useMemo(() => buildImportantPageRecommendations({
@@ -717,9 +717,8 @@ export function useStudyWorkspace(props: {
     payload: Parameters<typeof aiCanvas.applyChatCanvasEdit>[0],
   ) => {
     aiCanvas.applyChatCanvasEdit(payload);
-    setAppRightSidebarPanel('canvas');
-    if (appChatMode === 'sidebar') setAiPanelOpen(false);
-  }, [aiCanvas.applyChatCanvasEdit, appChatMode]);
+    setAppRightSidebarPanel((current) => (current === 'chat' ? current : 'canvas'));
+  }, [aiCanvas.applyChatCanvasEdit]);
   const currentBackendNoteId = getStudyDocumentBackendNoteId(studyDocument);
   const currentHandwritingDebugPageNumber = currentDocumentPage?.kind === 'pdf'
     ? currentDocumentPage.pageNumber
@@ -1763,6 +1762,8 @@ export function useStudyWorkspace(props: {
     canvasAction?: 'auto' | 'chat_only' | 'canvas_edit';
     source?: 'canvas-mini' | 'canvas-block';
     canvasBlockContext?: AiCanvasBlockContext | null;
+    canvasNoteNeedsTitle?: boolean;
+    canvasRecommendationMode?: AiCanvasRecommendationMode | null;
   }) => {
     if (isCanvasCreateRequest(command)) {
       setWorkspaceFeedback('현재 Canvas 수정만 도와드릴 수 있어요.');
@@ -1780,6 +1781,8 @@ export function useStudyWorkspace(props: {
       canvasMarkdown: aiCanvas.markdownDraft,
       canvasDocumentJson: aiCanvas.documentDraft,
       canvasBlockContext: options?.canvasBlockContext ?? null,
+      canvasNoteNeedsTitle: options?.canvasNoteNeedsTitle ?? false,
+      canvasRecommendationMode: options?.canvasRecommendationMode ?? null,
     });
   }, [aiCanvas.activeNoteId, aiCanvas.documentDraft, aiCanvas.markdownDraft, requestAiAnswer, setWorkspaceFeedback]);
 
@@ -2010,8 +2013,8 @@ export function useStudyWorkspace(props: {
   const documentRedoHistory = studyDocumentId ? redoInkHistoryByDocument[studyDocumentId] ?? [] : [];
   const canUndoDocumentAction = documentInkHistory.length > 0;
   const canRedoDocumentAction = documentRedoHistory.length > 0;
-  const canUndoWorkspaceTarget = (target: WorkspaceFocusTarget) => (target === 'document' ? canUndoDocumentAction : aiCanvas.canUndo);
-  const canRedoWorkspaceTarget = (target: WorkspaceFocusTarget) => (target === 'document' ? canRedoDocumentAction : aiCanvas.canRedo);
+  const canUndoWorkspaceTarget = (target: WorkspaceFocusTarget) => target === 'document' && canUndoDocumentAction;
+  const canRedoWorkspaceTarget = (target: WorkspaceFocusTarget) => target === 'document' && canRedoDocumentAction;
   const lastUndoWorkspaceTarget = [...workspaceActionHistory].reverse().find(canUndoWorkspaceTarget)
     ?? (focusedWorkspaceTarget && canUndoWorkspaceTarget(focusedWorkspaceTarget) ? focusedWorkspaceTarget : null);
   const lastRedoWorkspaceTarget = [...workspaceRedoActionHistory].reverse().find(canRedoWorkspaceTarget)
@@ -2028,22 +2031,14 @@ export function useStudyWorkspace(props: {
     setWorkspaceActionHistory((current) => removeLastWorkspaceTarget(current, target));
     setWorkspaceRedoActionHistory((current) => [...current, target].slice(-100));
     setFocusedWorkspaceTarget(target);
-    if (target === 'document') {
-      undoInk();
-      return;
-    }
-    aiCanvas.undoCanvasEdit();
+    undoInk();
   };
   const redoWorkspaceActionTarget = (target: WorkspaceFocusTarget) => {
     if (!canRedoWorkspaceTarget(target)) return;
     setWorkspaceRedoActionHistory((current) => removeLastWorkspaceTarget(current, target));
     setWorkspaceActionHistory((current) => [...current, target].slice(-100));
     setFocusedWorkspaceTarget(target);
-    if (target === 'document') {
-      redoInk();
-      return;
-    }
-    aiCanvas.redoCanvasEdit();
+    redoInk();
   };
   const undoFocusedWorkspaceAction = () => {
     const target = lastUndoWorkspaceTarget;

@@ -114,3 +114,5 @@ img_preprocessing/target_area_yolo11n/
 docs/codex/
 Document/google-cloud-deploy-commands.md
 cloud-server.sh
+backend/scripts/ai_canvas_quality_check.py
+backend/tests/test_ai_canvas_quality_check.py

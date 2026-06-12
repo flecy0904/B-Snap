@@ -4,7 +4,7 @@ import React from 'react';
 import { EditorContent, useEditor } from '@tiptap/react';
 import { Markdown } from '@tiptap/markdown';
 import { Strike } from '@tiptap/extension-strike';
-import { createDocument, Extension, nodeInputRule, renderNestedMarkdownContent, textblockTypeInputRule, type Editor, type JSONContent, wrappingInputRule } from '@tiptap/core';
+import { createDocument, Extension, Mark, nodeInputRule, renderNestedMarkdownContent, textblockTypeInputRule, type Editor, type JSONContent, wrappingInputRule } from '@tiptap/core';
 import { Fragment, type Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { NodeSelection, Selection, TextSelection } from '@tiptap/pm/state';
 import { history, isHistoryTransaction, redo as redoHistory, redoDepth, undo as undoHistory, undoDepth } from '@tiptap/pm/history';
@@ -24,6 +24,7 @@ import {
   EMPTY_AI_CANVAS_DOCUMENT,
   normalizeAiCanvasDocumentJson,
   stringifyAiCanvasDocument,
+  type AiCanvasOperationApplyResult,
   type AiCanvasDocumentJson,
   type AiCanvasBlockContext,
   type AiCanvasEditorChange,
@@ -45,7 +46,7 @@ type AiCanvasMarkdownEditorProps = {
   onChangeHistoryState?: (state: { canUndo: boolean; canRedo: boolean }) => void;
   onRegisterHistoryControls?: (controls: { undo: () => boolean; redo: () => boolean } | null) => void;
   onFocusEditor: () => Promise<void>;
-  onApplyOperationsResult?: (requestId: number, applied: boolean) => Promise<void>;
+  onApplyOperationsResult?: (requestId: number, result: AiCanvasOperationApplyResult) => Promise<void>;
   resetUiKey?: string | number | null;
   enableWebBlockLayers?: boolean;
   aiRequestBusy?: boolean;
@@ -98,6 +99,7 @@ type BlockRecord = {
   markdown: string;
   headingLevel: number | null;
   pos: number;
+  endPos: number;
 };
 
 const SLASH_MENU_ITEMS = [
@@ -636,6 +638,24 @@ const AiCanvasHorizontalRule = HorizontalRule.extend({
   },
 });
 
+const AiCanvasUncertainMark = Mark.create({
+  name: 'aiCanvasUncertain',
+
+  parseHTML() {
+    return [
+      {
+        tag: 'span[data-ai-canvas-uncertain]',
+      },
+    ];
+  },
+
+  renderHTML({ HTMLAttributes }) {
+    return ['span', { ...HTMLAttributes, 'data-ai-canvas-uncertain': 'true' }, 0];
+  },
+
+  renderMarkdown: (node, h) => h.renderChildren(node),
+});
+
 const AiCanvasCodeBlock = CodeBlock.extend({
   addInputRules() {
     return [
@@ -682,6 +702,7 @@ function createEditorExtensions() {
     AiCanvasCodeBlock,
     HardBreak,
     Strike,
+    AiCanvasUncertainMark,
     Markdown.configure({
       indentation: {
         style: 'space',
@@ -752,7 +773,32 @@ function getEditorMarkdown(editor: Editor) {
   }
 }
 
-function sanitizeEditorJsonNode(node: TiptapJsonNode, parentType?: string): TiptapJsonNode {
+function jsonNodeText(node: TiptapJsonNode | null | undefined): string {
+  if (!node) return '';
+  if (node.type === 'text') return typeof node.text === 'string' ? node.text : '';
+  if (!Array.isArray(node.content)) return '';
+  return node.content.map(jsonNodeText).join('');
+}
+
+function directListItemText(node: TiptapJsonNode): string {
+  if (!Array.isArray(node.content)) return jsonNodeText(node).trim();
+  return node.content
+    .filter((child) => child.type === 'paragraph')
+    .map(jsonNodeText)
+    .join(' ')
+    .trim();
+}
+
+function nestedListItems(node: TiptapJsonNode): TiptapJsonNode[] {
+  if (!Array.isArray(node.content)) return [];
+  return node.content.flatMap((child) => {
+    if (child.type !== 'bulletList' && child.type !== 'orderedList') return [];
+    if (!Array.isArray(child.content)) return [];
+    return child.content.filter((item) => item.type === 'listItem' && jsonNodeText(item).trim().length > 0);
+  });
+}
+
+function sanitizeEditorJsonNode(node: TiptapJsonNode, parentType?: string): TiptapJsonNode | null {
   const nextNode: TiptapJsonNode = { ...node };
 
   if (nextNode.attrs) {
@@ -788,20 +834,52 @@ function sanitizeEditorJsonNode(node: TiptapJsonNode, parentType?: string): Tipt
   }
 
   if (Array.isArray(nextNode.content)) {
-    nextNode.content = nextNode.content.map((child) => sanitizeEditorJsonNode(child, nextNode.type));
+    let nextContent = nextNode.content.flatMap((child) => {
+      const sanitizedChild = sanitizeEditorJsonNode(child, nextNode.type);
+      return sanitizedChild ? [sanitizedChild] : [];
+    });
+
+    if (nextNode.type === 'bulletList' || nextNode.type === 'orderedList') {
+      nextContent = nextContent.flatMap((child) => {
+        if (child.type !== 'listItem') return [];
+        if (directListItemText(child)) return [child];
+        return nestedListItems(child);
+      });
+    }
+
+    if (nextContent.length > 0) {
+      nextNode.content = nextContent;
+    } else {
+      delete nextNode.content;
+    }
+  }
+
+  if ((nextNode.type === 'bulletList' || nextNode.type === 'orderedList') && (!Array.isArray(nextNode.content) || nextNode.content.length === 0)) {
+    return null;
+  }
+
+  if (nextNode.type === 'listItem' && jsonNodeText(nextNode).trim().length === 0) {
+    return null;
   }
 
   return nextNode;
 }
 
-function getEditorDocumentJson(editor: Editor) {
-  const documentJson = normalizeAiCanvasDocumentJson(editor.getJSON());
+function sanitizeAiCanvasDocumentJson(documentJson: AiCanvasDocumentJson): AiCanvasDocumentJson {
+  const normalizedDocument = normalizeAiCanvasDocumentJson(documentJson);
   return {
     type: 'doc',
-    content: Array.isArray(documentJson.content)
-      ? documentJson.content.map((node) => sanitizeEditorJsonNode(node, 'doc'))
+    content: Array.isArray(normalizedDocument.content)
+      ? normalizedDocument.content.flatMap((node) => {
+        const sanitizedNode = sanitizeEditorJsonNode(node, 'doc');
+        return sanitizedNode ? [sanitizedNode] : [];
+      })
       : [],
-  } satisfies AiCanvasDocumentJson;
+  };
+}
+
+function getEditorDocumentJson(editor: Editor) {
+  return sanitizeAiCanvasDocumentJson(normalizeAiCanvasDocumentJson(editor.getJSON()));
 }
 
 function ensureEditorBlockIds(editor: Editor) {
@@ -876,32 +954,244 @@ function assignJsonBlockIds(node: TiptapJsonNode, existingBlockIds: Set<string>)
   return next;
 }
 
-function findBlockPosition(doc: ProseMirrorNode, blockId: string): { pos: number; node: ProseMirrorNode } | null {
-  let match: { pos: number; node: ProseMirrorNode } | null = null;
-  doc.descendants((node, pos) => {
+const AI_CANVAS_UNCERTAIN_LABEL_REGEX = /확인\s*필요:?/g;
+
+function withoutAiCanvasUncertainMark(marks: TiptapJsonNode['marks']) {
+  return Array.isArray(marks) ? marks.filter((mark) => mark?.type !== 'aiCanvasUncertain') : [];
+}
+
+function withOptionalMarks(node: TiptapJsonNode, text: string, marks: TiptapJsonNode['marks']): TiptapJsonNode {
+  return {
+    ...node,
+    text,
+    ...(marks && marks.length > 0 ? { marks } : { marks: undefined }),
+  };
+}
+
+function splitAiCanvasUncertainTextNode(node: TiptapJsonNode): TiptapJsonNode[] {
+  const text = typeof node.text === 'string' ? node.text : '';
+  const matches = [...text.matchAll(AI_CANVAS_UNCERTAIN_LABEL_REGEX)];
+  if (matches.length === 0) return [node];
+
+  const baseMarks = withoutAiCanvasUncertainMark(node.marks);
+  const uncertainMarks = [...baseMarks, { type: 'aiCanvasUncertain' }];
+  const parts: TiptapJsonNode[] = [];
+  let cursor = 0;
+
+  for (const match of matches) {
+    const start = match.index ?? 0;
+    const label = match[0];
+    if (start > cursor) {
+      parts.push(withOptionalMarks(node, text.slice(cursor, start), baseMarks));
+    }
+    parts.push(withOptionalMarks(node, label, uncertainMarks));
+    cursor = start + label.length;
+  }
+
+  if (cursor < text.length) {
+    parts.push(withOptionalMarks(node, text.slice(cursor), baseMarks));
+  }
+
+  return parts.filter((part) => part.text);
+}
+
+function withAiCanvasUncertainMarks(node: TiptapJsonNode): TiptapJsonNode[] {
+  if (node.type === 'text' && typeof node.text === 'string') {
+    return splitAiCanvasUncertainTextNode(node);
+  }
+
+  const next: TiptapJsonNode = { ...node };
+  if (Array.isArray(next.content)) {
+    next.content = next.content.flatMap(withAiCanvasUncertainMarks);
+  }
+  return [next];
+}
+
+function withAiCanvasUncertainMark(node: TiptapJsonNode): TiptapJsonNode {
+  return withAiCanvasUncertainMarks(node)[0] ?? node;
+}
+
+function prepareCanvasOperationNode(node: TiptapJsonNode, existingBlockIds: Set<string>) {
+  const sanitizedNode = sanitizeEditorJsonNode(node, 'doc') ?? {
+    type: 'paragraph',
+    attrs: { blockId: createUniqueBlockId(existingBlockIds) },
+    content: [],
+  };
+  return withAiCanvasUncertainMark(assignJsonBlockIds(sanitizedNode, existingBlockIds));
+}
+
+function withAiCanvasUncertainMarksInDocument(documentJson: AiCanvasDocumentJson): AiCanvasDocumentJson {
+  return withAiCanvasUncertainMark(documentJson as TiptapJsonNode) as AiCanvasDocumentJson;
+}
+
+function cloneJsonNode(node: TiptapJsonNode): TiptapJsonNode {
+  return JSON.parse(JSON.stringify(node)) as TiptapJsonNode;
+}
+
+function getJsonNodeBlockId(node: TiptapJsonNode) {
+  return typeof node.attrs?.blockId === 'string' ? node.attrs.blockId : null;
+}
+
+function withJsonNodeBlockId(node: TiptapJsonNode, blockId: string): TiptapJsonNode {
+  return {
+    ...node,
+    attrs: {
+      ...(node.attrs ?? {}),
+      blockId,
+    },
+  };
+}
+
+function jsonListNodeToPlainText(node: TiptapJsonNode): string {
+  if (node.type !== 'bulletList' && node.type !== 'orderedList') {
+    return jsonNodeText(node);
+  }
+  if (!Array.isArray(node.content)) return jsonNodeText(node);
+  const parts = node.content.flatMap((item, index) => {
+    if (item.type !== 'listItem') return [];
+    const text = directListItemText(item) || jsonNodeText(item).trim();
+    if (!text) return [];
+    return node.type === 'orderedList' ? [`${index + 1}. ${text}`] : [text];
+  });
+  return parts.join(' / ') || jsonNodeText(node);
+}
+
+function plainParagraphFromJsonNode(node: TiptapJsonNode, blockId: string): TiptapJsonNode {
+  const text = jsonListNodeToPlainText(node).trim();
+  return {
+    type: 'paragraph',
+    attrs: { blockId },
+    ...(text ? { content: [{ type: 'text', text }] } : {}),
+  };
+}
+
+function normalizeOperationNodeForTargetListParagraph(
+  node: TiptapJsonNode,
+  target: { node: ProseMirrorNode; parent: ProseMirrorNode | null },
+  operation: CanvasOperation,
+): TiptapJsonNode {
+  if (target.node.type.name !== 'paragraph' || target.parent?.type.name !== 'listItem') return node;
+
+  const targetBlockId = typeof operation.targetBlockId === 'string' ? operation.targetBlockId : null;
+  if (operation.op === 'replace' && targetBlockId) {
+    if (node.type === 'paragraph') {
+      return withJsonNodeBlockId(cloneJsonNode(node), targetBlockId);
+    }
+    return plainParagraphFromJsonNode(node, targetBlockId);
+  }
+
+  if (operation.op === 'insert_before' && targetBlockId && ['listItem', 'bulletList', 'orderedList'].includes(node.type)) {
+    return plainParagraphFromJsonNode(node, getJsonNodeBlockId(node) ?? `${targetBlockId}_insert`);
+  }
+
+  return node;
+}
+
+function wrapOperationNodeForTargetListItem(
+  node: TiptapJsonNode,
+  target: { node: ProseMirrorNode; parent: ProseMirrorNode | null },
+  operation: CanvasOperation,
+): TiptapJsonNode {
+  if (target.node.type.name !== 'listItem') return node;
+
+  const nextNode = cloneJsonNode(node);
+  const targetBlockId = operation.targetBlockId;
+  const isReplacingTarget = operation.op === 'replace' && typeof targetBlockId === 'string';
+
+  if (nextNode.type === 'listItem') {
+    const attrs = {
+      ...(nextNode.attrs ?? {}),
+      ...(isReplacingTarget ? { blockId: targetBlockId } : {}),
+      ...(target.node.attrs.markerless === true ? { markerless: true } : {}),
+    };
+    return {
+      ...nextNode,
+      attrs,
+    };
+  }
+
+  const listItemBlockId = isReplacingTarget
+    ? targetBlockId
+    : getJsonNodeBlockId(nextNode) ?? undefined;
+  const listItemAttrs: Record<string, unknown> = {
+    ...(listItemBlockId ? { blockId: listItemBlockId } : {}),
+    ...(target.node.attrs.markerless === true ? { markerless: true } : {}),
+  };
+
+  let childNode = nextNode;
+  if (nextNode.type === 'bulletList' || nextNode.type === 'orderedList') {
+    childNode = plainParagraphFromJsonNode(nextNode, `${listItemBlockId ?? 'ai_canvas_list_item'}_text`);
+  } else if (isReplacingTarget && getJsonNodeBlockId(nextNode) === targetBlockId) {
+    childNode = withJsonNodeBlockId(nextNode, `${targetBlockId}_text`);
+  }
+
+  return {
+    type: 'listItem',
+    ...(Object.keys(listItemAttrs).length > 0 ? { attrs: listItemAttrs } : {}),
+    content: [childNode],
+  };
+}
+
+function normalizeOperationNodeForTarget(
+  node: TiptapJsonNode,
+  target: { node: ProseMirrorNode; parent: ProseMirrorNode | null },
+  operation: CanvasOperation,
+): TiptapJsonNode {
+  const listParagraphNode = normalizeOperationNodeForTargetListParagraph(node, target, operation);
+  return wrapOperationNodeForTargetListItem(listParagraphNode, target, operation);
+}
+
+function findBlockPosition(
+  doc: ProseMirrorNode,
+  blockId: string,
+): { pos: number; node: ProseMirrorNode; parent: ProseMirrorNode | null } | null {
+  let match: { pos: number; node: ProseMirrorNode; parent: ProseMirrorNode | null } | null = null;
+  doc.descendants((node, pos, parent) => {
     if (node.attrs?.blockId === blockId) {
-      match = { pos, node };
+      match = { pos, node, parent };
       return false;
     }
     return undefined;
   });
-  return match as { pos: number; node: ProseMirrorNode } | null;
+  return match as { pos: number; node: ProseMirrorNode; parent: ProseMirrorNode | null } | null;
 }
 
-function applyCanvasOperations(editor: Editor, operations: CanvasOperation[]) {
+function stripCanvasNodeIdentity(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripCanvasNodeIdentity);
+  if (!value || typeof value !== 'object') return value;
+
+  const next: Record<string, unknown> = {};
+  Object.entries(value as Record<string, unknown>).forEach(([key, childValue]) => {
+    if (key === 'attrs' && childValue && typeof childValue === 'object' && !Array.isArray(childValue)) {
+      const attrs = { ...(childValue as Record<string, unknown>) };
+      delete attrs.blockId;
+      if (Object.keys(attrs).length > 0) next[key] = attrs;
+      return;
+    }
+    next[key] = key === 'content' ? stripCanvasNodeIdentity(childValue) : childValue;
+  });
+  return next;
+}
+
+function semanticCanvasDocumentString(doc: ProseMirrorNode) {
+  return JSON.stringify(stripCanvasNodeIdentity(doc.toJSON()));
+}
+
+function applyCanvasOperations(editor: Editor, operations: CanvasOperation[]): AiCanvasOperationApplyResult {
+  const beforeSemanticDocument = semanticCanvasDocumentString(editor.state.doc);
   let tr = editor.state.tr;
   for (const operation of operations) {
     if (operation.op === 'insert_after' && operation.targetBlockId === null) {
       const existingBlockIds = collectDocumentBlockIds(tr.doc);
-      const node = editor.schema.nodeFromJSON(assignJsonBlockIds(operation.node, existingBlockIds));
+      const node = editor.schema.nodeFromJSON(prepareCanvasOperationNode(operation.node, existingBlockIds));
       tr = tr.insert(tr.doc.content.size, node);
       continue;
     }
 
     const targetBlockId = operation.targetBlockId;
-    if (!targetBlockId) return false;
+    if (!targetBlockId) return 'failed';
     const target = findBlockPosition(tr.doc, targetBlockId);
-    if (!target) return false;
+    if (!target) return 'failed';
 
     if (operation.op === 'delete') {
       tr = tr.delete(target.pos, target.pos + target.node.nodeSize);
@@ -912,7 +1202,8 @@ function applyCanvasOperations(editor: Editor, operations: CanvasOperation[]) {
     if (operation.op === 'replace') {
       removeTargetBlockIds(existingBlockIds, target.node);
     }
-    const node = editor.schema.nodeFromJSON(assignJsonBlockIds(operation.node, existingBlockIds));
+    const operationNode = normalizeOperationNodeForTarget(operation.node, target, operation);
+    const node = editor.schema.nodeFromJSON(prepareCanvasOperationNode(operationNode, existingBlockIds));
     if (operation.op === 'replace') {
       tr = tr.replaceWith(target.pos, target.pos + target.node.nodeSize, node);
     } else if (operation.op === 'insert_before') {
@@ -921,9 +1212,10 @@ function applyCanvasOperations(editor: Editor, operations: CanvasOperation[]) {
       tr = tr.insert(target.pos + target.node.nodeSize, node);
     }
   }
-  if (!tr.docChanged) return false;
+  if (!tr.docChanged) return 'unchanged';
+  if (semanticCanvasDocumentString(tr.doc) === beforeSemanticDocument) return 'unchanged';
   editor.view.dispatch(tr.setMeta('addToHistory', false).scrollIntoView());
-  return true;
+  return 'applied';
 }
 
 function readEditorChange(editor: Editor, source: AiCanvasEditorChange['source'] = 'editor'): AiCanvasEditorChange {
@@ -936,7 +1228,12 @@ function readEditorChange(editor: Editor, source: AiCanvasEditorChange['source']
 }
 
 function readEditorSelection(editor: Editor): AiCanvasSelection | null {
-  return readProseMirrorSelection(editor.state.selection);
+  const selection = readProseMirrorSelection(editor.state.selection);
+  if (!selection || selection.from === selection.to) return selection;
+  return {
+    ...selection,
+    context: buildSelectionContext(editor, selection),
+  };
 }
 
 function readProseMirrorSelection(selection: Selection): AiCanvasSelection | null {
@@ -971,7 +1268,8 @@ function restoreEditorSelection(editor: Editor, selection: AiCanvasSelection | n
 }
 
 function setEditorJsonContentWithoutHistory(editor: Editor, documentJson: AiCanvasDocumentJson) {
-  const nextDocument = createDocument(documentJson as JSONContent, editor.schema, {}, {
+  const sanitizedDocument = sanitizeAiCanvasDocumentJson(documentJson);
+  const nextDocument = createDocument(withAiCanvasUncertainMarksInDocument(sanitizedDocument) as JSONContent, editor.schema, {}, {
     errorOnInvalidContent: editor.options.enableContentCheck,
   });
   editor.view.dispatch(
@@ -980,6 +1278,14 @@ function setEditorJsonContentWithoutHistory(editor: Editor, documentJson: AiCanv
       .setMeta('preventUpdate', true)
       .setMeta('addToHistory', false),
   );
+}
+
+function cleanupEditorListArtifactsWithoutHistory(editor: Editor) {
+  const currentDocument = normalizeAiCanvasDocumentJson(editor.getJSON());
+  const sanitizedDocument = sanitizeAiCanvasDocumentJson(currentDocument);
+  if (stringifyAiCanvasDocument(currentDocument) === stringifyAiCanvasDocument(sanitizedDocument)) return false;
+  setEditorJsonContentWithoutHistory(editor, sanitizedDocument);
+  return true;
 }
 
 function isEmptyAiCanvasDocument(documentJson: AiCanvasDocumentJson) {
@@ -1055,13 +1361,19 @@ function collectBlockRecords(doc: ProseMirrorNode): BlockRecord[] {
     if (!AI_CANVAS_TEXT_CONTEXT_TYPES.has(node.type.name)) return undefined;
     const blockId = typeof node.attrs?.blockId === 'string' ? node.attrs.blockId : null;
     if (!blockId) return undefined;
+    const text = node.textContent.trim();
+    if (!text) {
+      if (node.type.name === 'listItem') return false;
+      return undefined;
+    }
     records.push({
       blockId,
       type: node.type.name,
-      text: node.textContent.trim(),
-      markdown: node.textContent.trim(),
+      text,
+      markdown: text,
       headingLevel: node.type.name === 'heading' ? normalizeHeadingLevel(node.attrs?.level) : null,
       pos,
+      endPos: pos + node.nodeSize,
     });
     if (node.type.name === 'listItem') return false;
     return undefined;
@@ -1109,6 +1421,43 @@ function buildBlockContext(editor: Editor, blockId: string): AiCanvasBlockContex
     sectionExcerpt: sectionRecords.map((record) => record.text).filter(Boolean).join('\n').slice(0, 1800),
     beforeText: records[targetIndex - 1]?.text || null,
     afterText: records[targetIndex + 1]?.text || null,
+    scope: 'block',
+  };
+}
+
+function buildSelectionContext(editor: Editor, selection: AiCanvasSelection): AiCanvasBlockContext | null {
+  const records = collectBlockRecords(editor.state.doc);
+  const from = Math.min(selection.from, selection.to);
+  const to = Math.max(selection.from, selection.to);
+  const selectedRecords = records.filter((record) => record.endPos > from && record.pos < to);
+  if (selectedRecords.length === 0) return null;
+
+  const firstRecord = selectedRecords[0];
+  const firstIndex = records.findIndex((record) => record.blockId === firstRecord.blockId);
+  const lastRecord = selectedRecords[selectedRecords.length - 1];
+  const selectedText = editor.state.doc.textBetween(from, to, '\n', '\n').trim()
+    || selectedRecords.map((record) => record.text).filter(Boolean).join('\n');
+  let sectionHeading: BlockRecord | null = null;
+  for (let index = Math.max(0, firstIndex); index >= 0; index -= 1) {
+    if (records[index].type === 'heading') {
+      sectionHeading = records[index];
+      break;
+    }
+  }
+
+  return {
+    blockId: firstRecord.blockId,
+    type: 'selection',
+    text: selectedText.slice(0, 4000),
+    markdown: selectedRecords.map((record) => record.markdown).filter(Boolean).join('\n').slice(0, 4000),
+    sectionHeading: sectionHeading?.text ?? null,
+    sectionExcerpt: selectedRecords.map((record) => record.text).filter(Boolean).join('\n').slice(0, 1800),
+    beforeText: records[firstIndex - 1]?.text || null,
+    afterText: records[firstIndex + selectedRecords.length]?.text || null,
+    scope: 'selection',
+    selectedBlockIds: selectedRecords.map((record) => record.blockId),
+    selectionFrom: from,
+    selectionTo: to,
   };
 }
 
@@ -1243,7 +1592,10 @@ export default function AiCanvasMarkdownEditor({
     setSlashMenu(null);
   }, [resetUiKey]);
 
-  const initialDocument = React.useMemo(() => normalizeAiCanvasDocumentJson(documentJson ?? EMPTY_AI_CANVAS_DOCUMENT), []);
+  const initialDocument = React.useMemo(
+    () => withAiCanvasUncertainMarksInDocument(sanitizeAiCanvasDocumentJson(normalizeAiCanvasDocumentJson(documentJson ?? EMPTY_AI_CANVAS_DOCUMENT))),
+    [],
+  );
   const initialUsesMarkdown = isEmptyAiCanvasDocument(initialDocument) && !isMeaningfullyEmptyMarkdown(fallbackMarkdown);
   const editor = useEditor({
     extensions: editorExtensions,
@@ -1357,7 +1709,7 @@ export default function AiCanvasMarkdownEditor({
 
   React.useEffect(() => {
     if (!editor) return;
-    const nextDocument = normalizeAiCanvasDocumentJson(documentJson);
+    const nextDocument = withAiCanvasUncertainMarksInDocument(sanitizeAiCanvasDocumentJson(normalizeAiCanvasDocumentJson(documentJson)));
     const nextDocumentString = stringifyAiCanvasDocument(nextDocument);
     const shouldUseMarkdown = isEmptyAiCanvasDocument(nextDocument) && !isMeaningfullyEmptyMarkdown(fallbackMarkdown);
     if (nextDocumentString === lastDocumentStringRef.current && (!shouldUseMarkdown || fallbackMarkdown === lastMarkdownRef.current)) return;
@@ -1391,10 +1743,11 @@ export default function AiCanvasMarkdownEditor({
     appliedOperationRequestIdRef.current = pendingOperations.id;
     applyingCanvasOperationsRef.current = true;
     try {
-      const applied = applyCanvasOperations(editor, pendingOperations.operations);
-      void onApplyOperationsResultRef.current?.(pendingOperations.id, applied);
+      const result = applyCanvasOperations(editor, pendingOperations.operations);
+      if (result === 'applied') cleanupEditorListArtifactsWithoutHistory(editor);
+      void onApplyOperationsResultRef.current?.(pendingOperations.id, result);
     } catch {
-      void onApplyOperationsResultRef.current?.(pendingOperations.id, false);
+      void onApplyOperationsResultRef.current?.(pendingOperations.id, 'failed');
     } finally {
       applyingCanvasOperationsRef.current = false;
       onChangeHistoryStateRef.current?.(readEditorHistoryState(editor));
@@ -1733,6 +2086,14 @@ export default function AiCanvasMarkdownEditor({
 
         .ai-canvas-prosemirror s {
           color: #7a8394;
+        }
+
+        .ai-canvas-prosemirror span[data-ai-canvas-uncertain="true"] {
+          color: #c2413b;
+          font-weight: 800;
+          background: #fff1f1;
+          border-radius: 4px;
+          padding: 0 3px;
         }
 
         .ai-canvas-placeholder {

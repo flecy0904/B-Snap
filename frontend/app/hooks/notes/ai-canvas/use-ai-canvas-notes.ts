@@ -16,6 +16,7 @@ import {
   cloneAiCanvasDocument,
   normalizeAiCanvasDocumentJson,
   stringifyAiCanvasDocument,
+  type AiCanvasOperationApplyResult,
   type AiCanvasDocumentJson,
   type AiCanvasEditorChange,
   type AiCanvasSelection,
@@ -60,7 +61,7 @@ export type UseAiCanvasNotesResult = {
   setSelectionDraft: (selection: AiCanvasSelection | null) => void;
   setEditorHistoryState: (state: { canUndo: boolean; canRedo: boolean }) => void;
   registerEditorHistoryControls: (controls: AiCanvasEditorHistoryControls | null) => void;
-  completeCanvasOperations: (requestId: number, applied: boolean) => Promise<void>;
+  completeCanvasOperations: (requestId: number, result: AiCanvasOperationApplyResult) => Promise<void>;
   createNote: () => Promise<void>;
   renameNote: (title: string, noteId?: number) => Promise<boolean>;
   deleteNote: (noteId?: number) => Promise<void>;
@@ -80,6 +81,10 @@ const DEFAULT_CANVAS_MARKDOWN = '';
 const MAX_AI_CANVAS_NOTES_PER_NOTE = 3;
 const TRANSIENT_ERROR_DELAY_MS = 3000;
 const MAX_UNDO_STACK_SIZE = 50;
+
+function buildDefaultCanvasTitle(index: number) {
+  return `${DEFAULT_CANVAS_TITLE} ${index}`;
+}
 
 function createEmptyCanvasSnapshot(): CanvasSnapshot {
   return {
@@ -358,7 +363,7 @@ export function useAiCanvasNotes({
     const pageNumber = currentPageNumber ?? null;
     const created = await createBackendAiCanvasNote({
       noteId,
-      title: DEFAULT_CANVAS_TITLE,
+      title: buildDefaultCanvasTitle(notes.length + 1),
       markdown: DEFAULT_CANVAS_MARKDOWN,
       documentJson: EMPTY_AI_CANVAS_DOCUMENT,
       sourcePageStart: pageNumber,
@@ -367,7 +372,7 @@ export function useAiCanvasNotes({
     setNotes((current) => [created, ...current]);
     applyActiveNote(created);
     return created;
-  }, [applyActiveNote, canCreateNote, currentPageNumber, enabled, noteId, onFeedback, setTransientError]);
+  }, [applyActiveNote, canCreateNote, currentPageNumber, enabled, noteId, notes.length, onFeedback, setTransientError]);
 
   const createNote = useCallback(async () => {
     setSaving(true);
@@ -578,7 +583,8 @@ export function useAiCanvasNotes({
   }) => {
     setIsOpen(true);
     if (!operations.length) {
-      setTransientError('AI returned no Canvas edits.');
+      setError(null);
+      onFeedback('고칠 내용이 없어 현재 Canvas를 유지했어요.');
       return;
     }
 
@@ -627,13 +633,13 @@ export function useAiCanvasNotes({
       operations,
     });
     setError(null);
-  }, [activeNote, currentSnapshot, onRecordWorkspaceAction, setDraftSnapshot, setTransientError]);
+  }, [activeNote, currentSnapshot, onFeedback, onRecordWorkspaceAction, setDraftSnapshot, setTransientError]);
 
-  const completeCanvasOperations = useCallback(async (requestId: number, applied: boolean) => {
+  const completeCanvasOperations = useCallback(async (requestId: number, result: AiCanvasOperationApplyResult) => {
     const pendingRequest = pendingCanvasOperations;
     if (!pendingRequest || pendingRequest.id !== requestId) return;
     setPendingCanvasOperations(null);
-    if (!applied) {
+    if (result === 'failed') {
       setTransientError('Canvas 수정 적용 실패');
       onFeedback('Canvas 수정 적용 실패');
       if (pendingRequest.action === 'canvas_create') {
@@ -655,14 +661,18 @@ export function useAiCanvasNotes({
       }
       return;
     }
+    if (result === 'unchanged') {
+      onFeedback('고칠 내용이 없어 현재 Canvas를 유지했어요.');
+      return;
+    }
     onFeedback('AI updated the Canvas.');
   }, [applyActiveNote, loadCanvasNoteDetail, notes, onFeedback, pendingCanvasOperations, setTransientError]);
 
   const undoCanvasEdit = useCallback(() => {
     if (editorHistoryState.canUndo) {
       const applied = editorHistoryControlsRef.current?.undo() ?? false;
-      if (!applied) setEditorHistoryState((current) => ({ ...current, canUndo: false }));
-      return;
+      if (applied) return;
+      setEditorHistoryState((current) => ({ ...current, canUndo: false }));
     }
     const previous = undoStack[undoStack.length - 1];
     if (!previous) return;
@@ -674,8 +684,8 @@ export function useAiCanvasNotes({
   const redoCanvasEdit = useCallback(() => {
     if (editorHistoryState.canRedo) {
       const applied = editorHistoryControlsRef.current?.redo() ?? false;
-      if (!applied) setEditorHistoryState((current) => ({ ...current, canRedo: false }));
-      return;
+      if (applied) return;
+      setEditorHistoryState((current) => ({ ...current, canRedo: false }));
     }
     const next = redoStack[redoStack.length - 1];
     if (!next) return;

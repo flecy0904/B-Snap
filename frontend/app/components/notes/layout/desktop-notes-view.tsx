@@ -13,7 +13,7 @@ import { NotesBrowser } from './notes-browser';
 import { DesktopNotesWorkspaceProvider, useDesktopNotesWorkspaceContext } from '../workspace/notes-workspace-context';
 import type { BackendChatMessage, BackendChatSession, BackendClassInsight } from '../../../services/backend-api';
 import type { UseAiCanvasNotesResult } from '../../../hooks/notes/ai-canvas/use-ai-canvas-notes';
-import type { AiCanvasBlockContext } from '../../../types/ai-canvas';
+import type { AiCanvasBlockContext, AiCanvasRecommendationMode } from '../../../types/ai-canvas';
 import type { ImportantPageRecommendation } from '../../../hooks/notes/class-insight';
 import type { HandwritingRecognitionState } from '../../../hooks/notes/document/note-page-content';
 import type { MlKitHandwritingDebugState } from '../../../services/handwriting-recognition';
@@ -258,6 +258,8 @@ export type DesktopNotesViewProps = {
     canvasAction?: 'auto' | 'chat_only' | 'canvas_edit';
     source?: 'canvas-mini' | 'canvas-block';
     canvasBlockContext?: AiCanvasBlockContext | null;
+    canvasNoteNeedsTitle?: boolean;
+    canvasRecommendationMode?: AiCanvasRecommendationMode | null;
   }) => Promise<boolean>;
   onInsertAiAnswerPage: () => void;
   onSelectionChange: (rect: SelectionRect | null) => void;
@@ -469,6 +471,10 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
   const webPdfViewerMinWidth = !isNativeWideApp
     ? getEffectiveWebPdfMinWidth(webDocumentRowWidth)
     : undefined;
+  const webPdfViewportSafeArea = React.useMemo(() => ({
+    left: showWebChatSidebarPanel ? webPanelWidths.chat : 0,
+    right: showWebAiCanvasPanel ? webPanelWidths.canvas : 0,
+  }), [showWebAiCanvasPanel, showWebChatSidebarPanel, webPanelWidths.canvas, webPanelWidths.chat]);
 
   React.useEffect(() => {
     setRenameOpen(false);
@@ -657,6 +663,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           studyInteractionMode: props.studyInteractionMode,
           webChatSidebarWidth: webPanelWidths.chat,
           webAiCanvasPanelWidth: webPanelWidths.canvas,
+          webPdfViewportSafeArea,
           focusedWorkspaceTarget: props.focusedWorkspaceTarget,
           canUndoFocusedWorkspaceAction: props.canUndoFocusedWorkspaceAction,
           canRedoFocusedWorkspaceAction: props.canRedoFocusedWorkspaceAction,
@@ -1021,6 +1028,8 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
       studyDocuments={props.studyDocuments}
       allStudyDocuments={props.allStudyDocuments}
       deletedStudyDocuments={props.deletedStudyDocuments}
+      inkByDocument={props.inkByDocument}
+      textAnnotationsByDocument={props.textAnnotationsByDocument}
       captureAssetsBySubject={props.captureAssetsBySubject}
       pageCaptureReferences={props.allPageCaptureReferences}
       blueColor={props.blueColor}
@@ -1035,6 +1044,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
       onOpenStudyDocument={props.onOpenStudyDocument}
       onDeleteNote={props.onDeleteNote}
       onDeleteStudyDocument={props.onDeleteStudyDocument}
+      onRenameStudyDocument={props.onRenameStudyDocument}
       onRestoreNote={props.onRestoreNote}
       onRestoreStudyDocument={props.onRestoreStudyDocument}
       onInsertInboxAsset={props.onInsertInboxAsset}

@@ -5,6 +5,7 @@ import {
   normalizeAiCanvasDocumentJson,
   type AiCanvasDocumentJson,
   type AiCanvasBlockContext,
+  type AiCanvasRecommendationMode,
   type CanvasOperation,
 } from '../types/ai-canvas';
 
@@ -927,6 +928,7 @@ export async function sendBackendAiMessage(payload: {
   canvasMarkdown?: string | null;
   canvasDocumentJson?: AiCanvasDocumentJson | null;
   canvasBlockContext?: AiCanvasBlockContext | null;
+  canvasRecommendationMode?: AiCanvasRecommendationMode | null;
 }) {
   return request<BackendAiMessageResponse>(`/chat-sessions/${payload.sessionId}/ai-messages`, {
     method: 'POST',
@@ -946,6 +948,7 @@ export async function sendBackendAiMessage(payload: {
       canvas_markdown: payload.canvasMarkdown ?? null,
       canvas_document_json: payload.canvasDocumentJson ?? null,
       canvas_block_context: payload.canvasBlockContext ?? null,
+      canvas_recommendation_mode: payload.canvasRecommendationMode ?? null,
     },
   }).then(normalizeBackendAiMessageResponse);
 }

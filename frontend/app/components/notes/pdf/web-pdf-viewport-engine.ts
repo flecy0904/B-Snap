@@ -16,6 +16,7 @@ type PdfJsDocumentSource = string | { url: string; withCredentials?: boolean; di
 
 export type WebPdfZoomMode = 'fit' | 'manual';
 type WebPdfPageAlign = 'center' | 'start' | 'end';
+export type WebPdfViewportSafeArea = { left: number; right: number };
 
 export type WebPdfPageFrame = {
   pageNumber: number;
@@ -91,6 +92,7 @@ type UseWebPdfViewportEngineOptions = WebPdfViewportEngineCallbacks & {
   currentPage: number;
   pageGap: number;
   pageAlign?: WebPdfPageAlign;
+  viewportSafeArea?: Partial<WebPdfViewportSafeArea> | null;
 };
 
 const WEB_PDF_MIN_ZOOM = 0.5;
@@ -261,6 +263,7 @@ export class WebPdfViewportEngine {
   private manualScale = 1;
   private pageGap: number;
   private pageAlign: WebPdfPageAlign = 'center';
+  private viewportSafeArea: WebPdfViewportSafeArea = { left: 0, right: 0 };
   private viewStateKey: string | null = null;
   private snapshotViewStateKey: string | null = null;
 
@@ -306,6 +309,17 @@ export class WebPdfViewportEngine {
     const nextAlign = pageAlign ?? 'center';
     if (this.pageAlign === nextAlign) return;
     this.pageAlign = nextAlign;
+    this.relayoutKeepingViewportCenter();
+  }
+
+  setViewportSafeArea(safeArea: Partial<WebPdfViewportSafeArea> | null | undefined) {
+    const nextSafeArea = {
+      left: Math.max(0, Math.round(safeArea?.left ?? 0)),
+      right: Math.max(0, Math.round(safeArea?.right ?? 0)),
+    };
+    if (this.viewportSafeArea.left === nextSafeArea.left && this.viewportSafeArea.right === nextSafeArea.right) return;
+    this.viewportSafeArea = nextSafeArea;
+    if (this.fitCurrentPageIntoViewportIfNeeded()) return;
     this.relayoutKeepingViewportCenter();
   }
 
@@ -758,12 +772,18 @@ export class WebPdfViewportEngine {
     const height = Math.max(0, Math.floor(rect.height));
     if (width < 240 || height < 240) return;
     if (width === this.snapshot.viewportWidth && height === this.snapshot.viewportHeight) return;
+    const previousWidth = this.snapshot.viewportWidth;
     const anchor = this.resolvePageAnchor(this.getViewportCenterAnchor());
     this.snapshot = {
       ...this.snapshot,
       viewportWidth: width,
       viewportHeight: height,
     };
+    if (previousWidth > 0 && width < previousWidth - 8 && this.fitCurrentPageIntoViewportIfNeeded()) {
+      this.scheduleVisibleRenders(0);
+      this.scheduleHiResOverlayRender(WEB_PDF_HI_RES_RENDER_IDLE_MS);
+      return;
+    }
     this.layoutPages(anchor);
     this.scheduleVisibleRenders(0);
     this.scheduleHiResOverlayRender(WEB_PDF_HI_RES_RENDER_IDLE_MS);
@@ -786,6 +806,26 @@ export class WebPdfViewportEngine {
     const heightFitScale = targetHeight / Math.max(1, currentNatural.height);
     const widthFitScale = targetWidth / Math.max(1, currentNatural.width);
     return Math.min(WEB_PDF_MAX_AUTO_FIT_ZOOM, clampZoom(Math.min(heightFitScale, widthFitScale)));
+  }
+
+  private fitCurrentPageIntoViewportIfNeeded() {
+    if (this.snapshot.zoomMode !== 'manual') return false;
+    if (this.snapshot.scale > WEB_PDF_MAX_AUTO_FIT_ZOOM + 0.02) return false;
+    const currentNatural = this.naturalPages[this.snapshot.currentPage] ?? this.naturalPages[1];
+    if (!currentNatural || this.snapshot.viewportWidth <= 0) return false;
+    const currentPageWidth = Math.round(currentNatural.width * (this.snapshot.scale || 1));
+    if (currentPageWidth + WEB_PDF_HORIZONTAL_PADDING * 2 <= this.snapshot.viewportWidth) return false;
+    const nextScale = this.calculateFitScale();
+    if (nextScale >= this.snapshot.scale - 0.01) return false;
+    const currentPage = this.snapshot.currentPage;
+    this.snapshot = {
+      ...this.snapshot,
+      zoomMode: 'fit',
+      scale: nextScale,
+    };
+    this.layoutPages(null);
+    this.panToPage(currentPage, false);
+    return true;
   }
 
   private layoutPages(anchor?: PageAnchor | null) {
@@ -823,11 +863,7 @@ export class WebPdfViewportEngine {
     this.targetFrames.clear();
     this.layoutFrames = [];
     measuredPages.forEach((page) => {
-      const x = this.pageAlign === 'start' && contentWidth > page.width
-        ? WEB_PDF_HORIZONTAL_PADDING
-        : this.pageAlign === 'end' && contentWidth > page.width
-          ? Math.max(0, Math.round(contentWidth - page.width - WEB_PDF_HORIZONTAL_PADDING))
-          : Math.max(0, Math.round((contentWidth - page.width) / 2));
+      const x = this.resolvePageFrameX(page.width, contentWidth);
       const frame: WebPdfPageFrame = {
         pageNumber: page.sourcePageNumber,
         naturalWidth: page.naturalWidth,
@@ -867,6 +903,25 @@ export class WebPdfViewportEngine {
     };
     this.updateVisibility();
     this.scheduleSnapshot();
+  }
+
+  private resolvePageFrameX(pageWidth: number, contentWidth: number) {
+    if (contentWidth <= pageWidth) return 0;
+    const availableSlack = contentWidth - pageWidth;
+    if (availableSlack <= WEB_PDF_HORIZONTAL_PADDING * 2) {
+      return Math.round(availableSlack / 2);
+    }
+    const pageFitsViewport = pageWidth + WEB_PDF_HORIZONTAL_PADDING * 2 <= (this.snapshot.viewportWidth || contentWidth);
+    if (this.snapshot.zoomMode === 'fit' || pageFitsViewport) {
+      const minX = WEB_PDF_HORIZONTAL_PADDING;
+      const maxX = availableSlack - WEB_PDF_HORIZONTAL_PADDING;
+      const safeAreaBias = (this.viewportSafeArea.right - this.viewportSafeArea.left) / 2;
+      const desiredCenter = contentWidth / 2 + safeAreaBias;
+      return Math.round(clamp(desiredCenter - pageWidth / 2, minX, maxX));
+    }
+    if (this.pageAlign === 'start') return WEB_PDF_HORIZONTAL_PADDING;
+    if (this.pageAlign === 'end') return Math.max(0, Math.round(contentWidth - pageWidth - WEB_PDF_HORIZONTAL_PADDING));
+    return Math.max(0, Math.round((contentWidth - pageWidth) / 2));
   }
 
   private updateVisibility() {
@@ -1449,6 +1504,10 @@ export function useWebPdfViewportEngine(options: UseWebPdfViewportEngineOptions)
   useEffect(() => {
     engine.setPageAlign(options.pageAlign);
   }, [engine, options.pageAlign]);
+
+  useEffect(() => {
+    engine.setViewportSafeArea(options.viewportSafeArea);
+  }, [engine, options.viewportSafeArea?.left, options.viewportSafeArea?.right]);
 
   useEffect(() => {
     engine.setViewStateKey(options.viewStateKey ?? options.sourceUri ?? null);
