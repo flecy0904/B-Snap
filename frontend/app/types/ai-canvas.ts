@@ -13,11 +13,23 @@ export type AiCanvasDocumentJson = {
 
 export type TiptapBlockNode = TiptapJsonNode;
 
+export type AiCanvasRecommendationMode =
+  | 'polish'
+  | 'simplify'
+  | 'professionalize'
+  | 'shorten'
+  | 'expand'
+  | 'restructure'
+  | 'extract_key_points'
+  | 'mark_uncertain';
+
 export type CanvasOperation =
   | { op: 'insert_after'; targetBlockId: string | null; node: TiptapBlockNode }
   | { op: 'insert_before'; targetBlockId: string; node: TiptapBlockNode }
   | { op: 'replace'; targetBlockId: string; node: TiptapBlockNode }
   | { op: 'delete'; targetBlockId: string };
+
+export type AiCanvasOperationApplyResult = 'applied' | 'unchanged' | 'failed';
 
 export type CanvasOperationRequest = {
   id: number;
@@ -29,6 +41,7 @@ export type CanvasOperationRequest = {
 export type AiCanvasSelection = {
   from: number;
   to: number;
+  context?: AiCanvasBlockContext | null;
 };
 
 export type AiCanvasEditorChange = {
@@ -47,6 +60,10 @@ export type AiCanvasBlockContext = {
   sectionExcerpt: string;
   beforeText: string | null;
   afterText: string | null;
+  scope?: 'block' | 'selection';
+  selectedBlockIds?: string[];
+  selectionFrom?: number;
+  selectionTo?: number;
 };
 
 export const EMPTY_AI_CANVAS_DOCUMENT: AiCanvasDocumentJson = {

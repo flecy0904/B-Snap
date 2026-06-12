@@ -12,7 +12,7 @@ import {
   type BackendChatSession,
 } from '../../../services/backend-api';
 import type { AiAnswer, StudyDocumentEntry } from '../../../types';
-import type { AiCanvasBlockContext, AiCanvasDocumentJson, CanvasOperation } from '../../../types/ai-canvas';
+import type { AiCanvasBlockContext, AiCanvasDocumentJson, AiCanvasRecommendationMode, CanvasOperation } from '../../../types/ai-canvas';
 import type { SelectionRect } from '../../../ui-types';
 import { getStudyDocumentBackendNoteId } from '../document/backend-sync';
 import { buildAiChatTitle } from './ai-chat-title';
@@ -462,6 +462,8 @@ export function useAiChatActions(params: {
     canvasMarkdown?: string | null;
     canvasDocumentJson?: AiCanvasDocumentJson | null;
     canvasBlockContext?: AiCanvasBlockContext | null;
+    canvasNoteNeedsTitle?: boolean;
+    canvasRecommendationMode?: AiCanvasRecommendationMode | null;
   }) => {
     if (!params.studyDocumentId) return false;
     if (params.aiChatReadOnly) {
@@ -588,7 +590,7 @@ export function useAiChatActions(params: {
         source: messageSource,
         canvasNoteId: canvasAction === 'canvas_create' ? null : params.activeCanvasNoteId ?? null,
         canvasAction,
-        canvasNoteNeedsTitle: canvasAction === 'canvas_create',
+        canvasNoteNeedsTitle: override?.canvasNoteNeedsTitle ?? canvasAction === 'canvas_create',
         canvasMarkdown: isCanvasOriginRequest || canvasAction === 'canvas_edit' || (canvasAction === 'auto' && shouldLockCanvas)
           ? override?.canvasMarkdown ?? params.activeCanvasMarkdown ?? null
           : null,
@@ -596,6 +598,7 @@ export function useAiChatActions(params: {
           ? override?.canvasDocumentJson ?? params.activeCanvasDocumentJson ?? null
           : null,
         canvasBlockContext: override?.canvasBlockContext ?? null,
+        canvasRecommendationMode: override?.canvasRecommendationMode ?? null,
         contextHint,
       });
       const userMessageWithAttachment = {
@@ -676,6 +679,8 @@ export function useAiChatActions(params: {
     canvasMarkdown?: string | null;
     canvasDocumentJson?: AiCanvasDocumentJson | null;
     canvasBlockContext?: AiCanvasBlockContext | null;
+    canvasNoteNeedsTitle?: boolean;
+    canvasRecommendationMode?: AiCanvasRecommendationMode | null;
   }) => requestAiAnswerInternal(options);
 
   const requestAiAnswerForQuestion = async (question: string, options?: {
@@ -686,6 +691,8 @@ export function useAiChatActions(params: {
     canvasMarkdown?: string | null;
     canvasDocumentJson?: AiCanvasDocumentJson | null;
     canvasBlockContext?: AiCanvasBlockContext | null;
+    canvasNoteNeedsTitle?: boolean;
+    canvasRecommendationMode?: AiCanvasRecommendationMode | null;
   }) => requestAiAnswerInternal({
     question,
     selectionImageUri: options?.selectionImageUri ?? null,
@@ -695,6 +702,8 @@ export function useAiChatActions(params: {
     canvasMarkdown: options?.canvasMarkdown,
     canvasDocumentJson: options?.canvasDocumentJson,
     canvasBlockContext: options?.canvasBlockContext,
+    canvasNoteNeedsTitle: options?.canvasNoteNeedsTitle,
+    canvasRecommendationMode: options?.canvasRecommendationMode,
   });
 
   return {
