@@ -206,6 +206,30 @@ export type BackendAiMessageResponse = {
     fallback?: boolean;
     fallback_reason?: string | null;
     router_reason?: string | null;
+    image_recheck?: BackendImageRecheckDebug | null;
+  } | null;
+};
+
+export type BackendImageRecheckDebug = {
+  enabled?: boolean;
+  candidate_count?: number;
+  judge_called?: boolean;
+  needed?: boolean;
+  selected_ids?: string[];
+  rechecked_count?: number;
+  items?: Array<{
+    image_ai_summary_id?: string;
+    page_number?: number | null;
+    image_mode?: string;
+    title?: string;
+  }>;
+  failures?: Array<Record<string, unknown>>;
+  judge?: {
+    needs_image_recheck?: boolean;
+    image_ai_summary_ids?: string[];
+    allow_multiple?: boolean;
+    preferred_image_mode?: string;
+    reason?: string;
   } | null;
 };
 
@@ -263,6 +287,170 @@ export type BackendRagDebugParserCompareResponse = {
   }>;
 };
 
+export type BackendRagDebugDoclingCropsResponse = {
+  note: {
+    id: number;
+    folder_id: number;
+    title: string;
+  };
+  summary: {
+    parser: string;
+    page_count: number;
+    scanned_page_count: number;
+    candidate_count: number;
+    filtered_count: number;
+    skipped_candidate_count: number;
+    candidate_limit_reached: boolean;
+    elapsed_ms: number;
+    page_start: number | null;
+    page_end: number | null;
+    image_summary_error?: string | null;
+  };
+  candidates: Array<{
+    id: string;
+    page_number: number;
+    candidate_type: 'picture' | 'table' | string;
+    self_ref?: string | null;
+    docling_bbox: number[];
+    docling_coord_origin: string;
+    pdf_bbox: number[];
+    image_bbox: number[];
+    context_bbox: number[];
+    crop_bbox: number[];
+    crop_mode: string;
+    page_width: number;
+    page_height: number;
+    area_ratio: number;
+    image_area_ratio: number;
+    crop_width: number;
+    crop_height: number;
+    image_crop_width: number;
+    image_crop_height: number;
+    context_crop_width: number;
+    context_crop_height: number;
+    image_data_uri: string;
+    image_crop_data_uri: string;
+    context_crop_data_uri: string;
+    crop_hash: string;
+    image_crop_hash: string;
+    context_crop_hash: string;
+    image_ai_summary?: {
+      id?: number | null;
+      status?: string | null;
+      skipped_reason?: string | null;
+      candidate_type?: string | null;
+      confidence?: string | null;
+      importance?: string | null;
+      confidence_reason?: string | null;
+      importance_reason?: string | null;
+      indexed: boolean;
+      summary: string;
+      summary_snippet?: string | null;
+      ocr_text: string;
+      metadata?: Record<string, unknown>;
+      analyzed_at?: string | null;
+      indexed_at?: string | null;
+      updated_at?: string | null;
+    } | null;
+    text_preview?: string | null;
+  }>;
+};
+
+export type BackendRagDebugIndexResponse = {
+  note: {
+    id: number;
+    folder_id: number;
+    title: string;
+  };
+  summary: {
+    page_count: number;
+    chunk_count: number;
+    chunks_returned: number;
+    chunk_limit: number;
+    source_counts: Record<string, number>;
+    embedding_model?: string | null;
+    embedding_models: string[];
+    last_indexed_at?: string | null;
+    index_status: string;
+    last_error?: string | null;
+    image_summary_error?: string | null;
+    parser?: string | null;
+    text_block_count: number;
+    image_block_count: number;
+    visual_block_count: number;
+    extraction_strategies: string[];
+  };
+  pages: Array<{
+    id: number;
+    page_number: number;
+    text_length: number;
+    text_snippet: string;
+    text: string;
+    updated_at?: string | null;
+    parser?: string | null;
+    extraction_strategy?: string | null;
+    reading_order_strategy?: string | null;
+    column_count?: number | null;
+    column_confidence?: number | null;
+    text_block_count: number;
+    image_block_count: number;
+    visual_block_count: number;
+    header_footer_candidate_count: number;
+    side_label_candidate_count: number;
+    rag_extraction?: Record<string, unknown>;
+    elements?: Array<Record<string, unknown>>;
+    elements_returned: number;
+  }>;
+  chunks: BackendRagDebugResult[];
+  image_ai_summaries: Array<{
+    id: number;
+    page_number?: number | null;
+    candidate_type?: string | null;
+    status?: string | null;
+    skipped_reason?: string | null;
+    confidence?: string | null;
+    importance?: string | null;
+    confidence_reason?: string | null;
+    importance_reason?: string | null;
+    indexed: boolean;
+    summary_snippet?: string | null;
+    summary: string;
+    ocr_text: string;
+    metadata?: Record<string, unknown>;
+    analyzed_at?: string | null;
+    indexed_at?: string | null;
+    updated_at?: string | null;
+  }>;
+};
+
+export type BackendRagDebugImageSummaryPreviewResponse = {
+  id: number;
+  page_number?: number | null;
+  candidate_type?: string | null;
+  status?: string | null;
+  skipped_reason?: string | null;
+  confidence?: string | null;
+  importance?: string | null;
+  confidence_reason?: string | null;
+  importance_reason?: string | null;
+  indexed: boolean;
+  summary_snippet?: string | null;
+  summary: string;
+  ocr_text: string;
+  metadata?: Record<string, unknown>;
+  analyzed_at?: string | null;
+  indexed_at?: string | null;
+  updated_at?: string | null;
+  image_bbox: number[];
+  context_bbox: number[];
+  image_crop_data_uri: string;
+  context_crop_data_uri: string;
+  image_crop_width: number;
+  image_crop_height: number;
+  context_crop_width: number;
+  context_crop_height: number;
+};
+
 export type BackendRagDebugContextSection = {
   title: string;
   count: number;
@@ -278,6 +466,7 @@ export type BackendRagDebugContext = {
   nearby_pages_included: boolean;
   canvas_context_included: boolean;
   vision_image_attached: boolean;
+  image_recheck?: BackendImageRecheckDebug | null;
   fallback: boolean;
   fallback_reason?: string | null;
   context_preview: string;
@@ -300,6 +489,7 @@ export type BackendRagDebugEvaluateResponse = {
     retrieved_source_count?: number;
     retrieved_chunk_count?: number;
     scope_count?: number;
+    image_recheck?: BackendImageRecheckDebug | null;
   };
   context?: BackendRagDebugContext | null;
   results: BackendRagDebugResult[];
@@ -317,8 +507,52 @@ export type BackendRagDebugStatusResponse = {
     chunk_count: number;
     last_indexed_at?: string | null;
   }>;
+  rag_job?: {
+    text_status?: string | null;
+    image_status?: string | null;
+    overall_status?: string | null;
+    page_count: number;
+    processed_page_count: number;
+    total_batches: number;
+    completed_batches: number;
+    text_chunk_count: number;
+    image_candidate_count: number;
+    image_completed_count: number;
+    image_indexed_count: number;
+    last_error?: string | null;
+    started_at?: string | null;
+    text_ready_at?: string | null;
+    image_ready_at?: string | null;
+    updated_at?: string | null;
+  } | null;
+  docling_batches: Array<{
+    status?: string | null;
+    count: number;
+    page_start?: number | null;
+    page_end?: number | null;
+    updated_at?: string | null;
+  }>;
+  image_summary_status: Array<{
+    status?: string | null;
+    importance?: string | null;
+    indexed: boolean;
+    count: number;
+  }>;
+  recent_image_summaries: Array<{
+    id?: number | null;
+    page_number?: number | null;
+    candidate_type?: string | null;
+    status?: string | null;
+    skipped_reason?: string | null;
+    confidence?: string | null;
+    importance?: string | null;
+    indexed: boolean;
+    summary_snippet?: string | null;
+    updated_at?: string | null;
+  }>;
   failed_indexes: Array<Record<string, unknown>>;
   last_error?: string | null;
+  image_summary_error?: string | null;
   rag_scope: BackendRagScope;
   ragScope?: BackendRagScope | null;
 };
@@ -1067,6 +1301,32 @@ export async function sendBackendAiMessage(payload: {
 export function getBackendRagDebugParserCompare(noteId: number, parserName: BackendRagDebugParserName) {
   return request<BackendRagDebugParserCompareResponse>(`/notes/${noteId}/rag-debug/parser/${parserName}`, {
     timeoutMs: 10 * 60 * 1000,
+  });
+}
+
+export function getBackendRagDebugDoclingCrops(noteId: number, options?: { pageNumber?: number | null; pageLimit?: number; candidateLimit?: number }) {
+  const params = new URLSearchParams();
+  if (options?.pageNumber) params.set('page_number', String(options.pageNumber));
+  if (options?.pageLimit) params.set('page_limit', String(options.pageLimit));
+  if (options?.candidateLimit) params.set('candidate_limit', String(options.candidateLimit));
+  const query = params.toString();
+  return request<BackendRagDebugDoclingCropsResponse>(`/notes/${noteId}/rag-debug/docling-crops${query ? `?${query}` : ''}`, {
+    timeoutMs: 10 * 60 * 1000,
+  });
+}
+
+export function getBackendRagDebugIndex(noteId: number, options?: { limit?: number }) {
+  const params = new URLSearchParams();
+  if (options?.limit) params.set('limit', String(options.limit));
+  const query = params.toString();
+  return request<BackendRagDebugIndexResponse>(`/notes/${noteId}/rag-debug/index${query ? `?${query}` : ''}`, {
+    timeoutMs: 60 * 1000,
+  });
+}
+
+export function getBackendRagDebugImageSummaryPreview(noteId: number, summaryId: number) {
+  return request<BackendRagDebugImageSummaryPreviewResponse>(`/notes/${noteId}/rag-debug/image-summaries/${summaryId}/preview`, {
+    timeoutMs: 60 * 1000,
   });
 }
 

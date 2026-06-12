@@ -15,8 +15,18 @@ from backend.app.routes.chats import default_rag_scope, normalize_rag_scope, rag
 from backend.app.schemas.chats import RagScope, SelectionRectPayload
 from backend.app.services.ai_context_builder import build_ai_context, format_context_mode_instruction
 from backend.app.services.ai_context_router import AiContextRoute, route_ai_context
-from backend.app.services.docling_parser import DoclingParsingError, parse_pdf_pages_with_docling
+from backend.app.services.docling_batch_pipeline import (
+    cached_pages_from_batches,
+    file_sha256,
+    load_cached_docling_batches,
+)
+from backend.app.services.docling_crop_debug import (
+    DoclingCropDebugError,
+    extract_docling_crop_candidates_from_cached_pages,
+    render_pdf_crop_preview_from_bboxes,
+)
 from backend.app.services.note_page_content import parse_page_state
+from backend.app.services.pdf_image_recheck import ImageRecheckResult, maybe_recheck_pdf_images_for_chat
 from backend.app.services.pdf_parser import PdfParsingError, get_pdf_page_count, parse_pdf_path
 from backend.app.services.pypdf_plain_parser import PypdfPlainParsingError, parse_pdf_pages_with_pypdf_plain
 from backend.app.services.rag_chunker import IndexSource, build_text_chunks
@@ -98,6 +108,19 @@ def _rag_extraction_visual_blocks(rag_extraction: dict[str, Any]) -> list[dict[s
     if not isinstance(visual_blocks, list):
         return []
     return [block for block in visual_blocks if isinstance(block, dict)]
+
+
+def _metadata_bbox(metadata: dict[str, Any], key: str) -> tuple[float, float, float, float]:
+    value = metadata.get(key)
+    if not isinstance(value, list) or len(value) != 4:
+        raise HTTPException(status_code=400, detail=f"{key} metadata is unavailable")
+    try:
+        bbox = tuple(float(item) for item in value)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"{key} metadata is invalid") from exc
+    if bbox[2] <= bbox[0] or bbox[3] <= bbox[1]:
+        raise HTTPException(status_code=400, detail=f"{key} metadata is invalid")
+    return bbox  # type: ignore[return-value]
 
 
 def _format_debug_contexts(contexts: list[Any]) -> list[dict[str, Any]]:
@@ -273,6 +296,7 @@ def _format_debug_context_preview(
     rag_scope: dict[str, Any],
     contexts: list[Any],
     rag_debug: dict[str, Any],
+    image_recheck: ImageRecheckResult | None = None,
 ) -> dict[str, Any]:
     context_mode_instruction = format_context_mode_instruction(mode, has_rag_sources=bool(contexts))
     built_context = build_ai_context(
@@ -282,6 +306,8 @@ def _format_debug_context_preview(
         base_context_hints=[context_mode_instruction] if mode == "general" else [context_mode_instruction, payload.context_hint],
         rag_sources=contexts,
         rag_debug=rag_debug,
+        priority_context_hints=[image_recheck.context_hint if image_recheck else None],
+        extra_answer_sources_text=image_recheck.answer_sources_text if image_recheck else None,
     )
     current_page_items = [
         _format_context_page_item(page)
@@ -342,6 +368,23 @@ def _format_debug_context_preview(
         _context_section("Selection", selection_items),
         _context_section("Current Page", current_page_items),
         _context_section("Nearby Pages", nearby_page_items),
+        _context_section(
+            "Image Attachments",
+            [
+                {
+                    "title": item.title,
+                    "source_type": "image_recheck",
+                    "source_id": item.image_ai_summary_id,
+                    "page_number": item.page_number,
+                    "chunk_index": None,
+                    "score": None,
+                    "content_length": len(item.image_summary),
+                    "content_snippet": _snippet(item.image_summary),
+                    "content": item.image_summary,
+                }
+                for item in (image_recheck.items if image_recheck else [])
+            ],
+        ),
         _context_section("RAG Results", rag_items),
         _context_section("Canvas Notes", canvas_items),
         _context_section("Source References", source_reference_items),
@@ -355,6 +398,7 @@ def _format_debug_context_preview(
         "nearby_pages_included": bool(nearby_page_items),
         "canvas_context_included": bool(canvas_items),
         "vision_image_attached": bool(payload.selection_image or payload.selection_image_url),
+        "image_recheck": image_recheck.debug if image_recheck else None,
         "fallback": bool(built_context.debug.get("fallback")),
         "fallback_reason": built_context.debug.get("fallback_reason"),
         "context_preview": built_context.context_hint or "",
@@ -391,6 +435,7 @@ def get_note_rag_debug_index(
     )
     safe_limit = max(1, min(int(limit or 200), 500))
     index_error = None
+    image_summary_error = None
     try:
         chunk_summary_rows = fetch_all(
             connection,
@@ -430,6 +475,25 @@ def get_note_rag_debug_index(
         index_error = str(exc)
         chunk_summary_rows = []
         chunks = []
+
+    try:
+        image_summary_rows = fetch_all(
+            connection,
+            """
+            SELECT id, page_number, candidate_type, status, skipped_reason, confidence,
+                   importance, confidence_reason, importance_reason, indexed, summary,
+                   ocr_text, metadata, analyzed_at, indexed_at, updated_at
+            FROM image_ai_summaries
+            WHERE user_id = %s AND note_id = %s
+            ORDER BY page_number ASC, id ASC
+            LIMIT %s
+            """,
+            (current_user["id"], note_id, safe_limit),
+        )
+    except Exception as exc:
+        _rollback_after_debug_query_error(connection)
+        image_summary_error = str(exc)
+        image_summary_rows = []
     source_counts = {str(row["source_type"]): int(row["count"]) for row in chunk_summary_rows}
     embedding_models = sorted({
         str(chunk["embedding_model"])
@@ -491,6 +555,7 @@ def get_note_rag_debug_index(
             "last_indexed_at": last_indexed_at,
             "index_status": "unavailable" if index_error else "ready",
             "last_error": index_error,
+            "image_summary_error": image_summary_error,
             "parser": "pymupdf" if any(item.get("parser") == "pymupdf" for item in page_debug_items) else None,
             "text_block_count": text_block_count,
             "image_block_count": image_block_count,
@@ -521,6 +586,101 @@ def get_note_rag_debug_index(
             }
             for chunk in chunks
         ],
+        "image_ai_summaries": [
+            {
+                "id": row["id"],
+                "page_number": row.get("page_number"),
+                "candidate_type": row.get("candidate_type"),
+                "status": row.get("status"),
+                "skipped_reason": row.get("skipped_reason"),
+                "confidence": row.get("confidence"),
+                "importance": row.get("importance"),
+                "confidence_reason": row.get("confidence_reason"),
+                "importance_reason": row.get("importance_reason"),
+                "indexed": bool(row.get("indexed")),
+                "summary_snippet": _snippet(row.get("summary")),
+                "summary": row.get("summary") or "",
+                "ocr_text": row.get("ocr_text") or "",
+                "metadata": row.get("metadata") if isinstance(row.get("metadata"), dict) else {},
+                "analyzed_at": row.get("analyzed_at"),
+                "indexed_at": row.get("indexed_at"),
+                "updated_at": row.get("updated_at"),
+            }
+            for row in image_summary_rows
+        ],
+    }
+
+
+@router.get("/notes/{note_id}/rag-debug/image-summaries/{summary_id}/preview")
+def get_note_rag_debug_image_summary_preview(
+    note_id: int,
+    summary_id: int,
+    connection: Connection = Depends(get_db_connection),
+    current_user: dict = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
+):
+    _ensure_rag_debug_enabled(settings)
+    row = require_row(
+        fetch_one(
+            connection,
+            """
+            SELECT s.id, s.page_number, s.candidate_type, s.status, s.skipped_reason,
+                   s.confidence, s.importance, s.confidence_reason, s.importance_reason,
+                   s.indexed, s.summary, s.ocr_text, s.metadata, s.analyzed_at,
+                   s.indexed_at, s.updated_at,
+                   n.id AS note_id, n.folder_id, n.title AS note_title, n.file_url
+            FROM image_ai_summaries s
+            JOIN notes n ON n.id = s.note_id
+            WHERE s.id = %s
+              AND s.note_id = %s
+              AND s.user_id = %s
+            """,
+            (summary_id, note_id, current_user["id"]),
+        ),
+        "image summary not found",
+    )
+    metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+    page_number = row.get("page_number")
+    if not isinstance(page_number, int) or page_number < 1:
+        raise HTTPException(status_code=400, detail="image summary page_number is unavailable")
+    pdf_path = _stored_note_pdf_path(
+        {
+            "id": row["note_id"],
+            "folder_id": row["folder_id"],
+            "title": row["note_title"],
+            "file_url": row["file_url"],
+        },
+        settings,
+    )
+    try:
+        preview = render_pdf_crop_preview_from_bboxes(
+            pdf_path,
+            page_number=page_number,
+            image_bbox=_metadata_bbox(metadata, "image_bbox"),
+            context_bbox=_metadata_bbox(metadata, "context_bbox"),
+            render_scale=1.2,
+        )
+    except DoclingCropDebugError as exc:
+        raise HTTPException(status_code=400, detail=str(exc) or "failed to render image summary preview") from exc
+    return {
+        "id": row["id"],
+        "page_number": row.get("page_number"),
+        "candidate_type": row.get("candidate_type"),
+        "status": row.get("status"),
+        "skipped_reason": row.get("skipped_reason"),
+        "confidence": row.get("confidence"),
+        "importance": row.get("importance"),
+        "confidence_reason": row.get("confidence_reason"),
+        "importance_reason": row.get("importance_reason"),
+        "indexed": bool(row.get("indexed")),
+        "summary": row.get("summary") or "",
+        "summary_snippet": _snippet(row.get("summary")),
+        "ocr_text": row.get("ocr_text") or "",
+        "metadata": metadata,
+        "analyzed_at": row.get("analyzed_at"),
+        "indexed_at": row.get("indexed_at"),
+        "updated_at": row.get("updated_at"),
+        **preview,
     }
 
 
@@ -594,29 +754,171 @@ def get_note_rag_debug_parser_compare(
         return _parser_compare_response(note=note, parser=result.parser, pages=pages, chunks=chunks, elapsed_ms=result.elapsed_ms)
 
     try:
-        page_count = get_pdf_page_count(pdf_path)
-        result = parse_pdf_pages_with_docling(pdf_path, list(range(1, page_count + 1)))
-    except DoclingParsingError as exc:
+        started_at = time.perf_counter()
+        file_hash = file_sha256(pdf_path)
+        batches = load_cached_docling_batches(
+            connection,
+            note_id=note["id"],
+            user_id=current_user["id"],
+            file_hash=file_hash,
+        )
+        if not batches:
+            raise HTTPException(status_code=400, detail="Docling cache is not ready. Run current note RAG reprocess first.")
+        docling_pages = cached_pages_from_batches(batches)
+        elapsed_ms = round(sum(batch.elapsed_ms for batch in batches) or ((time.perf_counter() - started_at) * 1000), 1)
+    except HTTPException:
+        raise
+    except Exception as exc:
         raise HTTPException(status_code=400, detail=str(exc) or "failed to parse pdf with docling") from exc
-    except PdfParsingError as exc:
-        raise HTTPException(status_code=400, detail=str(exc) or "failed to read pdf page count") from exc
     pages = [
         _parser_compare_page(
             page_number=page.page_number,
             text=page.markdown,
             parser="docling",
-            elapsed_ms=page.elapsed_ms,
+            elapsed_ms=None,
             metadata={
                 "textItemCount": page.text_item_count,
                 "tableCount": page.table_count,
                 "pictureCount": page.picture_count,
                 "format": "markdown",
+                "source": "docling_batch_cache",
             },
         )
-        for page in result.pages
+        for page in docling_pages
     ]
-    chunks = _parser_compare_chunks(note=note, parser=result.parser, pages=pages, user_id=current_user["id"])
-    return _parser_compare_response(note=note, parser=result.parser, pages=pages, chunks=chunks, elapsed_ms=result.elapsed_ms)
+    chunks = _parser_compare_chunks(note=note, parser="docling", pages=pages, user_id=current_user["id"])
+    return _parser_compare_response(note=note, parser="docling", pages=pages, chunks=chunks, elapsed_ms=elapsed_ms)
+
+
+@router.get("/notes/{note_id}/rag-debug/docling-crops")
+def get_note_rag_debug_docling_crops(
+    note_id: int,
+    page_number: int | None = None,
+    page_limit: int | None = None,
+    candidate_limit: int = 120,
+    connection: Connection = Depends(get_db_connection),
+    current_user: dict = Depends(get_current_user),
+    settings: Settings = Depends(get_settings),
+):
+    _ensure_rag_debug_enabled(settings)
+    note = require_row(
+        fetch_one(
+            connection,
+            "SELECT id, folder_id, title, file_url FROM notes WHERE id = %s AND user_id = %s",
+            (note_id, current_user["id"]),
+        ),
+        "note not found",
+    )
+    pdf_path = _stored_note_pdf_path(note, settings)
+    try:
+        page_count = get_pdf_page_count(pdf_path)
+    except PdfParsingError as exc:
+        raise HTTPException(status_code=400, detail=str(exc) or "failed to read pdf page count") from exc
+
+    if page_number is not None:
+        if page_number < 1 or page_number > page_count:
+            raise HTTPException(status_code=400, detail="page_number is out of range")
+        page_numbers = [page_number]
+    elif page_limit is None:
+        page_numbers = list(range(1, page_count + 1))
+    else:
+        safe_page_limit = max(1, min(int(page_limit or page_count), page_count))
+        page_numbers = list(range(1, safe_page_limit + 1))
+
+    safe_candidate_limit = max(1, min(int(candidate_limit or 120), 300))
+    try:
+        file_hash = file_sha256(pdf_path)
+        batches = load_cached_docling_batches(
+            connection,
+            note_id=note["id"],
+            user_id=current_user["id"],
+            file_hash=file_hash,
+        )
+        if not batches:
+            raise HTTPException(status_code=400, detail="Docling cache is not ready. Run current note RAG reprocess first.")
+        cached_pages = [
+            page
+            for page in cached_pages_from_batches(batches)
+            if page.page_number in set(page_numbers)
+        ]
+        result = extract_docling_crop_candidates_from_cached_pages(
+            pdf_path,
+            cached_pages=cached_pages,
+            document_max_candidates=safe_candidate_limit,
+            use_full_page_context=True,
+        )
+    except HTTPException:
+        raise
+    except DoclingCropDebugError as exc:
+        raise HTTPException(status_code=400, detail=str(exc) or "failed to extract docling crop candidates") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=str(exc) or "failed to load docling crop cache") from exc
+    crop_hashes = sorted({candidate.crop_hash for candidate in result.candidates})
+    summary_by_key: dict[tuple[int, str], dict] = {}
+    image_summary_error = None
+    if crop_hashes:
+        try:
+            rows = fetch_all(
+                connection,
+                """
+                SELECT id, page_number, crop_hash, candidate_type, status, skipped_reason,
+                       confidence, importance, confidence_reason, importance_reason,
+                       indexed, summary, ocr_text, metadata, analyzed_at, indexed_at, updated_at
+                FROM image_ai_summaries
+                WHERE user_id = %s
+                  AND note_id = %s
+                  AND crop_hash = ANY(%s::text[])
+                """,
+                (current_user["id"], note_id, crop_hashes),
+            )
+            summary_by_key = {
+                (int(row["page_number"]), str(row["crop_hash"])): {
+                    "id": row.get("id"),
+                    "status": row.get("status"),
+                    "skipped_reason": row.get("skipped_reason"),
+                    "candidate_type": row.get("candidate_type"),
+                    "confidence": row.get("confidence"),
+                    "importance": row.get("importance"),
+                    "confidence_reason": row.get("confidence_reason"),
+                    "importance_reason": row.get("importance_reason"),
+                    "indexed": bool(row.get("indexed")),
+                    "summary": row.get("summary") or "",
+                    "summary_snippet": _snippet(row.get("summary")),
+                    "ocr_text": row.get("ocr_text") or "",
+                    "metadata": row.get("metadata") if isinstance(row.get("metadata"), dict) else {},
+                    "analyzed_at": row.get("analyzed_at"),
+                    "indexed_at": row.get("indexed_at"),
+                    "updated_at": row.get("updated_at"),
+                }
+                for row in rows
+            }
+        except Exception as exc:
+            _rollback_after_debug_query_error(connection)
+            image_summary_error = str(exc)
+
+    candidate_responses = []
+    for candidate in result.candidates:
+        response = candidate.to_response()
+        response["image_ai_summary"] = summary_by_key.get((candidate.page_number, candidate.crop_hash))
+        candidate_responses.append(response)
+
+    return {
+        "note": {"id": note["id"], "folder_id": note["folder_id"], "title": note["title"]},
+        "summary": {
+            "parser": result.parser,
+            "page_count": page_count,
+            "scanned_page_count": result.scanned_page_count,
+            "candidate_count": len(result.candidates),
+            "filtered_count": result.filtered_count,
+            "skipped_candidate_count": result.skipped_candidate_count,
+            "candidate_limit_reached": result.candidate_limit_reached,
+            "elapsed_ms": result.elapsed_ms,
+            "page_start": page_numbers[0] if page_numbers else None,
+            "page_end": page_numbers[-1] if page_numbers else None,
+            "image_summary_error": image_summary_error,
+        },
+        "candidates": candidate_responses,
+    }
 
 
 @router.post("/chat-sessions/{session_id}/rag-debug/evaluate")
@@ -632,7 +934,8 @@ def evaluate_chat_session_rag_debug(
         fetch_one(
             connection,
             """
-            SELECT s.id, s.note_id, s.title, s.model, s.rag_scope, n.folder_id, n.title AS note_title
+            SELECT s.id, s.note_id, s.title, s.model, s.rag_scope,
+                   n.folder_id, n.title AS note_title, n.file_url AS note_file_url
             FROM chat_sessions s
             JOIN notes n ON n.id = s.note_id
             WHERE s.id = %s AND n.user_id = %s
@@ -645,6 +948,7 @@ def evaluate_chat_session_rag_debug(
         "id": session["note_id"],
         "folder_id": session["folder_id"],
         "title": session["note_title"],
+        "file_url": session.get("note_file_url"),
     }
     pages = fetch_all(
         connection,
@@ -696,6 +1000,18 @@ def evaluate_chat_session_rag_debug(
             documents=None,
             top_k=payload.top_k,
         )
+    image_recheck = ImageRecheckResult()
+    if context_route.mode == "rag":
+        image_recheck = maybe_recheck_pdf_images_for_chat(
+            connection,
+            note=note,
+            user_id=current_user["id"],
+            model=model,
+            user_question=payload.content,
+            current_page_number=payload.page_number,
+            rag_sources=contexts,
+            settings=settings,
+        )
     return {
         "mode": context_route.mode,
         "rewritten_query": context_route.rewritten_query,
@@ -708,6 +1024,7 @@ def evaluate_chat_session_rag_debug(
         "debug": {
             **rag_debug,
             "scope_count": len((rag_scope or {}).get("sources", [])),
+            "image_recheck": image_recheck.debug,
         },
         "context": _format_debug_context_preview(
             mode=context_route.mode,
@@ -717,6 +1034,7 @@ def evaluate_chat_session_rag_debug(
             rag_scope=rag_scope or default_rag_scope(note),
             contexts=contexts,
             rag_debug=rag_debug,
+            image_recheck=image_recheck,
         ),
         "results": _format_debug_contexts(contexts),
     }
@@ -763,7 +1081,33 @@ def get_chat_session_rag_debug_status(
     )
     scope_count = 0
     status_error = None
+    image_summary_error = None
+    rag_job_row = None
+    batch_status_rows = []
     try:
+        rag_job_row = fetch_one(
+            connection,
+            """
+            SELECT text_status, image_status, overall_status, page_count, processed_page_count,
+                   total_batches, completed_batches, text_chunk_count, image_candidate_count,
+                   image_completed_count, image_indexed_count, last_error, started_at,
+                   text_ready_at, image_ready_at, updated_at
+            FROM note_rag_jobs
+            WHERE user_id = %s AND note_id = %s
+            """,
+            (current_user["id"], session["note_id"]),
+        )
+        batch_status_rows = fetch_all(
+            connection,
+            """
+            SELECT status, COUNT(*) AS count, MIN(page_start) AS page_start, MAX(page_end) AS page_end, MAX(updated_at) AS updated_at
+            FROM docling_batch_results
+            WHERE user_id = %s AND note_id = %s
+            GROUP BY status
+            ORDER BY status ASC
+            """,
+            (current_user["id"], session["note_id"]),
+        )
         total_row = fetch_one(
             connection,
             "SELECT COUNT(*) AS count FROM document_chunks WHERE user_id = %s",
@@ -830,6 +1174,38 @@ def get_chat_session_rag_debug_status(
         current_note_row = {"count": 0}
         recent_rows = []
         model_rows = []
+        rag_job_row = None
+        batch_status_rows = []
+
+    try:
+        image_summary_status_rows = fetch_all(
+            connection,
+            """
+            SELECT status, importance, indexed, COUNT(*) AS count
+            FROM image_ai_summaries
+            WHERE user_id = %s AND note_id = %s
+            GROUP BY status, importance, indexed
+            ORDER BY status ASC, importance ASC, indexed ASC
+            """,
+            (current_user["id"], session["note_id"]),
+        )
+        recent_image_summary_rows = fetch_all(
+            connection,
+            """
+            SELECT id, page_number, candidate_type, status, skipped_reason,
+                   confidence, importance, indexed, summary, updated_at
+            FROM image_ai_summaries
+            WHERE user_id = %s AND note_id = %s
+            ORDER BY updated_at DESC NULLS LAST, id DESC
+            LIMIT 8
+            """,
+            (current_user["id"], session["note_id"]),
+        )
+    except Exception as exc:
+        _rollback_after_debug_query_error(connection)
+        image_summary_error = str(exc)
+        image_summary_status_rows = []
+        recent_image_summary_rows = []
     return {
         "pgvector_available": bool(vector_row and vector_row.get("available")),
         "document_chunks_total_count": int(total_row["count"]) if total_row else 0,
@@ -848,7 +1224,64 @@ def get_chat_session_rag_debug_status(
             }
             for row in recent_rows
         ],
+        "rag_job": (
+            {
+                "text_status": rag_job_row.get("text_status"),
+                "image_status": rag_job_row.get("image_status"),
+                "overall_status": rag_job_row.get("overall_status"),
+                "page_count": int(rag_job_row.get("page_count") or 0),
+                "processed_page_count": int(rag_job_row.get("processed_page_count") or 0),
+                "total_batches": int(rag_job_row.get("total_batches") or 0),
+                "completed_batches": int(rag_job_row.get("completed_batches") or 0),
+                "text_chunk_count": int(rag_job_row.get("text_chunk_count") or 0),
+                "image_candidate_count": int(rag_job_row.get("image_candidate_count") or 0),
+                "image_completed_count": int(rag_job_row.get("image_completed_count") or 0),
+                "image_indexed_count": int(rag_job_row.get("image_indexed_count") or 0),
+                "last_error": rag_job_row.get("last_error"),
+                "started_at": rag_job_row.get("started_at"),
+                "text_ready_at": rag_job_row.get("text_ready_at"),
+                "image_ready_at": rag_job_row.get("image_ready_at"),
+                "updated_at": rag_job_row.get("updated_at"),
+            }
+            if rag_job_row
+            else None
+        ),
+        "docling_batches": [
+            {
+                "status": row.get("status"),
+                "count": int(row.get("count") or 0),
+                "page_start": row.get("page_start"),
+                "page_end": row.get("page_end"),
+                "updated_at": row.get("updated_at"),
+            }
+            for row in batch_status_rows
+        ],
+        "image_summary_status": [
+            {
+                "status": row.get("status"),
+                "importance": row.get("importance"),
+                "indexed": bool(row.get("indexed")),
+                "count": int(row["count"]),
+            }
+            for row in image_summary_status_rows
+        ],
+        "recent_image_summaries": [
+            {
+                "id": row.get("id"),
+                "page_number": row.get("page_number"),
+                "candidate_type": row.get("candidate_type"),
+                "status": row.get("status"),
+                "skipped_reason": row.get("skipped_reason"),
+                "confidence": row.get("confidence"),
+                "importance": row.get("importance"),
+                "indexed": bool(row.get("indexed")),
+                "summary_snippet": _snippet(row.get("summary")),
+                "updated_at": row.get("updated_at"),
+            }
+            for row in recent_image_summary_rows
+        ],
         "failed_indexes": [],
         "last_error": status_error,
+        "image_summary_error": image_summary_error,
         "rag_scope": rag_scope or default_rag_scope(note),
     }
