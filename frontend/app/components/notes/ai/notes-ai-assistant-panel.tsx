@@ -2009,6 +2009,13 @@ export function NotesAiAssistantPanel() {
                     </Pressable>
                   </View>
                   {ragDebugStatus ? (
+                    (() => {
+                      const doclingBatches = Array.isArray(ragDebugStatus.docling_batches) ? ragDebugStatus.docling_batches : [];
+                      const embeddingModels = Array.isArray(ragDebugStatus.embedding_models) ? ragDebugStatus.embedding_models : [];
+                      const recentIndexStatus = Array.isArray(ragDebugStatus.recent_index_status) ? ragDebugStatus.recent_index_status : [];
+                      const imageSummaryStatus = Array.isArray(ragDebugStatus.image_summary_status) ? ragDebugStatus.image_summary_status : [];
+                      const recentImageSummaries = Array.isArray(ragDebugStatus.recent_image_summaries) ? ragDebugStatus.recent_image_summaries : [];
+                      return (
                     <View style={workspace.styles.aiRagDevSection}>
                       <Text style={workspace.styles.aiRagDevMeta}>pgvector {ragDebugStatus.pgvector_available ? 'available' : 'not available'}</Text>
                       <Text style={workspace.styles.aiRagDevSectionTitle}>현재 노트 처리 작업</Text>
@@ -2027,25 +2034,25 @@ export function NotesAiAssistantPanel() {
                         </>
                       ) : <Text style={workspace.styles.aiRagDevEmpty}>아직 처리 작업 기록이 없습니다.</Text>}
                       <Text style={workspace.styles.aiRagDevSectionTitle}>Docling 페이지 묶음 처리</Text>
-                      {ragDebugStatus.docling_batches.length ? ragDebugStatus.docling_batches.map((item, index) => (
+                      {doclingBatches.length ? doclingBatches.map((item, index) => (
                         <Text key={`${item.status}:${index}`} style={workspace.styles.aiRagDevMeta}>
                           {item.status ?? '-'} · {item.count} batches · pages {item.page_start ?? '-'}-{item.page_end ?? '-'}
                         </Text>
                       )) : <Text style={workspace.styles.aiRagDevEmpty}>아직 Docling 처리 기록이 없습니다.</Text>}
                       <Text style={workspace.styles.aiRagDevMeta}>total chunks {ragDebugStatus.document_chunks_total_count} · current note {ragDebugStatus.current_note_chunk_count} · current scope {ragDebugStatus.current_scope_chunk_count}</Text>
                       <Text style={workspace.styles.aiRagDevSectionTitle}>Embedding 모델</Text>
-                      {ragDebugStatus.embedding_models.length ? ragDebugStatus.embedding_models.map((item) => <Text key={item.model} style={workspace.styles.aiRagDevMeta}>{item.model} · {item.count}</Text>) : <Text style={workspace.styles.aiRagDevEmpty}>저장된 embedding 모델 정보가 없습니다.</Text>}
+                      {embeddingModels.length ? embeddingModels.map((item) => <Text key={item.model} style={workspace.styles.aiRagDevMeta}>{item.model} · {item.count}</Text>) : <Text style={workspace.styles.aiRagDevEmpty}>저장된 embedding 모델 정보가 없습니다.</Text>}
                       <Text style={workspace.styles.aiRagDevSectionTitle}>최근 index 상태</Text>
-                      {ragDebugStatus.recent_index_status.length ? ragDebugStatus.recent_index_status.map((item, index) => (
+                      {recentIndexStatus.length ? recentIndexStatus.map((item, index) => (
                         <Text key={`${item.note_id}:${item.source_type}:${index}`} style={workspace.styles.aiRagDevMeta}>note {item.note_id ?? '-'} · {item.source_type ?? '-'} · chunks {item.chunk_count} · {item.last_indexed_at ?? '-'}</Text>
                       )) : <Text style={workspace.styles.aiRagDevEmpty}>최근 index 기록이 없습니다.</Text>}
                       <Text style={workspace.styles.aiRagDevSectionTitle}>이미지 AI 요약</Text>
-                      {ragDebugStatus.image_summary_status.length ? ragDebugStatus.image_summary_status.map((item, index) => (
+                      {imageSummaryStatus.length ? imageSummaryStatus.map((item, index) => (
                         <Text key={`${item.status}:${item.importance}:${item.indexed}:${index}`} style={workspace.styles.aiRagDevMeta}>
                           {item.status ?? '-'} · importance {item.importance ?? '-'} · indexed {item.indexed ? 'yes' : 'no'} · {item.count}
                         </Text>
                       )) : <Text style={workspace.styles.aiRagDevEmpty}>이미지 AI 요약 기록이 없습니다.</Text>}
-                      {ragDebugStatus.recent_image_summaries.length ? ragDebugStatus.recent_image_summaries.map((item) => (
+                      {recentImageSummaries.length ? recentImageSummaries.map((item) => (
                         <Text key={`image-summary:${item.id}`} style={workspace.styles.aiRagDevMeta} numberOfLines={2}>
                           p.{item.page_number ?? '-'} · {item.candidate_type ?? '-'} · {item.status ?? '-'} · conf {item.confidence ?? '-'} · imp {item.importance ?? '-'} · indexed {item.indexed ? 'yes' : 'no'} · {item.summary_snippet || item.skipped_reason || '-'}
                         </Text>
@@ -2053,6 +2060,8 @@ export function NotesAiAssistantPanel() {
                       {ragDebugStatus.last_error ? <Text style={workspace.styles.aiRagDevError}>last error: {ragDebugStatus.last_error}</Text> : null}
                       {ragDebugStatus.image_summary_error ? <Text style={workspace.styles.aiRagDevError}>image summary error: {ragDebugStatus.image_summary_error}</Text> : null}
                     </View>
+                      );
+                    })()
                   ) : null}
                 </View>
               ) : null}
