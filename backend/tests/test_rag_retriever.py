@@ -22,6 +22,7 @@ from backend.app.schemas.chats import RagScope, RagScopeSource
 from backend.app.services.ai_context_builder import build_ai_context, format_answer_sources, select_rag_context_pages
 from backend.app.services.ai_context_router import AiContextRoute, route_ai_context
 from backend.app.services.docling_crop_debug import _should_use_full_page_context
+from backend.app.services.docling_batch_pipeline import note_rag_text_ready
 from backend.app.services.pdf_image_recheck import _image_recheck_candidates, _selected_recheck_contexts, _server_image_mode
 from backend.app.services.pdf_image_recheck import maybe_recheck_pdf_images_for_chat
 from backend.app.services.document_chunk_index import (
@@ -65,6 +66,29 @@ from backend.app.services.openai_service import build_response_input, judge_pdf_
 
 
 class RAGRetrieverTest(unittest.TestCase):
+    def test_note_rag_text_ready_does_not_block_non_pdf_note_without_job(self):
+        with patch("backend.app.services.docling_batch_pipeline.fetch_all") as fetch_all_mock:
+            fetch_all_mock.side_effect = [
+                [{"id": 10, "file_url": None}],
+            ]
+
+            ready, pending = note_rag_text_ready(object(), note_ids=[10], user_id=7)
+
+        self.assertTrue(ready)
+        self.assertIsNone(pending)
+
+    def test_note_rag_text_ready_blocks_pdf_note_without_job(self):
+        with patch("backend.app.services.docling_batch_pipeline.fetch_all") as fetch_all_mock:
+            fetch_all_mock.side_effect = [
+                [{"id": 10, "file_url": "/uploads/notes/sample.pdf"}],
+                [],
+            ]
+
+            ready, pending = note_rag_text_ready(object(), note_ids=[10], user_id=7)
+
+        self.assertFalse(ready)
+        self.assertEqual(pending, {"note_id": 10, "reason": "missing_job"})
+
     def test_full_page_context_ignores_tiny_far_apart_visual_candidate(self):
         page = SimpleNamespace(
             page_width=960.0,

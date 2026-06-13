@@ -939,7 +939,9 @@ def get_note_rag_status(
     connection: Connection = Depends(get_db_connection),
     current_user: dict = Depends(get_current_user),
 ):
-    get_note_for_user(note_id, current_user["id"], connection)
+    note = get_note_for_user(note_id, current_user["id"], connection)
+    file_path = urlparse(str(note.get("file_url") or "")).path.lower()
+    analysis_required = file_path.endswith(".pdf")
     rag_job = fetch_one(
         connection,
         """
@@ -1020,10 +1022,11 @@ def get_note_rag_status(
                 "image_ready_at": rag_job.get("image_ready_at"),
                 "updated_at": rag_job.get("updated_at"),
             }
-            if rag_job
+            if rag_job and analysis_required
             else None
         ),
         "current_note_chunk_count": int(chunk_row["count"]) if chunk_row else 0,
+        "analysis_required": analysis_required,
         "image_summary_error": image_error_row.get("skipped_reason") if image_error_row else None,
     }
 

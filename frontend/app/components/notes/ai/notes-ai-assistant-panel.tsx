@@ -169,6 +169,9 @@ function formatPercentProgress(done: number, total: number) {
 function buildNoteRagStatusDisplay(status: BackendNoteRagStatusResponse | null): NoteRagStatusDisplay | null {
   if (!status) return null;
   const job = status.rag_job;
+  if (status.analysis_required === false) {
+    return { progressLabel: null, currentNoteScopeLabel: '현재 노트 참고중' };
+  }
   if (!job) {
     return (status.current_note_chunk_count ?? 0) > 0
       ? { progressLabel: null, currentNoteScopeLabel: '현재 노트 참고중' }

@@ -519,6 +519,7 @@ export type BackendNoteRagStatusResponse = {
     updated_at?: string | null;
   } | null;
   current_note_chunk_count: number;
+  analysis_required?: boolean;
   image_summary_error?: string | null;
 };
 

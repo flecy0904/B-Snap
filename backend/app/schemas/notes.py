@@ -114,6 +114,7 @@ class NoteRagJobStatusRead(BaseModel):
 class NoteRagStatusRead(BaseModel):
     rag_job: NoteRagJobStatusRead | None = None
     current_note_chunk_count: int = 0
+    analysis_required: bool = True
     image_summary_error: str | None = None
 
 

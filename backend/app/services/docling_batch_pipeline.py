@@ -6,6 +6,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 import fitz  # type: ignore[import-untyped]
 from psycopg import Connection
@@ -145,6 +146,22 @@ def file_sha256(path: Path) -> str:
 def note_rag_text_ready(connection: Connection, *, note_ids: list[int], user_id: int) -> tuple[bool, dict[str, Any] | None]:
     if not note_ids:
         return True, None
+    note_rows = fetch_all(
+        connection,
+        """
+        SELECT id, file_url
+        FROM notes
+        WHERE user_id = %s AND id = ANY(%s::int[])
+        """,
+        (user_id, note_ids),
+    )
+    pdf_note_ids = {
+        int(row["id"])
+        for row in note_rows
+        if urlparse(str(row.get("file_url") or "")).path.lower().endswith(".pdf")
+    }
+    if not pdf_note_ids:
+        return True, None
     rows = fetch_all(
         connection,
         """
@@ -152,10 +169,12 @@ def note_rag_text_ready(connection: Connection, *, note_ids: list[int], user_id:
         FROM note_rag_jobs
         WHERE user_id = %s AND note_id = ANY(%s::int[])
         """,
-        (user_id, note_ids),
+        (user_id, list(pdf_note_ids)),
     )
     by_note_id = {int(row["note_id"]): row for row in rows}
     for note_id in note_ids:
+        if int(note_id) not in pdf_note_ids:
+            continue
         row = by_note_id.get(int(note_id))
         if row is None:
             return False, {"note_id": note_id, "reason": "missing_job"}
