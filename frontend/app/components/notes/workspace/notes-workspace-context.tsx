@@ -136,7 +136,6 @@ export type DesktopNotesWorkspaceContextValue = {
   onToggleAiRagScopeCollapsed: () => void;
   onAddAiRagScopeSource: (source: BackendRagScopeSource) => void;
   onRemoveAiRagScopeSource: (sourceKey: string) => void;
-  onResetAiRagScope: () => void;
   onChangeAiChatSearchQuery: (value: string) => void;
   onSelectAiChatSession: (sessionId: number) => void;
   onRenameAiChatSession: (sessionId: number, title: string) => Promise<boolean>;

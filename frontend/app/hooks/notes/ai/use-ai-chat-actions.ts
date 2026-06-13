@@ -35,6 +35,7 @@ function getAiContextModeFeedback(
   scopeCount = 0,
   sourceCount = 0,
   chunkCount = 0,
+  contextPageCount = 0,
   fallback = false,
 ) {
   if (!mode) return null;
@@ -43,6 +44,7 @@ function getAiContextModeFeedback(
   return [
     `AI mode: ${label}`,
     `scope ${scopeCount}`,
+    `pages ${contextPageCount}`,
     `sources ${sourceCount}`,
     `chunks ${chunkCount}`,
     fallback ? 'fallback' : null,
@@ -644,6 +646,7 @@ export function useAiChatActions(params: {
         response.debug?.scope_count ?? response.ragScope?.sources.length ?? params.activeRagScope?.sources.length ?? 0,
         response.debug?.retrieved_source_count ?? response.sources?.length ?? 0,
         response.debug?.retrieved_chunk_count ?? response.sources?.length ?? 0,
+        response.debug?.context_page_count ?? 0,
         Boolean(response.debug?.fallback),
       );
       if (aiContextModeFeedback) {

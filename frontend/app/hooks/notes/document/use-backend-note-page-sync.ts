@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import {
   ensureFolderForSubject,
-  extractBackendPdfText,
   isBackendApiEnabled,
   listBackendNotePages,
   updateBackendNotePage,
@@ -441,29 +440,6 @@ export function useBackendNotePageSync({
           })()
           : item
       )));
-
-      void extractBackendPdfText({ noteId: result.note.id })
-        .then((textResult) => {
-          const textPageIdsByNumber = textResult.pages.reduce<Record<number, number>>((next, page) => {
-            next[page.page_number] = page.id;
-            return next;
-          }, {});
-          setBackendPageIdsByDocument((current) => ({
-            ...current,
-            [document.id]: {
-              ...(current[document.id] ?? {}),
-              ...textPageIdsByNumber,
-            },
-          }));
-          setUserStudyDocuments((current) => current.map((item) => (
-            item.id === document.id
-              ? { ...item, pageCount: Math.max(item.pageCount, textResult.pages_extracted) }
-              : item
-          )));
-        })
-        .catch(() => {
-          setWorkspaceFeedback('PDF에서 텍스트 추출에 실패했어요.');
-        });
 
       setWorkspaceFeedback(`${Math.max(document.pageCount, result.note.page_count ?? result.upload.page_count)}페이지 PDF를 서버에 저장했어요.`);
     } catch (error) {

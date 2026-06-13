@@ -203,6 +203,8 @@ export type BackendAiMessageResponse = {
     scope_count?: number;
     retrieved_source_count?: number;
     retrieved_chunk_count?: number;
+    context_page_count?: number;
+    context_page_number?: number | null;
     fallback?: boolean;
     fallback_reason?: string | null;
     router_reason?: string | null;
@@ -284,75 +286,6 @@ export type BackendRagDebugParserCompareResponse = {
     content_length: number;
     content_snippet: string;
     content: string;
-  }>;
-};
-
-export type BackendRagDebugDoclingCropsResponse = {
-  note: {
-    id: number;
-    folder_id: number;
-    title: string;
-  };
-  summary: {
-    parser: string;
-    page_count: number;
-    scanned_page_count: number;
-    candidate_count: number;
-    filtered_count: number;
-    skipped_candidate_count: number;
-    candidate_limit_reached: boolean;
-    elapsed_ms: number;
-    page_start: number | null;
-    page_end: number | null;
-    image_summary_error?: string | null;
-  };
-  candidates: Array<{
-    id: string;
-    page_number: number;
-    candidate_type: 'picture' | 'table' | string;
-    self_ref?: string | null;
-    docling_bbox: number[];
-    docling_coord_origin: string;
-    pdf_bbox: number[];
-    image_bbox: number[];
-    context_bbox: number[];
-    crop_bbox: number[];
-    crop_mode: string;
-    page_width: number;
-    page_height: number;
-    area_ratio: number;
-    image_area_ratio: number;
-    crop_width: number;
-    crop_height: number;
-    image_crop_width: number;
-    image_crop_height: number;
-    context_crop_width: number;
-    context_crop_height: number;
-    image_data_uri: string;
-    image_crop_data_uri: string;
-    context_crop_data_uri: string;
-    crop_hash: string;
-    image_crop_hash: string;
-    context_crop_hash: string;
-    image_ai_summary?: {
-      id?: number | null;
-      status?: string | null;
-      skipped_reason?: string | null;
-      candidate_type?: string | null;
-      confidence?: string | null;
-      importance?: string | null;
-      confidence_reason?: string | null;
-      importance_reason?: string | null;
-      indexed: boolean;
-      summary: string;
-      summary_snippet?: string | null;
-      ocr_text: string;
-      metadata?: Record<string, unknown>;
-      analyzed_at?: string | null;
-      indexed_at?: string | null;
-      updated_at?: string | null;
-    } | null;
-    text_preview?: string | null;
   }>;
 };
 
@@ -488,6 +421,8 @@ export type BackendRagDebugEvaluateResponse = {
     fallback_reason?: string | null;
     retrieved_source_count?: number;
     retrieved_chunk_count?: number;
+    context_page_count?: number;
+    context_page_number?: number | null;
     scope_count?: number;
     image_recheck?: BackendImageRecheckDebug | null;
   };
@@ -517,6 +452,7 @@ export type BackendRagDebugStatusResponse = {
     completed_batches: number;
     text_chunk_count: number;
     image_candidate_count: number;
+    image_processed_count?: number;
     image_completed_count: number;
     image_indexed_count: number;
     last_error?: string | null;
@@ -557,10 +493,28 @@ export type BackendRagDebugStatusResponse = {
   ragScope?: BackendRagScope | null;
 };
 
-export type BackendPdfTextExtractionResponse = {
-  note_id: number;
-  pages_extracted: number;
-  pages: BackendNotePage[];
+export type BackendNoteRagStatusResponse = {
+  rag_job?: {
+    text_status?: string | null;
+    image_status?: string | null;
+    overall_status?: string | null;
+    page_count: number;
+    processed_page_count: number;
+    total_batches: number;
+    completed_batches: number;
+    text_chunk_count: number;
+    image_candidate_count: number;
+    image_processed_count?: number;
+    image_completed_count: number;
+    image_indexed_count: number;
+    last_error?: string | null;
+    started_at?: string | null;
+    text_ready_at?: string | null;
+    image_ready_at?: string | null;
+    updated_at?: string | null;
+  } | null;
+  current_note_chunk_count: number;
+  image_summary_error?: string | null;
 };
 
 export type BackendUpload = {
@@ -1014,6 +968,12 @@ export function getBackendClassInsight(noteId: number, limit = 12) {
   return request<BackendClassInsight>(`/notes/${noteId}/class-insights?limit=${limit}`);
 }
 
+export function getBackendNoteRagStatus(noteId: number) {
+  return request<BackendNoteRagStatusResponse>(`/notes/${noteId}/rag-status`, {
+    timeoutMs: 8000,
+  });
+}
+
 export async function createBackendNote(payload: {
   folderId: number;
   title: string;
@@ -1122,17 +1082,6 @@ export async function moveBackendNotePage(payload: {
   return request<BackendNotePage[]>(`/notes/${payload.noteId}/pages/${payload.pageNumber}/move?delta=${payload.delta}`, {
     method: 'POST',
   }).then(normalizeBackendNotePages);
-}
-
-export async function extractBackendPdfText(payload: {
-  noteId: number;
-  pdfData?: string;
-}) {
-  return request<BackendPdfTextExtractionResponse>(`/notes/${payload.noteId}/extract-pdf-text`, {
-    method: 'POST',
-    timeoutMs: AI_MESSAGE_TIMEOUT_MS,
-    body: payload.pdfData ? { pdf_data: payload.pdfData } : {},
-  });
 }
 
 export function listBackendAiCanvasNotes(noteId: number) {
@@ -1300,17 +1249,6 @@ export async function sendBackendAiMessage(payload: {
 
 export function getBackendRagDebugParserCompare(noteId: number, parserName: BackendRagDebugParserName) {
   return request<BackendRagDebugParserCompareResponse>(`/notes/${noteId}/rag-debug/parser/${parserName}`, {
-    timeoutMs: 10 * 60 * 1000,
-  });
-}
-
-export function getBackendRagDebugDoclingCrops(noteId: number, options?: { pageNumber?: number | null; pageLimit?: number; candidateLimit?: number }) {
-  const params = new URLSearchParams();
-  if (options?.pageNumber) params.set('page_number', String(options.pageNumber));
-  if (options?.pageLimit) params.set('page_limit', String(options.pageLimit));
-  if (options?.candidateLimit) params.set('candidate_limit', String(options.candidateLimit));
-  const query = params.toString();
-  return request<BackendRagDebugDoclingCropsResponse>(`/notes/${noteId}/rag-debug/docling-crops${query ? `?${query}` : ''}`, {
     timeoutMs: 10 * 60 * 1000,
   });
 }
