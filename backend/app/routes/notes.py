@@ -14,10 +14,9 @@ from backend.app.schemas.notes import (
     NotePageCreate,
     NotePageRead,
     NotePageUpdate,
+    NoteRagStatusRead,
     NoteRead,
     NoteUpdate,
-    PdfTextExtractionCreate,
-    PdfTextExtractionRead,
 )
 from backend.app.services.document_chunk_index import (
     delete_note_page_chunks_background,
@@ -25,7 +24,6 @@ from backend.app.services.document_chunk_index import (
     reindex_note_page_background,
 )
 from backend.app.services.note_page_content import merge_page_state_content
-from backend.app.services.pdf_parser import PdfParsingError, parse_pdf_data_uri, parse_pdf_path
 
 
 router = APIRouter(tags=["notes"])
@@ -83,6 +81,31 @@ def _list_page_refs_for_note(connection: Connection, note_id: int) -> list[dict]
         """,
         (note_id,),
     )
+
+
+def _count_cached_docling_visual_candidates(connection: Connection, *, note_id: int, user_id: int) -> int:
+    rows = fetch_all(
+        connection,
+        """
+        SELECT result
+        FROM docling_batch_results
+        WHERE user_id = %s
+          AND note_id = %s
+          AND status = 'ready'
+        """,
+        (user_id, note_id),
+    )
+    count = 0
+    for row in rows:
+        result = row.get("result") if isinstance(row.get("result"), dict) else {}
+        pages = result.get("pages") if isinstance(result.get("pages"), list) else []
+        for page in pages:
+            if not isinstance(page, dict):
+                continue
+            visual_candidates = page.get("visual_candidates")
+            if isinstance(visual_candidates, list):
+                count += len(visual_candidates)
+    return count
 
 
 def _upload_relative_path(url: str | None) -> str | None:
@@ -180,6 +203,101 @@ def get_note(
     current_user: dict = Depends(get_current_user),
 ):
     return get_note_for_user(note_id, current_user["id"], connection)
+
+
+@router.get("/notes/{note_id}/rag-status", response_model=NoteRagStatusRead)
+def get_note_rag_status(
+    note_id: int,
+    connection: Connection = Depends(get_db_connection),
+    current_user: dict = Depends(get_current_user),
+):
+    get_note_for_user(note_id, current_user["id"], connection)
+    rag_job = fetch_one(
+        connection,
+        """
+        SELECT text_status, image_status, overall_status, page_count, processed_page_count,
+               total_batches, completed_batches, text_chunk_count, image_candidate_count,
+               image_completed_count, image_indexed_count, last_error, started_at,
+               text_ready_at, image_ready_at, updated_at
+        FROM note_rag_jobs
+        WHERE user_id = %s AND note_id = %s
+        """,
+        (current_user["id"], note_id),
+    )
+    chunk_row = fetch_one(
+        connection,
+        """
+        SELECT COUNT(*) AS count
+        FROM document_chunks
+        WHERE user_id = %s
+          AND note_id = %s
+          AND source_type <> 'canvas_note'
+        """,
+        (current_user["id"], note_id),
+    )
+    image_count_row = fetch_one(
+        connection,
+        """
+        SELECT COUNT(*) AS candidate_count,
+               COUNT(*) FILTER (WHERE status IN ('completed', 'failed', 'skipped')) AS processed_count,
+               COUNT(*) FILTER (WHERE status = 'completed') AS completed_count,
+               COUNT(*) FILTER (WHERE indexed = true) AS indexed_count
+        FROM image_ai_summaries
+        WHERE user_id = %s
+          AND note_id = %s
+        """,
+        (current_user["id"], note_id),
+    ) or {}
+    cached_visual_candidate_count = _count_cached_docling_visual_candidates(
+        connection,
+        note_id=note_id,
+        user_id=current_user["id"],
+    )
+    image_candidate_count = max(
+        int(image_count_row.get("candidate_count") or 0),
+        cached_visual_candidate_count,
+    )
+    image_error_row = fetch_one(
+        connection,
+        """
+        SELECT skipped_reason
+        FROM image_ai_summaries
+        WHERE user_id = %s
+          AND note_id = %s
+          AND status = 'failed'
+          AND skipped_reason IS NOT NULL
+        ORDER BY updated_at DESC NULLS LAST, id DESC
+        LIMIT 1
+        """,
+        (current_user["id"], note_id),
+    )
+    return {
+        "rag_job": (
+            {
+                "text_status": rag_job.get("text_status"),
+                "image_status": rag_job.get("image_status"),
+                "overall_status": rag_job.get("overall_status"),
+                "page_count": int(rag_job.get("page_count") or 0),
+                "processed_page_count": int(rag_job.get("processed_page_count") or 0),
+                "total_batches": int(rag_job.get("total_batches") or 0),
+                "completed_batches": int(rag_job.get("completed_batches") or 0),
+                "text_chunk_count": int(rag_job.get("text_chunk_count") or 0),
+                "image_candidate_count": image_candidate_count,
+                "image_processed_count": int(image_count_row.get("processed_count") or 0),
+                "image_completed_count": int(image_count_row.get("completed_count") or 0),
+                "image_indexed_count": int(image_count_row.get("indexed_count") or 0),
+                "last_error": rag_job.get("last_error"),
+                "started_at": rag_job.get("started_at"),
+                "text_ready_at": rag_job.get("text_ready_at"),
+                "image_ready_at": rag_job.get("image_ready_at"),
+                "updated_at": rag_job.get("updated_at"),
+            }
+            if rag_job
+            else None
+        ),
+        "current_note_chunk_count": int(chunk_row["count"]) if chunk_row else 0,
+        "image_summary_error": image_error_row.get("skipped_reason") if image_error_row else None,
+    }
 
 
 @router.patch("/notes/{note_id}", response_model=NoteRead)
@@ -389,99 +507,6 @@ def move_note_page_by_number(
 
     _schedule_note_reindex(background_tasks, note_id, current_user["id"])
     return _list_pages_for_note(connection, note_id)
-
-
-@router.post("/notes/{note_id}/extract-pdf-text", response_model=PdfTextExtractionRead)
-def extract_note_pdf_text(
-    note_id: int,
-    payload: PdfTextExtractionCreate,
-    background_tasks: BackgroundTasks,
-    connection: Connection = Depends(get_db_connection),
-    current_user: dict = Depends(get_current_user),
-    settings: Settings = Depends(get_settings),
-):
-    note = get_note_for_user(note_id, current_user["id"], connection)
-    try:
-        if payload.pdf_data:
-            parse_result = parse_pdf_data_uri(payload.pdf_data)
-        else:
-            file_url = note.get("file_url")
-            if not file_url or not file_url.startswith("/uploads/"):
-                raise HTTPException(status_code=400, detail="stored pdf file is required")
-
-            upload_root = settings.upload_path.resolve()
-            pdf_path = (upload_root / file_url.removeprefix("/uploads/")).resolve()
-            if upload_root not in pdf_path.parents or pdf_path.suffix.lower() != ".pdf" or not pdf_path.exists():
-                raise HTTPException(status_code=400, detail="stored pdf file is unavailable")
-
-            parse_result = parse_pdf_path(pdf_path)
-    except PdfParsingError as exc:
-        raise HTTPException(status_code=400, detail=str(exc) or "failed to read pdf") from exc
-    existing_pages = fetch_all(
-        connection,
-        """
-        SELECT id, note_id, page_number, content, image_url, created_at, updated_at
-        FROM note_pages
-        WHERE note_id = %s
-        ORDER BY page_number ASC, id ASC
-        """,
-        (note_id,),
-    )
-    pages_by_number = {page["page_number"]: page for page in existing_pages}
-
-    try:
-        with connection.cursor() as cursor:
-            for parsed_page in parse_result.pages:
-                current = pages_by_number.get(parsed_page.page_number)
-                if current:
-                    cursor.execute(
-                        """
-                        UPDATE note_pages
-                        SET content = %s, updated_at = now()
-                        WHERE id = %s
-                        """,
-                        (
-                            merge_page_state_content(
-                                current["content"],
-                                None,
-                                pdf_text=parsed_page.text,
-                                rag_extraction=parsed_page.extraction_metadata(),
-                            ),
-                            current["id"],
-                        ),
-                    )
-                else:
-                    cursor.execute(
-                        """
-                        INSERT INTO note_pages (note_id, page_number, content, image_url)
-                        VALUES (%s, %s, %s, NULL)
-                        """,
-                        (
-                            note_id,
-                            parsed_page.page_number,
-                            merge_page_state_content(
-                                None,
-                                None,
-                                pdf_text=parsed_page.text,
-                                rag_extraction=parsed_page.extraction_metadata(),
-                            ),
-                        ),
-                    )
-            cursor.execute(
-                "UPDATE notes SET page_count = GREATEST(COALESCE(page_count, 0), %s), updated_at = now() WHERE id = %s",
-                (parse_result.page_count, note_id),
-            )
-        connection.commit()
-    except Exception:
-        connection.rollback()
-        raise
-    pages = _list_page_refs_for_note(connection, note_id)
-    _schedule_note_reindex(background_tasks, note_id, current_user["id"])
-    return {
-        "note_id": note_id,
-        "pages_extracted": parse_result.page_count,
-        "pages": pages,
-    }
 
 
 @router.patch("/note-pages/{page_id}", response_model=NotePageRead)

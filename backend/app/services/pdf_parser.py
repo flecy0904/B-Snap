@@ -1,4 +1,3 @@
-import base64
 import logging
 import re
 from dataclasses import dataclass, field
@@ -152,21 +151,6 @@ class PageParseResult:
 class PdfParseResult:
     page_count: int
     pages: list[PageParseResult]
-
-
-def decode_pdf_data_uri(pdf_data: str) -> bytes:
-    if not pdf_data:
-        raise PdfParsingError("pdf_data is required")
-
-    base64_text = pdf_data.split(",", 1)[1] if "," in pdf_data else pdf_data
-    try:
-        return base64.b64decode(base64_text, validate=True)
-    except ValueError as exc:
-        raise PdfParsingError("invalid pdf_data") from exc
-
-
-def parse_pdf_data_uri(pdf_data: str) -> PdfParseResult:
-    return parse_pdf_bytes(decode_pdf_data_uri(pdf_data))
 
 
 def parse_pdf_path(path: Path) -> PdfParseResult:

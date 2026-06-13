@@ -1201,6 +1201,8 @@ def retrieve_chunk_contexts(
     folder_id: int | None = None,
     canvas_note_ids: list[int] | None = None,
     exclude_canvas_for_notes: bool = False,
+    source_types: list[str] | None = None,
+    min_score: float | None = None,
     top_k: int = 5,
 ) -> list[RetrievedContext]:
     embedding_model = get_settings().openai_embedding_model
@@ -1223,6 +1225,9 @@ def retrieve_chunk_contexts(
     if folder_id is not None:
         filters.append("folder_id = %s")
         params.append(folder_id)
+    if source_types:
+        filters.append("source_type = ANY(%s::text[])")
+        params.append(source_types)
     if source_filters:
         filters.append("(" + " OR ".join(source_filters) + ")")
         params.extend(source_params)
@@ -1248,7 +1253,7 @@ def retrieve_chunk_contexts(
         """,
         tuple([vector, *filter_params, vector, top_k]),
     )
-    return [
+    contexts = [
         RetrievedContext(
             source_type=str(row["source_type"]),
             source_id=str(row["source_id"]),
@@ -1263,6 +1268,9 @@ def retrieve_chunk_contexts(
         )
         for row in rows
     ]
+    if min_score is None:
+        return contexts
+    return [context for context in contexts if context.score >= min_score]
 
 __all__ = [
     "collect_canvas_index_sources",
