@@ -528,6 +528,7 @@ function WebPdfTextAnnotationLayer(props: {
   const [activeAnnotationId, setActiveAnnotationId] = useState<string | null>(null);
   const [draftFrame, setDraftFrame] = useState<Record<string, { x: number; y: number; width: number; height: number }>>({});
   const textareaRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
+  const annotationRefs = useRef<Record<string, HTMLDivElement | null>>({});
   const pointerDragRef = useRef<{
     id: string;
     mode: 'move' | 'resize';
@@ -549,6 +550,22 @@ function WebPdfTextAnnotationLayer(props: {
     if (props.annotations.some((annotation) => annotation.id === activeAnnotationId)) return;
     setActiveAnnotationId(null);
   }, [activeAnnotationId, props.annotations]);
+
+  useEffect(() => {
+    if (!activeAnnotationId) return undefined;
+
+    const handleDocumentPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      const activeAnnotation = annotationRefs.current[activeAnnotationId];
+      if (activeAnnotation?.contains(target)) return;
+      textareaRefs.current[activeAnnotationId]?.blur();
+      setActiveAnnotationId(null);
+    };
+
+    document.addEventListener('pointerdown', handleDocumentPointerDown, true);
+    return () => document.removeEventListener('pointerdown', handleDocumentPointerDown, true);
+  }, [activeAnnotationId]);
 
   useEffect(() => {
     const emptyAnnotation = props.annotations.find((annotation) => !annotation.text.trim());
@@ -730,6 +747,9 @@ function WebPdfTextAnnotationLayer(props: {
         return (
           <div
             key={annotation.id}
+            ref={(node) => {
+              annotationRefs.current[annotation.id] = node;
+            }}
             style={{
               position: 'absolute',
               left: percent(frame.x, props.pageWidth),
