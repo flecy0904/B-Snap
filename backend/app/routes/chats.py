@@ -23,6 +23,7 @@ from backend.app.services.ai_context_builder import (
     select_rag_context_pages,
 )
 from backend.app.services.ai_context_router import AiContextRoute, route_ai_context
+from backend.app.services.ai_page_references import resolve_context_page_number
 from backend.app.services.openai_service import (
     generate_ai_canvas_intent,
     generate_ai_canvas_operations_from_chat,
@@ -32,7 +33,12 @@ from backend.app.services.openai_service import (
 )
 from backend.app.services.docling_batch_pipeline import note_rag_text_ready
 from backend.app.services.pdf_image_recheck import ImageRecheckResult, maybe_recheck_pdf_images_for_chat
-from backend.app.services.rag_service import retrieve_rag_contexts_with_debug
+from backend.app.services.rag_service import (
+    load_page_local_rag_contexts,
+    merge_retrieved_contexts,
+    retrieve_rag_contexts_with_debug,
+    update_rag_debug_for_contexts,
+)
 
 
 router = APIRouter(tags=["chats"])
@@ -599,13 +605,18 @@ def create_ai_chat_message(
         canvas_origin_request=canvas_origin_request,
         canvas_block_context=payload.canvas_block_context,
     )
+    effective_page_number, page_reference_debug = resolve_context_page_number(
+        question=payload.content,
+        payload_page_number=payload.page_number,
+        available_pages=pages,
+    )
     has_selection_context = bool(payload.selection_image or payload.selection_image_url or payload.selection_rect)
     context_route = route_ai_context(
         question=payload.content,
         model=model,
         has_selection=has_selection_context,
         has_canvas_context=canvas_origin_request or bool(payload.canvas_block_context),
-        current_page_number=payload.page_number,
+        current_page_number=effective_page_number,
     )
     rag_scope = normalize_rag_scope(
         connection,
@@ -653,7 +664,25 @@ def create_ai_chat_message(
                 documents=None,
                 top_k=payload.top_k,
             )
-    preliminary_context_pages = [] if context_route.mode == "general" else select_rag_context_pages(pages, payload.page_number)
+            page_local_contexts = (
+                load_page_local_rag_contexts(
+                    connection,
+                    user_id=current_user["id"],
+                    note_ids=note_ids,
+                    page_number=effective_page_number,
+                )
+                if effective_page_number is not None
+                and (
+                    context_route.reason in {"explicit_page_reference", "current_context_keyword"}
+                    or page_reference_debug.get("explicit_page_number") is not None
+                )
+                else []
+            )
+            if page_local_contexts:
+                rag_sources = merge_retrieved_contexts(page_local_contexts, rag_sources)
+                rag_debug = rag_debug or {}
+                update_rag_debug_for_contexts(rag_debug, rag_sources, page_local_contexts=page_local_contexts)
+    preliminary_context_pages = [] if context_route.mode == "general" else select_rag_context_pages(pages, effective_page_number)
     rag_failure_answer = get_rag_failure_answer(
         rag_debug,
         has_local_context=bool(
@@ -688,7 +717,7 @@ def create_ai_chat_message(
             user_id=current_user["id"],
             model=model,
             user_question=payload.content,
-            current_page_number=payload.page_number,
+            current_page_number=effective_page_number,
             rag_sources=rag_sources,
         )
 
@@ -699,13 +728,14 @@ def create_ai_chat_message(
     built_context = build_ai_context(
         mode=context_route.mode,
         pages=pages,
-        page_number=payload.page_number,
+        page_number=effective_page_number,
         base_context_hints=[context_mode_instruction] if context_route.mode == "general" else [context_mode_instruction, payload.context_hint],
         rag_sources=rag_sources,
         rag_debug=rag_debug,
         priority_context_hints=[image_recheck.context_hint],
         extra_answer_sources_text=image_recheck.answer_sources_text,
     )
+    built_context.debug["page_reference"] = page_reference_debug
 
     if rag_processing_answer:
         answer = rag_processing_answer
@@ -732,7 +762,7 @@ def create_ai_chat_message(
                 canvas_title=canvas_note["title"],
                 canvas_markdown=current_canvas_markdown,
                 canvas_document_json=current_canvas_document_json,
-                current_page_number=payload.page_number,
+                current_page_number=effective_page_number,
                 selection_image=payload.selection_image,
                 selection_image_url=payload.selection_image_url,
                 context_hint=built_context.context_hint,
@@ -792,7 +822,7 @@ def create_ai_chat_message(
             user_content=payload.content,
             selection_image=payload.selection_image,
             selection_rect=payload.selection_rect.model_dump() if payload.selection_rect else None,
-            page_number=payload.page_number,
+            page_number=effective_page_number,
             selection_image_url=payload.selection_image_url,
             context_hint=built_context.context_hint,
             canvas_block_context=payload.canvas_block_context,

@@ -66,8 +66,11 @@ def maybe_recheck_pdf_images_for_chat(
     candidates = _image_recheck_candidates(
         rag_sources,
         top_k=max(1, int(active_settings.rag_image_recheck_judge_top_k)),
+        min_score=float(active_settings.rag_image_recheck_min_score),
+        current_page_number=current_page_number,
     )
     debug["candidate_count"] = len(candidates)
+    debug["min_score"] = float(active_settings.rag_image_recheck_min_score)
     if not candidates:
         return ImageRecheckResult(debug=debug)
 
@@ -203,10 +206,18 @@ def maybe_recheck_pdf_images_for_chat(
     )
 
 
-def _image_recheck_candidates(contexts: list[RetrievedContext], *, top_k: int) -> list[RetrievedContext]:
+def _image_recheck_candidates(
+    contexts: list[RetrievedContext],
+    *,
+    top_k: int,
+    min_score: float = 0.0,
+    current_page_number: int | None = None,
+) -> list[RetrievedContext]:
     candidates: list[RetrievedContext] = []
     for context in contexts:
         if context.source_type != "image_ai_summary":
+            continue
+        if context.score < min_score:
             continue
         metadata = context.metadata if isinstance(context.metadata, dict) else {}
         if _image_summary_id(context) is None:
@@ -214,9 +225,9 @@ def _image_recheck_candidates(contexts: list[RetrievedContext], *, top_k: int) -
         if str(metadata.get("importance") or "").strip().lower() == "low":
             continue
         candidates.append(context)
-        if len(candidates) >= top_k:
-            break
-    return candidates
+    if current_page_number is not None:
+        candidates.sort(key=lambda context: (context.page_number != current_page_number, -context.score))
+    return candidates[:top_k]
 
 
 def _text_contexts_for_judge(contexts: list[RetrievedContext], *, limit: int = 3) -> list[dict[str, Any]]:

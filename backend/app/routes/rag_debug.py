@@ -13,8 +13,9 @@ from backend.app.db.crud import fetch_all, fetch_one, require_row
 from backend.app.db.session import get_db_connection
 from backend.app.routes.chats import default_rag_scope, normalize_rag_scope, rag_scope_search_targets
 from backend.app.schemas.chats import RagScope, SelectionRectPayload
-from backend.app.services.ai_context_builder import build_ai_context, format_context_mode_instruction
+from backend.app.services.ai_context_builder import build_ai_context, format_context_mode_instruction, select_rag_context_pages
 from backend.app.services.ai_context_router import AiContextRoute, route_ai_context
+from backend.app.services.ai_page_references import resolve_context_page_number
 from backend.app.services.docling_batch_pipeline import (
     cached_pages_from_batches,
     file_sha256,
@@ -22,15 +23,19 @@ from backend.app.services.docling_batch_pipeline import (
 )
 from backend.app.services.docling_crop_debug import (
     DoclingCropDebugError,
-    extract_docling_crop_candidates_from_cached_pages,
     render_pdf_crop_preview_from_bboxes,
 )
 from backend.app.services.note_page_content import parse_page_state
 from backend.app.services.pdf_image_recheck import ImageRecheckResult, maybe_recheck_pdf_images_for_chat
-from backend.app.services.pdf_parser import PdfParsingError, get_pdf_page_count, parse_pdf_path
+from backend.app.services.pdf_parser import PdfParsingError, parse_pdf_path
 from backend.app.services.pypdf_plain_parser import PypdfPlainParsingError, parse_pdf_pages_with_pypdf_plain
 from backend.app.services.rag_chunker import IndexSource, build_text_chunks
-from backend.app.services.rag_service import retrieve_rag_contexts_with_debug
+from backend.app.services.rag_service import (
+    load_page_local_rag_contexts,
+    merge_retrieved_contexts,
+    retrieve_rag_contexts_with_debug,
+    update_rag_debug_for_contexts,
+)
 
 
 router = APIRouter(tags=["rag-debug"])
@@ -397,7 +402,11 @@ def _format_debug_context_preview(
         "current_page_included": bool(current_page_items),
         "nearby_pages_included": bool(nearby_page_items),
         "canvas_context_included": bool(canvas_items),
-        "vision_image_attached": bool(payload.selection_image or payload.selection_image_url),
+        "vision_image_attached": bool(
+            payload.selection_image
+            or payload.selection_image_url
+            or (image_recheck and image_recheck.items)
+        ),
         "image_recheck": image_recheck.debug if image_recheck else None,
         "fallback": bool(built_context.debug.get("fallback")),
         "fallback_reason": built_context.debug.get("fallback_reason"),
@@ -790,137 +799,6 @@ def get_note_rag_debug_parser_compare(
     return _parser_compare_response(note=note, parser="docling", pages=pages, chunks=chunks, elapsed_ms=elapsed_ms)
 
 
-@router.get("/notes/{note_id}/rag-debug/docling-crops")
-def get_note_rag_debug_docling_crops(
-    note_id: int,
-    page_number: int | None = None,
-    page_limit: int | None = None,
-    candidate_limit: int = 120,
-    connection: Connection = Depends(get_db_connection),
-    current_user: dict = Depends(get_current_user),
-    settings: Settings = Depends(get_settings),
-):
-    _ensure_rag_debug_enabled(settings)
-    note = require_row(
-        fetch_one(
-            connection,
-            "SELECT id, folder_id, title, file_url FROM notes WHERE id = %s AND user_id = %s",
-            (note_id, current_user["id"]),
-        ),
-        "note not found",
-    )
-    pdf_path = _stored_note_pdf_path(note, settings)
-    try:
-        page_count = get_pdf_page_count(pdf_path)
-    except PdfParsingError as exc:
-        raise HTTPException(status_code=400, detail=str(exc) or "failed to read pdf page count") from exc
-
-    if page_number is not None:
-        if page_number < 1 or page_number > page_count:
-            raise HTTPException(status_code=400, detail="page_number is out of range")
-        page_numbers = [page_number]
-    elif page_limit is None:
-        page_numbers = list(range(1, page_count + 1))
-    else:
-        safe_page_limit = max(1, min(int(page_limit or page_count), page_count))
-        page_numbers = list(range(1, safe_page_limit + 1))
-
-    safe_candidate_limit = max(1, min(int(candidate_limit or 120), 300))
-    try:
-        file_hash = file_sha256(pdf_path)
-        batches = load_cached_docling_batches(
-            connection,
-            note_id=note["id"],
-            user_id=current_user["id"],
-            file_hash=file_hash,
-        )
-        if not batches:
-            raise HTTPException(status_code=400, detail="Docling cache is not ready. Run current note RAG reprocess first.")
-        cached_pages = [
-            page
-            for page in cached_pages_from_batches(batches)
-            if page.page_number in set(page_numbers)
-        ]
-        result = extract_docling_crop_candidates_from_cached_pages(
-            pdf_path,
-            cached_pages=cached_pages,
-            document_max_candidates=safe_candidate_limit,
-            use_full_page_context=True,
-        )
-    except HTTPException:
-        raise
-    except DoclingCropDebugError as exc:
-        raise HTTPException(status_code=400, detail=str(exc) or "failed to extract docling crop candidates") from exc
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail=str(exc) or "failed to load docling crop cache") from exc
-    crop_hashes = sorted({candidate.crop_hash for candidate in result.candidates})
-    summary_by_key: dict[tuple[int, str], dict] = {}
-    image_summary_error = None
-    if crop_hashes:
-        try:
-            rows = fetch_all(
-                connection,
-                """
-                SELECT id, page_number, crop_hash, candidate_type, status, skipped_reason,
-                       confidence, importance, confidence_reason, importance_reason,
-                       indexed, summary, ocr_text, metadata, analyzed_at, indexed_at, updated_at
-                FROM image_ai_summaries
-                WHERE user_id = %s
-                  AND note_id = %s
-                  AND crop_hash = ANY(%s::text[])
-                """,
-                (current_user["id"], note_id, crop_hashes),
-            )
-            summary_by_key = {
-                (int(row["page_number"]), str(row["crop_hash"])): {
-                    "id": row.get("id"),
-                    "status": row.get("status"),
-                    "skipped_reason": row.get("skipped_reason"),
-                    "candidate_type": row.get("candidate_type"),
-                    "confidence": row.get("confidence"),
-                    "importance": row.get("importance"),
-                    "confidence_reason": row.get("confidence_reason"),
-                    "importance_reason": row.get("importance_reason"),
-                    "indexed": bool(row.get("indexed")),
-                    "summary": row.get("summary") or "",
-                    "summary_snippet": _snippet(row.get("summary")),
-                    "ocr_text": row.get("ocr_text") or "",
-                    "metadata": row.get("metadata") if isinstance(row.get("metadata"), dict) else {},
-                    "analyzed_at": row.get("analyzed_at"),
-                    "indexed_at": row.get("indexed_at"),
-                    "updated_at": row.get("updated_at"),
-                }
-                for row in rows
-            }
-        except Exception as exc:
-            _rollback_after_debug_query_error(connection)
-            image_summary_error = str(exc)
-
-    candidate_responses = []
-    for candidate in result.candidates:
-        response = candidate.to_response()
-        response["image_ai_summary"] = summary_by_key.get((candidate.page_number, candidate.crop_hash))
-        candidate_responses.append(response)
-
-    return {
-        "note": {"id": note["id"], "folder_id": note["folder_id"], "title": note["title"]},
-        "summary": {
-            "parser": result.parser,
-            "page_count": page_count,
-            "scanned_page_count": result.scanned_page_count,
-            "candidate_count": len(result.candidates),
-            "filtered_count": result.filtered_count,
-            "skipped_candidate_count": result.skipped_candidate_count,
-            "candidate_limit_reached": result.candidate_limit_reached,
-            "elapsed_ms": result.elapsed_ms,
-            "page_start": page_numbers[0] if page_numbers else None,
-            "page_end": page_numbers[-1] if page_numbers else None,
-            "image_summary_error": image_summary_error,
-        },
-        "candidates": candidate_responses,
-    }
-
-
 @router.post("/chat-sessions/{session_id}/rag-debug/evaluate")
 def evaluate_chat_session_rag_debug(
     session_id: int,
@@ -961,13 +839,18 @@ def evaluate_chat_session_rag_debug(
         (session["note_id"],),
     )
     model = session.get("model") or settings.default_ai_model
+    effective_page_number, page_reference_debug = resolve_context_page_number(
+        question=payload.content,
+        payload_page_number=payload.page_number,
+        available_pages=pages,
+    )
     has_selection_context = bool(payload.selection_image or payload.selection_image_url or payload.selection_rect)
     context_route = route_ai_context(
         question=payload.content,
         model=model,
         has_selection=has_selection_context,
         has_canvas_context=bool(payload.canvas_block_context),
-        current_page_number=payload.page_number,
+        current_page_number=effective_page_number,
     )
     if payload.use_rag and context_route.mode == "general":
         context_route = AiContextRoute(
@@ -1000,6 +883,23 @@ def evaluate_chat_session_rag_debug(
             documents=None,
             top_k=payload.top_k,
         )
+        page_local_contexts = (
+            load_page_local_rag_contexts(
+                connection,
+                user_id=current_user["id"],
+                note_ids=note_ids,
+                page_number=effective_page_number,
+            )
+            if effective_page_number is not None
+            and (
+                context_route.reason in {"explicit_page_reference", "current_context_keyword"}
+                or page_reference_debug.get("explicit_page_number") is not None
+            )
+            else []
+        )
+        if page_local_contexts:
+            contexts = merge_retrieved_contexts(page_local_contexts, contexts)
+            update_rag_debug_for_contexts(rag_debug, contexts, page_local_contexts=page_local_contexts)
     image_recheck = ImageRecheckResult()
     if context_route.mode == "rag":
         image_recheck = maybe_recheck_pdf_images_for_chat(
@@ -1008,10 +908,11 @@ def evaluate_chat_session_rag_debug(
             user_id=current_user["id"],
             model=model,
             user_question=payload.content,
-            current_page_number=payload.page_number,
+            current_page_number=effective_page_number,
             rag_sources=contexts,
             settings=settings,
         )
+    context_page_count = len(select_rag_context_pages(pages, effective_page_number)) if context_route.mode == "rag" else 0
     return {
         "mode": context_route.mode,
         "rewritten_query": context_route.rewritten_query,
@@ -1024,12 +925,15 @@ def evaluate_chat_session_rag_debug(
         "debug": {
             **rag_debug,
             "scope_count": len((rag_scope or {}).get("sources", [])),
+            "context_page_count": context_page_count,
+            "context_page_number": effective_page_number,
+            "page_reference": page_reference_debug,
             "image_recheck": image_recheck.debug,
         },
         "context": _format_debug_context_preview(
             mode=context_route.mode,
             pages=pages,
-            page_number=payload.page_number,
+            page_number=effective_page_number,
             payload=payload,
             rag_scope=rag_scope or default_rag_scope(note),
             contexts=contexts,

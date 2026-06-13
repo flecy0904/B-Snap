@@ -36,10 +36,13 @@ from backend.app.services.document_chunk_index import (
 )
 from backend.app.services.rag_chunker import IndexSource, build_text_chunks, split_text_into_chunks
 from backend.app.services.rag_service import (
+    _merge_ranked_contexts,
     _parse_quiz_questions,
     load_canvas_documents,
     load_note_documents,
+    merge_retrieved_contexts,
     retrieve_rag_contexts_with_debug,
+    update_rag_debug_for_contexts,
 )
 from backend.app.services.openai_service import build_response_input, judge_pdf_image_recheck
 
@@ -164,6 +167,41 @@ class RAGRetrieverTest(unittest.TestCase):
 
         self.assertEqual([candidate.title for candidate in candidates], ["persisted image"])
 
+    def test_image_recheck_candidates_apply_min_score_and_prioritize_current_page(self):
+        contexts = [
+            RetrievedContext(
+                source_type="image_ai_summary",
+                source_id="10",
+                title="other page high score",
+                content="other page",
+                score=0.95,
+                page_number=8,
+                metadata={"importance": "high"},
+            ),
+            RetrievedContext(
+                source_type="image_ai_summary",
+                source_id="11",
+                title="current page strong enough",
+                content="current page",
+                score=0.70,
+                page_number=3,
+                metadata={"importance": "high"},
+            ),
+            RetrievedContext(
+                source_type="image_ai_summary",
+                source_id="12",
+                title="current page too weak",
+                content="weak current page",
+                score=0.40,
+                page_number=3,
+                metadata={"importance": "high"},
+            ),
+        ]
+
+        candidates = _image_recheck_candidates(contexts, top_k=3, min_score=0.55, current_page_number=3)
+
+        self.assertEqual([candidate.source_id for candidate in candidates], ["11", "10"])
+
     def test_image_recheck_selection_defaults_to_one_image(self):
         first = RetrievedContext(source_type="image_ai_summary", source_id="10", title="first", content="first")
         second = RetrievedContext(source_type="image_ai_summary", source_id="11", title="second", content="second")
@@ -278,6 +316,7 @@ class RAGRetrieverTest(unittest.TestCase):
             source_id="88",
             title="Image",
             content="diagram summary",
+            score=0.82,
             page_number=51,
             metadata={"importance": "high", "context_bbox": [1, 2, 100, 120]},
         )
@@ -323,6 +362,7 @@ class RAGRetrieverTest(unittest.TestCase):
             source_id="88",
             title="Other note image",
             content="diagram summary",
+            score=0.82,
             note_id=9,
             page_number=2,
             metadata={"importance": "high", "context_bbox": [1, 2, 100, 120]},
@@ -382,6 +422,7 @@ class RAGRetrieverTest(unittest.TestCase):
             source_id="chunk-derived-id",
             title="Persisted image",
             content="diagram summary",
+            score=0.82,
             note_id=9,
             page_number=2,
             metadata={"importance": "high", "image_ai_summary_id": 88, "context_bbox": [1, 2, 100, 120]},
@@ -488,6 +529,91 @@ class RAGRetrieverTest(unittest.TestCase):
         self.assertEqual(debug["fallback_reason"], "vector_empty")
         self.assertTrue(debug["no_results"])
         self.assertEqual(debug["retrieved_chunk_count"], 0)
+
+    def test_page_local_contexts_clear_vector_empty_debug_state(self):
+        page_context = RetrievedContext(
+            source_type="pdf_page",
+            source_id="page-5",
+            title="Page 5",
+            content="grading policy",
+            page_number=5,
+            chunk_index=0,
+        )
+        image_context = RetrievedContext(
+            source_type="image_ai_summary",
+            source_id="image-5",
+            title="Page 5 image",
+            content="grading chart",
+            page_number=5,
+            chunk_index=0,
+        )
+        merged = merge_retrieved_contexts([page_context, image_context])
+        debug = {
+            "fallback": False,
+            "fallback_reason": "vector_empty",
+            "no_results": True,
+            "retrieved_source_count": 0,
+            "retrieved_chunk_count": 0,
+        }
+
+        update_rag_debug_for_contexts(debug, merged, page_local_contexts=merged)
+
+        self.assertFalse(debug["no_results"])
+        self.assertTrue(debug["vector_no_results"])
+        self.assertIsNone(debug["fallback_reason"])
+        self.assertEqual(debug["page_local_context_count"], 2)
+        self.assertEqual(debug["retrieved_chunk_count"], 2)
+        self.assertEqual(debug["retrieved_text_chunk_count"], 1)
+        self.assertEqual(debug["retrieved_image_summary_count"], 1)
+
+    def test_retrieve_rag_contexts_uses_separate_text_and_image_threshold_searches(self):
+        text_context = RetrievedContext(
+            source_type="pdf_page",
+            source_id="1",
+            title="text",
+            content="TCP text",
+            score=0.80,
+        )
+        image_context = RetrievedContext(
+            source_type="image_ai_summary",
+            source_id="88",
+            title="image",
+            content="TCP image",
+            score=0.70,
+        )
+
+        with patch(
+            "backend.app.services.rag_service.retrieve_chunk_contexts",
+            side_effect=[[text_context], [image_context]],
+        ) as retrieve:
+            contexts, debug = retrieve_rag_contexts_with_debug(object(), user_id=7, question="TCP", documents=[])
+
+        self.assertEqual([context.source_id for context in contexts], ["1", "88"])
+        self.assertEqual(retrieve.call_args_list[0].kwargs["source_types"], ["pdf_page", "canvas_note"])
+        self.assertEqual(retrieve.call_args_list[1].kwargs["source_types"], ["image_ai_summary"])
+        self.assertEqual(retrieve.call_args_list[0].kwargs["min_score"], 0.45)
+        self.assertEqual(retrieve.call_args_list[1].kwargs["min_score"], 0.5)
+        self.assertEqual(debug["score_meaning"], "similarity_higher_is_better")
+        self.assertEqual(debug["retrieved_text_chunk_count"], 1)
+        self.assertEqual(debug["retrieved_image_summary_count"], 1)
+
+    def test_merge_ranked_contexts_reserves_image_candidates(self):
+        text_contexts = [
+            RetrievedContext(source_type="pdf_page", source_id=str(index), title=f"text {index}", content="text", score=0.95 - index * 0.01)
+            for index in range(5)
+        ]
+        image_context = RetrievedContext(
+            source_type="image_ai_summary",
+            source_id="88",
+            title="image",
+            content="image",
+            score=0.60,
+        )
+
+        contexts = _merge_ranked_contexts(text_contexts, [image_context], limit=5, image_reserve_count=1)
+
+        self.assertIn("88", [context.source_id for context in contexts])
+        self.assertEqual(len(contexts), 5)
 
     def test_rag_ask_returns_status_message_without_llm_when_vector_search_is_unavailable(self):
         with patch(
@@ -664,6 +790,55 @@ class RAGRetrieverTest(unittest.TestCase):
         self.assertIn("source_type <> 'canvas_note'", captured["query"])
         self.assertIn("source_type = 'canvas_note'", captured["query"])
         self.assertIn(" OR ", captured["query"])
+
+    def test_retrieve_chunk_contexts_applies_source_type_and_min_score(self):
+        captured = {}
+
+        def fake_fetch_all(connection, query, params):
+            captured["query"] = query
+            captured["params"] = params
+            return [
+                {
+                    "source_type": "pdf_page",
+                    "source_id": "1",
+                    "title": "strong",
+                    "content": "strong text",
+                    "score": 0.72,
+                    "folder_id": 2,
+                    "note_id": 3,
+                    "page_number": 1,
+                    "chunk_index": 1,
+                    "metadata": {},
+                },
+                {
+                    "source_type": "pdf_page",
+                    "source_id": "2",
+                    "title": "weak",
+                    "content": "weak text",
+                    "score": 0.22,
+                    "folder_id": 2,
+                    "note_id": 3,
+                    "page_number": 2,
+                    "chunk_index": 1,
+                    "metadata": {},
+                },
+            ]
+
+        with patch("backend.app.services.document_chunk_index.generate_embedding", return_value=[0.0] * 1536), patch(
+            "backend.app.services.document_chunk_index.fetch_all",
+            side_effect=fake_fetch_all,
+        ):
+            contexts = retrieve_chunk_contexts(
+                object(),
+                user_id=7,
+                query="TCP",
+                source_types=["pdf_page"],
+                min_score=0.45,
+                top_k=10,
+            )
+
+        self.assertIn("source_type = ANY", captured["query"])
+        self.assertEqual([context.source_id for context in contexts], ["1"])
 
     def test_answer_sources_do_not_duplicate_page_label(self):
         source_text = format_answer_sources([

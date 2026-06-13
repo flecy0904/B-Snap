@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Any
 
+from backend.app.core.config import get_settings
 from backend.app.schemas.rag import RetrievedContext
 
 
@@ -71,7 +72,7 @@ def format_answer_sources(contexts: list[RetrievedContext], *, max_sources: int 
         page_label = f"{context.page_number}페이지" if context.page_number else ""
         if page_label and page_label not in label:
             label = f"{label} {page_label}".strip()
-        key = f"{context.source_type}:{context.source_id}:{context.page_number}"
+        key = f"{label}:{context.page_number}"
         if key in seen:
             continue
         seen.add(key)
@@ -105,12 +106,15 @@ def build_ai_context(
     debug = {
         "retrieved_source_count": len({f"{context.source_type}:{context.source_id}" for context in rag_sources}),
         "retrieved_chunk_count": len(rag_sources),
+        "context_page_count": len(context_pages),
+        "context_page_number": page_number,
         "fallback": False,
         "fallback_reason": None,
     }
     if rag_debug:
         debug.update(rag_debug)
-    answer_sources_text = format_answer_sources(rag_sources, max_sources=4) if mode == "rag" else None
+    source_display_max = max(1, int(get_settings().rag_source_display_max or 4))
+    answer_sources_text = format_answer_sources(rag_sources, max_sources=source_display_max) if mode == "rag" else None
     if extra_answer_sources_text and mode == "rag":
         answer_sources_text = "\n".join(
             part
