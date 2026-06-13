@@ -353,7 +353,7 @@ export function AndroidNativePdfViewport(props: {
   onCommitInkStroke: (stroke: InkStroke) => void;
   onRemoveInkStroke: (strokeId: string) => void;
   onReplaceInkStrokes?: (removedStrokeIds: string[], addedStrokes: InkStroke[]) => void;
-  onEraseInkAtPoint?: (point: InkPoint, radius: number, snapshot?: boolean) => boolean;
+  onEraseInkAtPoint?: (point: InkPoint, radius: number, snapshot?: boolean, mode?: InkEraserMode) => boolean;
   onAddTextAnnotation?: (point: InkPoint) => void;
   onUpdateTextAnnotation?: (id: string, text: string) => void;
   onRemoveTextAnnotation?: (id: string) => void;
@@ -1031,7 +1031,7 @@ export function AndroidNativePdfViewport(props: {
       ? Math.max(10, (props.eraserWidth ?? props.penWidth * 3) * 1.35)
       : Math.max(14, props.eraserWidth ?? props.penWidth * 3.2);
     if (props.onEraseInkAtPoint) {
-      const changed = props.onEraseInkAtPoint(point, radius, !eraserSnapshotPushedRef.current);
+      const changed = props.onEraseInkAtPoint(point, radius, !eraserSnapshotPushedRef.current, props.eraserMode ?? 'partial');
       if (changed) eraserSnapshotPushedRef.current = true;
       return;
     }

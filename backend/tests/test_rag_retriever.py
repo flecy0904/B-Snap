@@ -15,6 +15,7 @@ from backend.app.routes.rag_debug import (
     evaluate_chat_session_rag_debug,
     get_note_rag_debug_index,
 )
+from backend.app.routes.ai_canvas_notes import delete_ai_canvas_note
 from backend.app.routes.rag import ask_rag
 from backend.app.schemas.rag import QuizQuestion, RAGAskRequest, RAGSummaryRequest, RetrievedContext
 from backend.app.routes.chats import normalize_rag_scope, rag_scope_search_targets
@@ -30,6 +31,7 @@ from backend.app.services.document_chunk_index import (
     content_hash,
     delete_note_page_chunks,
     reindex_note_chunks_from_pages_background,
+    replace_canvas_chunks,
     replace_image_summary_chunks,
     replace_note_page_chunks,
     replace_note_pages_chunks,
@@ -129,6 +131,16 @@ class RAGRetrieverTest(unittest.TestCase):
         self.assertEqual(route.mode, "rag")
         self.assertEqual(route.rewritten_query, "큐 설명")
         self.assertEqual(route.reason, "llm")
+
+    def test_router_falls_back_to_rag_when_note_router_fails(self):
+        with patch(
+            "backend.app.services.ai_context_router.generate_text_response",
+            side_effect=RuntimeError("router unavailable"),
+        ):
+            route = route_ai_context(question="노트에 있는 큐 설명해줘", model="test-model")
+
+        self.assertEqual(route.mode, "rag")
+        self.assertEqual(route.reason, "fallback")
 
     def test_rag_context_pages_prioritize_current_then_neighbors(self):
         pages = [
@@ -634,6 +646,23 @@ class RAGRetrieverTest(unittest.TestCase):
 
         self.assertIn("88", [context.source_id for context in contexts])
         self.assertEqual(len(contexts), 5)
+
+    def test_retrieve_rag_contexts_rolls_back_after_vector_error(self):
+        class FakeConnection:
+            def __init__(self):
+                self.rollback_count = 0
+
+            def rollback(self):
+                self.rollback_count += 1
+
+        connection = FakeConnection()
+        with patch("backend.app.services.rag_service.retrieve_chunk_contexts", side_effect=RuntimeError("vector failed")):
+            contexts, debug = retrieve_rag_contexts_with_debug(connection, user_id=7, question="TCP")
+
+        self.assertEqual(contexts, [])
+        self.assertEqual(connection.rollback_count, 1)
+        self.assertTrue(debug["rag_unavailable"])
+        self.assertEqual(debug["fallback_reason"], "vector_error")
 
     def test_rag_ask_returns_status_message_without_llm_when_vector_search_is_unavailable(self):
         with patch(
@@ -1515,6 +1544,7 @@ class RAGRetrieverTest(unittest.TestCase):
         self.assertEqual(delete_params[0], 7)
         self.assertIn("pdf_text_box", delete_params[1])
         self.assertIn("image_ocr", delete_params[1])
+        self.assertIn("note_page", delete_params[1])
         self.assertEqual(delete_params[2], "10")
         self.assertEqual(delete_params[3], "10:%")
 
@@ -1695,6 +1725,139 @@ class RAGRetrieverTest(unittest.TestCase):
         self.assertIn("UPDATE image_ai_summaries", update_query)
         self.assertEqual(update_params, (True, True, 88, 7))
         self.assertEqual(executed[-1], ("COMMIT", None))
+
+    def test_replace_canvas_chunks_deletes_legacy_canvas_sources_before_insert(self):
+        executed = []
+
+        class FakeCursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def execute(self, query, params=None):
+                executed.append((query, params))
+
+        class FakeConnection:
+            def cursor(self):
+                return FakeCursor()
+
+            def commit(self):
+                executed.append(("COMMIT", None))
+
+            def rollback(self):
+                executed.append(("ROLLBACK", None))
+
+        with patch("backend.app.services.document_chunk_index.collect_canvas_index_sources", return_value=[]):
+            count = replace_canvas_chunks(FakeConnection(), canvas_note_id=20, user_id=7)
+
+        self.assertEqual(count, 0)
+        delete_query, delete_params = executed[0]
+        self.assertIn("DELETE FROM document_chunks", delete_query)
+        self.assertEqual(delete_params[0], 7)
+        self.assertIn("canvas_note", delete_params[1])
+        self.assertIn("ai_canvas_note", delete_params[1])
+        self.assertEqual(delete_params[2], "20")
+
+    def test_replace_canvas_chunks_removes_legacy_canvas_type_when_new_chunks_remain(self):
+        executed = []
+        source = IndexSource(
+            source_type="canvas_note",
+            source_id="20",
+            title="자료구조 - Canvas",
+            content="Canvas note text about stack and queue operations.",
+            user_id=7,
+            folder_id=2,
+            note_id=3,
+        )
+
+        class FakeCursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def execute(self, query, params=None):
+                executed.append((query, params))
+
+        class FakeConnection:
+            def cursor(self):
+                return FakeCursor()
+
+            def commit(self):
+                executed.append(("COMMIT", None))
+
+            def rollback(self):
+                executed.append(("ROLLBACK", None))
+
+        with patch("backend.app.services.document_chunk_index.collect_canvas_index_sources", return_value=[source]), patch(
+            "backend.app.services.document_chunk_index.get_settings",
+            return_value=SimpleNamespace(openai_embedding_model="test-embedding-model"),
+        ), patch(
+            "backend.app.services.document_chunk_index.fetch_all",
+            return_value=[{
+                "user_id": 7,
+                "source_type": "canvas_note",
+                "source_id": "20",
+                "chunk_index": 1,
+                "content_hash": content_hash(source.content),
+                "embedding_model": "test-embedding-model",
+            }],
+        ), patch("backend.app.services.document_chunk_index.generate_embedding") as generate_embedding:
+            count = replace_canvas_chunks(FakeConnection(), canvas_note_id=20, user_id=7)
+
+        self.assertEqual(count, 1)
+        generate_embedding.assert_not_called()
+        delete_query, delete_params = executed[0]
+        self.assertIn("source_type <> 'canvas_note'", delete_query)
+        self.assertIn("ai_canvas_note", delete_params[1])
+        self.assertEqual(delete_params[2], "20")
+
+    def test_delete_canvas_note_continues_when_rag_cleanup_fails(self):
+        executed = []
+
+        class FakeCursor:
+            def __init__(self, fail_cleanup: bool = False):
+                self.fail_cleanup = fail_cleanup
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def execute(self, query, params=None):
+                executed.append((query, params))
+                if self.fail_cleanup and "document_chunks" in query:
+                    raise RuntimeError("document_chunks missing")
+
+        class FakeConnection:
+            def __init__(self):
+                self.cursor_count = 0
+                self.rollback_count = 0
+                self.commit_count = 0
+
+            def cursor(self):
+                self.cursor_count += 1
+                return FakeCursor(fail_cleanup=self.cursor_count == 1)
+
+            def rollback(self):
+                self.rollback_count += 1
+                executed.append(("ROLLBACK", None))
+
+            def commit(self):
+                self.commit_count += 1
+                executed.append(("COMMIT", None))
+
+        connection = FakeConnection()
+        with patch("backend.app.routes.ai_canvas_notes.get_ai_canvas_note", return_value={"id": 20}):
+            delete_ai_canvas_note(20, connection=connection, current_user={"id": 7})
+
+        self.assertEqual(connection.rollback_count, 1)
+        self.assertEqual(connection.commit_count, 1)
+        self.assertTrue(any("DELETE FROM ai_canvas_notes" in query for query, _params in executed))
 
     def test_replace_note_chunks_skips_embedding_when_content_hash_is_unchanged(self):
         executed = []

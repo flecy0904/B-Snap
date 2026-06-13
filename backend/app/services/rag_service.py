@@ -297,6 +297,12 @@ def retrieve_rag_contexts_with_debug(
         debug["fallback_reason"] = "vector_empty"
         debug["no_results"] = True
     except Exception as exc:
+        rollback = getattr(connection, "rollback", None)
+        if callable(rollback):
+            try:
+                rollback()
+            except Exception as rollback_exc:
+                logger.warning("failed to roll back after vector RAG retrieval error: %s", rollback_exc)
         debug["fallback"] = True
         debug["fallback_reason"] = "vector_error"
         debug["rag_unavailable"] = True

@@ -1,4 +1,4 @@
-import type { Dispatch, SetStateAction } from 'react';
+import { useRef, type Dispatch, type SetStateAction } from 'react';
 import * as FileSystem from 'expo-file-system/legacy';
 import {
   createBackendChatSession,
@@ -233,6 +233,7 @@ export function useAiChatActions(params: {
   clearSelection?: () => void;
   buildContextHint?: (question: string) => string | null | Promise<string | null>;
 }) {
+  const aiRequestInFlightRef = useRef(false);
   const getCurrentBackendNoteId = () => getStudyDocumentBackendNoteId(params.studyDocument);
   const getSessionDocumentKey = (session: BackendChatSession) => {
     const backendNoteId = getCurrentBackendNoteId();
@@ -500,6 +501,7 @@ export function useAiChatActions(params: {
     canvasRecommendationMode?: AiCanvasRecommendationMode | null;
   }) => {
     if (!params.studyDocumentId) return false;
+    if (aiRequestInFlightRef.current) return false;
     if (params.aiChatReadOnly) {
       params.setAiError('현재 대화는 다른 노트의 대화라서 읽기만 가능해요.');
       return false;
@@ -524,8 +526,9 @@ export function useAiChatActions(params: {
     const shouldHideSelectionAttachment = Boolean(selectionRect || attachedSelectionPreviewUri);
     const rawQuestion = override?.question?.trim() ?? params.aiQuestion.trim();
     if (isCanvasOriginRequest && !rawQuestion) return false;
+    if (!rawQuestion && !hasSelection) return false;
 
-    const question = rawQuestion || (hasSelection ? '선택한 영역을 설명해줘' : '현재 페이지를 요약해줘');
+    const question = rawQuestion || '선택한 영역을 설명해줘';
     const canvasAction = override?.canvasAction ?? getCanvasAction(question, override?.source ?? 'chat');
     if (isCanvasOriginRequest && canvasAction === 'canvas_create') {
       params.setAiError('현재 Canvas를 수정해달라고 요청해 주세요.');
@@ -544,6 +547,7 @@ export function useAiChatActions(params: {
       ? `Canvas ${canvasAction === 'canvas_create' ? 'create' : 'edit'}: ${question}`
       : question;
     const messageSource = isCanvasOriginRequest ? override?.source ?? 'canvas-mini' : 'chat';
+    aiRequestInFlightRef.current = true;
     params.setAiLoading(true);
     if (shouldLockCanvas) params.setAiCanvasRequestBusy?.(true);
     params.setAiError(null);
@@ -718,6 +722,7 @@ export function useAiChatActions(params: {
     } finally {
       if (shouldLockCanvas) params.setAiCanvasRequestBusy?.(false);
       params.setAiLoading(false);
+      aiRequestInFlightRef.current = false;
     }
   };
 

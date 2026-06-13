@@ -280,6 +280,11 @@ export function NotesAiAssistantPanel() {
     && quickPrompts.length
     && !workspace.aiQuestion.trim()
   );
+  const canSubmitAiQuestion = Boolean(
+    workspace.aiQuestion.trim()
+    || workspace.selectionRect
+    || workspace.selectionPreviewUri
+  );
   const activeSession = workspace.activeAiChatSessionId
     ? workspace.allAiChatSessions.find((session: any) => session.id === workspace.activeAiChatSessionId)
       ?? workspace.noteAiChatSessions.find((session: any) => session.id === workspace.activeAiChatSessionId)
@@ -2385,12 +2390,12 @@ export function NotesAiAssistantPanel() {
               <View style={workspace.styles.aiTooltipAnchor}>
               <Pressable
                 {...getTooltipTriggerProps('ai-chat-send', '전송')}
-                style={[workspace.styles.aiSendButton, workspace.aiChatReadOnly && workspace.styles.aiSendButtonDisabled]}
+                style={[workspace.styles.aiSendButton, (!canSubmitAiQuestion || workspace.aiChatReadOnly) && workspace.styles.aiSendButtonDisabled]}
                 onPress={() => {
                   hideTooltip('ai-chat-send');
                   void workspace.onRequestAiAnswer();
                 }}
-                disabled={workspace.aiLoading || workspace.aiChatReadOnly}
+                disabled={workspace.aiLoading || workspace.aiChatReadOnly || !canSubmitAiQuestion}
               >
                 {workspace.aiLoading ? <ActivityIndicator size="small" color="#FFFFFF" /> : <MaterialCommunityIcons name="arrow-up" size={18} color="#FFFFFF" />}
               </Pressable>
