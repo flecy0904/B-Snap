@@ -128,5 +128,4 @@ def route_ai_context(
         rewritten = _clean_query(str(parsed.get("rewritten_query") or question))
         return AiContextRoute(mode=mode, rewritten_query=rewritten, reason="llm")
     except Exception:
-        fallback_mode: AiContextMode = "rag" if current_page_number is not None else "general"
-        return AiContextRoute(mode=fallback_mode, rewritten_query=rewritten_query, reason="fallback")
+        return AiContextRoute(mode="rag", rewritten_query=rewritten_query, reason="fallback")

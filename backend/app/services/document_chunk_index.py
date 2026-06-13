@@ -20,7 +20,8 @@ from backend.app.services.rag_chunker import IndexSource, build_text_chunks, is_
 
 
 logger = logging.getLogger(__name__)
-PAGE_SOURCE_TYPES = ("pdf_page", "pdf_text_box", "image_ocr", "image_ai_summary")
+PAGE_SOURCE_TYPES = ("pdf_page", "pdf_text_box", "image_ocr", "image_ai_summary", "note_page")
+CANVAS_SOURCE_TYPES = ("canvas_note", "ai_canvas_note")
 
 
 def content_hash(content: str) -> str:
@@ -474,19 +475,27 @@ def _delete_obsolete_chunks_for_canvas(
     with connection.cursor() as cursor:
         if not keep_indexes:
             cursor.execute(
-                "DELETE FROM document_chunks WHERE user_id = %s AND source_type = 'canvas_note' AND source_id = %s",
-                (user_id, str(canvas_note_id)),
+                """
+                DELETE FROM document_chunks
+                WHERE user_id = %s
+                  AND source_type = ANY(%s::text[])
+                  AND source_id = %s
+                """,
+                (user_id, list(CANVAS_SOURCE_TYPES), str(canvas_note_id)),
             )
             return
         cursor.execute(
             """
             DELETE FROM document_chunks
             WHERE user_id = %s
-              AND source_type = 'canvas_note'
+              AND source_type = ANY(%s::text[])
               AND source_id = %s
-              AND NOT (chunk_index = ANY(%s::int[]))
+              AND (
+                  source_type <> 'canvas_note'
+                  OR NOT (chunk_index = ANY(%s::int[]))
+              )
             """,
-            (user_id, str(canvas_note_id), keep_indexes),
+            (user_id, list(CANVAS_SOURCE_TYPES), str(canvas_note_id), keep_indexes),
         )
 
 
@@ -725,6 +734,7 @@ __all__ = [
     "collect_canvas_index_sources",
     "collect_note_index_sources",
     "collect_note_page_index_sources",
+    "CANVAS_SOURCE_TYPES",
     "delete_note_page_chunks",
     "delete_note_page_chunks_background",
     "extract_pdf_text_and_reindex_background",

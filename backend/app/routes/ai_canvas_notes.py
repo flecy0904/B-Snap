@@ -1,3 +1,5 @@
+import logging
+
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from psycopg import Connection
 from psycopg.rows import dict_row
@@ -13,10 +15,11 @@ from backend.app.schemas.ai_canvas_notes import (
     AiCanvasNoteSummaryRead,
     AiCanvasNoteUpdate,
 )
-from backend.app.services.document_chunk_index import reindex_canvas_background
+from backend.app.services.document_chunk_index import CANVAS_SOURCE_TYPES, reindex_canvas_background
 
 
 router = APIRouter(tags=["ai-canvas-notes"])
+logger = logging.getLogger(__name__)
 MAX_AI_CANVAS_NOTES_PER_NOTE = 3
 
 
@@ -226,9 +229,25 @@ def delete_ai_canvas_note(
     try:
         with connection.cursor() as cursor:
             cursor.execute(
-                "DELETE FROM document_chunks WHERE user_id = %s AND source_type = 'canvas_note' AND source_id = %s",
-                (current_user["id"], str(canvas_note_id)),
+                """
+                DELETE FROM document_chunks
+                WHERE user_id = %s
+                  AND source_type = ANY(%s::text[])
+                  AND source_id = %s
+                """,
+                (current_user["id"], list(CANVAS_SOURCE_TYPES), str(canvas_note_id)),
             )
+    except Exception as exc:
+        connection.rollback()
+        logger.warning(
+            "failed to clean canvas RAG chunks before delete: canvas_note_id=%s user_id=%s error=%s",
+            canvas_note_id,
+            current_user["id"],
+            exc,
+        )
+
+    try:
+        with connection.cursor() as cursor:
             cursor.execute("DELETE FROM ai_canvas_notes WHERE id = %s", (canvas_note_id,))
         connection.commit()
     except Exception:
