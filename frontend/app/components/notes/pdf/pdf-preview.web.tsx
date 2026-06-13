@@ -4,7 +4,7 @@ import { MaterialCommunityIcons } from '@expo/vector-icons';
 import Svg, { Path } from 'react-native-svg';
 import { getCaptureOriginalImageSource, getPageCaptureReferenceImageSource } from '../shared/capture-assets';
 import { cleanAiDisplayText, finalizeInkStroke, findHitInkStrokeId, getInkCenterlinePath, getInkStrokeSvgPath, isDrawingTool, isShapeTool, resolveInkStrokeAppearance, resolveShapeStrokeAppearance, scaleInkStrokeToPageSize, scaleSelectionRectToPageSize, scaleTextAnnotationToPageSize, shouldAppendInkPoint } from '../../../ui-helpers';
-import { InkBrush, InkBrushSettings, InkImageAnnotation, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
+import { InkBrush, InkBrushSettings, InkEraserMode, InkImageAnnotation, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { CaptureAsset, NotebookPage, PageCaptureReference } from '../../../types';
 import { useWebPdfViewportEngine, WebPdfPageFrame } from './web-pdf-viewport-engine';
 
@@ -928,6 +928,8 @@ export function PdfPreview(props: {
   penWidth: number;
   brushType: InkBrush;
   linePattern: InkLinePattern;
+  eraserMode?: InkEraserMode;
+  eraserWidth?: number;
   selectionMode?: InkSelectionMode;
   brushSettings?: InkBrushSettings;
   inkStrokes: InkStroke[];
@@ -943,7 +945,7 @@ export function PdfPreview(props: {
   onMoveTextAnnotation: (id: string, x: number, y: number) => void;
   onResizeTextAnnotation: (id: string, width: number, height: number) => void;
   onChangeTextAnnotationFontSize: (id: string, fontSize: number) => void;
-  onEraseInkAtPoint?: (point: InkPoint, radius: number, snapshot?: boolean) => boolean;
+  onEraseInkAtPoint?: (point: InkPoint, radius: number, snapshot?: boolean, mode?: InkEraserMode) => boolean;
   onSelectionChange: (rect: SelectionRect | null) => void;
   onMoveSelection?: (dx: number, dy: number) => void;
   onResizeSelection?: (rect: SelectionRect) => void;
@@ -982,6 +984,7 @@ export function PdfPreview(props: {
   const draftSelectionRenderFrameRef = useRef<number | null>(null);
   const textTapRef = useRef<InkPoint | null>(null);
   const selectionPreviewRequestRef = useRef(0);
+  const eraserSnapshotPushedRef = useRef(false);
   const scrollbarDragRef = useRef<ScrollbarDragState | null>(null);
   const viewPanDragRef = useRef<ViewPanDragState | null>(null);
   const verticalScrollbarTrackRef = useRef<HTMLDivElement | null>(null);
@@ -1452,6 +1455,28 @@ export function PdfPreview(props: {
       flushCurrentStrokeRender(null);
       clearPointerInteraction();
     };
+    const eraseAtPoint = (point: InkPoint) => {
+      const mode = props.eraserMode ?? 'partial';
+      const baseRadius = mode === 'partial'
+        ? Math.max(10, props.eraserWidth ?? props.penWidth * 3)
+        : Math.max(14, props.eraserWidth ?? props.penWidth * 3.2);
+      const radius = baseRadius / Math.max(0.001, frame.scale);
+
+      if (props.onEraseInkAtPoint) {
+        const changed = props.onEraseInkAtPoint(point, radius, !eraserSnapshotPushedRef.current, mode);
+        if (changed) eraserSnapshotPushedRef.current = true;
+        return;
+      }
+
+      const hitTestStrokes = getRawPageStrokes(page).map((stroke) => scaleInkStrokeToLogicalHitTestSize(
+        stroke,
+        point.pageWidth ?? frame.width,
+        point.pageHeight ?? frame.height,
+        frame.scale,
+      ));
+      const hitStrokeId = findHitInkStrokeId(hitTestStrokes, point, radius);
+      if (hitStrokeId) props.onRemoveInkStroke(hitStrokeId);
+    };
     const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
       if (!shouldCaptureDomPointer(props.inkTool, event, props.fingerDrawingEnabled)) return;
       event.preventDefault();
@@ -1523,9 +1548,8 @@ export function PdfPreview(props: {
       }
 
       if (props.inkTool === 'erase') {
-        const hitTestStrokes = getRawPageStrokes(page).map((stroke) => scaleInkStrokeToLogicalHitTestSize(stroke, point.pageWidth, point.pageHeight, frame.scale));
-        const hitStrokeId = findHitInkStrokeId(hitTestStrokes, point, 18 / Math.max(0.001, frame.scale));
-        if (hitStrokeId) props.onRemoveInkStroke(hitStrokeId);
+        eraserSnapshotPushedRef.current = false;
+        eraseAtPoint(point);
       }
     };
     const handlePointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -1592,6 +1616,11 @@ export function PdfPreview(props: {
             })()
           : getSelectionRectFromDrag(origin, point, 'rect');
         scheduleDraftSelectionRender(rect, page.id);
+        return;
+      }
+
+      if (props.inkTool === 'erase') {
+        eraseAtPoint(point);
       }
     };
     const handlePointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
@@ -1601,6 +1630,7 @@ export function PdfPreview(props: {
       if (stroke && stroke.points.length > 1) props.onCommitInkStroke(finalizeInkStroke(stroke));
       finishSelection(activePointerPageRef.current ?? page);
       flushCurrentStrokeRender(null);
+      eraserSnapshotPushedRef.current = false;
       clearPointerInteraction();
     };
 

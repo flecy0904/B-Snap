@@ -267,7 +267,7 @@ export function PdfPreview(props: {
   onMoveTextAnnotation: (id: string, x: number, y: number) => void;
   onResizeTextAnnotation: (id: string, width: number, height: number) => void;
   onChangeTextAnnotationFontSize: (id: string, fontSize: number) => void;
-  onEraseInkAtPoint?: (point: InkPoint, radius: number, snapshot?: boolean) => boolean;
+  onEraseInkAtPoint?: (point: InkPoint, radius: number, snapshot?: boolean, mode?: InkEraserMode) => boolean;
   onSelectionChange: (rect: SelectionRect | null) => void;
   onMoveSelection?: (dx: number, dy: number) => void;
   onResizeSelection?: (rect: SelectionRect) => void;
@@ -1217,7 +1217,7 @@ export function PdfPreview(props: {
     const eraseAtPoint = (point: InkPoint) => {
       const radius = Math.max(10, props.penWidth * 2.4);
       if (props.onEraseInkAtPoint) {
-        const changed = props.onEraseInkAtPoint(point, radius, !eraserSnapshotPushedRef.current);
+        const changed = props.onEraseInkAtPoint(point, radius, !eraserSnapshotPushedRef.current, props.eraserMode ?? 'partial');
         if (changed) eraserSnapshotPushedRef.current = true;
         return;
       }

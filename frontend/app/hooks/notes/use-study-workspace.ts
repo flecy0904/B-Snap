@@ -1919,8 +1919,8 @@ export function useStudyWorkspace(props: {
     recordDocumentAction();
     changeTextAnnotationFontSizeBase(annotationId, fontSize);
   }, [changeTextAnnotationFontSizeBase, recordDocumentAction]);
-  const eraseInkAtPoint = useCallback((point: InkPoint, radius: number, snapshot?: boolean) => {
-    const changed = eraseInkAtPointBase(point, radius, snapshot);
+  const eraseInkAtPoint = useCallback((point: InkPoint, radius: number, snapshot?: boolean, mode?: InkEraserMode) => {
+    const changed = eraseInkAtPointBase(point, radius, snapshot, mode);
     if (changed) recordDocumentAction();
     return changed;
   }, [eraseInkAtPointBase, recordDocumentAction]);
