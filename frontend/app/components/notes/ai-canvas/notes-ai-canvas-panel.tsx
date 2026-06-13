@@ -8,11 +8,11 @@ import { useAppKeyboardInset } from '../../../hooks/notes/use-app-keyboard-inset
 import { useDelayedTooltip } from '../../../hooks/notes/use-delayed-tooltip';
 import AiCanvasMarkdownEditor from './ai-canvas-markdown-editor.dom';
 import { useDesktopNotesWorkspaceContext } from '../workspace/notes-workspace-context';
-import type { AiCanvasBlockContext } from '../../../types/ai-canvas';
+import type { AiCanvasBlockContext, AiCanvasRecommendationMode } from '../../../types/ai-canvas';
 
-const AI_CANVAS_MINI_PROMPTS = ['마무리 다듬기', '수준 조정', '길이 조절'];
+const AI_CANVAS_MINI_PROMPTS = ['마무리 다듬기', '수준 조정', '길이 조절', '정리 보강'];
 
-type RecommendationMode = 'polish' | 'level' | 'length' | null;
+type RecommendationMode = 'polish' | 'level' | 'length' | 'study' | null;
 
 type WebCanvasResizeState = {
   pointerId: number | null;
@@ -31,11 +31,68 @@ function handleWebSubmitKeyPress(event: any, submit: () => void) {
 
 const AI_CANVAS_RECOMMENDATION_COMMANDS = {
   polish: '마무리 다듬기',
-  easier: '수준 조정 - 쉽게',
-  professional: '수준 조정 - 전문적으로',
-  shorter: '길이 조절 - 짧게',
-  longer: '길이 조절 - 길게',
+  simplify: '수준 조정 - 쉽게',
+  professionalize: '수준 조정 - 전문적으로',
+  shorten: '길이 조절 - 짧게',
+  expand: '길이 조절 - 길게',
+  studyRestructure: '정리 보강 - 구조화',
+  studyKeyPoints: '정리 보강 - 핵심만',
+  studyMarkUncertain: '정리 보강 - 오류 의심 표시',
 };
+
+function isDefaultAiCanvasTitle(title?: string | null) {
+  const normalized = (title ?? '').trim();
+  if (!normalized) return true;
+  if (/^Canvas Note(?:\s+\d+)?$/.test(normalized)) return true;
+  return /^p\.\d+(?:-\d+)?\s+메모$/.test(normalized);
+}
+
+function getCanvasCreatedAtTime(note: { id: number; created_at?: string | null }) {
+  const time = note.created_at ? new Date(note.created_at).getTime() : Number.NaN;
+  return Number.isNaN(time) ? note.id : time;
+}
+
+function getCanvasNoteCreationIndex(
+  note: { id: number; created_at?: string | null },
+  notes: Array<{ id: number; created_at?: string | null }>,
+) {
+  const sorted = [...notes].sort((left, right) => {
+    const timeDiff = getCanvasCreatedAtTime(left) - getCanvasCreatedAtTime(right);
+    return timeDiff || left.id - right.id;
+  });
+  const index = sorted.findIndex((item) => item.id === note.id);
+  return index >= 0 ? index + 1 : sorted.length + 1;
+}
+
+function formatCanvasNoteTitle(
+  note: { id: number; title?: string | null; created_at?: string | null } | null | undefined,
+  notes: Array<{ id: number; created_at?: string | null }>,
+) {
+  if (!note) return 'Canvas Notes';
+  if (!isDefaultAiCanvasTitle(note.title)) return note.title ?? 'Canvas Note';
+  return `Canvas Note ${getCanvasNoteCreationIndex(note, notes)}`;
+}
+
+function formatCanvasUpdatedAt(value?: string | Date | null) {
+  if (!value) return '최근 수정';
+  const date = value instanceof Date ? value : new Date(value);
+  const time = date.getTime();
+  if (Number.isNaN(time)) return '최근 수정';
+  const diffMs = Date.now() - time;
+  const minuteMs = 60 * 1000;
+  const hourMs = 60 * minuteMs;
+  const dayMs = 24 * hourMs;
+  if (diffMs < minuteMs) return '방금 전';
+  if (diffMs < hourMs) return `${Math.max(1, Math.floor(diffMs / minuteMs))}분 전`;
+  if (diffMs < dayMs) return `${Math.floor(diffMs / hourMs)}시간 전`;
+  if (diffMs < dayMs * 7) return `${Math.floor(diffMs / dayMs)}일 전`;
+  return `${date.getMonth() + 1}/${date.getDate()}`;
+}
+
+function getActiveSelectionContext(selection?: { from: number; to: number; context?: AiCanvasBlockContext | null } | null) {
+  if (!selection || selection.from === selection.to) return null;
+  return selection.context ?? null;
+}
 
 export function NotesAiCanvasPanel() {
   const workspace = useDesktopNotesWorkspaceContext();
@@ -53,6 +110,7 @@ export function NotesAiCanvasPanel() {
   const [miniCommand, setMiniCommand] = React.useState('');
   const [miniSelectionImageUri, setMiniSelectionImageUri] = React.useState<string | null>(null);
   const [miniComposerOpen, setMiniComposerOpen] = React.useState(false);
+  const [miniSelectionContext, setMiniSelectionContext] = React.useState<AiCanvasBlockContext | null>(null);
   const [recommendationMode, setRecommendationMode] = React.useState<RecommendationMode>(null);
   const [canvasRequestBusy, setCanvasRequestBusy] = React.useState(false);
   const [nativeEditorMode, setNativeEditorMode] = React.useState<'view' | 'edit'>('view');
@@ -70,9 +128,12 @@ export function NotesAiCanvasPanel() {
   const editorEditable = canvasEditModeEnabled && !canvasControlsLocked;
   const canvasCanModify = canvasEditModeEnabled;
   const recommendationBusy = canvasRequestBusy || workspace.aiLoading || canvas.loading || canvas.saving;
-  const recommendationEnabled = canvasCanModify && Boolean(canvas.activeNote) && hasUsefulAiCanvasMarkdown(canvas.markdownDraft) && !recommendationBusy;
+  const baseRecommendationAvailable = canvasCanModify && Boolean(canvas.activeNote) && !recommendationBusy;
+  const hasCanvasContent = hasUsefulAiCanvasMarkdown(canvas.markdownDraft);
   const miniCommandReady = Boolean(miniCommand.trim());
   const canvasManagementDisabled = canvasControlsLocked || canvas.loading || canvas.saving;
+  const canUndoCanvas = Boolean(canvas.activeNote && canvas.canUndo && !canvasControlsLocked);
+  const canRedoCanvas = Boolean(canvas.activeNote && canvas.canRedo && !canvasControlsLocked);
   const resizeWebAiCanvasPanel = workspace.onResizeWebAiCanvasPanel;
   const appKeyboardAvoidingStyle = appKeyboardInset > 0 ? { paddingBottom: appKeyboardInset + 12 } : null;
 
@@ -102,7 +163,7 @@ export function NotesAiCanvasPanel() {
     setPendingRenameNoteId(targetNote.id);
     setNoteActionMenuId(null);
     setNoteListOpen(false);
-    setRenameDraft(targetNote.title);
+    setRenameDraft(formatCanvasNoteTitle(targetNote, canvas.notes));
     setRenameError(null);
     setRenameOpen(true);
   };
@@ -192,6 +253,10 @@ export function NotesAiCanvasPanel() {
     await canvas.deleteNote(pendingDeleteNoteId ?? undefined);
     setPendingDeleteNoteId(null);
   };
+  const openMiniComposer = () => {
+    setMiniSelectionContext(getActiveSelectionContext(canvas.selectionDraft));
+    setMiniComposerOpen(true);
+  };
   const submitMiniCommand = async () => {
     const command = miniCommand.trim();
     if (!command || recommendationBusy) return;
@@ -202,10 +267,12 @@ export function NotesAiCanvasPanel() {
         selectionImageUri: miniSelectionImageUri,
         canvasAction: 'auto',
         source: 'canvas-mini',
+        canvasBlockContext: miniSelectionContext ?? getActiveSelectionContext(canvas.selectionDraft),
       });
       if (sent) {
         setMiniCommand('');
         setMiniSelectionImageUri(null);
+        setMiniSelectionContext(null);
         setMiniComposerOpen(false);
       }
       if (!sent && !locallyBlocked) {
@@ -215,19 +282,23 @@ export function NotesAiCanvasPanel() {
       setCanvasRequestBusy(false);
     }
   };
-  const submitRecommendationCommand = async (command: string) => {
-    if (!recommendationEnabled) return;
+  const submitRecommendationCommand = async (command: string, mode: AiCanvasRecommendationMode) => {
+    if (!canRunRecommendationMode(mode)) return;
     setCanvasRequestBusy(true);
     try {
       const sent = await workspace.onRequestAiCanvasCommand(command, {
         selectionImageUri: miniSelectionImageUri,
         canvasAction: 'canvas_edit',
         source: 'canvas-mini',
+        canvasNoteNeedsTitle: isDefaultAiCanvasTitle(canvas.activeNote?.title),
+        canvasBlockContext: miniSelectionContext ?? getActiveSelectionContext(canvas.selectionDraft),
+        canvasRecommendationMode: mode,
       });
       if (sent) {
         setRecommendationMode(null);
         setMiniCommand('');
         setMiniSelectionImageUri(null);
+        setMiniSelectionContext(null);
         setMiniComposerOpen(false);
         return;
       }
@@ -239,6 +310,7 @@ export function NotesAiCanvasPanel() {
   const closeMiniComposer = () => {
     setMiniCommand('');
     setMiniSelectionImageUri(null);
+    setMiniSelectionContext(null);
     setMiniComposerOpen(false);
     setRecommendationMode(null);
   };
@@ -294,6 +366,40 @@ export function NotesAiCanvasPanel() {
     hoveredTooltipId === id && workspace.styles.aiCanvasHeaderNewButtonHover,
     (canvasManagementDisabled || !canvas.canCreateNote) && workspace.styles.aiCanvasSaveButtonDisabled,
   ];
+  const getAiCanvasHeaderHistoryButtonStyle = (id: string, enabled: boolean) => [
+    workspace.styles.aiCanvasIconButton,
+    hoveredTooltipId === id && enabled && workspace.styles.aiCanvasIconButtonHover,
+    !enabled && workspace.styles.aiCanvasSaveButtonDisabled,
+  ];
+  const canRunRecommendationMode = (mode: AiCanvasRecommendationMode) => {
+    if (!baseRecommendationAvailable) return false;
+    return hasCanvasContent;
+  };
+  const canOpenRecommendationGroup = (prompt: string) => (
+    prompt === '정리 보강' ? baseRecommendationAvailable : baseRecommendationAvailable && hasCanvasContent
+  );
+  const preserveCanvasSelectionProps = Platform.OS === 'web'
+    ? ({
+        onMouseDown: (event: any) => {
+          if (miniSelectionContext || getActiveSelectionContext(canvas.selectionDraft)) {
+            event.preventDefault?.();
+          }
+        },
+      } as any)
+    : {};
+  const renderRecommendationChip = (label: string, command: string, mode: AiCanvasRecommendationMode) => {
+    const enabled = canRunRecommendationMode(mode);
+    return (
+      <Pressable
+        {...preserveCanvasSelectionProps}
+        style={[workspace.styles.aiCanvasMiniQuickChip, !enabled && workspace.styles.aiCanvasMiniQuickChipDisabled]}
+        onPress={() => submitRecommendationCommand(command, mode)}
+        disabled={!enabled}
+      >
+        <Text style={workspace.styles.aiCanvasMiniQuickChipText}>{label}</Text>
+      </Pressable>
+    );
+  };
   const renderRecommendationActions = () => {
     if (!miniComposerOpen) return null;
 
@@ -303,13 +409,7 @@ export function NotesAiCanvasPanel() {
           <Pressable style={workspace.styles.aiCanvasMiniQuickChip} onPress={() => setRecommendationMode(null)} disabled={recommendationBusy}>
             <MaterialCommunityIcons name="close" size={14} color="#4F68D2" />
           </Pressable>
-          <Pressable
-            style={[workspace.styles.aiCanvasMiniQuickChip, !recommendationEnabled && workspace.styles.aiCanvasMiniQuickChipDisabled]}
-            onPress={() => submitRecommendationCommand(AI_CANVAS_RECOMMENDATION_COMMANDS.polish)}
-            disabled={!recommendationEnabled}
-          >
-            <Text style={workspace.styles.aiCanvasMiniQuickChipText}>실행</Text>
-          </Pressable>
+          {renderRecommendationChip('실행', AI_CANVAS_RECOMMENDATION_COMMANDS.polish, 'polish')}
         </View>
       );
     }
@@ -320,20 +420,8 @@ export function NotesAiCanvasPanel() {
           <Pressable style={workspace.styles.aiCanvasMiniQuickChip} onPress={() => setRecommendationMode(null)} disabled={recommendationBusy}>
             <MaterialCommunityIcons name="close" size={14} color="#4F68D2" />
           </Pressable>
-          <Pressable
-            style={[workspace.styles.aiCanvasMiniQuickChip, !recommendationEnabled && workspace.styles.aiCanvasMiniQuickChipDisabled]}
-            onPress={() => submitRecommendationCommand(AI_CANVAS_RECOMMENDATION_COMMANDS.easier)}
-            disabled={!recommendationEnabled}
-          >
-            <Text style={workspace.styles.aiCanvasMiniQuickChipText}>쉽게</Text>
-          </Pressable>
-          <Pressable
-            style={[workspace.styles.aiCanvasMiniQuickChip, !recommendationEnabled && workspace.styles.aiCanvasMiniQuickChipDisabled]}
-            onPress={() => submitRecommendationCommand(AI_CANVAS_RECOMMENDATION_COMMANDS.professional)}
-            disabled={!recommendationEnabled}
-          >
-            <Text style={workspace.styles.aiCanvasMiniQuickChipText}>전문적으로</Text>
-          </Pressable>
+          {renderRecommendationChip('쉽게', AI_CANVAS_RECOMMENDATION_COMMANDS.simplify, 'simplify')}
+          {renderRecommendationChip('전문적으로', AI_CANVAS_RECOMMENDATION_COMMANDS.professionalize, 'professionalize')}
         </View>
       );
     }
@@ -344,40 +432,46 @@ export function NotesAiCanvasPanel() {
           <Pressable style={workspace.styles.aiCanvasMiniQuickChip} onPress={() => setRecommendationMode(null)} disabled={recommendationBusy}>
             <MaterialCommunityIcons name="close" size={14} color="#4F68D2" />
           </Pressable>
-          <Pressable
-            style={[workspace.styles.aiCanvasMiniQuickChip, !recommendationEnabled && workspace.styles.aiCanvasMiniQuickChipDisabled]}
-            onPress={() => submitRecommendationCommand(AI_CANVAS_RECOMMENDATION_COMMANDS.shorter)}
-            disabled={!recommendationEnabled}
-          >
-            <Text style={workspace.styles.aiCanvasMiniQuickChipText}>짧게</Text>
+          {renderRecommendationChip('짧게', AI_CANVAS_RECOMMENDATION_COMMANDS.shorten, 'shorten')}
+          {renderRecommendationChip('길게', AI_CANVAS_RECOMMENDATION_COMMANDS.expand, 'expand')}
+        </View>
+      );
+    }
+
+    if (recommendationMode === 'study') {
+      return (
+        <View style={workspace.styles.aiCanvasMiniQuickRow}>
+          <Pressable style={workspace.styles.aiCanvasMiniQuickChip} onPress={() => setRecommendationMode(null)} disabled={recommendationBusy}>
+            <MaterialCommunityIcons name="close" size={14} color="#4F68D2" />
           </Pressable>
-          <Pressable
-            style={[workspace.styles.aiCanvasMiniQuickChip, !recommendationEnabled && workspace.styles.aiCanvasMiniQuickChipDisabled]}
-            onPress={() => submitRecommendationCommand(AI_CANVAS_RECOMMENDATION_COMMANDS.longer)}
-            disabled={!recommendationEnabled}
-          >
-            <Text style={workspace.styles.aiCanvasMiniQuickChipText}>길게</Text>
-          </Pressable>
+          {renderRecommendationChip('구조화', AI_CANVAS_RECOMMENDATION_COMMANDS.studyRestructure, 'restructure')}
+          {renderRecommendationChip('핵심만', AI_CANVAS_RECOMMENDATION_COMMANDS.studyKeyPoints, 'extract_key_points')}
+          {renderRecommendationChip('오류 의심', AI_CANVAS_RECOMMENDATION_COMMANDS.studyMarkUncertain, 'mark_uncertain')}
         </View>
       );
     }
 
     return (
       <View style={workspace.styles.aiCanvasMiniQuickRow}>
-        {AI_CANVAS_MINI_PROMPTS.map((prompt) => (
-          <Pressable
-            key={prompt}
-            style={[workspace.styles.aiCanvasMiniQuickChip, !recommendationEnabled && workspace.styles.aiCanvasMiniQuickChipDisabled]}
-            onPress={() => {
-              if (prompt === '마무리 다듬기') setRecommendationMode('polish');
-              if (prompt === '수준 조정') setRecommendationMode('level');
-              if (prompt === '길이 조절') setRecommendationMode('length');
-            }}
-            disabled={!recommendationEnabled}
-          >
-            <Text style={workspace.styles.aiCanvasMiniQuickChipText}>{prompt}</Text>
-          </Pressable>
-        ))}
+        {AI_CANVAS_MINI_PROMPTS.map((prompt) => {
+          const enabled = canOpenRecommendationGroup(prompt);
+          return (
+            <Pressable
+              key={prompt}
+              {...preserveCanvasSelectionProps}
+              style={[workspace.styles.aiCanvasMiniQuickChip, !enabled && workspace.styles.aiCanvasMiniQuickChipDisabled]}
+              onPress={() => {
+                if (prompt === '마무리 다듬기') setRecommendationMode('polish');
+                if (prompt === '수준 조정') setRecommendationMode('level');
+                if (prompt === '길이 조절') setRecommendationMode('length');
+                if (prompt === '정리 보강') setRecommendationMode('study');
+              }}
+              disabled={!enabled}
+            >
+              <Text style={workspace.styles.aiCanvasMiniQuickChipText}>{prompt}</Text>
+            </Pressable>
+          );
+        })}
       </View>
     );
   };
@@ -428,8 +522,8 @@ export function NotesAiCanvasPanel() {
                   void submitMiniCommand();
                 });
               }}
-              autoFocus
-              showSoftInputOnFocus
+              autoFocus={!miniSelectionContext}
+              showSoftInputOnFocus={!miniSelectionContext}
             />
             <View style={workspace.styles.aiTooltipAnchor}>
               <Pressable
@@ -463,11 +557,12 @@ export function NotesAiCanvasPanel() {
           <View style={workspace.styles.aiCanvasMiniFabAnchor}>
             <View style={workspace.styles.aiTooltipAnchor}>
               <Pressable
+                {...preserveCanvasSelectionProps}
                 {...getTooltipTriggerProps('ai-canvas-mini-open', 'AI')}
                 style={workspace.styles.aiCanvasMiniSendButton}
                 onPress={() => {
                   hideTooltip('ai-canvas-mini-open');
-                  setMiniComposerOpen(true);
+                  openMiniComposer();
                 }}
               >
                 <MaterialCommunityIcons name="pencil-outline" size={20} color="#FFFFFF" />
@@ -484,10 +579,38 @@ export function NotesAiCanvasPanel() {
 
     return (
       <View style={workspace.styles.aiCanvasNoteListMenu}>
+        <View style={workspace.styles.aiCanvasNoteListMenuHeader}>
+          <View style={workspace.styles.aiCanvasNoteListMenuHeaderTextBox}>
+            <Text style={workspace.styles.aiCanvasNoteListMenuTitle}>이 PDF의 Canvas</Text>
+            <Text style={workspace.styles.aiCanvasNoteListMenuSubtitle}>
+              주제별 필기 {canvas.notes.length}/{canvas.maxNotesPerNote}
+            </Text>
+          </View>
+          <Pressable
+            style={[
+              workspace.styles.aiCanvasNoteListMenuNewButton,
+              (canvasManagementDisabled || !canvas.canCreateNote) && workspace.styles.aiCanvasSaveButtonDisabled,
+            ]}
+            onPress={() => {
+              if (canvasManagementDisabled || !canvas.canCreateNote) return;
+              setNoteActionMenuId(null);
+              void canvas.createNote();
+            }}
+            disabled={canvasManagementDisabled || !canvas.canCreateNote}
+          >
+            <MaterialCommunityIcons name="plus" size={16} color="#405CD1" />
+          </Pressable>
+        </View>
         {canvas.notes.map((note) => {
           const active = note.id === canvas.activeNoteId;
           return (
-            <View key={note.id} style={workspace.styles.aiCanvasNoteListMenuItemWrap}>
+            <View
+              key={note.id}
+              style={[
+                workspace.styles.aiCanvasNoteListMenuItemWrap,
+                noteActionMenuId === note.id && workspace.styles.aiCanvasNoteListMenuItemWrapActive,
+              ]}
+            >
               <Pressable
                 style={[
                   workspace.styles.aiCanvasNoteListMenuItem,
@@ -506,15 +629,32 @@ export function NotesAiCanvasPanel() {
                 disabled={canvasControlsLocked}
                 delayLongPress={350}
               >
-                <Text
-                  style={[
-                    workspace.styles.aiCanvasNoteListMenuText,
-                    active && workspace.styles.aiCanvasNoteListMenuTextActive,
-                  ]}
-                  numberOfLines={1}
+                <View style={[workspace.styles.aiCanvasNoteListActiveDot, active && workspace.styles.aiCanvasNoteListActiveDotOn]} />
+                <View style={workspace.styles.aiCanvasNoteListMenuTextBox}>
+                  <Text
+                    style={[
+                      workspace.styles.aiCanvasNoteListMenuText,
+                      active && workspace.styles.aiCanvasNoteListMenuTextActive,
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {formatCanvasNoteTitle(note, canvas.notes)}
+                  </Text>
+                  <Text style={workspace.styles.aiCanvasNoteListMenuMeta} numberOfLines={1}>
+                    {formatCanvasUpdatedAt(note.updated_at)}
+                  </Text>
+                </View>
+                <Pressable
+                  style={workspace.styles.aiCanvasNoteListRowMenuButton}
+                  onPress={(event) => {
+                    event.stopPropagation();
+                    if (canvasControlsLocked) return;
+                    setNoteActionMenuId((current) => (current === note.id ? null : note.id));
+                  }}
+                  disabled={canvasControlsLocked}
                 >
-                  {note.title}
-                </Text>
+                  <MaterialCommunityIcons name="dots-horizontal" size={16} color="#7A8394" />
+                </Pressable>
               </Pressable>
               {noteActionMenuId === note.id ? (
                 <View style={workspace.styles.aiCanvasNoteActionMenu}>
@@ -575,9 +715,18 @@ export function NotesAiCanvasPanel() {
       ) : null}
       <View style={[workspace.styles.aiCanvasHeader, isWebAiCanvasPanel && workspace.styles.aiCanvasHeaderWeb]}>
         <View style={workspace.styles.aiCanvasHeaderTitleWrap}>
-          <Text style={workspace.styles.aiCanvasTitle} numberOfLines={1}>
-            {canvas.activeNote?.title ?? 'Canvas Notes'}
-          </Text>
+          <Pressable
+            style={workspace.styles.aiCanvasHeaderTitleButton}
+            onPress={startRename}
+            disabled={!canvas.activeNote || canvasControlsLocked}
+          >
+            <Text style={workspace.styles.aiCanvasTitle} numberOfLines={1}>
+              {formatCanvasNoteTitle(canvas.activeNote, canvas.notes)}
+            </Text>
+            {canvas.activeNote ? (
+              <MaterialCommunityIcons name="pencil-outline" size={14} color="#8A95A8" />
+            ) : null}
+          </Pressable>
         </View>
         <View style={workspace.styles.aiCanvasHeaderActions}>
           {isNativeApp ? (
@@ -596,6 +745,36 @@ export function NotesAiCanvasPanel() {
               {renderAiTooltip('ai-canvas-mode', canvasEditModeEnabled ? '보기 모드' : '편집 모드')}
             </View>
           ) : null}
+          <View style={workspace.styles.aiTooltipAnchor}>
+            <Pressable
+              {...getTooltipTriggerProps('ai-canvas-undo', 'Canvas 되돌리기')}
+              style={getAiCanvasHeaderHistoryButtonStyle('ai-canvas-undo', canUndoCanvas)}
+              onPress={() => {
+                hideTooltip('ai-canvas-undo');
+                if (!canUndoCanvas) return;
+                canvas.undoCanvasEdit();
+              }}
+              disabled={!canUndoCanvas}
+            >
+              <MaterialCommunityIcons name="undo-variant" size={18} color={canUndoCanvas ? '#303744' : '#A8B0BF'} />
+            </Pressable>
+            {renderAiTooltip('ai-canvas-undo', 'Canvas 되돌리기')}
+          </View>
+          <View style={workspace.styles.aiTooltipAnchor}>
+            <Pressable
+              {...getTooltipTriggerProps('ai-canvas-redo', 'Canvas 다시 실행')}
+              style={getAiCanvasHeaderHistoryButtonStyle('ai-canvas-redo', canRedoCanvas)}
+              onPress={() => {
+                hideTooltip('ai-canvas-redo');
+                if (!canRedoCanvas) return;
+                canvas.redoCanvasEdit();
+              }}
+              disabled={!canRedoCanvas}
+            >
+              <MaterialCommunityIcons name="redo-variant" size={18} color={canRedoCanvas ? '#303744' : '#A8B0BF'} />
+            </Pressable>
+            {renderAiTooltip('ai-canvas-redo', 'Canvas 다시 실행')}
+          </View>
           <View style={workspace.styles.aiTooltipAnchor}>
             <Pressable
               {...getTooltipTriggerProps('ai-canvas-new-note', '새 노트')}
@@ -702,11 +881,10 @@ export function NotesAiCanvasPanel() {
                   canvas.registerEditorHistoryControls(controls);
                 }}
                 onFocusEditor={async () => {
-                  if (miniComposerOpen) closeMiniComposer();
                   workspace.onFocusWorkspaceTarget('aiCanvas');
                 }}
-                onApplyOperationsResult={async (requestId, applied) => {
-                  canvas.completeCanvasOperations(requestId, applied);
+                onApplyOperationsResult={async (requestId, result) => {
+                  canvas.completeCanvasOperations(requestId, result);
                 }}
                 dom={{
                   style: workspace.styles.aiCanvasMarkdownWebView,
@@ -805,7 +983,10 @@ export function NotesAiCanvasPanel() {
           <Pressable style={workspace.styles.aiRenameModalCard} onPress={(event) => event.stopPropagation()}>
             <Text style={workspace.styles.aiRenameModalTitle}>Canvas 삭제</Text>
             <Text style={workspace.styles.aiRenameModalBody}>
-              "{canvas.notes.find((note) => note.id === pendingDeleteNoteId)?.title ?? canvas.activeNote?.title ?? ''}" Canvas를 삭제할까요?
+              "{formatCanvasNoteTitle(
+                canvas.notes.find((note) => note.id === pendingDeleteNoteId) ?? canvas.activeNote,
+                canvas.notes,
+              )}" Canvas를 삭제할까요?
             </Text>
             <View style={workspace.styles.aiRenameModalActions}>
               <Pressable

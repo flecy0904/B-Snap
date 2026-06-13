@@ -1,6 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Keyboard, Platform } from 'react-native';
 import {
+  analyzeBackendNoteHandwriting,
+  analyzeBackendNotePageHandwriting,
+  BackendApiError,
   getBackendClassInsight,
   isBackendApiEnabled,
   listAllBackendChatSessions,
@@ -9,15 +12,26 @@ import {
   listBackendAiCanvasNotes,
   listBackendAiCanvasNotesByFolder,
   listBackendFolders,
+  listBackendNotePages,
   listBackendNotes,
+  persistBackendNotePageHandwritingRecognition,
   updateBackendChatSession,
   type BackendAiCanvasNoteSummary,
   type BackendClassInsight,
   type BackendChatSession,
   type BackendChatMessage,
+  type BackendHandwritingRecognitionWrite,
+  type BackendNotePage,
   type BackendRagScope,
   type BackendRagScopeSource,
 } from '../../services/backend-api';
+import {
+  ensureKoreanHandwritingModel,
+  getHandwritingRecognitionAvailability,
+  recognizeKoreanHandwritingByClusters,
+  type HandwritingRecognitionResult,
+  type MlKitHandwritingDebugState,
+} from '../../services/handwriting-recognition';
 import type { PencilInteractionEvent } from '../../services/pencil-interaction';
 import {
   type AiFloatingPanelSize,
@@ -34,8 +48,15 @@ import { useAiChatActions } from './ai/use-ai-chat-actions';
 import { useAiChatDerivedState } from './ai/use-ai-chat-derived-state';
 import { isCanvasCreateRequest } from './ai-canvas/canvas-command-intent';
 import { useAiCanvasNotes } from './ai-canvas/use-ai-canvas-notes';
-import { buildClassInsightContext, buildImportantPageRecommendations, isClassInsightQuestion, isClassInsightTargetDocument } from './class-insight';
+import {
+  buildClassInsightContext,
+  buildImportantPageRecommendations,
+  extractRecommendedPageNumbersFromText,
+  isClassInsightQuestion,
+  isClassInsightTargetDocument,
+} from './class-insight';
 import { getStudyDocumentBackendNoteId } from './document/backend-sync';
+import { parseNotePageContent, type HandwritingRecognitionState } from './document/note-page-content';
 import { useStudyDocumentActions } from './document/use-study-document-actions';
 import { useDocumentPageActions } from './document/use-document-page-actions';
 import { normalizeDocumentFile } from './document/document-file-utils';
@@ -53,7 +74,7 @@ import { useWorkspaceCaptureIntents } from './workspace/use-workspace-capture-in
 import { useWorkspaceAiIntents } from './workspace/use-workspace-ai-intents';
 import { isSameDocumentPage, isShapeTool } from '../../ui-helpers';
 import type { InkBrush, InkBrushSettings, InkEraserMode, InkImageAnnotation, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../ui-types';
-import type { AiCanvasBlockContext } from '../../types/ai-canvas';
+import type { AiCanvasBlockContext, AiCanvasRecommendationMode } from '../../types/ai-canvas';
 import type { AiAnswer, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../types';
 
 export type WorkspaceFocusTarget = 'document' | 'aiCanvas';
@@ -62,9 +83,140 @@ export type AppChatMode = 'sidebar' | 'floating';
 export type AppSidebarPosition = 'left' | 'right';
 export type StudyInteractionMode = 'edit' | 'read';
 export type { AiFloatingPanelSize };
+export type { MlKitHandwritingDebugState };
+export type HandwritingDebugReadiness = {
+  platform: string;
+  backendUrlPresent: boolean;
+  workspaceHydrated: boolean;
+  backendApiEnabled: boolean;
+  studyDocumentId: number | null;
+  backendNoteId: number | null;
+  currentDocumentHasBackendPages: boolean;
+  pageNumber: number | null;
+  pageId: number | null;
+  backendPageCount: number;
+  pendingPageSaveCount: number;
+  savingPageCount: number;
+  failedPageSaveCount: number;
+  handwritingSaveState: 'idle' | 'pending' | 'success' | 'failed';
+  handwritingPersisted: boolean | null;
+  lastHandwritingSaveError: string | null;
+  lastHandwritingSaveAt: number | null;
+  canAnalyze: boolean;
+};
 
 const DEFAULT_AI_FLOATING_PANEL_SIZE: AiFloatingPanelSize = { width: 380, height: 620 };
 const DEFAULT_AI_PANEL_MODE: 'floating' | 'sidebar' = Platform.OS === 'web' ? 'sidebar' : 'floating';
+const HANDWRITING_AUTO_ANALYZE_ENABLED = process.env.EXPO_PUBLIC_ENABLE_HANDWRITING_AUTO_ANALYZE === 'true';
+const HANDWRITING_AUTO_VISION_FALLBACK_ENABLED = process.env.EXPO_PUBLIC_ENABLE_HANDWRITING_AUTO_VISION === 'true';
+
+function buildMlKitRecognitionWritePayload(
+  result: HandwritingRecognitionResult,
+  pageNumber: number,
+  strokeHash?: string | null,
+): BackendHandwritingRecognitionWrite {
+  return {
+    stroke_hash: strokeHash || undefined,
+    engine: result.engine || 'mlkit-digital-ink',
+    text: result.text || '',
+    keywords: result.keywords ?? [],
+    symbols: result.symbols ?? [],
+    confidence: result.confidence ?? 0,
+    clusters: (result.clusters ?? []).map((cluster, index) => ({
+      id: cluster.id || `mlkit-cluster-${index + 1}`,
+      pageNumber: cluster.pageNumber || pageNumber,
+      bbox: cluster.bbox,
+      text: cluster.text || '',
+      candidates: cluster.candidates ?? [],
+      keywords: cluster.keywords ?? [],
+      symbols: cluster.symbols ?? [],
+      confidence: cluster.confidence ?? result.confidence ?? 0,
+      source: cluster.source || 'mlkit-digital-ink',
+    })),
+  };
+}
+
+function formatVisionSkipReason(reason?: string | null) {
+  switch (reason) {
+    case 'disabled':
+      return 'fallback-disabled';
+    case 'missing-api-key':
+      return 'missing-api-key';
+    case 'cluster-limit':
+      return 'cluster-limit-exceeded';
+    case 'page-limit':
+      return 'note-page-limit-exceeded';
+    case 'not-requested':
+      return 'not-requested';
+    case 'not-needed':
+      return 'not-needed';
+    case 'no-eligible-clusters':
+      return 'no-eligible-clusters';
+    case 'no-renderable-clusters':
+      return 'no-renderable-clusters';
+    case 'no-star-anchor':
+      return 'no-star-anchor';
+    case 'no-star-text-anchor':
+      return 'no-star-text-anchor';
+    case 'unavailable':
+      return 'unavailable';
+    case 'failed':
+      return 'failed';
+    default:
+      return reason || 'unknown';
+  }
+}
+
+function formatHandwritingAnalysisFeedback(
+  pageNumber: number,
+  recognition: HandwritingRecognitionState | null,
+  options?: { force?: boolean; useVisionFallback?: boolean },
+  previousStrokeHash?: string | null,
+) {
+  const sameStrokeHash = Boolean(
+    previousStrokeHash
+    && recognition?.strokeHash
+    && previousStrokeHash === recognition.strokeHash
+    && !options?.force
+    && !options?.useVisionFallback,
+  );
+  if (sameStrokeHash) {
+    return `${pageNumber}페이지 손필기 변경 없음(same-stroke-hash). 기존 분석을 유지했고 class insight는 그대로 둡니다.`;
+  }
+  if (options?.useVisionFallback) {
+    if (recognition?.visionFallbackUsed) {
+      return `${pageNumber}페이지 Vision fallback 결과를 저장했고 class insight를 새로고침했어요.`;
+    }
+    return `${pageNumber}페이지 Vision fallback skipped: ${formatVisionSkipReason(recognition?.visionFallbackSkippedReason)}. geometry 분석 결과는 저장했어요.`;
+  }
+  if (options?.force) {
+    return `${pageNumber}페이지 force 재분석을 저장했고 class insight를 새로고침했어요.`;
+  }
+  return `${pageNumber}페이지 geometry 손필기 분석을 저장했고 class insight를 새로고침했어요.`;
+}
+
+function formatMlKitUnavailableFeedback(detail?: string) {
+  const normalized = (detail ?? '').toLowerCase();
+  if (Platform.OS === 'web' || normalized.includes('web fallback')) {
+    return '웹에서는 ML Kit native module이 없어 unavailable이 정상입니다. geometry/Vision debug flow를 사용하세요.';
+  }
+  if (Platform.OS === 'android' || normalized.includes('android')) {
+    return 'Android ML Kit bridge는 아직 연결하지 않았어요. Android에서는 저장된 inkStrokes를 백엔드 geometry/Vision 경로로 분석합니다.';
+  }
+  if (normalized.includes('download is in progress') || normalized.includes('downloading')) {
+    return 'ML Kit 한국어 모델을 다운로드 중입니다. 완료 후 다시 실행해주세요.';
+  }
+  if (normalized === 'failed' || (normalized.includes('download') && normalized.includes('failed'))) {
+    return 'ML Kit 한국어 모델 다운로드에 실패했어요. 모델 준비를 다시 실행해주세요.';
+  }
+  if (normalized === 'missing' || normalized.includes('model is missing') || normalized.includes('ensurekoreanmodel')) {
+    return 'ML Kit 한국어 모델이 아직 없습니다. 먼저 한국어 모델 준비를 실행하세요.';
+  }
+  if (normalized.includes('native module unavailable')) {
+    return 'ML Kit native module을 찾지 못했어요. iOS dev build에서는 모듈 연결을, Web/Android에서는 백엔드 분석 경로를 확인해주세요.';
+  }
+  return `ML Kit unavailable: ${detail ?? 'unknown'}`;
+}
 
 function normalizeAiFloatingPanelSize(size?: AiFloatingPanelSize | null): AiFloatingPanelSize {
   const width = Number.isFinite(size?.width) ? Math.round(size!.width) : DEFAULT_AI_FLOATING_PANEL_SIZE.width;
@@ -189,8 +341,33 @@ export function useStudyWorkspace(props: {
   const [lastChatSessionByDocument, setLastChatSessionByDocument] = useState<Record<number, number>>({});
   const [chatSessionsByDocument, setChatSessionsByDocument] = useState<Record<number, BackendChatSession[]>>({});
   const [classInsightByDocument, setClassInsightByDocument] = useState<Record<number, BackendClassInsight | null>>({});
+  const [handwritingRecognitionByDocument, setHandwritingRecognitionByDocument] = useState<Record<number, Record<number, HandwritingRecognitionState | null>>>({});
+  const [handwritingAnalysisBusy, setHandwritingAnalysisBusy] = useState<'page' | 'note' | null>(null);
+  const [handwritingPersistenceDebug, setHandwritingPersistenceDebug] = useState<{
+    state: 'idle' | 'pending' | 'success' | 'failed';
+    persisted: boolean | null;
+    lastError: string | null;
+    lastSavedAt: number | null;
+  }>({
+    state: 'idle',
+    persisted: null,
+    lastError: null,
+    lastSavedAt: null,
+  });
+  const [mlKitHandwritingDebug, setMlKitHandwritingDebug] = useState<MlKitHandwritingDebugState>({
+    available: null,
+    modelReady: null,
+    busy: false,
+    result: null,
+  });
+  const [handwritingAutoAnalyzeQueue, setHandwritingAutoAnalyzeQueue] = useState<{
+    documentId: number;
+    pageNumber: number;
+    requestId: number;
+  }[]>([]);
   const classInsightFetchKeyRef = useRef<Record<number, string>>({});
   const classInsightRefreshTimerRef = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
+  const handwritingAutoAnalyzeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [allChatSessions, setAllChatSessions] = useState<BackendChatSession[]>([]);
   const [aiChatScope, setAiChatScope] = useState<'note' | 'all'>('note');
   const [aiChatSearchQuery, setAiChatSearchQuery] = useState('');
@@ -431,16 +608,61 @@ export function useStudyWorkspace(props: {
       setClassInsightByDocument((current) => ({ ...current, [documentId]: null }));
     }, 1200);
   }, []);
+  const rememberHandwritingRecognitionFromPages = useCallback((documentId: number, pages: BackendNotePage[]) => {
+    const nextByPage: Record<number, HandwritingRecognitionState | null> = {};
+    pages.forEach((page) => {
+      nextByPage[page.page_number] = parseNotePageContent(page.content)?.handwritingRecognition ?? null;
+    });
+    setHandwritingRecognitionByDocument((current) => ({
+      ...current,
+      [documentId]: {
+        ...(current[documentId] ?? {}),
+        ...nextByPage,
+      },
+    }));
+  }, []);
+  const rememberHandwritingRecognitionFromPage = useCallback((documentId: number, page: BackendNotePage) => {
+    const recognition = parseNotePageContent(page.content)?.handwritingRecognition ?? null;
+    setHandwritingRecognitionByDocument((current) => ({
+      ...current,
+      [documentId]: {
+        ...(current[documentId] ?? {}),
+        [page.page_number]: recognition,
+      },
+    }));
+  }, []);
+  const handlePageSaveSuccess = useCallback((documentId: number, pageNumber: number) => {
+    scheduleClassInsightRefresh(documentId);
+    if (!HANDWRITING_AUTO_ANALYZE_ENABLED) return;
+    setHandwritingAutoAnalyzeQueue((current) => {
+      const nextRequest = {
+        documentId,
+        pageNumber,
+        requestId: Date.now() + Math.random(),
+      };
+      return [
+        ...current.filter((request) => (
+          request.documentId !== documentId || request.pageNumber !== pageNumber
+        )),
+        nextRequest,
+      ];
+    });
+  }, [scheduleClassInsightRefresh]);
 
   useEffect(() => () => {
     Object.values(classInsightRefreshTimerRef.current).forEach((timer) => clearTimeout(timer));
     classInsightRefreshTimerRef.current = {};
+    if (handwritingAutoAnalyzeTimerRef.current) {
+      clearTimeout(handwritingAutoAnalyzeTimerRef.current);
+      handwritingAutoAnalyzeTimerRef.current = null;
+    }
   }, []);
 
   const {
     backendPageIdsByDocument,
     setBackendPageIdsByDocument,
     markBackendPageDirty,
+    rememberSavedBackendNotePage,
     syncPdfDocumentToBackend,
     failedPageSaveCount,
     pendingPageSaveCount,
@@ -462,8 +684,60 @@ export function useStudyWorkspace(props: {
     setTextAnnotationsByDocument,
     setImageAnnotationsByDocument,
     setWorkspaceFeedback,
-    onPageSaveSuccess: scheduleClassInsightRefresh,
+    onPageSaveSuccess: handlePageSaveSuccess,
+    onBackendPagesLoaded: rememberHandwritingRecognitionFromPages,
   });
+  useEffect(() => {
+    if (!HANDWRITING_AUTO_ANALYZE_ENABLED || !handwritingAutoAnalyzeQueue.length) return undefined;
+    const request = handwritingAutoAnalyzeQueue.find(({ documentId, pageNumber }) => (
+      Boolean(backendPageIdsByDocument[documentId]?.[pageNumber])
+    ));
+    if (!request) return undefined;
+
+    const { documentId, pageNumber, requestId } = request;
+    const pageId = backendPageIdsByDocument[documentId]?.[pageNumber];
+    if (!pageId) return undefined;
+
+    if (handwritingAutoAnalyzeTimerRef.current) clearTimeout(handwritingAutoAnalyzeTimerRef.current);
+    const removeRequest = () => {
+      setHandwritingAutoAnalyzeQueue((current) => current.filter((item) => (
+        item.documentId !== documentId
+        || item.pageNumber !== pageNumber
+        || item.requestId !== requestId
+      )));
+    };
+    handwritingAutoAnalyzeTimerRef.current = setTimeout(() => {
+      handwritingAutoAnalyzeTimerRef.current = null;
+      analyzeBackendNotePageHandwriting(pageId, {
+        force: false,
+        useVisionFallback: HANDWRITING_AUTO_VISION_FALLBACK_ENABLED,
+      })
+        .then((page) => {
+          rememberHandwritingRecognitionFromPage(documentId, page);
+          rememberSavedBackendNotePage(documentId, page);
+          scheduleClassInsightRefresh(documentId);
+        })
+        .catch(() => {
+          // Debug-only automatic analysis should never interrupt normal page save flow.
+        })
+        .finally(() => {
+          removeRequest();
+        });
+    }, 2000);
+
+    return () => {
+      if (handwritingAutoAnalyzeTimerRef.current) {
+        clearTimeout(handwritingAutoAnalyzeTimerRef.current);
+        handwritingAutoAnalyzeTimerRef.current = null;
+      }
+    };
+  }, [
+    backendPageIdsByDocument,
+    handwritingAutoAnalyzeQueue,
+    rememberHandwritingRecognitionFromPage,
+    rememberSavedBackendNotePage,
+    scheduleClassInsightRefresh,
+  ]);
   const {
     activeAiChatSessionId,
     aiChatReadOnly,
@@ -587,7 +861,7 @@ export function useStudyWorkspace(props: {
     enabled: workspaceHydrated && isBackendApiEnabled() && !!studyDocumentBackendNoteId && currentDocumentHasBackendPages,
     currentPageNumber: currentAiCanvasPageNumber ?? null,
     onFeedback: setWorkspaceFeedback,
-    onRecordWorkspaceAction: () => recordWorkspaceActionTarget('aiCanvas'),
+    onRecordWorkspaceAction: () => setFocusedWorkspaceTarget('aiCanvas'),
   });
   const currentClassInsight = studyDocumentId ? classInsightByDocument[studyDocumentId] ?? null : null;
   const importantPageRecommendations = useMemo(() => buildImportantPageRecommendations({
@@ -604,10 +878,330 @@ export function useStudyWorkspace(props: {
     payload: Parameters<typeof aiCanvas.applyChatCanvasEdit>[0],
   ) => {
     aiCanvas.applyChatCanvasEdit(payload);
-    setAppRightSidebarPanel('canvas');
-    if (appChatMode === 'sidebar') setAiPanelOpen(false);
-  }, [aiCanvas.applyChatCanvasEdit, appChatMode]);
+    setAppRightSidebarPanel((current) => (current === 'chat' ? current : 'canvas'));
+  }, [aiCanvas.applyChatCanvasEdit]);
   const currentBackendNoteId = getStudyDocumentBackendNoteId(studyDocument);
+  const currentHandwritingDebugPageNumber = currentDocumentPage?.kind === 'pdf'
+    ? currentDocumentPage.pageNumber
+    : currentDocumentPage?.kind === 'generated'
+      ? null
+      : currentPdfPage;
+  const currentBackendPageIds = studyDocumentId
+    ? backendPageIdsByDocument[studyDocumentId] ?? null
+    : null;
+  const currentHandwritingDebugPageId = studyDocumentId && currentHandwritingDebugPageNumber
+    ? currentBackendPageIds?.[currentHandwritingDebugPageNumber] ?? null
+    : null;
+  const currentPageHandwritingRecognition = studyDocumentId && currentHandwritingDebugPageNumber
+    ? handwritingRecognitionByDocument[studyDocumentId]?.[currentHandwritingDebugPageNumber] ?? null
+    : null;
+  const handwritingDebugBackendApiEnabled = isBackendApiEnabled();
+  const handwritingDebugReadiness: HandwritingDebugReadiness = {
+    platform: Platform.OS,
+    backendUrlPresent: Boolean(process.env.EXPO_PUBLIC_BACKEND_URL?.trim()),
+    workspaceHydrated,
+    backendApiEnabled: handwritingDebugBackendApiEnabled,
+    studyDocumentId: studyDocumentId ?? null,
+    backendNoteId: currentBackendNoteId ?? null,
+    currentDocumentHasBackendPages,
+    pageNumber: currentHandwritingDebugPageNumber ?? null,
+    pageId: currentHandwritingDebugPageId,
+    backendPageCount: currentBackendPageIds ? Object.keys(currentBackendPageIds).length : 0,
+    pendingPageSaveCount,
+    savingPageCount,
+    failedPageSaveCount,
+    handwritingSaveState: handwritingPersistenceDebug.state,
+    handwritingPersisted: handwritingPersistenceDebug.persisted,
+    lastHandwritingSaveError: handwritingPersistenceDebug.lastError,
+    lastHandwritingSaveAt: handwritingPersistenceDebug.lastSavedAt,
+    canAnalyze: Boolean(
+      workspaceHydrated
+      && handwritingDebugBackendApiEnabled
+      && studyDocumentId
+      && currentBackendNoteId
+      && currentDocumentHasBackendPages
+      && currentHandwritingDebugPageNumber
+      && currentHandwritingDebugPageId
+      && !pendingPageSaveCount
+      && !savingPageCount
+    ),
+  };
+  const canAnalyzeCurrentPageHandwriting = handwritingDebugReadiness.canAnalyze;
+  const analyzeCurrentPageHandwriting = useCallback(async (options?: { force?: boolean; useVisionFallback?: boolean }) => {
+    if (!studyDocumentId || !currentBackendNoteId || !currentHandwritingDebugPageNumber) {
+      setWorkspaceFeedback('분석할 PDF 페이지를 찾지 못했어요.');
+      return;
+    }
+    if (pendingPageSaveCount || savingPageCount) {
+      setWorkspaceFeedback('필기 저장이 끝난 뒤 손필기 분석을 다시 실행해주세요.');
+      return;
+    }
+    const pageId = backendPageIdsByDocument[studyDocumentId]?.[currentHandwritingDebugPageNumber];
+    if (!pageId) {
+      setHandwritingPersistenceDebug({
+        state: 'failed',
+        persisted: false,
+        lastError: 'no backend page id',
+        lastSavedAt: null,
+      });
+      setWorkspaceFeedback('서버에 연결된 현재 페이지가 아직 준비되지 않았어요.');
+      return;
+    }
+
+    setHandwritingAnalysisBusy('page');
+    setHandwritingPersistenceDebug({
+      state: 'pending',
+      persisted: false,
+      lastError: null,
+      lastSavedAt: null,
+    });
+    try {
+      const page = await analyzeBackendNotePageHandwriting(pageId, options);
+      const recognition = parseNotePageContent(page.content)?.handwritingRecognition ?? null;
+      rememberHandwritingRecognitionFromPage(studyDocumentId, page);
+      rememberSavedBackendNotePage(studyDocumentId, page);
+      scheduleClassInsightRefresh(studyDocumentId);
+      setHandwritingPersistenceDebug({
+        state: 'success',
+        persisted: Boolean(recognition),
+        lastError: recognition ? null : 'backend response did not include handwritingRecognition',
+        lastSavedAt: Date.now(),
+      });
+      setWorkspaceFeedback(formatHandwritingAnalysisFeedback(
+        page.page_number,
+        recognition,
+        options,
+        currentPageHandwritingRecognition?.strokeHash,
+      ));
+    } catch (error) {
+      const detail = error instanceof BackendApiError
+        ? error.detail ?? error.message
+        : error instanceof Error
+          ? error.message
+          : 'unknown error';
+      setHandwritingPersistenceDebug({
+        state: 'failed',
+        persisted: false,
+        lastError: detail,
+        lastSavedAt: null,
+      });
+      setWorkspaceFeedback(`현재 페이지 손필기 분석에 실패했어요. ${detail}`);
+    } finally {
+      setHandwritingAnalysisBusy(null);
+    }
+  }, [
+    backendPageIdsByDocument,
+    currentBackendNoteId,
+    currentHandwritingDebugPageNumber,
+    currentPageHandwritingRecognition?.strokeHash,
+    pendingPageSaveCount,
+    rememberSavedBackendNotePage,
+    rememberHandwritingRecognitionFromPage,
+    savingPageCount,
+    scheduleClassInsightRefresh,
+    setWorkspaceFeedback,
+    studyDocumentId,
+  ]);
+  const forceAnalyzeCurrentPageHandwriting = useCallback(() => analyzeCurrentPageHandwriting({ force: true }), [analyzeCurrentPageHandwriting]);
+  const analyzeCurrentPageHandwritingWithVision = useCallback(() => (
+    analyzeCurrentPageHandwriting({ force: true, useVisionFallback: true })
+  ), [analyzeCurrentPageHandwriting]);
+  const analyzeCurrentNoteHandwriting = useCallback(async (options?: { force?: boolean; useVisionFallback?: boolean }) => {
+    if (!studyDocumentId || !currentBackendNoteId) {
+      setWorkspaceFeedback('분석할 PDF 노트를 찾지 못했어요.');
+      return;
+    }
+    if (pendingPageSaveCount || savingPageCount) {
+      setWorkspaceFeedback('필기 저장이 끝난 뒤 노트 전체 분석을 다시 실행해주세요.');
+      return;
+    }
+
+    setHandwritingAnalysisBusy('note');
+    try {
+      const summary = await analyzeBackendNoteHandwriting(currentBackendNoteId, options);
+      const pages = await listBackendNotePages(currentBackendNoteId);
+      rememberHandwritingRecognitionFromPages(studyDocumentId, pages);
+      pages.forEach((page) => rememberSavedBackendNotePage(studyDocumentId, page));
+      scheduleClassInsightRefresh(studyDocumentId);
+      setWorkspaceFeedback(`손필기 분석 완료: ${summary.pages_analyzed}개 분석, ${summary.pages_skipped}개 건너뜀, ${summary.pages_failed}개 실패`);
+    } catch {
+      setWorkspaceFeedback('노트 전체 손필기 분석에 실패했어요.');
+    } finally {
+      setHandwritingAnalysisBusy(null);
+    }
+  }, [
+    currentBackendNoteId,
+    pendingPageSaveCount,
+    rememberHandwritingRecognitionFromPages,
+    rememberSavedBackendNotePage,
+    savingPageCount,
+    scheduleClassInsightRefresh,
+    setWorkspaceFeedback,
+    studyDocumentId,
+  ]);
+  const getCurrentPageInkStrokesForRecognition = useCallback(() => {
+    if (!studyDocumentId || !currentHandwritingDebugPageNumber) return [];
+    return (inkByDocument[studyDocumentId] ?? []).filter((stroke) => (
+      !stroke.generatedPageId
+      && (!stroke.pageNumber || stroke.pageNumber === currentHandwritingDebugPageNumber)
+    ));
+  }, [currentHandwritingDebugPageNumber, inkByDocument, studyDocumentId]);
+  const checkMlKitHandwritingAvailability = useCallback(async () => {
+    setMlKitHandwritingDebug((current) => ({ ...current, busy: true }));
+    const availability = await getHandwritingRecognitionAvailability();
+    setMlKitHandwritingDebug((current) => ({
+      ...current,
+      available: availability.available,
+      modelReady: availability.state === 'ready' ? true : availability.state ? false : current.modelReady,
+      modelState: availability.state,
+      busy: false,
+      detail: availability.detail,
+    }));
+    setWorkspaceFeedback(
+      availability.state === 'ready'
+        ? 'ML Kit 손필기 인식 모듈과 한국어 모델이 준비됐어요.'
+        : availability.available
+          ? `ML Kit 모듈은 사용 가능해요. ${formatMlKitUnavailableFeedback(availability.detail ?? availability.state)}`
+          : formatMlKitUnavailableFeedback(availability.detail ?? availability.state),
+    );
+  }, [setWorkspaceFeedback]);
+  const prepareKoreanHandwritingModel = useCallback(async () => {
+    setMlKitHandwritingDebug((current) => ({ ...current, busy: true }));
+    const model = await ensureKoreanHandwritingModel();
+    setMlKitHandwritingDebug((current) => ({
+      ...current,
+      available: model.available || current.available === true,
+      modelReady: model.available || model.state === 'ready',
+      modelState: model.state,
+      busy: false,
+      detail: model.detail,
+    }));
+    setWorkspaceFeedback(
+      model.state === 'ready' || model.available
+        ? '한국어 손필기 모델이 준비됐어요.'
+        : `한국어 모델 준비 상태: ${formatMlKitUnavailableFeedback(model.detail ?? model.state)}`,
+    );
+  }, [setWorkspaceFeedback]);
+  const recognizeCurrentPageWithMlKit = useCallback(async () => {
+    if (!currentHandwritingDebugPageNumber) {
+      setWorkspaceFeedback('ML Kit으로 인식할 현재 PDF 페이지를 찾지 못했어요.');
+      return;
+    }
+    const strokes = getCurrentPageInkStrokesForRecognition();
+    if (!strokes.length) {
+      setWorkspaceFeedback('현재 페이지에 인식할 B-Snap 필기가 없어요.');
+      return;
+    }
+    if (mlKitHandwritingDebug.modelReady === false) {
+      setWorkspaceFeedback(formatMlKitUnavailableFeedback(mlKitHandwritingDebug.detail ?? mlKitHandwritingDebug.modelState ?? 'Korean Digital Ink model is missing.'));
+      return;
+    }
+
+    setMlKitHandwritingDebug((current) => ({ ...current, busy: true }));
+    const result = await recognizeKoreanHandwritingByClusters(strokes, { pageNumber: currentHandwritingDebugPageNumber });
+    const clusterCount = result.clusters?.length ?? 0;
+    setMlKitHandwritingDebug((current) => ({
+      ...current,
+      available: result.status === 'ready' ? true : current.available,
+      modelReady: result.status === 'ready' ? true : result.modelState ? result.modelState === 'ready' : current.modelReady,
+      modelState: result.modelState ?? current.modelState,
+      busy: false,
+      detail: result.detail,
+      result,
+    }));
+    setWorkspaceFeedback(
+      result.status === 'ready'
+        ? `${currentHandwritingDebugPageNumber}페이지 ML Kit 후보를 ${clusterCount || 1}개 cluster에서 인식했어요.`
+        : formatMlKitUnavailableFeedback(result.detail ?? result.status),
+    );
+  }, [
+    currentHandwritingDebugPageNumber,
+    getCurrentPageInkStrokesForRecognition,
+    mlKitHandwritingDebug.detail,
+    mlKitHandwritingDebug.modelReady,
+    mlKitHandwritingDebug.modelState,
+    setWorkspaceFeedback,
+  ]);
+  const recognizeAndSaveCurrentPageWithMlKit = useCallback(async () => {
+    if (!studyDocumentId || !currentBackendNoteId || !currentHandwritingDebugPageNumber) {
+      setWorkspaceFeedback('ML Kit으로 저장할 현재 PDF 페이지를 찾지 못했어요.');
+      return;
+    }
+    if (pendingPageSaveCount || savingPageCount) {
+      setWorkspaceFeedback('필기 저장이 끝난 뒤 ML Kit 저장을 다시 실행해주세요.');
+      return;
+    }
+    const pageId = backendPageIdsByDocument[studyDocumentId]?.[currentHandwritingDebugPageNumber];
+    if (!pageId) {
+      setWorkspaceFeedback('서버에 연결된 현재 페이지가 아직 준비되지 않았어요.');
+      return;
+    }
+    const strokes = getCurrentPageInkStrokesForRecognition();
+    if (!strokes.length) {
+      setWorkspaceFeedback('현재 페이지에 저장할 B-Snap 필기가 없어요.');
+      return;
+    }
+    if (mlKitHandwritingDebug.modelReady === false) {
+      setWorkspaceFeedback(formatMlKitUnavailableFeedback(mlKitHandwritingDebug.detail ?? mlKitHandwritingDebug.modelState ?? 'Korean Digital Ink model is missing.'));
+      return;
+    }
+
+    setHandwritingAnalysisBusy('page');
+    setMlKitHandwritingDebug((current) => ({ ...current, busy: true }));
+    try {
+      const result = await recognizeKoreanHandwritingByClusters(strokes, { pageNumber: currentHandwritingDebugPageNumber });
+      setMlKitHandwritingDebug((current) => ({
+        ...current,
+        available: result.status === 'ready' ? true : current.available,
+        modelReady: result.status === 'ready' ? true : result.modelState ? result.modelState === 'ready' : current.modelReady,
+        modelState: result.modelState ?? current.modelState,
+        detail: result.detail,
+        result,
+      }));
+      if (result.status !== 'ready') {
+        setWorkspaceFeedback(`ML Kit 결과를 저장하지 못했어요. ${formatMlKitUnavailableFeedback(result.detail ?? result.status)}`);
+        return;
+      }
+
+      const page = await persistBackendNotePageHandwritingRecognition(
+        pageId,
+        buildMlKitRecognitionWritePayload(
+          result,
+          currentHandwritingDebugPageNumber,
+          currentPageHandwritingRecognition?.strokeHash,
+        ),
+      );
+      rememberHandwritingRecognitionFromPage(studyDocumentId, page);
+      rememberSavedBackendNotePage(studyDocumentId, page);
+      scheduleClassInsightRefresh(studyDocumentId);
+      setWorkspaceFeedback(`${page.page_number}페이지 ML Kit 손필기 결과를 ${result.clusters?.length || 1}개 cluster 기준으로 저장했고 class insight를 새로고침했어요.`);
+    } catch (error) {
+      if (error instanceof BackendApiError && error.status === 409) {
+        setWorkspaceFeedback('ML Kit 결과가 오래됐어요. 현재 페이지에서 다시 실행해주세요.');
+      } else {
+        setWorkspaceFeedback('ML Kit 손필기 결과 저장에 실패했어요.');
+      }
+    } finally {
+      setHandwritingAnalysisBusy(null);
+      setMlKitHandwritingDebug((current) => ({ ...current, busy: false }));
+    }
+  }, [
+    backendPageIdsByDocument,
+    currentBackendNoteId,
+    currentHandwritingDebugPageNumber,
+    currentPageHandwritingRecognition?.strokeHash,
+    getCurrentPageInkStrokesForRecognition,
+    mlKitHandwritingDebug.detail,
+    mlKitHandwritingDebug.modelReady,
+    mlKitHandwritingDebug.modelState,
+    pendingPageSaveCount,
+    rememberHandwritingRecognitionFromPage,
+    rememberSavedBackendNotePage,
+    savingPageCount,
+    scheduleClassInsightRefresh,
+    setWorkspaceFeedback,
+    studyDocumentId,
+  ]);
 
   useEffect(() => {
     if (!activeIncomingBanner) return;
@@ -1175,12 +1769,24 @@ export function useStudyWorkspace(props: {
       }
     },
     clearSelection: clearSelectionForCurrentDocument,
-    buildContextHint: async (question) => buildClassInsightContext({
-      question,
-      studyDocument,
-      subject,
-      classInsight: await refreshClassInsightForQuestion(question),
-    }),
+    buildContextHint: async (question) => {
+      const previouslyRecommendedPageNumbers = new Set<number>();
+      aiMessages
+        .filter((message) => message.role === 'assistant')
+        .forEach((message) => {
+          extractRecommendedPageNumbersFromText(message.content, studyDocument?.pageCount).forEach((pageNumber) => {
+            previouslyRecommendedPageNumbers.add(pageNumber);
+          });
+        });
+
+      return buildClassInsightContext({
+        question,
+        studyDocument,
+        subject,
+        classInsight: await refreshClassInsightForQuestion(question),
+        previouslyRecommendedPageNumbers,
+      });
+    },
   });
 
   const {
@@ -1335,6 +1941,8 @@ export function useStudyWorkspace(props: {
     canvasAction?: 'auto' | 'chat_only' | 'canvas_edit';
     source?: 'canvas-mini' | 'canvas-block';
     canvasBlockContext?: AiCanvasBlockContext | null;
+    canvasNoteNeedsTitle?: boolean;
+    canvasRecommendationMode?: AiCanvasRecommendationMode | null;
   }) => {
     if (isCanvasCreateRequest(command)) {
       setWorkspaceFeedback('현재 Canvas 수정만 도와드릴 수 있어요.');
@@ -1352,6 +1960,8 @@ export function useStudyWorkspace(props: {
       canvasMarkdown: aiCanvas.markdownDraft,
       canvasDocumentJson: aiCanvas.documentDraft,
       canvasBlockContext: options?.canvasBlockContext ?? null,
+      canvasNoteNeedsTitle: options?.canvasNoteNeedsTitle ?? false,
+      canvasRecommendationMode: options?.canvasRecommendationMode ?? null,
     });
   }, [aiCanvas.activeNoteId, aiCanvas.documentDraft, aiCanvas.markdownDraft, requestAiAnswer, setWorkspaceFeedback]);
 
@@ -1582,8 +2192,8 @@ export function useStudyWorkspace(props: {
   const documentRedoHistory = studyDocumentId ? redoInkHistoryByDocument[studyDocumentId] ?? [] : [];
   const canUndoDocumentAction = documentInkHistory.length > 0;
   const canRedoDocumentAction = documentRedoHistory.length > 0;
-  const canUndoWorkspaceTarget = (target: WorkspaceFocusTarget) => (target === 'document' ? canUndoDocumentAction : aiCanvas.canUndo);
-  const canRedoWorkspaceTarget = (target: WorkspaceFocusTarget) => (target === 'document' ? canRedoDocumentAction : aiCanvas.canRedo);
+  const canUndoWorkspaceTarget = (target: WorkspaceFocusTarget) => target === 'document' && canUndoDocumentAction;
+  const canRedoWorkspaceTarget = (target: WorkspaceFocusTarget) => target === 'document' && canRedoDocumentAction;
   const lastUndoWorkspaceTarget = [...workspaceActionHistory].reverse().find(canUndoWorkspaceTarget)
     ?? (focusedWorkspaceTarget && canUndoWorkspaceTarget(focusedWorkspaceTarget) ? focusedWorkspaceTarget : null);
   const lastRedoWorkspaceTarget = [...workspaceRedoActionHistory].reverse().find(canRedoWorkspaceTarget)
@@ -1600,22 +2210,14 @@ export function useStudyWorkspace(props: {
     setWorkspaceActionHistory((current) => removeLastWorkspaceTarget(current, target));
     setWorkspaceRedoActionHistory((current) => [...current, target].slice(-100));
     setFocusedWorkspaceTarget(target);
-    if (target === 'document') {
-      undoInk();
-      return;
-    }
-    aiCanvas.undoCanvasEdit();
+    undoInk();
   };
   const redoWorkspaceActionTarget = (target: WorkspaceFocusTarget) => {
     if (!canRedoWorkspaceTarget(target)) return;
     setWorkspaceRedoActionHistory((current) => removeLastWorkspaceTarget(current, target));
     setWorkspaceActionHistory((current) => [...current, target].slice(-100));
     setFocusedWorkspaceTarget(target);
-    if (target === 'document') {
-      redoInk();
-      return;
-    }
-    aiCanvas.redoCanvasEdit();
+    redoInk();
   };
   const undoFocusedWorkspaceAction = () => {
     const target = lastUndoWorkspaceTarget;
@@ -1743,6 +2345,11 @@ export function useStudyWorkspace(props: {
     aiCanvas,
     classInsight: currentClassInsight,
     importantPageRecommendations,
+    currentPageHandwritingRecognition,
+    handwritingAnalysisBusy,
+    mlKitHandwritingDebug,
+    handwritingDebugReadiness,
+    canAnalyzeCurrentPageHandwriting,
     query,
     sort,
     incomingAssetSuggestion,
@@ -1779,6 +2386,14 @@ export function useStudyWorkspace(props: {
     openSubject,
     openNote,
     openStudyDocument,
+    analyzeCurrentPageHandwriting,
+    forceAnalyzeCurrentPageHandwriting,
+    analyzeCurrentPageHandwritingWithVision,
+    analyzeCurrentNoteHandwriting,
+    checkMlKitHandwritingAvailability,
+    prepareKoreanHandwritingModel,
+    recognizeCurrentPageWithMlKit,
+    recognizeAndSaveCurrentPageWithMlKit,
     createBlankNote,
     requestDeleteNote,
     requestDeleteStudyDocument,
@@ -1832,6 +2447,7 @@ export function useStudyWorkspace(props: {
     startNewAiChatSession,
     createAiChatSession,
     requestAiAnswer,
+    requestAiAnswerForQuestion,
     requestAiCanvasCommand,
     askAiAboutSelection,
     insertAiAnswerPage,

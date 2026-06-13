@@ -1,6 +1,9 @@
 import { useEffect, useMemo, useState } from 'react';
 
 const WORKSPACE_FEEDBACK_CLEAR_MS = 2200;
+const SHOW_WORKSPACE_FEEDBACK_TOASTS =
+  process.env.EXPO_PUBLIC_ENABLE_WORKSPACE_FEEDBACK_TOASTS === 'true'
+  || process.env.EXPO_PUBLIC_ENABLE_HANDWRITING_DEBUG === 'true';
 
 export function useWorkspaceFeedback() {
   const [workspaceFeedback, setWorkspaceFeedback] = useState<string | null>(null);
@@ -36,7 +39,7 @@ export function useWorkspaceSaveStatus(params: {
             : '저장 준비 중';
 
     return {
-      effectiveWorkspaceFeedback: params.workspaceFeedback,
+      effectiveWorkspaceFeedback: SHOW_WORKSPACE_FEEDBACK_TOASTS ? params.workspaceFeedback : null,
       documentSaveStatus,
     };
   }, [

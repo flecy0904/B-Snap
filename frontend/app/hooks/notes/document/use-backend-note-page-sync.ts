@@ -7,6 +7,7 @@ import {
   updateBackendNotePage,
   uploadBackendPdfNote,
   BackendApiError,
+  type BackendNotePage,
 } from '../../../services/backend-api';
 import type { InkImageAnnotation, InkStroke, InkTextAnnotation } from '../../../ui-types';
 import type { BookmarkedPage, GeneratedWorkspacePage, PageCaptureReference, StudyDocumentEntry, Subject } from '../../../types';
@@ -41,11 +42,26 @@ type UseBackendNotePageSyncParams = {
   setImageAnnotationsByDocument: Dispatch<SetStateAction<Record<number, InkImageAnnotation[]>>>;
   setWorkspaceFeedback: Dispatch<SetStateAction<string | null>>;
   onPageSaveSuccess?: (documentId: number, pageNumber: number) => void;
+  onBackendPagesLoaded?: (documentId: number, pages: BackendNotePage[]) => void;
 };
 
 const EMPTY_PAGE_CONTENT = serializeNotePageContent({ inkStrokes: [], textAnnotations: [] });
 
 const getPageSaveKey = (documentId: number, pageNumber: number) => `${documentId}:${pageNumber}`;
+
+function serializeBackendPageForSavedState(page: BackendNotePage) {
+  const storedPage = parseNotePageContent(page.content);
+  if (!storedPage) return page.content ?? EMPTY_PAGE_CONTENT;
+  return serializeNotePageContent({
+    inkStrokes: storedPage.inkStrokes,
+    textAnnotations: storedPage.textAnnotations,
+    imageAnnotations: storedPage.imageAnnotations,
+    bookmarked: storedPage.bookmarked,
+    photoReferenceCount: storedPage.photoReferenceCount,
+    memoPageCount: storedPage.memoPageCount,
+    handwritingRecognition: storedPage.handwritingRecognition,
+  });
+}
 
 function isTransientWebPdfUri(uri: string | null | undefined) {
   if (typeof uri !== 'string') return false;
@@ -71,6 +87,7 @@ export function useBackendNotePageSync({
   setImageAnnotationsByDocument,
   setWorkspaceFeedback,
   onPageSaveSuccess,
+  onBackendPagesLoaded,
 }: UseBackendNotePageSyncParams) {
   const [backendPageIdsByDocument, setBackendPageIdsByDocument] = useState<Record<number, Record<number, number>>>({});
   const [pendingPageSaves, setPendingPageSaves] = useState<Record<string, PendingPageSave>>({});
@@ -123,6 +140,7 @@ export function useBackendNotePageSync({
         bookmarked: storedPage.bookmarked,
         photoReferenceCount: storedPage.photoReferenceCount,
         memoPageCount: storedPage.memoPageCount,
+        handwritingRecognition: storedPage.handwritingRecognition,
       });
       documentInk.push(...normalizedInkStrokes);
       documentTextAnnotations.push(...normalizedTextAnnotations);
@@ -161,10 +179,31 @@ export function useBackendNotePageSync({
       setTextAnnotationsByDocument((current) => ({ ...current, [documentId]: documentTextAnnotations }));
       setImageAnnotationsByDocument((current) => ({ ...current, [documentId]: documentImageAnnotations }));
     }
-  }, [setImageAnnotationsByDocument, setInkByDocument, setTextAnnotationsByDocument, setUserStudyDocuments]);
+    onBackendPagesLoaded?.(documentId, pages);
+  }, [onBackendPagesLoaded, setImageAnnotationsByDocument, setInkByDocument, setTextAnnotationsByDocument, setUserStudyDocuments]);
 
   const markBackendPageDirty = useCallback((documentId: number, pageNumber: number) => {
     dirtyPageKeysRef.current.add(getPageSaveKey(documentId, pageNumber));
+  }, []);
+
+  const rememberSavedBackendNotePage = useCallback((documentId: number, page: BackendNotePage) => {
+    const key = getPageSaveKey(documentId, page.page_number);
+    const content = serializeBackendPageForSavedState(page);
+    lastSavedPageContentRef.current[key] = content;
+    lastQueuedPageContentRef.current[key] = content;
+    dirtyPageKeysRef.current.delete(key);
+    setPendingPageSaves((current) => {
+      if (!current[key]) return current;
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
+    setFailedPageSaveKeys((current) => {
+      if (!current[key]) return current;
+      const next = { ...current };
+      delete next[key];
+      return next;
+    });
   }, []);
 
   useEffect(() => {
@@ -497,6 +536,7 @@ export function useBackendNotePageSync({
     backendPageIdsByDocument,
     setBackendPageIdsByDocument,
     markBackendPageDirty,
+    rememberSavedBackendNotePage,
     syncPdfDocumentToBackend,
     failedPageSaveCount: Object.keys(failedPageSaveKeys).length,
     pendingPageSaveCount: Object.keys(pendingPageSaves).length,

@@ -10,7 +10,7 @@ type PageReferenceTextProps = {
   onOpenPage?: (pageNumber: number) => void;
 };
 
-const PAGE_REFERENCE_PATTERN = /(\d{1,3})\s*(페이지|쪽|p(?:age)?\.?)/gi;
+const PAGE_REFERENCE_PATTERN = /(\d{1,3})(?:\s*[-~–—]\s*(\d{1,3}))?\s*(페이지|쪽|p(?:age)?\.?)/gi;
 const BOLD_PATTERN = /\*\*([^*]+)\*\*/g;
 const DEFAULT_BOLD_STYLE = { fontWeight: '900' as const };
 
@@ -36,11 +36,15 @@ function renderPageSegments(params: {
 
   while ((match = pattern.exec(params.text)) !== null) {
     const pageNumber = Number(match[1]);
+    const endPageNumber = match[2] ? Number(match[2]) : pageNumber;
     const matchedText = match[0];
     const validPage = Boolean(params.onOpenPage)
       && Number.isFinite(pageNumber)
+      && Number.isFinite(endPageNumber)
       && pageNumber >= 1
-      && pageNumber <= params.maxPage;
+      && pageNumber <= params.maxPage
+      && endPageNumber >= pageNumber
+      && endPageNumber <= params.maxPage;
 
     if (match.index > lastIndex) {
       const plainText = params.text.slice(lastIndex, match.index);

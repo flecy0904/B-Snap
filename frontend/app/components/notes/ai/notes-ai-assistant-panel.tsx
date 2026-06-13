@@ -97,10 +97,9 @@ function getFloatingPanelHeight(windowHeight: number, panelY: number, requestedH
 }
 
 const CLASS_INSIGHT_QUICK_PROMPTS = [
-  { label: '시험 부분', question: '시험에 나올만한 부분 알려줘' },
   { label: '중요 페이지', question: '시험에 나올만한 중요 페이지 추천해줘' },
-  { label: '복습 순서', question: '이 PDF에서 먼저 복습할 순서 알려줘' },
 ] as const;
+const MORE_IMPORTANT_PAGES_QUESTION = '중요 페이지 더 보여줘';
 
 export function NotesAiAssistantPanel() {
   const workspace = useNotesGlobalContext();
@@ -164,6 +163,7 @@ export function NotesAiAssistantPanel() {
       ? CLASS_INSIGHT_QUICK_PROMPTS
       : []
   ), [workspace.classInsight, workspace.studyDocument, workspace.subject]);
+  const canRequestMoreImportantPages = quickPrompts.length > 0 && !workspace.aiChatReadOnly;
   const showQuickPrompts = Boolean(
     !workspace.aiChatReadOnly
     && !workspace.aiLoading
@@ -179,6 +179,9 @@ export function NotesAiAssistantPanel() {
     workspace.onSetCurrentPdfPage?.(pageNumber);
     workspace.onChangeInkTool?.('view');
   }, [workspace.onChangeInkTool, workspace.onSetCurrentPdfPage]);
+  const requestMoreImportantPages = React.useCallback(() => {
+    void workspace.onRequestAiAnswerForQuestion(MORE_IMPORTANT_PAGES_QUESTION);
+  }, [workspace.onRequestAiAnswerForQuestion]);
   const recentSessions = workspace.allAiChatSessions.slice(0, 8);
   const activeRagScopeSources = workspace.activeAiRagScope?.sources ?? [];
   const ragReferenceCandidates = workspace.aiRagReferenceCandidates ?? [];
@@ -1524,6 +1527,8 @@ export function NotesAiAssistantPanel() {
                     textStyle={[workspace.styles.aiMessageText, workspace.styles.aiMessageTextAssistant]}
                     linkStyle={workspace.styles.aiMessagePageLink}
                     onOpenPage={openLinkedPdfPage}
+                    onRequestMoreRecommendations={canRequestMoreImportantPages ? requestMoreImportantPages : undefined}
+                    moreRecommendationsDisabled={workspace.aiLoading || workspace.aiChatReadOnly}
                   />
                 )}
               </View>

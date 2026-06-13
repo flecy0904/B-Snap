@@ -22,6 +22,17 @@ class RagScope(BaseModel):
     sourceIds: list[str] = Field(default_factory=list)
     sources: list[RagScopeSource] = Field(default_factory=list)
 
+CanvasRecommendationMode = Literal[
+    "polish",
+    "simplify",
+    "professionalize",
+    "shorten",
+    "expand",
+    "restructure",
+    "extract_key_points",
+    "mark_uncertain",
+]
+
 
 class ChatSessionCreate(BaseModel):
     title: str
@@ -78,6 +89,7 @@ class ChatAiMessageCreate(BaseModel):
     canvas_document_json: dict[str, Any] | None = None
     canvas_block_context: dict[str, Any] | None = None
     rag_scope: RagScope | None = None
+    canvas_recommendation_mode: CanvasRecommendationMode | None = None
     use_rag: bool = False
     top_k: int = Field(default=5, ge=1, le=20)
     selection_image: str | None = None
