@@ -11,7 +11,14 @@ from backend.app.core.auth import get_current_user
 from backend.app.core.config import Settings, get_settings
 from backend.app.db.crud import fetch_all, fetch_one, require_row
 from backend.app.db.session import get_db_connection
-from backend.app.routes.chats import default_rag_scope, normalize_rag_scope, rag_scope_search_targets
+from backend.app.routes.chats import (
+    default_rag_scope,
+    get_note_course_name,
+    material_reference_scope_hint,
+    normalize_rag_scope,
+    rag_scope_search_targets,
+    rag_scope_titles,
+)
 from backend.app.schemas.chats import RagScope, SelectionRectPayload
 from backend.app.services.ai_context_builder import build_ai_context, format_context_mode_instruction, select_rag_context_pages
 from backend.app.services.ai_context_router import AiContextRoute, route_ai_context
@@ -302,13 +309,18 @@ def _format_debug_context_preview(
     contexts: list[Any],
     rag_debug: dict[str, Any],
     image_recheck: ImageRecheckResult | None = None,
+    empty_scope_hint: str | None = None,
 ) -> dict[str, Any]:
     context_mode_instruction = format_context_mode_instruction(mode, has_rag_sources=bool(contexts))
     built_context = build_ai_context(
         mode=mode,
         pages=pages,
         page_number=page_number,
-        base_context_hints=[context_mode_instruction] if mode == "general" else [context_mode_instruction, payload.context_hint],
+        base_context_hints=(
+            [context_mode_instruction, empty_scope_hint]
+            if mode == "general"
+            else [context_mode_instruction, payload.context_hint]
+        ),
         rag_sources=contexts,
         rag_debug=rag_debug,
         priority_context_hints=[image_recheck.context_hint if image_recheck else None],
@@ -845,25 +857,37 @@ def evaluate_chat_session_rag_debug(
         available_pages=pages,
     )
     has_selection_context = bool(payload.selection_image or payload.selection_image_url or payload.selection_rect)
-    context_route = route_ai_context(
-        question=payload.content,
-        model=model,
-        has_selection=has_selection_context,
-        has_canvas_context=bool(payload.canvas_block_context),
-        current_page_number=effective_page_number,
-    )
-    if payload.use_rag and context_route.mode == "general":
-        context_route = AiContextRoute(
-            mode="rag",
-            rewritten_query=context_route.rewritten_query,
-            reason="explicit_use_rag",
-        )
     rag_scope = normalize_rag_scope(
         connection,
         requested_scope=payload.rag_scope if payload.rag_scope is not None else session.get("rag_scope"),
         default_note=note,
         user_id=current_user["id"],
     )
+    empty_scope_hint = material_reference_scope_hint(
+        payload.content,
+        has_empty_scope=not bool(rag_scope.get("sources")),
+    )
+    if not rag_scope.get("sources"):
+        context_route = AiContextRoute(
+            mode="general",
+            rewritten_query="",
+            reason="empty_rag_scope",
+        )
+    else:
+        context_route = route_ai_context(
+            question=payload.content,
+            model=model,
+            course_name=get_note_course_name(connection, note, current_user["id"]),
+            document_title=str(note.get("title") or ""),
+            pinned_reference_titles=rag_scope_titles(rag_scope),
+            has_selection=has_selection_context,
+        )
+    if rag_scope.get("sources") and payload.use_rag and context_route.mode == "general":
+        context_route = AiContextRoute(
+            mode="rag",
+            rewritten_query=context_route.rewritten_query or payload.content,
+            reason="explicit_use_rag",
+        )
     note_ids, canvas_note_ids = rag_scope_search_targets(rag_scope)
     contexts = []
     rag_debug: dict[str, Any] = {
@@ -939,6 +963,7 @@ def evaluate_chat_session_rag_debug(
             contexts=contexts,
             rag_debug=rag_debug,
             image_recheck=image_recheck,
+            empty_scope_hint=empty_scope_hint,
         ),
         "results": _format_debug_contexts(contexts),
     }

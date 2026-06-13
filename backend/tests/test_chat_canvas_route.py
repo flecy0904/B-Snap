@@ -3,6 +3,7 @@ from unittest.mock import MagicMock, patch
 
 from backend.app.routes import chats
 from backend.app.schemas.chats import ChatAiMessageCreate
+from backend.app.services.ai_context_router import AiContextRoute
 
 
 class ChatCanvasRouteTests(unittest.TestCase):
@@ -63,6 +64,7 @@ class ChatCanvasRouteTests(unittest.TestCase):
             patch.object(chats, "fetch_one", return_value={"count": 0}),
             patch.object(chats, "execute_returning", side_effect=fake_execute_returning),
             patch.object(chats, "execute_commit", execute_commit),
+            patch.object(chats, "route_ai_context", return_value=AiContextRoute(mode="general", rewritten_query="", reason="llm")),
             patch.object(chats, "generate_ai_canvas_operations_from_chat", return_value=[]),
             patch.object(chats, "generate_ai_canvas_title") as generate_title,
         ):

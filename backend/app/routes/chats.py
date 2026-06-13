@@ -56,6 +56,32 @@ DEFAULT_CANVAS_DOCUMENT_JSON = {"type": "doc", "content": []}
 RAG_SEARCH_UNAVAILABLE_MESSAGE = "지금은 자료 검색을 사용할 수 없습니다. 잠시 후 다시 시도해 주세요."
 RAG_NO_RESULTS_MESSAGE = "관련된 자료를 찾지 못했습니다."
 RAG_TEXT_PROCESSING_MESSAGE = "자료를 읽는 중입니다. 잠시 후 다시 질문해 주세요."
+EMPTY_RAG_SCOPE_MATERIAL_HINT = (
+    "No pinned reference materials are selected for this chat. "
+    "If the user asks about this PDF, this note, selected course material, pages, or searching in materials, "
+    "say briefly in Korean that no reference material is selected, so material-specific verification is unavailable. "
+    "Then answer generally only when a general answer is useful."
+)
+MATERIAL_REFERENCE_KEYWORDS = (
+    "pdf",
+    "문서",
+    "자료",
+    "노트",
+    "페이지",
+    "쪽",
+    "강의",
+    "수업",
+    "과목",
+    "교수님",
+    "시험 범위",
+    "중요 페이지",
+    "찾아",
+    "검색",
+    "여기",
+    "이 부분",
+    "보이는",
+    "현재 화면",
+)
 DEFAULT_CANVAS_TITLE_RE = re.compile(r"^Canvas Note(?:\s+\d+)?$")
 CANVAS_PAGE_FALLBACK_TITLE_RE = re.compile(r"^p\.\d+(?:-\d+)?\s+메모$")
 GENERIC_CANVAS_TITLES = {
@@ -383,9 +409,11 @@ def normalize_rag_scope(
     user_id: int,
 ) -> dict:
     raw_scope = _scope_to_dict(requested_scope) or {}
+    if requested_scope is None:
+        return default_rag_scope(default_note)
     raw_sources = raw_scope.get("sources")
     if not isinstance(raw_sources, list):
-        raw_sources = []
+        return default_rag_scope(default_note)
 
     note_ids: list[int] = []
     canvas_note_ids: list[int] = []
@@ -457,8 +485,6 @@ def normalize_rag_scope(
                 "title": f"{canvas['note_title']} - {canvas['title']}",
             })
 
-    if not sources:
-        return default_rag_scope(default_note)
     return {
         "sourceIds": [f"{source['type']}:{source['id']}" for source in sources],
         "sources": sources,
@@ -480,6 +506,45 @@ def rag_scope_search_targets(scope: dict) -> tuple[list[int], list[int]]:
         elif source.get("type") == "canvas_note":
             canvas_note_ids.append(source_id)
     return note_ids, canvas_note_ids
+
+
+def rag_scope_titles(scope: dict) -> list[str]:
+    titles: list[str] = []
+    seen: set[str] = set()
+    for source in scope.get("sources", []):
+        if not isinstance(source, dict):
+            continue
+        title = " ".join(str(source.get("title") or "").split()).strip()
+        if title and title not in seen:
+            titles.append(title)
+            seen.add(title)
+    return titles
+
+
+def get_note_course_name(connection: Connection, note: dict, user_id: int) -> str | None:
+    folder_id = note.get("folder_id")
+    if folder_id is None:
+        return None
+    row = fetch_one(
+        connection,
+        "SELECT name FROM folders WHERE id = %s AND user_id = %s",
+        (folder_id, user_id),
+    )
+    if not isinstance(row, dict):
+        return None
+    name = " ".join(str(row.get("name") or "").split()).strip()
+    return name or None
+
+
+def material_reference_scope_hint(question: str, *, has_empty_scope: bool) -> str | None:
+    if not has_empty_scope:
+        return None
+    normalized = question.lower()
+    if any(keyword in normalized for keyword in MATERIAL_REFERENCE_KEYWORDS):
+        return EMPTY_RAG_SCOPE_MATERIAL_HINT
+    if re.search(r"(?<!\d)\d{1,4}\s*(?:페이지|쪽)", normalized):
+        return EMPTY_RAG_SCOPE_MATERIAL_HINT
+    return None
 
 
 def get_rag_failure_answer(debug: dict | None, *, has_local_context: bool) -> str | None:
@@ -804,13 +869,6 @@ def create_ai_chat_message(
         available_pages=pages,
     )
     has_selection_context = bool(payload.selection_image or payload.selection_image_url or payload.selection_rect)
-    context_route = route_ai_context(
-        question=payload.content,
-        model=model,
-        has_selection=has_selection_context,
-        has_canvas_context=canvas_origin_request or bool(payload.canvas_block_context),
-        current_page_number=effective_page_number,
-    )
     rag_scope = normalize_rag_scope(
         connection,
         requested_scope=payload.rag_scope if payload.rag_scope is not None else session.get("rag_scope"),
@@ -824,10 +882,31 @@ def create_ai_chat_message(
             (Jsonb(rag_scope), session_id),
         )
         session["rag_scope"] = rag_scope
-    if payload.use_rag and context_route.mode == "general":
+
+    empty_scope_hint = material_reference_scope_hint(
+        payload.content,
+        has_empty_scope=not bool(rag_scope.get("sources")),
+    )
+    if not rag_scope.get("sources"):
+        context_route = AiContextRoute(
+            mode="general",
+            rewritten_query="",
+            reason="empty_rag_scope",
+        )
+    else:
+        context_route = route_ai_context(
+            question=payload.content,
+            model=model,
+            course_name=get_note_course_name(connection, note, current_user["id"]),
+            document_title=str(note.get("title") or ""),
+            pinned_reference_titles=rag_scope_titles(rag_scope),
+            has_selection=has_selection_context,
+        )
+
+    if rag_scope.get("sources") and payload.use_rag and context_route.mode == "general":
         context_route = AiContextRoute(
             mode="rag",
-            rewritten_query=context_route.rewritten_query,
+            rewritten_query=context_route.rewritten_query or payload.content,
             reason="explicit_use_rag",
         )
     rag_sources = []
@@ -935,7 +1014,11 @@ def create_ai_chat_message(
         mode=context_route.mode,
         pages=pages,
         page_number=effective_page_number,
-        base_context_hints=[context_mode_instruction] if context_route.mode == "general" else [context_mode_instruction, payload.context_hint],
+        base_context_hints=(
+            [context_mode_instruction, empty_scope_hint]
+            if context_route.mode == "general"
+            else [context_mode_instruction, payload.context_hint]
+        ),
         rag_sources=rag_sources,
         rag_debug=rag_debug,
         priority_context_hints=[image_recheck.context_hint],
