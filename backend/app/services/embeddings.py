@@ -25,7 +25,10 @@ def generate_embedding(text: str, *, model: str | None = None) -> list[float]:
 
     client = OpenAI(api_key=settings.openai_api_key)
     try:
-        response = client.embeddings.create(model=selected_model, input=text)
+        response = client.embeddings.create(
+            model=selected_model,
+            input=text,
+        )
     except OpenAIError as exc:
         logger.exception("OpenAI embedding request failed: model=%s", selected_model)
         raise EmbeddingError("OpenAI embedding request failed") from exc

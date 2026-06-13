@@ -1,5 +1,5 @@
 import React from 'react';
-import type { BackendChatMessage, BackendChatSession, BackendClassInsight } from '../../../services/backend-api';
+import type { BackendChatMessage, BackendChatSession, BackendClassInsight, BackendRagScope, BackendRagScopeSource } from '../../../services/backend-api';
 import type { UseAiCanvasNotesResult } from '../../../hooks/notes/ai-canvas/use-ai-canvas-notes';
 import type { AiCanvasBlockContext, AiCanvasRecommendationMode } from '../../../types/ai-canvas';
 import type { ImportantPageRecommendation } from '../../../hooks/notes/class-insight';
@@ -47,6 +47,9 @@ export type DesktopNotesWorkspaceContextValue = {
   allAiChatSessions: BackendChatSession[];
   aiChatScope: 'note' | 'all';
   aiChatSearchQuery: string;
+  activeAiRagScope: BackendRagScope | null;
+  aiRagReferenceCandidates: BackendRagScopeSource[];
+  aiRagScopeCollapsed: boolean;
   activeAiChatSessionId: number | null;
   aiChatReadOnly: boolean;
   aiLoading: boolean;
@@ -138,6 +141,10 @@ export type DesktopNotesWorkspaceContextValue = {
   onChangeAiQuestion: (value: string) => void;
   onChangeAiChatScope: (scope: 'note' | 'all') => void;
   onLoadAllAiChatSessions: () => void;
+  onToggleAiRagScopeCollapsed: () => void;
+  onAddAiRagScopeSource: (source: BackendRagScopeSource) => void;
+  onRemoveAiRagScopeSource: (sourceKey: string) => void;
+  onResetAiRagScope: () => void;
   onChangeAiChatSearchQuery: (value: string) => void;
   onSelectAiChatSession: (sessionId: number) => void;
   onRenameAiChatSession: (sessionId: number, title: string) => Promise<boolean>;

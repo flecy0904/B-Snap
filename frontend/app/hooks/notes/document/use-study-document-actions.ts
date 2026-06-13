@@ -1,4 +1,5 @@
 import type { Dispatch, SetStateAction } from 'react';
+import { Platform } from 'react-native';
 import * as DocumentPicker from 'expo-document-picker';
 import {
   createBackendNote,
@@ -291,6 +292,7 @@ export function useStudyDocumentActions(params: StudyDocumentActionsParams) {
         const document: StudyDocumentEntry = {
           id: backendNote.id,
           backendNoteId: backendNote.id,
+          backendFolderId: backendNote.folder_id,
           subjectId: targetSubjectId,
           title: backendNote.title,
           type: 'blank',
@@ -390,12 +392,14 @@ export function useStudyDocumentActions(params: StudyDocumentActionsParams) {
           type: 'application/pdf',
           multiple: false,
           copyToCacheDirectory: true,
+          base64: Platform.OS === 'web',
         });
       } catch {
         result = await DocumentPicker.getDocumentAsync({
           type: 'application/pdf',
           multiple: false,
           copyToCacheDirectory: false,
+          base64: Platform.OS === 'web',
         });
       }
 

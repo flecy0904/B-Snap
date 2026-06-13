@@ -462,6 +462,7 @@ export function useBackendNotePageSync({
             return {
               ...item,
               backendNoteId: result.note.id,
+              backendFolderId: result.note.folder_id,
               title: result.note.title,
               updatedAt: 'DB 저장됨',
               pageCount: Math.max(item.pageCount, result.note.page_count ?? result.upload.page_count),
@@ -502,8 +503,8 @@ export function useBackendNotePageSync({
 
       setWorkspaceFeedback(`${Math.max(document.pageCount, result.note.page_count ?? result.upload.page_count)}페이지 PDF를 서버에 저장했어요.`);
     } catch (error) {
-      const syncError = error instanceof BackendApiError && error.detail
-        ? error.detail
+      const syncError = error instanceof BackendApiError
+        ? error.detail ?? (error.status ? `백엔드 저장에 실패했습니다. (${error.status})` : error.message)
         : '백엔드 저장에 실패했습니다.';
       setWorkspaceFeedback(`${syncError} PDF는 이 기기에 유지할게요.`);
       setUserStudyDocuments((current) => current.map((item) => (

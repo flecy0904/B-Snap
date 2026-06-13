@@ -86,6 +86,19 @@ export type BackendChatSession = {
   note_id: number;
   title: string;
   model: string | null;
+  ragScope?: BackendRagScope | null;
+};
+
+export type BackendRagScopeSource = {
+  id: string;
+  // RAG v1 intentionally exposes only pinned notes and explicit Canvas notes.
+  type: 'note' | 'canvas_note';
+  title: string;
+};
+
+export type BackendRagScope = {
+  sourceIds: string[];
+  sources: BackendRagScopeSource[];
 };
 
 export type BackendChatMessage = {
@@ -150,6 +163,21 @@ export type BackendClassInsight = {
   pages: BackendClassInsightPageSignal[];
 };
 
+export type BackendAiContextMode = 'general' | 'rag';
+
+export type BackendRetrievedContext = {
+  source_type: string;
+  source_id: string;
+  title: string;
+  content: string;
+  score: number;
+  folder_id?: number | null;
+  note_id?: number | null;
+  page_number?: number | null;
+  chunk_index?: number | null;
+  metadata?: Record<string, unknown>;
+};
+
 export type BackendAiMessageResponse = {
   model: string;
   user_message: BackendChatMessage;
@@ -170,6 +198,125 @@ export type BackendAiMessageResponse = {
     canvas_note: BackendAiCanvasNote;
     operations: CanvasOperation[];
   } | null;
+  context_mode?: BackendAiContextMode | null;
+  rewritten_query?: string | null;
+  rag_scope?: BackendRagScope | null;
+  ragScope?: BackendRagScope | null;
+  sources?: BackendRetrievedContext[];
+  debug?: {
+    mode?: BackendAiContextMode | string;
+    scope_count?: number;
+    retrieved_source_count?: number;
+    retrieved_chunk_count?: number;
+    fallback?: boolean;
+    fallback_reason?: string | null;
+    router_reason?: string | null;
+  } | null;
+};
+
+export type BackendRagDebugResult = {
+  source_type: string;
+  source_id?: string | number | null;
+  title: string;
+  score?: number | null;
+  folder_id?: number | null;
+  note_id?: number | null;
+  page_number?: number | null;
+  chunk_index?: number | null;
+  metadata?: Record<string, unknown>;
+  content_length: number;
+  content_snippet: string;
+  content: string;
+  embedding_model?: string | null;
+  indexed_at?: string | null;
+  updated_at?: string | null;
+};
+
+export type BackendRagDebugIndexResponse = {
+  note: {
+    id: number;
+    folder_id: number;
+    title: string;
+  };
+  summary: {
+    page_count: number;
+    chunk_count: number;
+    chunks_returned: number;
+    chunk_limit: number;
+    source_counts: Record<string, number>;
+    embedding_model?: string | null;
+    embedding_models?: string[];
+    last_indexed_at?: string | null;
+  };
+  pages: Array<{
+    id: number;
+    page_number: number;
+    text_length: number;
+    text_snippet: string;
+    text: string;
+    updated_at?: string | null;
+  }>;
+  chunks: BackendRagDebugResult[];
+};
+
+export type BackendRagDebugContextSection = {
+  title: string;
+  count: number;
+  items: BackendRagDebugResult[];
+};
+
+export type BackendRagDebugContext = {
+  mode: BackendAiContextMode;
+  scope_count: number;
+  source_count: number;
+  retrieved_chunk_count: number;
+  current_page_included: boolean;
+  nearby_pages_included: boolean;
+  canvas_context_included: boolean;
+  vision_image_attached: boolean;
+  fallback: boolean;
+  fallback_reason?: string | null;
+  context_preview: string;
+  sections: BackendRagDebugContextSection[];
+};
+
+export type BackendRagDebugEvaluateResponse = {
+  mode: BackendAiContextMode;
+  rewritten_query: string;
+  router_reason: string;
+  rag_scope: BackendRagScope;
+  ragScope?: BackendRagScope | null;
+  search_targets: {
+    note_ids: number[];
+    canvas_note_ids: number[];
+  };
+  debug: {
+    fallback?: boolean;
+    fallback_reason?: string | null;
+    retrieved_source_count?: number;
+    retrieved_chunk_count?: number;
+    scope_count?: number;
+  };
+  context?: BackendRagDebugContext | null;
+  results: BackendRagDebugResult[];
+};
+
+export type BackendRagDebugStatusResponse = {
+  pgvector_available: boolean;
+  document_chunks_total_count: number;
+  current_note_chunk_count: number;
+  current_scope_chunk_count: number;
+  embedding_models: Array<{ model: string; count: number }>;
+  recent_index_status: Array<{
+    note_id?: number | null;
+    source_type?: string | null;
+    chunk_count: number;
+    last_indexed_at?: string | null;
+  }>;
+  failed_indexes: Array<Record<string, unknown>>;
+  last_error?: string | null;
+  rag_scope: BackendRagScope;
+  ragScope?: BackendRagScope | null;
 };
 
 export type BackendPdfTextExtractionResponse = {
@@ -318,14 +465,44 @@ function normalizeBackendAiCanvasNote(note: any): BackendAiCanvasNote {
   } as BackendAiCanvasNote;
 }
 
-function normalizeBackendAiMessageResponse(response: BackendAiMessageResponse): BackendAiMessageResponse {
-  if (!response.canvas_edit) return response;
+function normalizeBackendRagScope(scope: any): BackendRagScope | null {
+  if (!scope || !Array.isArray(scope.sources)) return null;
+  const sources: BackendRagScopeSource[] = [];
+  scope.sources.forEach((source: any) => {
+    const type = source?.type === 'canvas_note' ? 'canvas_note' : source?.type === 'note' ? 'note' : null;
+    const id = String(source?.id ?? '');
+    const title = String(source?.title ?? '');
+    if (!type || !id || !title) return;
+    sources.push({ id, type, title });
+  });
   return {
+    sourceIds: Array.isArray(scope.sourceIds)
+      ? scope.sourceIds.map((value: unknown) => String(value))
+      : sources.map((source) => `${source.type}:${source.id}`),
+    sources,
+  };
+}
+
+function normalizeBackendChatSession(session: any): BackendChatSession {
+  return {
+    ...session,
+    ragScope: normalizeBackendRagScope(session?.ragScope ?? session?.rag_scope),
+  } as BackendChatSession;
+}
+
+function normalizeBackendAiMessageResponse(response: BackendAiMessageResponse): BackendAiMessageResponse {
+  const normalized = {
     ...response,
+    chat_session: response.chat_session ? normalizeBackendChatSession(response.chat_session) : response.chat_session,
+    ragScope: normalizeBackendRagScope(response.ragScope ?? response.rag_scope),
+  };
+  if (!normalized.canvas_edit) return normalized;
+  return {
+    ...normalized,
     canvas_edit: {
-      ...response.canvas_edit,
-      operations: Array.isArray(response.canvas_edit.operations) ? response.canvas_edit.operations : [],
-      canvas_note: normalizeBackendAiCanvasNote(response.canvas_edit.canvas_note),
+      ...normalized.canvas_edit,
+      operations: Array.isArray(normalized.canvas_edit.operations) ? normalized.canvas_edit.operations : [],
+      canvas_note: normalizeBackendAiCanvasNote(normalized.canvas_edit.canvas_note),
     },
   };
 }
@@ -862,36 +1039,40 @@ export async function createBackendChatSession(payload: {
   noteId: number;
   title: string;
   model?: string | null;
+  ragScope?: BackendRagScope | null;
 }) {
   return request<BackendChatSession>(`/notes/${payload.noteId}/chat-sessions`, {
     method: 'POST',
     body: {
       title: payload.title,
       model: payload.model ?? null,
+      rag_scope: payload.ragScope ?? null,
     },
-  });
+  }).then(normalizeBackendChatSession);
 }
 
 export function listBackendChatSessions(noteId: number) {
-  return request<BackendChatSession[]>(`/notes/${noteId}/chat-sessions`);
+  return request<BackendChatSession[]>(`/notes/${noteId}/chat-sessions`).then((sessions) => sessions.map(normalizeBackendChatSession));
 }
 
 export function listAllBackendChatSessions() {
-  return request<BackendChatSession[]>('/chat-sessions');
+  return request<BackendChatSession[]>('/chat-sessions').then((sessions) => sessions.map(normalizeBackendChatSession));
 }
 
 export async function updateBackendChatSession(payload: {
   sessionId: number;
   title?: string;
   model?: string | null;
+  ragScope?: BackendRagScope | null;
 }) {
   return request<BackendChatSession>(`/chat-sessions/${payload.sessionId}`, {
     method: 'PATCH',
     body: {
       title: payload.title,
       model: payload.model,
+      rag_scope: payload.ragScope,
     },
-  });
+  }).then(normalizeBackendChatSession);
 }
 
 export function deleteBackendChatSession(sessionId: number) {
@@ -928,6 +1109,9 @@ export async function sendBackendAiMessage(payload: {
   canvasMarkdown?: string | null;
   canvasDocumentJson?: AiCanvasDocumentJson | null;
   canvasBlockContext?: AiCanvasBlockContext | null;
+  ragScope?: BackendRagScope | null;
+  useRag?: boolean;
+  topK?: number;
   canvasRecommendationMode?: AiCanvasRecommendationMode | null;
 }) {
   return request<BackendAiMessageResponse>(`/chat-sessions/${payload.sessionId}/ai-messages`, {
@@ -948,7 +1132,77 @@ export async function sendBackendAiMessage(payload: {
       canvas_markdown: payload.canvasMarkdown ?? null,
       canvas_document_json: payload.canvasDocumentJson ?? null,
       canvas_block_context: payload.canvasBlockContext ?? null,
+      rag_scope: payload.ragScope ?? null,
+      use_rag: payload.useRag ?? false,
+      top_k: payload.topK ?? 5,
       canvas_recommendation_mode: payload.canvasRecommendationMode ?? null,
     },
   }).then(normalizeBackendAiMessageResponse);
+}
+
+export function getBackendRagDebugIndex(noteId: number) {
+  return request<BackendRagDebugIndexResponse>(`/notes/${noteId}/rag-debug/index`);
+}
+
+export function reindexBackendNoteRag(noteId: number) {
+  return request<{ status: string; note_count: number }>(`/ai/rag/reindex/notes/${noteId}`, {
+    method: 'POST',
+  });
+}
+
+export async function evaluateBackendRagDebug(payload: {
+  sessionId: number;
+  content: string;
+  model?: string | null;
+  pageNumber?: number | null;
+  contextHint?: string | null;
+  selectionImage?: string | null;
+  selectionImageUri?: string | null;
+  selectionRect?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    mode?: 'rect' | 'lasso';
+    pageWidth?: number;
+    pageHeight?: number;
+  } | null;
+  canvasBlockContext?: AiCanvasBlockContext | null;
+  ragScope?: BackendRagScope | null;
+  useRag?: boolean;
+  topK?: number;
+}) {
+  return request<BackendRagDebugEvaluateResponse>(`/chat-sessions/${payload.sessionId}/rag-debug/evaluate`, {
+    method: 'POST',
+    body: {
+      content: payload.content,
+      page_number: payload.pageNumber ?? null,
+      context_hint: payload.contextHint ?? null,
+      selection_image: payload.selectionImage ?? payload.selectionImageUri ?? null,
+      selection_image_url: payload.selectionImageUri ?? null,
+      selection_rect: payload.selectionRect ?? null,
+      canvas_block_context: payload.canvasBlockContext ?? null,
+      rag_scope: payload.ragScope ?? null,
+      use_rag: payload.useRag ?? false,
+      top_k: payload.topK ?? 5,
+    },
+  }).then((response) => ({
+    ...response,
+    ragScope: normalizeBackendRagScope(response.ragScope ?? response.rag_scope),
+  }));
+}
+
+export async function getBackendRagDebugStatus(payload: {
+  sessionId: number;
+  ragScope?: BackendRagScope | null;
+}) {
+  return request<BackendRagDebugStatusResponse>(`/chat-sessions/${payload.sessionId}/rag-debug/status`, {
+    method: 'POST',
+    body: {
+      rag_scope: payload.ragScope ?? null,
+    },
+  }).then((response) => ({
+    ...response,
+    ragScope: normalizeBackendRagScope(response.ragScope ?? response.rag_scope),
+  }));
 }

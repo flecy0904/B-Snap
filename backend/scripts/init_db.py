@@ -40,6 +40,7 @@ def apply_auth_migration(engine) -> None:
         connection.execute(text("ALTER TABLE notes ADD COLUMN IF NOT EXISTS subject_match_key VARCHAR(160)"))
         connection.execute(text("ALTER TABLE notes ADD COLUMN IF NOT EXISTS document_match_key VARCHAR(260)"))
         connection.execute(text("ALTER TABLE chat_messages ADD COLUMN IF NOT EXISTS source TEXT DEFAULT 'chat'"))
+        connection.execute(text("ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS rag_scope JSONB"))
         connection.execute(text("ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS summary TEXT"))
         connection.execute(text("ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS summarized_message_id INTEGER"))
         connection.execute(text("ALTER TABLE chat_sessions ADD COLUMN IF NOT EXISTS summary_updated_at TIMESTAMPTZ"))
@@ -89,7 +90,6 @@ def apply_auth_migration(engine) -> None:
         connection.execute(text("CREATE INDEX IF NOT EXISTS ix_notes_subject_match_key ON notes(subject_match_key)"))
         connection.execute(text("CREATE INDEX IF NOT EXISTS ix_notes_document_match_key ON notes(document_match_key)"))
         connection.execute(text("CREATE INDEX IF NOT EXISTS ix_chat_sessions_summarized_message_id ON chat_sessions(summarized_message_id)"))
-
 
 def apply_document_chunk_migration(engine) -> None:
     try:

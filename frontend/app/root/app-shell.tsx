@@ -303,6 +303,9 @@ export function AppShell(props: {
                   allAiChatSessions={notesState.allAiChatSessions}
                   aiChatScope={notesState.aiChatScope}
                   aiChatSearchQuery={notesState.aiChatSearchQuery}
+                  activeAiRagScope={notesState.activeAiRagScope}
+                  aiRagReferenceCandidates={notesState.aiRagReferenceCandidates}
+                  aiRagScopeCollapsed={notesState.aiRagScopeCollapsed}
                   activeAiChatSessionId={notesState.activeAiChatSessionId}
                   aiChatReadOnly={notesState.aiChatReadOnly}
                   aiLoading={notesState.aiLoading}
@@ -367,6 +370,10 @@ export function AppShell(props: {
                   onChangeAiQuestion={notesState.setAiQuestion}
                   onChangeAiChatScope={notesState.setAiChatScope}
                   onLoadAllAiChatSessions={notesState.onLoadAllAiChatSessions}
+                  onToggleAiRagScopeCollapsed={notesState.onToggleAiRagScopeCollapsed}
+                  onAddAiRagScopeSource={notesState.onAddAiRagScopeSource}
+                  onRemoveAiRagScopeSource={notesState.onRemoveAiRagScopeSource}
+                  onResetAiRagScope={notesState.onResetAiRagScope}
                   onChangeAiChatSearchQuery={notesState.setAiChatSearchQuery}
                   onSelectAiChatSession={notesState.selectAiChatSession}
                   onRenameAiChatSession={notesState.renameAiChatSession}

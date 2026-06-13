@@ -4,6 +4,16 @@ import { ActivityIndicator, Animated, Image, Keyboard, PanResponder, Platform, P
 import { hasEnoughClassInsightData, isClassInsightTargetDocument } from '../../../hooks/notes/class-insight';
 import { useAppKeyboardInset } from '../../../hooks/notes/use-app-keyboard-inset';
 import { useDelayedTooltip } from '../../../hooks/notes/use-delayed-tooltip';
+import {
+  evaluateBackendRagDebug,
+  getBackendRagDebugStatus,
+  getBackendRagDebugIndex,
+  reindexBackendNoteRag,
+  type BackendRagDebugEvaluateResponse,
+  type BackendRagDebugIndexResponse,
+  type BackendRagDebugStatusResponse,
+  type BackendRagScopeSource,
+} from '../../../services/backend-api';
 import { AiResponseContent } from './ai-response-content';
 import { useNotesGlobalContext } from '../workspace/notes-global-context';
 
@@ -19,6 +29,7 @@ const APP_DETACHED_PANEL_WIDTH = 380;
 const APP_DETACHED_PANEL_TOP = 60;
 const SIDEBAR_MIN_WIDTH = 300;
 const SIDEBAR_DEFAULT_WIDTH = 340;
+const RAG_SCOPE_TITLE_MAX_LENGTH = 42;
 
 type WebFloatingDragState = {
   pointerId: number | null;
@@ -50,6 +61,16 @@ type WebMessageScrollbarDragState = {
 };
 
 const WEB_MESSAGE_SCROLLBAR_MIN_THUMB_HEIGHT = 32;
+const AI_COMPOSER_INPUT_MIN_HEIGHT = 36;
+const AI_COMPOSER_INPUT_MAX_HEIGHT = 132;
+const RAG_DEV_PANEL_WIDTH = 480;
+const RAG_DEV_PANEL_DEFAULT_HEIGHT = 640;
+const RAG_DEV_PANEL_MARGIN = 16;
+const RAG_DEV_PANEL_TOP = 82;
+const RAG_DEBUG_ENABLED = Platform.OS === 'web' && typeof __DEV__ !== 'undefined' && __DEV__;
+const RAG_DEV_TABS = ['search', 'index', 'context', 'status'] as const;
+
+type RagDevTab = typeof RAG_DEV_TABS[number];
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
@@ -62,6 +83,13 @@ function handleWebSubmitKeyPress(event: any, submit: () => void) {
   if (key !== 'Enter' || shiftKey) return;
   event.preventDefault?.();
   submit();
+}
+
+function isWebRagMenuInteractiveTarget(target: unknown) {
+  if (Platform.OS !== 'web' || typeof Element === 'undefined' || !(target instanceof Element)) {
+    return false;
+  }
+  return Boolean(target.closest('[data-ai-rag-menu-interactive="true"]'));
 }
 
 function getFloatingPanelHeight(windowHeight: number, panelY: number, requestedHeight = FLOATING_PANEL_HEIGHT) {
@@ -95,6 +123,22 @@ export function NotesAiAssistantPanel() {
   const [editingTitle, setEditingTitle] = React.useState('');
   const [editingTitleError, setEditingTitleError] = React.useState<string | null>(null);
   const [deleteTarget, setDeleteTarget] = React.useState<{ id: number; title: string } | null>(null);
+  const [ragMenuOpen, setRagMenuOpen] = React.useState(false);
+  const [ragMenuQuery, setRagMenuQuery] = React.useState('');
+  const [aiComposerInputHeight, setAiComposerInputHeight] = React.useState(AI_COMPOSER_INPUT_MIN_HEIGHT);
+  const [ragDebugOpen, setRagDebugOpen] = React.useState(false);
+  const [ragDevTab, setRagDevTab] = React.useState<RagDevTab>('search');
+  const [ragDevPosition, setRagDevPosition] = React.useState({ x: Math.max(RAG_DEV_PANEL_MARGIN, width - RAG_DEV_PANEL_WIDTH - RAG_DEV_PANEL_MARGIN), y: RAG_DEV_PANEL_TOP });
+  const ragDevPositionRef = React.useRef(ragDevPosition);
+  const webRagDevDragRef = React.useRef<WebFloatingDragState | null>(null);
+  const [ragDebugQuery, setRagDebugQuery] = React.useState('');
+  const [ragDebugLoading, setRagDebugLoading] = React.useState<'evaluate' | 'index' | 'status' | 'reindex' | null>(null);
+  const [ragDebugError, setRagDebugError] = React.useState<string | null>(null);
+  const [ragDebugEvaluation, setRagDebugEvaluation] = React.useState<BackendRagDebugEvaluateResponse | null>(null);
+  const [ragDebugIndex, setRagDebugIndex] = React.useState<BackendRagDebugIndexResponse | null>(null);
+  const [ragDebugStatus, setRagDebugStatus] = React.useState<BackendRagDebugStatusResponse | null>(null);
+  const [ragDebugSelectedKey, setRagDebugSelectedKey] = React.useState<string | null>(null);
+  const aiQuestionInputRef = React.useRef<TextInput | null>(null);
   const messagesScrollRef = React.useRef<ScrollView | null>(null);
   const [messageScrollbarState, setMessageScrollbarState] = React.useState<WebMessageScrollbarState>({
     scrollTop: 0,
@@ -104,6 +148,15 @@ export function NotesAiAssistantPanel() {
   });
   const messageScrollbarStateRef = React.useRef(messageScrollbarState);
   const hasChatHistory = workspace.aiMessages.length > 0;
+  const latestUserMessageContent = React.useMemo(() => {
+    for (let index = workspace.aiMessages.length - 1; index >= 0; index -= 1) {
+      const message = workspace.aiMessages[index] as any;
+      if (message?.role === 'user' && typeof message.content === 'string' && message.content.trim()) {
+        return message.content.trim();
+      }
+    }
+    return '';
+  }, [workspace.aiMessages]);
   const quickPrompts = React.useMemo(() => (
     isClassInsightTargetDocument(workspace.studyDocument, workspace.subject)
     && hasEnoughClassInsightData(workspace.classInsight)
@@ -135,6 +188,285 @@ export function NotesAiAssistantPanel() {
     void workspace.onRequestAiAnswerForQuestion(MORE_IMPORTANT_PAGES_QUESTION);
   }, [workspace.onRequestAiAnswerForQuestion]);
   const recentSessions = workspace.allAiChatSessions.slice(0, 8);
+  const activeRagScopeSources = workspace.activeAiRagScope?.sources ?? [];
+  const ragReferenceCandidates = workspace.aiRagReferenceCandidates ?? [];
+  const activeRagScopeKeys = React.useMemo(
+    () => new Set(activeRagScopeSources.map((source) => `${source.type}:${source.id}`)),
+    [activeRagScopeSources],
+  );
+  const filteredRagCandidates = React.useMemo(() => {
+    const query = ragMenuQuery.trim().toLowerCase();
+    return ragReferenceCandidates
+      .filter((source) => !activeRagScopeKeys.has(`${source.type}:${source.id}`))
+      .filter((source) => !query || source.title.toLowerCase().includes(query) || source.type.includes(query))
+      .slice(0, 8);
+  }, [activeRagScopeKeys, ragMenuQuery, ragReferenceCandidates]);
+  const currentBackendNoteId = React.useMemo(() => {
+    const document = workspace.studyDocument as any;
+    if (typeof document?.backendNoteId === 'number') return String(document.backendNoteId);
+    if (document?.backendSyncStatus === 'synced' && typeof document?.id === 'number') return String(document.id);
+    return null;
+  }, [workspace.studyDocument]);
+  const ragScopeTitle = React.useMemo(() => {
+    if (activeRagScopeSources.length === 0) {
+      return '참고 자료 준비 중';
+    }
+    if (activeRagScopeSources.length === 1) {
+      const source = activeRagScopeSources[0];
+      if (source?.type === 'note' && source.id === currentBackendNoteId) {
+        return '현재 노트 참고중';
+      }
+      const title = source?.title ?? '현재 노트';
+      const shortTitle = title.length > RAG_SCOPE_TITLE_MAX_LENGTH
+        ? `${title.slice(0, RAG_SCOPE_TITLE_MAX_LENGTH).trimEnd()}...`
+        : title;
+      return `${shortTitle} 참고중`;
+    }
+    return `참고 자료 ${activeRagScopeSources.length}개`;
+  }, [activeRagScopeSources, currentBackendNoteId]);
+  const ragDebugDetail = React.useMemo(() => {
+    if (!ragDebugSelectedKey) return null;
+    if (ragDebugEvaluation) {
+      const result = ragDebugEvaluation.results.find((item, index) => (
+        `result:${item.source_type}:${item.source_id}:${item.chunk_index ?? index}` === ragDebugSelectedKey
+      ));
+      if (result) {
+        return {
+          title: result.title,
+          meta: `${result.source_type} · p.${result.page_number ?? '-'} · chunk ${result.chunk_index ?? '-'} · score ${typeof result.score === 'number' ? result.score.toFixed(3) : '-'}`,
+          text: result.content,
+        };
+      }
+      for (const section of ragDebugEvaluation.context?.sections ?? []) {
+        const contextItem = section.items.find((item, index) => (
+          `context:${section.title}:${item.source_type}:${item.source_id ?? 'none'}:${item.chunk_index ?? index}` === ragDebugSelectedKey
+        ));
+        if (contextItem) {
+          return {
+            title: `${section.title} / ${contextItem.title}`,
+            meta: `${contextItem.source_type} · p.${contextItem.page_number ?? '-'} · chunk ${contextItem.chunk_index ?? '-'} · ${contextItem.content_length} chars`,
+            text: contextItem.content,
+          };
+        }
+      }
+    }
+    if (ragDebugIndex) {
+      const page = ragDebugIndex.pages.find((item) => `page:${item.id}` === ragDebugSelectedKey);
+      if (page) {
+        return {
+          title: `Page ${page.page_number}`,
+          meta: `${page.text_length} chars extracted from current note page`,
+          text: page.text,
+        };
+      }
+      const chunk = ragDebugIndex.chunks.find((item, index) => (
+        `chunk:${item.source_type}:${item.source_id}:${item.chunk_index ?? index}` === ragDebugSelectedKey
+      ));
+      if (chunk) {
+        return {
+          title: chunk.title,
+          meta: `${chunk.source_type} · p.${chunk.page_number ?? '-'} · chunk ${chunk.chunk_index ?? '-'} · ${chunk.content_length} chars`,
+          text: chunk.content,
+        };
+      }
+    }
+    return null;
+  }, [ragDebugEvaluation, ragDebugIndex, ragDebugSelectedKey]);
+  const runRagDebugIndex = React.useCallback(async () => {
+    if (!RAG_DEBUG_ENABLED) return;
+    const noteId = Number(currentBackendNoteId);
+    if (!Number.isFinite(noteId) || noteId <= 0) {
+      setRagDebugError('현재 노트가 backend note와 연결되어 있지 않습니다.');
+      return;
+    }
+    setRagDebugLoading('index');
+    setRagDebugError(null);
+    try {
+      const result = await getBackendRagDebugIndex(noteId);
+      setRagDebugIndex(result);
+      if (result.pages[0]) {
+        setRagDebugSelectedKey(`page:${result.pages[0].id}`);
+      } else if (result.chunks[0]) {
+        setRagDebugSelectedKey(`chunk:${result.chunks[0].source_type}:${result.chunks[0].source_id}:${result.chunks[0].chunk_index ?? 0}`);
+      } else {
+        setRagDebugSelectedKey(null);
+      }
+    } catch (error: any) {
+      setRagDebugError(error?.detail || error?.message || 'RAG index 확인에 실패했습니다.');
+    } finally {
+      setRagDebugLoading(null);
+    }
+  }, [currentBackendNoteId]);
+  const runRagDevEvaluate = React.useCallback(async () => {
+    if (!RAG_DEBUG_ENABLED) return;
+    const question = (ragDebugQuery || workspace.aiQuestion || latestUserMessageContent).trim();
+    if (!question) {
+      setRagDebugError('Search query를 입력하세요.');
+      return;
+    }
+    if (!activeSession?.id) {
+      setRagDebugError('Active AI Chat session이 없습니다.');
+      return;
+    }
+    setRagDebugQuery(question);
+    setRagDebugLoading('evaluate');
+    setRagDebugError(null);
+    try {
+      const result = await evaluateBackendRagDebug({
+        sessionId: activeSession.id,
+        content: question,
+        pageNumber: workspace.currentPdfPage ?? null,
+        selectionImageUri: workspace.selectionPreviewUri ?? null,
+        selectionRect: workspace.selectionRect ?? null,
+        ragScope: workspace.activeAiRagScope ?? null,
+        topK: 10,
+      });
+      setRagDebugEvaluation(result);
+      setRagDebugSelectedKey(result.results[0]
+        ? `result:${result.results[0].source_type}:${result.results[0].source_id}:${result.results[0].chunk_index ?? 0}`
+        : null);
+    } catch (error: any) {
+      setRagDebugError(error?.detail || error?.message || 'RAG search evaluation failed.');
+    } finally {
+      setRagDebugLoading(null);
+    }
+  }, [
+    activeSession?.id,
+    latestUserMessageContent,
+    ragDebugQuery,
+    workspace.activeAiRagScope,
+    workspace.aiQuestion,
+    workspace.currentPdfPage,
+    workspace.selectionPreviewUri,
+    workspace.selectionRect,
+  ]);
+  const runRagDevIndex = React.useCallback(async () => {
+    if (!RAG_DEBUG_ENABLED) return;
+    await runRagDebugIndex();
+  }, [runRagDebugIndex]);
+  const runRagDevStatus = React.useCallback(async () => {
+    if (!RAG_DEBUG_ENABLED) return;
+    if (!activeSession?.id) {
+      setRagDebugError('Active AI Chat session이 없습니다.');
+      return;
+    }
+    setRagDebugLoading('status');
+    setRagDebugError(null);
+    try {
+      const result = await getBackendRagDebugStatus({
+        sessionId: activeSession.id,
+        ragScope: workspace.activeAiRagScope ?? null,
+      });
+      setRagDebugStatus(result);
+    } catch (error: any) {
+      setRagDebugError(error?.detail || error?.message || 'RAG status check failed.');
+    } finally {
+      setRagDebugLoading(null);
+    }
+  }, [activeSession?.id, workspace.activeAiRagScope]);
+  const runRagDevReindex = React.useCallback(async () => {
+    if (!RAG_DEBUG_ENABLED) return;
+    const noteId = Number(currentBackendNoteId);
+    if (!Number.isFinite(noteId) || noteId <= 0) {
+      setRagDebugError('현재 note가 backend note와 연결되어 있지 않습니다.');
+      return;
+    }
+    setRagDebugLoading('reindex');
+    setRagDebugError(null);
+    try {
+      await reindexBackendNoteRag(noteId);
+      await runRagDevIndex();
+      await runRagDevStatus();
+    } catch (error: any) {
+      setRagDebugError(error?.detail || error?.message || 'Current note reindex failed.');
+    } finally {
+      setRagDebugLoading(null);
+    }
+  }, [currentBackendNoteId, runRagDevIndex, runRagDevStatus]);
+  const refreshRagDevScope = React.useCallback(async () => {
+    await Promise.all([
+      runRagDevIndex(),
+      runRagDevStatus(),
+    ]);
+    if ((ragDebugQuery || workspace.aiQuestion || latestUserMessageContent).trim()) {
+      await runRagDevEvaluate();
+    }
+  }, [latestUserMessageContent, ragDebugQuery, runRagDevEvaluate, runRagDevIndex, runRagDevStatus, workspace.aiQuestion]);
+  const removeMentionToken = React.useCallback((value: string) => (
+    value.replace(/(^|\s)@[^\s@]*$/, (match, prefix) => prefix.trimEnd())
+  ).trimStart(), []);
+  const closeRagReferenceMenu = React.useCallback((options?: { focusComposer?: boolean }) => {
+    setRagMenuOpen(false);
+    setRagMenuQuery('');
+    if (Platform.OS === 'web' && options?.focusComposer) {
+      window.setTimeout(() => {
+        aiQuestionInputRef.current?.focus();
+      }, 0);
+    }
+  }, []);
+  const handleAiQuestionChange = React.useCallback((value: string) => {
+    workspace.onChangeAiQuestion(value);
+    if (!value) setAiComposerInputHeight(AI_COMPOSER_INPUT_MIN_HEIGHT);
+    if (Platform.OS !== 'web') return;
+    const match = value.match(/(?:^|\s)@([^\s@]*)$/);
+    if (match) {
+      setRagMenuOpen(true);
+      setRagMenuQuery(match[1] ?? '');
+      return;
+    }
+    closeRagReferenceMenu();
+  }, [closeRagReferenceMenu, workspace.onChangeAiQuestion]);
+  const handleAiQuestionContentSizeChange = React.useCallback((event: any) => {
+    const contentHeight = Number(event?.nativeEvent?.contentSize?.height ?? 0);
+    if (!Number.isFinite(contentHeight) || contentHeight <= 0) return;
+    const nextHeight = clamp(Math.ceil(contentHeight), AI_COMPOSER_INPUT_MIN_HEIGHT, AI_COMPOSER_INPUT_MAX_HEIGHT);
+    setAiComposerInputHeight((current) => (
+      Math.abs(current - nextHeight) < 1 ? current : nextHeight
+    ));
+  }, []);
+  const addRagReference = React.useCallback((source: BackendRagScopeSource) => {
+    workspace.onAddAiRagScopeSource?.(source);
+    workspace.onChangeAiQuestion(removeMentionToken(workspace.aiQuestion));
+    closeRagReferenceMenu();
+  }, [closeRagReferenceMenu, removeMentionToken, workspace]);
+  const webRagMenuInteractiveProps = React.useMemo(() => (
+    Platform.OS === 'web'
+      ? ({
+        'data-ai-rag-menu-interactive': 'true',
+        onPointerDown: (event: any) => {
+          event.stopPropagation?.();
+          event.nativeEvent?.stopPropagation?.();
+        },
+      } as any)
+      : {}
+  ), []);
+  const getWebRagMenuItemProps = React.useCallback((source: BackendRagScopeSource) => (
+    Platform.OS === 'web'
+      ? ({
+        onPointerDown: (event: any) => {
+          event.preventDefault?.();
+          event.stopPropagation?.();
+          event.nativeEvent?.stopPropagation?.();
+          addRagReference(source);
+        },
+      } as any)
+      : {}
+  ), [addRagReference]);
+  const handleAiComposerKeyPress = React.useCallback((event: any) => {
+    if (Platform.OS === 'web') {
+      const key = event?.key ?? event?.nativeEvent?.key;
+      if (key === 'Escape' && ragMenuOpen) {
+        event.preventDefault?.();
+        event.stopPropagation?.();
+        event.nativeEvent?.stopPropagation?.();
+        closeRagReferenceMenu({ focusComposer: true });
+        return;
+      }
+    }
+    handleWebSubmitKeyPress(event, () => {
+      void workspace.onRequestAiAnswer();
+    });
+  }, [closeRagReferenceMenu, ragMenuOpen, workspace.onRequestAiAnswer]);
   const appFloatingChat = Boolean(
     workspace.usesAppAiPanelLayout
     && workspace.appChatMode === 'floating'
@@ -160,6 +492,10 @@ export function NotesAiAssistantPanel() {
   const floatingResizeStartSizeRef = React.useRef(floatingPanelSizeRef.current);
   const floatingMaxX = Math.max(FLOATING_PANEL_MARGIN, width - floatingPanelWidth - FLOATING_PANEL_MARGIN);
   const floatingMaxY = Math.max(FLOATING_PANEL_TOP, height - floatingPanelHeight - FLOATING_PANEL_MARGIN);
+  const ragDevPanelWidth = Math.min(RAG_DEV_PANEL_WIDTH, Math.max(320, width - RAG_DEV_PANEL_MARGIN * 2));
+  const ragDevPanelHeight = Math.min(RAG_DEV_PANEL_DEFAULT_HEIGHT, Math.max(360, height - RAG_DEV_PANEL_MARGIN * 2));
+  const ragDevMaxX = Math.max(RAG_DEV_PANEL_MARGIN, width - ragDevPanelWidth - RAG_DEV_PANEL_MARGIN);
+  const ragDevMaxY = Math.max(RAG_DEV_PANEL_MARGIN, height - ragDevPanelHeight - RAG_DEV_PANEL_MARGIN);
   const sidebarMaxWidth = Math.max(SIDEBAR_MIN_WIDTH, Math.floor(width * 0.5));
   const useWebFloatingDrag = Platform.OS === 'web' && !appChatSidebar && workspace.aiPanelMode === 'floating';
   const useWebSidebarResize = Platform.OS === 'web' && !workspace.usesAppAiPanelLayout && workspace.aiPanelMode === 'sidebar';
@@ -183,6 +519,81 @@ export function NotesAiAssistantPanel() {
   React.useEffect(() => {
     messageScrollbarStateRef.current = messageScrollbarState;
   }, [messageScrollbarState]);
+
+  React.useEffect(() => {
+    ragDevPositionRef.current = ragDevPosition;
+  }, [ragDevPosition]);
+
+  React.useEffect(() => {
+    setRagDevPosition((current) => {
+      const next = {
+        x: clamp(current.x, RAG_DEV_PANEL_MARGIN, ragDevMaxX),
+        y: clamp(current.y, RAG_DEV_PANEL_MARGIN, ragDevMaxY),
+      };
+      return next.x === current.x && next.y === current.y ? current : next;
+    });
+  }, [ragDevMaxX, ragDevMaxY]);
+
+  React.useEffect(() => {
+    if (Platform.OS !== 'web' || !ragMenuOpen) return undefined;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (isWebRagMenuInteractiveTarget(event.target)) return;
+      closeRagReferenceMenu();
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      closeRagReferenceMenu({ focusComposer: true });
+    };
+    window.addEventListener('pointerdown', handlePointerDown);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [closeRagReferenceMenu, ragMenuOpen]);
+
+  const handleRagDevPointerDown = React.useCallback((event: any) => {
+    if (Platform.OS !== 'web') return;
+    const native = event?.nativeEvent ?? event;
+    const pointerId = Number(native?.pointerId ?? 0);
+    webRagDevDragRef.current = {
+      pointerId: Number.isFinite(pointerId) ? pointerId : null,
+      startClientX: Number(native?.clientX ?? 0),
+      startClientY: Number(native?.clientY ?? 0),
+      startPanelX: ragDevPositionRef.current.x,
+      startPanelY: ragDevPositionRef.current.y,
+    };
+    event.preventDefault?.();
+    event.stopPropagation?.();
+    event.currentTarget?.setPointerCapture?.(pointerId);
+  }, []);
+
+  React.useEffect(() => {
+    if (Platform.OS !== 'web') return undefined;
+    const handlePointerMove = (event: PointerEvent) => {
+      const drag = webRagDevDragRef.current;
+      if (!drag) return;
+      if (drag.pointerId !== null && event.pointerId !== drag.pointerId) return;
+      const nextX = clamp(drag.startPanelX + event.clientX - drag.startClientX, RAG_DEV_PANEL_MARGIN, ragDevMaxX);
+      const nextY = clamp(drag.startPanelY + event.clientY - drag.startClientY, RAG_DEV_PANEL_MARGIN, ragDevMaxY);
+      setRagDevPosition({ x: nextX, y: nextY });
+    };
+    const handlePointerUp = (event: PointerEvent) => {
+      const drag = webRagDevDragRef.current;
+      if (!drag) return;
+      if (drag.pointerId !== null && event.pointerId !== drag.pointerId) return;
+      webRagDevDragRef.current = null;
+    };
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    window.addEventListener('pointercancel', handlePointerUp);
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+      window.removeEventListener('pointercancel', handlePointerUp);
+    };
+  }, [ragDevMaxX, ragDevMaxY]);
 
   const scrollMessagesTo = React.useCallback((scrollTop: number) => {
     const currentState = messageScrollbarStateRef.current;
@@ -655,6 +1066,7 @@ export function NotesAiAssistantPanel() {
   const closeOpenMenus = () => {
     setHeaderMenuOpen(false);
     setMenuSessionId(null);
+    closeRagReferenceMenu();
   };
 
   const closeChatPanel = () => {
@@ -765,6 +1177,17 @@ export function NotesAiAssistantPanel() {
           </View>
 
           <View style={workspace.styles.aiHeaderActions}>
+            {RAG_DEBUG_ENABLED ? (
+              <Pressable
+                style={[
+                  workspace.styles.aiRagDevHeaderButton,
+                  ragDebugOpen && workspace.styles.aiRagDevHeaderButtonActive,
+                ]}
+                onPress={() => setRagDebugOpen((current) => !current)}
+              >
+                <Text style={workspace.styles.aiRagDevHeaderButtonText}>RAG Dev</Text>
+              </Pressable>
+            ) : null}
             <View style={workspace.styles.aiTooltipAnchor}>
               <Pressable
                 {...getTooltipTriggerProps('ai-chat-panel-mode', workspace.aiPanelMode === 'floating' ? '사이드바로 보기' : '플로팅으로 보기')}
@@ -817,7 +1240,13 @@ export function NotesAiAssistantPanel() {
                       },
                     } as any;
                     return (
-                      <View key={session.id} style={workspace.styles.aiSidebarChatRowWrap}>
+                      <View
+                        key={session.id}
+                        style={[
+                          workspace.styles.aiSidebarChatRowWrap,
+                          menuSessionId === session.id && workspace.styles.aiSidebarChatRowWrapMenuOpen,
+                        ]}
+                      >
                         <Pressable
                           {...contextMenuProps}
                           style={[workspace.styles.aiHeaderRecentMenuItem, active && workspace.styles.aiHeaderRecentMenuItemActive]}
@@ -830,7 +1259,7 @@ export function NotesAiAssistantPanel() {
                           </Text>
                         </Pressable>
                         {menuSessionId === session.id ? (
-                          <View style={workspace.styles.aiSidebarContextMenu}>
+                          <View style={[workspace.styles.aiSidebarContextMenu, workspace.styles.aiHeaderRecentContextMenu]}>
                             <Pressable style={workspace.styles.aiSidebarContextMenuItem} onPress={() => startEditingSession(session.id, session.title)}>
                               <MaterialCommunityIcons name="pencil-outline" size={15} color="#111827" />
                               <Text style={workspace.styles.aiSidebarContextMenuText}>이름 바꾸기</Text>
@@ -864,6 +1293,204 @@ export function NotesAiAssistantPanel() {
             </View>
           </View>
         </View>
+
+        {RAG_DEBUG_ENABLED && ragDebugOpen ? (
+          <View
+            {...webFloatingDragExcludeProps}
+            style={[
+              workspace.styles.aiRagDevPanel,
+              {
+                left: ragDevPosition.x,
+                top: ragDevPosition.y,
+                width: ragDevPanelWidth,
+                height: ragDevPanelHeight,
+              },
+            ]}
+          >
+            <View style={workspace.styles.aiRagDevHeader} {...({ onPointerDown: handleRagDevPointerDown } as any)}>
+              <View style={workspace.styles.aiRagDevTitleWrap}>
+                <Text style={workspace.styles.aiRagDevTitle}>RAG DevTools</Text>
+                <Text style={workspace.styles.aiRagDevSubtitle} numberOfLines={1}>Developer-only search, index, context, and status checks</Text>
+              </View>
+              <Pressable
+                style={workspace.styles.aiRagDevCloseButton}
+                onPress={() => setRagDebugOpen(false)}
+                {...({
+                  onPointerDown: (event: any) => {
+                    event.stopPropagation?.();
+                    event.nativeEvent?.stopPropagation?.();
+                  },
+                } as any)}
+              >
+                <MaterialCommunityIcons name="close" size={17} color="#303744" />
+              </Pressable>
+            </View>
+            <View style={workspace.styles.aiRagDevTabs}>
+              {RAG_DEV_TABS.map((tab) => (
+                <Pressable
+                  key={tab}
+                  style={[workspace.styles.aiRagDevTab, ragDevTab === tab && workspace.styles.aiRagDevTabActive]}
+                  onPress={() => setRagDevTab(tab)}
+                >
+                  <Text style={[workspace.styles.aiRagDevTabText, ragDevTab === tab && workspace.styles.aiRagDevTabTextActive]}>
+                    {tab[0].toUpperCase() + tab.slice(1)}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+            <ScrollView style={workspace.styles.aiRagDevScroll} contentContainerStyle={workspace.styles.aiRagDevContent} showsVerticalScrollIndicator>
+              {ragDebugError ? <Text style={workspace.styles.aiRagDevError}>{ragDebugError}</Text> : null}
+              {ragDevTab === 'search' ? (
+                <View style={workspace.styles.aiRagDevSection}>
+                  <Text style={workspace.styles.aiRagDevLabel}>Test query</Text>
+                  <TextInput
+                    value={ragDebugQuery}
+                    onChangeText={setRagDebugQuery}
+                    placeholder="RAG 검색을 테스트할 질문을 입력하세요"
+                    placeholderTextColor="#8F96A3"
+                    style={workspace.styles.aiRagDevInput}
+                  />
+                  <View style={workspace.styles.aiRagDevActions}>
+                    <Pressable style={workspace.styles.aiRagDevPrimaryButton} onPress={runRagDevEvaluate} disabled={ragDebugLoading !== null}>
+                      <Text style={workspace.styles.aiRagDevPrimaryButtonText}>{ragDebugLoading === 'evaluate' ? 'Evaluating' : 'Run Search'}</Text>
+                    </Pressable>
+                  </View>
+                  {ragDebugEvaluation ? (
+                    <View style={workspace.styles.aiRagDevSection}>
+                      <Text style={workspace.styles.aiRagDevMeta}>
+                        mode {ragDebugEvaluation.mode} · scope {ragDebugEvaluation.debug?.scope_count ?? ragDebugEvaluation.ragScope?.sources.length ?? 0} · sources {ragDebugEvaluation.debug?.retrieved_source_count ?? 0} · chunks {ragDebugEvaluation.debug?.retrieved_chunk_count ?? 0}
+                      </Text>
+                      <Text style={workspace.styles.aiRagDevMeta} numberOfLines={2}>rewritten: {ragDebugEvaluation.rewritten_query}</Text>
+                      <Text style={workspace.styles.aiRagDevMeta} numberOfLines={2}>reason: {ragDebugEvaluation.router_reason}</Text>
+                      <Text style={workspace.styles.aiRagDevMeta} numberOfLines={2}>
+                        scope: {(ragDebugEvaluation.ragScope?.sources ?? activeRagScopeSources).map((source) => `${source.type}:${source.title}`).join(', ') || '-'}
+                      </Text>
+                      <Text style={workspace.styles.aiRagDevSectionTitle}>Top results</Text>
+                      {ragDebugEvaluation.results.length ? ragDebugEvaluation.results.map((result, index) => {
+                        const key = `result:${result.source_type}:${result.source_id}:${result.chunk_index ?? index}`;
+                        return (
+                          <Pressable key={key} style={[workspace.styles.aiRagDevCard, ragDebugSelectedKey === key && workspace.styles.aiRagDevCardActive]} onPress={() => setRagDebugSelectedKey(key)}>
+                            <Text style={workspace.styles.aiRagDevCardTitle} numberOfLines={1}>{index + 1}. {result.title}</Text>
+                            <Text style={workspace.styles.aiRagDevMeta} numberOfLines={1}>
+                              {result.source_type} · p.{result.page_number ?? '-'} · chunk {result.chunk_index ?? '-'} · score {typeof result.score === 'number' ? result.score.toFixed(4) : '-'}
+                            </Text>
+                            <Text style={workspace.styles.aiRagDevSnippet} numberOfLines={3}>{result.content_snippet}</Text>
+                          </Pressable>
+                        );
+                      }) : (
+                        <Text style={workspace.styles.aiRagDevEmpty}>No search results.</Text>
+                      )}
+                    </View>
+                  ) : null}
+                </View>
+              ) : null}
+              {ragDevTab === 'index' ? (
+                <View style={workspace.styles.aiRagDevSection}>
+                  <View style={workspace.styles.aiRagDevActions}>
+                    <Pressable style={workspace.styles.aiRagDevPrimaryButton} onPress={runRagDevIndex} disabled={ragDebugLoading !== null}>
+                      <Text style={workspace.styles.aiRagDevPrimaryButtonText}>{ragDebugLoading === 'index' ? 'Loading' : 'Load Current Note Index'}</Text>
+                    </Pressable>
+                    <Pressable style={workspace.styles.aiRagDevSecondaryButton} onPress={runRagDevReindex} disabled={ragDebugLoading !== null}>
+                      <Text style={workspace.styles.aiRagDevSecondaryButtonText}>{ragDebugLoading === 'reindex' ? 'Queued' : 'Reindex'}</Text>
+                    </Pressable>
+                    <Pressable style={workspace.styles.aiRagDevSecondaryButton} onPress={refreshRagDevScope} disabled={ragDebugLoading !== null}>
+                      <Text style={workspace.styles.aiRagDevSecondaryButtonText}>Refresh Scope</Text>
+                    </Pressable>
+                  </View>
+                  {ragDebugIndex ? (
+                    <View style={workspace.styles.aiRagDevSection}>
+                      <Text style={workspace.styles.aiRagDevSectionTitle} numberOfLines={1}>{ragDebugIndex.note.title}</Text>
+                      <Text style={workspace.styles.aiRagDevMeta}>pages {ragDebugIndex.summary.page_count} · chunks {ragDebugIndex.summary.chunk_count} · shown {ragDebugIndex.summary.chunks_returned}</Text>
+                      <Text style={workspace.styles.aiRagDevMeta} numberOfLines={1}>model {ragDebugIndex.summary.embedding_model ?? '-'} · last indexed {ragDebugIndex.summary.last_indexed_at ?? '-'}</Text>
+                      <Text style={workspace.styles.aiRagDevSectionTitle}>Extracted page text</Text>
+                      {ragDebugIndex.pages.slice(0, 8).map((page) => {
+                        const key = `page:${page.id}`;
+                        return (
+                          <Pressable key={key} style={[workspace.styles.aiRagDevCard, ragDebugSelectedKey === key && workspace.styles.aiRagDevCardActive]} onPress={() => setRagDebugSelectedKey(key)}>
+                            <Text style={workspace.styles.aiRagDevCardTitle}>page {page.page_number} · {page.text_length} chars</Text>
+                            <Text style={workspace.styles.aiRagDevSnippet} numberOfLines={2}>{page.text_snippet || 'No extracted text.'}</Text>
+                          </Pressable>
+                        );
+                      })}
+                      <Text style={workspace.styles.aiRagDevSectionTitle}>Chunks</Text>
+                      {ragDebugIndex.chunks.map((chunk, index) => {
+                        const key = `chunk:${chunk.source_type}:${chunk.source_id}:${chunk.chunk_index ?? index}`;
+                        return (
+                          <Pressable key={key} style={[workspace.styles.aiRagDevCard, ragDebugSelectedKey === key && workspace.styles.aiRagDevCardActive]} onPress={() => setRagDebugSelectedKey(key)}>
+                            <Text style={workspace.styles.aiRagDevCardTitle} numberOfLines={1}>{chunk.title}</Text>
+                            <Text style={workspace.styles.aiRagDevMeta} numberOfLines={1}>{chunk.source_type} · p.{chunk.page_number ?? '-'} · chunk {chunk.chunk_index ?? '-'} · {chunk.content_length} chars</Text>
+                            <Text style={workspace.styles.aiRagDevSnippet} numberOfLines={2}>{chunk.content_snippet}</Text>
+                          </Pressable>
+                        );
+                      })}
+                    </View>
+                  ) : null}
+                </View>
+              ) : null}
+              {ragDevTab === 'context' ? (
+                <View style={workspace.styles.aiRagDevSection}>
+                  <View style={workspace.styles.aiRagDevActions}>
+                    <Pressable style={workspace.styles.aiRagDevPrimaryButton} onPress={runRagDevEvaluate} disabled={ragDebugLoading !== null}>
+                      <Text style={workspace.styles.aiRagDevPrimaryButtonText}>{ragDebugLoading === 'evaluate' ? 'Building' : 'Build Context Preview'}</Text>
+                    </Pressable>
+                  </View>
+                  {ragDebugEvaluation?.context ? (
+                    <View style={workspace.styles.aiRagDevSection}>
+                      <Text style={workspace.styles.aiRagDevMeta}>mode {ragDebugEvaluation.context.mode} · scope {ragDebugEvaluation.context.scope_count} · sources {ragDebugEvaluation.context.source_count} · chunks {ragDebugEvaluation.context.retrieved_chunk_count}</Text>
+                      <Text style={workspace.styles.aiRagDevMeta}>current page {ragDebugEvaluation.context.current_page_included ? 'yes' : 'no'} · nearby {ragDebugEvaluation.context.nearby_pages_included ? 'yes' : 'no'} · canvas {ragDebugEvaluation.context.canvas_context_included ? 'yes' : 'no'} · vision {ragDebugEvaluation.context.vision_image_attached ? 'yes' : 'no'}</Text>
+                      {ragDebugEvaluation.context.fallback ? <Text style={workspace.styles.aiRagDevError}>fallback: {ragDebugEvaluation.context.fallback_reason ?? 'unknown'}</Text> : null}
+                      {ragDebugEvaluation.context.sections.map((section) => (
+                        <View key={section.title} style={workspace.styles.aiRagDevSection}>
+                          <Text style={workspace.styles.aiRagDevSectionTitle}>{section.title} ({section.count})</Text>
+                          {section.items.length ? section.items.map((item, index) => {
+                            const key = `context:${section.title}:${item.source_type}:${item.source_id ?? 'none'}:${item.chunk_index ?? index}`;
+                            return (
+                              <Pressable key={key} style={[workspace.styles.aiRagDevCard, ragDebugSelectedKey === key && workspace.styles.aiRagDevCardActive]} onPress={() => setRagDebugSelectedKey(key)}>
+                                <Text style={workspace.styles.aiRagDevCardTitle} numberOfLines={1}>{item.title}</Text>
+                                <Text style={workspace.styles.aiRagDevSnippet} numberOfLines={2}>{item.content_snippet}</Text>
+                              </Pressable>
+                            );
+                          }) : <Text style={workspace.styles.aiRagDevEmpty}>No context in this section.</Text>}
+                        </View>
+                      ))}
+                      <Text style={workspace.styles.aiRagDevSectionTitle}>Final context preview</Text>
+                      <Text style={workspace.styles.aiRagDevDetailText}>{ragDebugEvaluation.context.context_preview || 'No context preview.'}</Text>
+                    </View>
+                  ) : <Text style={workspace.styles.aiRagDevEmpty}>Run context preview first.</Text>}
+                </View>
+              ) : null}
+              {ragDevTab === 'status' ? (
+                <View style={workspace.styles.aiRagDevSection}>
+                  <View style={workspace.styles.aiRagDevActions}>
+                    <Pressable style={workspace.styles.aiRagDevPrimaryButton} onPress={runRagDevStatus} disabled={ragDebugLoading !== null}>
+                      <Text style={workspace.styles.aiRagDevPrimaryButtonText}>{ragDebugLoading === 'status' ? 'Checking' : 'Refresh Status'}</Text>
+                    </Pressable>
+                  </View>
+                  {ragDebugStatus ? (
+                    <View style={workspace.styles.aiRagDevSection}>
+                      <Text style={workspace.styles.aiRagDevMeta}>pgvector {ragDebugStatus.pgvector_available ? 'available' : 'not available'}</Text>
+                      <Text style={workspace.styles.aiRagDevMeta}>total chunks {ragDebugStatus.document_chunks_total_count} · current note {ragDebugStatus.current_note_chunk_count} · current scope {ragDebugStatus.current_scope_chunk_count}</Text>
+                      <Text style={workspace.styles.aiRagDevSectionTitle}>Embedding models</Text>
+                      {ragDebugStatus.embedding_models.length ? ragDebugStatus.embedding_models.map((item) => <Text key={item.model} style={workspace.styles.aiRagDevMeta}>{item.model} · {item.count}</Text>) : <Text style={workspace.styles.aiRagDevEmpty}>No embedding model rows.</Text>}
+                      <Text style={workspace.styles.aiRagDevSectionTitle}>Recent index status</Text>
+                      {ragDebugStatus.recent_index_status.length ? ragDebugStatus.recent_index_status.map((item, index) => (
+                        <Text key={`${item.note_id}:${item.source_type}:${index}`} style={workspace.styles.aiRagDevMeta}>note {item.note_id ?? '-'} · {item.source_type ?? '-'} · chunks {item.chunk_count} · {item.last_indexed_at ?? '-'}</Text>
+                      )) : <Text style={workspace.styles.aiRagDevEmpty}>No recent index rows.</Text>}
+                      {ragDebugStatus.last_error ? <Text style={workspace.styles.aiRagDevError}>last error: {ragDebugStatus.last_error}</Text> : null}
+                    </View>
+                  ) : null}
+                </View>
+              ) : null}
+              {ragDebugDetail ? (
+                <View style={workspace.styles.aiRagDevDetail}>
+                  <Text style={workspace.styles.aiRagDevDetailTitle} numberOfLines={2}>{ragDebugDetail.title}</Text>
+                  <Text style={workspace.styles.aiRagDevMeta} numberOfLines={2}>{ragDebugDetail.meta}</Text>
+                  <Text style={workspace.styles.aiRagDevDetailText}>{ragDebugDetail.text || 'No full text.'}</Text>
+                </View>
+              ) : null}
+            </ScrollView>
+          </View>
+        ) : null}
 
         <View {...webFloatingDragExcludeProps} style={workspace.styles.aiConversationShell}>
           <View style={workspace.styles.aiMessagesViewport}>
@@ -923,6 +1550,7 @@ export function NotesAiAssistantPanel() {
             </View>
           ) : null}
             </ScrollView>
+            {Platform.OS === 'web' ? <View pointerEvents="none" style={workspace.styles.aiMessagesTopFade} /> : null}
             {Platform.OS === 'web' ? (
             <View
               pointerEvents={messageScrollbarMetrics.visible ? 'auto' : 'none'}
@@ -946,6 +1574,43 @@ export function NotesAiAssistantPanel() {
           </View>
 
         <View style={workspace.styles.aiComposer}>
+          {Platform.OS === 'web' ? (
+            <View style={workspace.styles.aiRagScopePanel}>
+              <Pressable
+                style={workspace.styles.aiRagScopeHeader}
+                onPress={() => workspace.onToggleAiRagScopeCollapsed?.()}
+              >
+                <Text style={workspace.styles.aiRagScopeTitle} numberOfLines={1}>{ragScopeTitle}</Text>
+                <MaterialCommunityIcons name={workspace.aiRagScopeCollapsed ? 'chevron-right' : 'chevron-down'} size={17} color="#465064" />
+              </Pressable>
+              {!workspace.aiRagScopeCollapsed ? (
+                <View style={workspace.styles.aiRagScopeList}>
+                  {activeRagScopeSources.map((source) => {
+                    const key = `${source.type}:${source.id}`;
+                    return (
+                      <View key={key} style={workspace.styles.aiRagScopeItem}>
+                        <MaterialCommunityIcons name={source.type === 'canvas_note' ? 'note-edit-outline' : 'file-document-outline'} size={14} color="#5F79FF" />
+                        <Text style={workspace.styles.aiRagScopeItemText} numberOfLines={1}>{source.title}</Text>
+                        <Pressable
+                          style={workspace.styles.aiRagScopeRemove}
+                          onPress={() => workspace.onRemoveAiRagScopeSource?.(key)}
+                        >
+                          <MaterialCommunityIcons name="close" size={14} color="#6A7280" />
+                        </Pressable>
+                      </View>
+                    );
+                  })}
+                  <Pressable
+                    style={workspace.styles.aiRagScopeReset}
+                    onPress={() => workspace.onResetAiRagScope?.()}
+                    disabled={workspace.aiChatReadOnly || workspace.aiLoading}
+                  >
+                    <Text style={workspace.styles.aiRagScopeResetText}>현재 노트로 초기화</Text>
+                  </Pressable>
+                </View>
+              ) : null}
+            </View>
+          ) : null}
           {workspace.aiChatReadOnly ? (
             <View style={workspace.styles.aiReadOnlyNotice}>
               <MaterialCommunityIcons name="lock-outline" size={14} color="#5B6472" />
@@ -989,29 +1654,80 @@ export function NotesAiAssistantPanel() {
               ))}
             </ScrollView>
           ) : null}
-          <View style={workspace.styles.aiComposerInputShell}>
+          <View
+            style={[
+              workspace.styles.aiComposerInputShell,
+              Platform.OS !== 'web' && workspace.styles.aiComposerInputShellStandalone,
+            ]}
+            {...webRagMenuInteractiveProps}
+          >
+            {ragMenuOpen && Platform.OS === 'web' ? (
+              <View style={workspace.styles.aiRagScopeMenu}>
+                <Text style={workspace.styles.aiRagScopeMenuTitle}>참고 자료 추가</Text>
+                {filteredRagCandidates.length ? filteredRagCandidates.map((source) => (
+                  <Pressable
+                    key={`${source.type}:${source.id}`}
+                    style={workspace.styles.aiRagScopeMenuItem}
+                    onPress={Platform.OS === 'web' ? undefined : () => addRagReference(source)}
+                    {...getWebRagMenuItemProps(source)}
+                  >
+                    <MaterialCommunityIcons name={source.type === 'canvas_note' ? 'note-edit-outline' : 'file-document-outline'} size={15} color="#5F79FF" />
+                    <Text style={workspace.styles.aiRagScopeMenuItemText} numberOfLines={1}>{source.title}</Text>
+                  </Pressable>
+                )) : (
+                  <Text style={workspace.styles.aiRagScopeMenuEmpty}>추가할 참고 자료가 없어요.</Text>
+                )}
+              </View>
+            ) : null}
             <TextInput
+              ref={aiQuestionInputRef}
               value={workspace.aiQuestion}
-              onChangeText={workspace.onChangeAiQuestion}
+              onChangeText={handleAiQuestionChange}
               onFocus={() => workspace.onFocusWorkspaceTarget?.(null)}
               placeholder={workspace.selectionRect || workspace.selectionPreviewUri ? '이 부분이 궁금하신가요?' : '메시지 입력'}
               placeholderTextColor="#8F96A3"
               multiline
               editable={!workspace.aiChatReadOnly && !workspace.aiLoading}
               showSoftInputOnFocus
-              style={workspace.styles.aiComposerInput}
+              style={[
+                workspace.styles.aiComposerInput,
+                { height: aiComposerInputHeight },
+              ]}
+              onContentSizeChange={handleAiQuestionContentSizeChange}
+              scrollEnabled={aiComposerInputHeight >= AI_COMPOSER_INPUT_MAX_HEIGHT}
               submitBehavior="submit"
               blurOnSubmit={false}
               onSubmitEditing={() => {
                 void workspace.onRequestAiAnswer();
               }}
-              onKeyPress={(event) => {
-                handleWebSubmitKeyPress(event, () => {
-                  void workspace.onRequestAiAnswer();
-                });
-              }}
+              onKeyPress={handleAiComposerKeyPress}
             />
-            <View style={workspace.styles.aiTooltipAnchor}>
+            <View style={workspace.styles.aiComposerActionRow}>
+              {Platform.OS === 'web' ? (
+                <Pressable
+                  style={workspace.styles.aiRagScopeAddButton}
+                  onPress={() => {
+                    if (ragMenuOpen) {
+                      closeRagReferenceMenu({ focusComposer: true });
+                      return;
+                    }
+                    setRagMenuOpen(true);
+                    setRagMenuQuery('');
+                  }}
+                  disabled={workspace.aiChatReadOnly || workspace.aiLoading}
+                >
+                  <MaterialCommunityIcons name="plus" size={18} color="#5B6472" />
+                </Pressable>
+              ) : null}
+              <View style={workspace.styles.aiComposerActionSpacer} />
+              <Pressable
+                style={workspace.styles.aiComposerModeButton}
+                disabled={workspace.aiChatReadOnly || workspace.aiLoading}
+              >
+                <Text style={workspace.styles.aiComposerModeText}>GPT-5.5</Text>
+                <MaterialCommunityIcons name="chevron-down" size={15} color="#5B6472" />
+              </Pressable>
+              <View style={workspace.styles.aiTooltipAnchor}>
               <Pressable
                 {...getTooltipTriggerProps('ai-chat-send', '전송')}
                 style={[workspace.styles.aiSendButton, (!canSubmitAiQuestion || workspace.aiChatReadOnly) && workspace.styles.aiSendButtonDisabled]}
@@ -1027,6 +1743,7 @@ export function NotesAiAssistantPanel() {
             </View>
           </View>
         </View>
+      </View>
       </View>
       </Animated.View>
       {workspace.aiPanelMode === 'sidebar' && !workspace.usesAppAiPanelLayout ? (

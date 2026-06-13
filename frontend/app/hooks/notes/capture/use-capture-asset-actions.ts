@@ -113,6 +113,7 @@ export function useCaptureAssetActions(params: CaptureAssetActionsParams) {
         const document: StudyDocumentEntry = {
           id: backendNote.id,
           backendNoteId: backendNote.id,
+          backendFolderId: backendNote.folder_id,
           subjectId: targetSubject.id,
           title: backendNote.title,
           type: 'image',

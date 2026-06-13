@@ -39,7 +39,16 @@ def is_meaningful_text(text: str | None) -> bool:
     return useful_chars >= 8
 
 
-def split_text_into_chunks(text: str, chunk_size: int = DEFAULT_CHUNK_SIZE, overlap: int = DEFAULT_CHUNK_OVERLAP) -> list[str]:
+def _has_useful_chunk_content(text: str) -> bool:
+    return sum(1 for char in text if char.isalnum()) >= 3
+
+
+def split_text_into_chunks(
+    text: str,
+    *,
+    chunk_size: int = DEFAULT_CHUNK_SIZE,
+    overlap: int = DEFAULT_CHUNK_OVERLAP,
+) -> list[str]:
     if not text:
         return []
     if chunk_size <= 0:
@@ -56,7 +65,7 @@ def split_text_into_chunks(text: str, chunk_size: int = DEFAULT_CHUNK_SIZE, over
     while start < len(normalized):
         end = start + chunk_size
         chunk = normalized[start:end].strip()
-        if sum(1 for char in chunk if char.isalnum()) >= 3:
+        if _has_useful_chunk_content(chunk):
             chunks.append(chunk)
         if end >= len(normalized):
             break

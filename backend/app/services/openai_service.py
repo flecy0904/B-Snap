@@ -1720,6 +1720,7 @@ def generate_ai_canvas_operations_from_chat(
         if canvas_recommendation_mode in CANVAS_RECOMMENDATION_MODE_MEANINGS
         else "Current Canvas document JSON:"
     )
+    support_context_text = context_hint.strip() if context_hint else "(none)"
     input_items: list[dict[str, Any]] = [
         {
             "role": "user",
@@ -1750,6 +1751,9 @@ def generate_ai_canvas_operations_from_chat(
                 "",
                 "Note/PDF context:",
                 build_note_context(note, pages, current_page_number=current_page_number),
+                "",
+                "Support context from scoped RAG routing:",
+                support_context_text,
                 "",
                 "Return Canvas operations JSON only.",
             ] if part is not None),

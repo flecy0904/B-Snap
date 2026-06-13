@@ -1,4 +1,5 @@
 import json
+import logging
 import re
 from typing import Any
 
@@ -13,7 +14,7 @@ from backend.app.schemas.rag import (
     RAGQuizResponse,
     RetrievedContext,
 )
-from backend.app.services.document_chunk_index import retrieve_hybrid_contexts
+from backend.app.services.document_chunk_index import retrieve_chunk_contexts
 from backend.app.services.note_page_content import extract_ai_page_text
 from backend.app.services.openai_service import generate_text_response
 from backend.app.services.prompts.rag import (
@@ -26,15 +27,10 @@ from backend.app.services.prompts.rag import (
     build_summary_prompt,
     format_contexts_for_prompt,
 )
-from backend.app.services.rag_retriever import (
-    Document,
-    build_mock_contexts,
-    retrieve_relevant_contexts,
-    split_text_into_chunks,
-)
 
-
+logger = logging.getLogger(__name__)
 JSON_FENCE_PATTERN = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
+Document = dict[str, Any]
 
 
 def load_note_documents(
@@ -44,6 +40,7 @@ def load_note_documents(
     folder_id: int | None = None,
     subject_id: int | None = None,
     user_id: int | None = None,
+    include_canvas_notes: bool = True,
 ) -> list[Document]:
     current_folder_id = folder_id if folder_id is not None else subject_id
     where_clause, params = _build_note_filters(note_ids=note_ids, folder_id=current_folder_id, user_id=user_id)
@@ -69,23 +66,25 @@ def load_note_documents(
         """,
         params,
     )
-    ai_canvas_notes = fetch_all(
-        connection,
-        f"""
-        SELECT c.id,
-               c.note_id,
-               c.title,
-               c.markdown,
-               c.source_page_start,
-               c.source_page_end,
-               n.title AS note_title
-        FROM ai_canvas_notes c
-        JOIN notes n ON n.id = c.note_id
-        {where_clause}
-        ORDER BY c.updated_at DESC, c.id DESC
-        """,
-        params,
-    )
+    ai_canvas_notes = []
+    if include_canvas_notes:
+        ai_canvas_notes = fetch_all(
+            connection,
+            f"""
+            SELECT c.id,
+                   c.note_id,
+                   c.title,
+                   c.markdown,
+                   c.source_page_start,
+                   c.source_page_end,
+                   n.title AS note_title
+            FROM ai_canvas_notes c
+            JOIN notes n ON n.id = c.note_id
+            {where_clause}
+            ORDER BY c.updated_at DESC, c.id DESC
+            """,
+            params,
+        )
 
     documents: list[Document] = []
     for note in notes:
@@ -136,40 +135,63 @@ def load_note_documents(
     return documents
 
 
-def ask_with_rag(
-    *,
-    question: str,
-    documents: list[Document],
-    top_k: int = 5,
-    model: str | None = None,
-) -> RAGAnswer:
-    contexts = _retrieve_or_mock(question, documents, top_k)
-    return answer_with_retrieved_contexts(question=question, contexts=contexts, model=model)
-
-
-def ask_with_hybrid_rag(
+def load_canvas_documents(
     connection: Connection,
     *,
-    user_id: int,
-    question: str,
-    documents: list[Document],
-    note_ids: list[int] | None = None,
-    folder_id: int | None = None,
-    top_k: int = 5,
-    model: str | None = None,
-) -> RAGAnswer:
-    contexts = retrieve_hybrid_contexts(
+    canvas_note_ids: list[int],
+    user_id: int | None = None,
+) -> list[Document]:
+    if not canvas_note_ids:
+        return []
+
+    filters = ["c.id = ANY(%s)"]
+    params: list[Any] = [canvas_note_ids]
+    if user_id is not None:
+        filters.append("n.user_id = %s")
+        params.append(user_id)
+
+    ai_canvas_notes = fetch_all(
         connection,
-        user_id=user_id,
-        query=question,
-        documents=documents,
-        note_ids=note_ids,
-        folder_id=folder_id,
-        top_k=top_k,
+        f"""
+        SELECT c.id,
+               c.note_id,
+               c.title,
+               c.markdown,
+               c.source_page_start,
+               c.source_page_end,
+               n.title AS note_title
+        FROM ai_canvas_notes c
+        JOIN notes n ON n.id = c.note_id
+        WHERE {' AND '.join(filters)}
+        ORDER BY c.updated_at DESC, c.id DESC
+        """,
+        tuple(params),
     )
-    if not contexts and not documents:
-        contexts = build_mock_contexts(question)
-    return answer_with_retrieved_contexts(question=question, contexts=contexts, model=model)
+
+    documents: list[Document] = []
+    for canvas_note in ai_canvas_notes:
+        if not canvas_note.get("markdown"):
+            continue
+        page_range = _format_page_range(
+            canvas_note.get("source_page_start"),
+            canvas_note.get("source_page_end"),
+        )
+        documents.append(
+            {
+                "source_type": "canvas_note",
+                "source_id": str(canvas_note["id"]),
+                "title": f"{canvas_note['note_title']} - {canvas_note['title']}",
+                "content": "\n".join(
+                    part
+                    for part in [
+                        f"Source pages: {page_range}" if page_range else "",
+                        canvas_note["markdown"],
+                    ]
+                    if part
+                ),
+            }
+        )
+    return documents
 
 
 def answer_with_retrieved_contexts(
@@ -198,64 +220,69 @@ def answer_with_retrieved_contexts(
     )
 
 
-def build_rag_context_hint(
-    *,
-    question: str,
-    documents: list[Document],
-    top_k: int = 5,
-) -> str | None:
-    contexts = retrieve_relevant_contexts(question, documents, top_k=top_k)
-    if not contexts:
-        return None
-
-    return "\n\n".join(
-        [
-            "Retrieved study context for this user question:",
-            format_contexts_for_prompt(contexts),
-        ]
-    )
-
-
-def build_hybrid_rag_context_hint(
+def retrieve_rag_contexts_with_debug(
     connection: Connection,
     *,
     user_id: int,
     question: str,
-    documents: list[Document],
     note_ids: list[int] | None = None,
     folder_id: int | None = None,
+    canvas_note_ids: list[int] | None = None,
+    exclude_canvas_for_notes: bool = False,
+    documents: list[Document] | None = None,
     top_k: int = 5,
-) -> str | None:
-    contexts = retrieve_hybrid_contexts(
-        connection,
-        user_id=user_id,
-        query=question,
-        documents=documents,
-        note_ids=note_ids,
-        folder_id=folder_id,
-        top_k=top_k,
-    )
-    if not contexts:
-        return None
+) -> tuple[list[RetrievedContext], dict[str, Any]]:
+    debug: dict[str, Any] = {
+        "fallback": False,
+        "fallback_reason": None,
+        "retrieved_source_count": 0,
+        "retrieved_chunk_count": 0,
+    }
+    try:
+        contexts = retrieve_chunk_contexts(
+            connection,
+            user_id=user_id,
+            query=question,
+            note_ids=note_ids,
+            folder_id=folder_id,
+            canvas_note_ids=canvas_note_ids,
+            exclude_canvas_for_notes=exclude_canvas_for_notes,
+            top_k=top_k,
+        )
+        if contexts:
+            debug["retrieved_source_count"] = len({f"{context.source_type}:{context.source_id}" for context in contexts})
+            debug["retrieved_chunk_count"] = len(contexts)
+            return contexts, debug
+        debug["fallback_reason"] = "vector_empty"
+        debug["no_results"] = True
+    except Exception as exc:
+        rollback = getattr(connection, "rollback", None)
+        if callable(rollback):
+            try:
+                rollback()
+            except Exception as rollback_exc:
+                logger.warning("failed to roll back after vector RAG retrieval error: %s", rollback_exc)
+        debug["fallback"] = True
+        debug["fallback_reason"] = "vector_error"
+        debug["rag_unavailable"] = True
+        logger.warning(
+            "vector RAG retrieval failed: user_id=%s note_ids=%s folder_id=%s canvas_note_ids=%s error=%s",
+            user_id,
+            note_ids,
+            folder_id,
+            canvas_note_ids,
+            exc,
+        )
 
-    return "\n\n".join(
-        [
-            "Retrieved study context for this user question:",
-            format_contexts_for_prompt(contexts),
-        ]
-    )
+    return [], debug
 
 
-def summarize_note_with_prompt(
+def summarize_retrieved_contexts(
     *,
-    documents: list[Document],
-    top_k: int = 5,
+    contexts: list[RetrievedContext],
     mode: str = "note",
     model: str | None = None,
-    contexts: list[RetrievedContext] | None = None,
 ) -> RAGAnswer:
-    query = "시험 대비 핵심 개념 예상 문제" if mode == "exam" else "노트 핵심 요약 중요 개념"
-    contexts = contexts or _retrieve_or_mock(query, documents, top_k, fallback_to_documents=True)
     selected_model = model or get_settings().default_ai_model
     instructions = EXAM_SUMMARY_PROMPT if mode == "exam" else NOTE_SUMMARY_PROMPT
     mock_response = _mock_summary(contexts, mode)
@@ -277,45 +304,12 @@ def summarize_note_with_prompt(
     )
 
 
-def summarize_note_with_hybrid_rag(
-    connection: Connection,
+def generate_quiz_from_retrieved_contexts(
     *,
-    user_id: int,
-    documents: list[Document],
-    note_ids: list[int] | None = None,
-    folder_id: int | None = None,
-    top_k: int = 5,
-    mode: str = "note",
-    model: str | None = None,
-) -> RAGAnswer:
-    query = "시험 대비 핵심 개념 예상 문제" if mode == "exam" else "노트 핵심 요약 중요 개념"
-    contexts = retrieve_hybrid_contexts(
-        connection,
-        user_id=user_id,
-        query=query,
-        documents=documents,
-        note_ids=note_ids,
-        folder_id=folder_id,
-        top_k=top_k,
-    )
-    return summarize_note_with_prompt(
-        documents=documents,
-        top_k=top_k,
-        mode=mode,
-        model=model,
-        contexts=contexts or None,
-    )
-
-
-def generate_quiz_from_context(
-    *,
-    documents: list[Document],
-    top_k: int = 5,
+    contexts: list[RetrievedContext],
     count: int = 5,
     model: str | None = None,
-    contexts: list[RetrievedContext] | None = None,
 ) -> RAGQuizResponse:
-    contexts = contexts or _retrieve_or_mock("퀴즈 문제 정답 설명 핵심 개념", documents, top_k, fallback_to_documents=True)
     selected_model = model or get_settings().default_ai_model
     mock_questions = _mock_quiz_questions(contexts, count)
     mock_response = json.dumps(
@@ -332,35 +326,6 @@ def generate_quiz_from_context(
     return RAGQuizResponse(
         questions=_parse_quiz_questions(raw_response, fallback=mock_questions),
         sources=contexts,
-    )
-
-
-def generate_quiz_with_hybrid_rag(
-    connection: Connection,
-    *,
-    user_id: int,
-    documents: list[Document],
-    note_ids: list[int] | None = None,
-    folder_id: int | None = None,
-    top_k: int = 5,
-    count: int = 5,
-    model: str | None = None,
-) -> RAGQuizResponse:
-    contexts = retrieve_hybrid_contexts(
-        connection,
-        user_id=user_id,
-        query="퀴즈 문제 정답 설명 핵심 개념",
-        documents=documents,
-        note_ids=note_ids,
-        folder_id=folder_id,
-        top_k=top_k,
-    )
-    return generate_quiz_from_context(
-        documents=documents,
-        top_k=top_k,
-        count=count,
-        model=model,
-        contexts=contexts or None,
     )
 
 
@@ -397,45 +362,6 @@ def _format_page_range(start: int | None, end: int | None) -> str:
     if end is None or end == start:
         return str(start)
     return f"{start}-{end}"
-
-
-def _retrieve_or_mock(
-    question: str,
-    documents: list[Document],
-    top_k: int,
-    *,
-    fallback_to_documents: bool = False,
-) -> list[RetrievedContext]:
-    contexts = retrieve_relevant_contexts(question, documents, top_k=top_k)
-    if contexts:
-        return contexts
-    if not documents:
-        return build_mock_contexts(question)
-    if fallback_to_documents:
-        return _first_contexts(documents, top_k)
-    return []
-
-
-def _first_contexts(documents: list[Document], top_k: int) -> list[RetrievedContext]:
-    contexts = []
-    for document in documents:
-        chunks = split_text_into_chunks(document.get("content") or "")
-        for chunk_index, chunk in enumerate(chunks):
-            source_id = str(document.get("source_id") or document.get("id") or "")
-            if len(chunks) > 1:
-                source_id = f"{source_id}#chunk-{chunk_index + 1}"
-            contexts.append(
-                RetrievedContext(
-                    source_type=str(document.get("source_type") or "document"),
-                    source_id=source_id,
-                    title=str(document.get("title") or "Untitled"),
-                    content=chunk,
-                    score=0.0,
-                )
-            )
-            if len(contexts) >= top_k:
-                return contexts
-    return contexts
 
 
 def _mock_answer(question: str, contexts: list[RetrievedContext]) -> str:

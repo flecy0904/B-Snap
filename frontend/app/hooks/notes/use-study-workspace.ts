@@ -9,15 +9,21 @@ import {
   listAllBackendChatSessions,
   listBackendChatMessages,
   listBackendChatSessions,
+  listBackendAiCanvasNotes,
+  listBackendAiCanvasNotesByFolder,
   listBackendFolders,
   listBackendNotePages,
   listBackendNotes,
   persistBackendNotePageHandwritingRecognition,
+  updateBackendChatSession,
+  type BackendAiCanvasNoteSummary,
   type BackendClassInsight,
   type BackendChatSession,
   type BackendChatMessage,
   type BackendHandwritingRecognitionWrite,
   type BackendNotePage,
+  type BackendRagScope,
+  type BackendRagScopeSource,
 } from '../../services/backend-api';
 import {
   ensureKoreanHandwritingModel,
@@ -100,6 +106,7 @@ export type HandwritingDebugReadiness = {
 };
 
 const DEFAULT_AI_FLOATING_PANEL_SIZE: AiFloatingPanelSize = { width: 380, height: 620 };
+const DEFAULT_AI_PANEL_MODE: 'floating' | 'sidebar' = Platform.OS === 'web' ? 'sidebar' : 'floating';
 const HANDWRITING_AUTO_ANALYZE_ENABLED = process.env.EXPO_PUBLIC_ENABLE_HANDWRITING_AUTO_ANALYZE === 'true';
 const HANDWRITING_AUTO_VISION_FALLBACK_ENABLED = process.env.EXPO_PUBLIC_ENABLE_HANDWRITING_AUTO_VISION === 'true';
 
@@ -226,6 +233,39 @@ function isTransientWebFileUri(uri: string | null | undefined) {
   return normalizedUri.startsWith('blob:') || normalizedUri.startsWith('data:application/pdf');
 }
 
+function getRagScopeSourceKey(source: Pick<BackendRagScopeSource, 'id' | 'type'>) {
+  return `${source.type}:${source.id}`;
+}
+
+function buildRagScope(sources: BackendRagScopeSource[]): BackendRagScope {
+  const nextSources: BackendRagScopeSource[] = [];
+  const seen = new Set<string>();
+  sources.forEach((source) => {
+    const key = getRagScopeSourceKey(source);
+    if (seen.has(key)) return;
+    seen.add(key);
+    nextSources.push(source);
+  });
+  return {
+    sourceIds: nextSources.map(getRagScopeSourceKey),
+    sources: nextSources,
+  };
+}
+
+function buildDefaultRagScope(document: StudyDocumentEntry | null): BackendRagScope | null {
+  const backendNoteId = getStudyDocumentBackendNoteId(document);
+  if (!backendNoteId || !document) return null;
+  return buildRagScope([{ id: String(backendNoteId), type: 'note', title: document.title }]);
+}
+
+function getNonEmptyRagScope(scope: BackendRagScope | null | undefined): BackendRagScope | null {
+  return scope?.sources.length ? scope : null;
+}
+
+function getStudyDocumentBackendFolderId(document: StudyDocumentEntry | null | undefined) {
+  return typeof document?.backendFolderId === 'number' ? document.backendFolderId : null;
+}
+
 export function useStudyWorkspace(props: {
   wide: boolean;
   subjects: Subject[];
@@ -261,7 +301,7 @@ export function useStudyWorkspace(props: {
   const [textAnnotationsByDocument, setTextAnnotationsByDocument] = useState<Record<number, InkTextAnnotation[]>>({});
   const [imageAnnotationsByDocument, setImageAnnotationsByDocument] = useState<Record<number, InkImageAnnotation[]>>({});
   const [aiPanelOpen, setAiPanelOpen] = useState(false);
-  const [aiPanelMode, setAiPanelMode] = useState<'floating' | 'sidebar'>('floating');
+  const [aiPanelMode, setAiPanelMode] = useState<'floating' | 'sidebar'>(DEFAULT_AI_PANEL_MODE);
   const [appRightSidebarPanel, setAppRightSidebarPanel] = useState<AppRightSidebarPanel>(null);
   const [appChatMode, setAppChatMode] = useState<AppChatMode>('sidebar');
   const [appRightSidebarWidth, setAppRightSidebarWidth] = useState(380);
@@ -332,6 +372,10 @@ export function useStudyWorkspace(props: {
   const [aiChatScope, setAiChatScope] = useState<'note' | 'all'>('note');
   const [aiChatSearchQuery, setAiChatSearchQuery] = useState('');
   const [aiMessagesBySession, setAiMessagesBySession] = useState<Record<number, BackendChatMessage[]>>({});
+  const [draftAiRagScopeByDocument, setDraftAiRagScopeByDocument] = useState<Record<number, BackendRagScope | null>>({});
+  const [aiRagScopeCollapsed, setAiRagScopeCollapsed] = useState(true);
+  const [aiRagCanvasCandidates, setAiRagCanvasCandidates] = useState<BackendAiCanvasNoteSummary[]>([]);
+  const [backendFolderIdBySubjectId, setBackendFolderIdBySubjectId] = useState<Record<number, number>>({});
   const loadAllAiChatSessions = useCallback(() => {
     if (!isBackendApiEnabled()) return;
 
@@ -431,7 +475,9 @@ export function useStudyWorkspace(props: {
     setBookmarksByDocument(snapshot.bookmarksByDocument ?? {});
     setLastChatSessionByDocument(snapshot.lastChatSessionByDocument ?? {});
     setChatSidebarOpenByDocument(snapshot.chatSidebarOpenByDocument ?? {});
-    setAiPanelMode(snapshot.aiPanelMode === 'sidebar' ? 'sidebar' : 'floating');
+    setAiPanelMode(snapshot.aiPanelMode === 'sidebar' || snapshot.aiPanelMode === 'floating'
+      ? snapshot.aiPanelMode
+      : DEFAULT_AI_PANEL_MODE);
     setAiFloatingPanelSize(normalizeAiFloatingPanelSize(snapshot.aiFloatingPanelSize));
     setAppSidebarPosition(snapshot.appSidebarPosition === 'left' ? 'left' : 'right');
     setStudyInteractionMode(snapshot.studyInteractionMode === 'read' ? 'read' : 'edit');
@@ -482,6 +528,32 @@ export function useStudyWorkspace(props: {
     state: persistedWorkspaceState,
     onHydrate: hydrateWorkspaceState,
   });
+  const currentBackendFolderId = getStudyDocumentBackendFolderId(studyDocument) ?? (subject?.id ? backendFolderIdBySubjectId[subject.id] : undefined);
+  useEffect(() => {
+    if (!workspaceHydrated || !isBackendApiEnabled()) {
+      setAiRagCanvasCandidates([]);
+      return;
+    }
+    const backendNoteId = getStudyDocumentBackendNoteId(studyDocument);
+    if (!currentBackendFolderId && !backendNoteId) {
+      setAiRagCanvasCandidates([]);
+      return;
+    }
+    let cancelled = false;
+    const loadCanvasNotes = currentBackendFolderId
+      ? listBackendAiCanvasNotesByFolder(currentBackendFolderId)
+      : listBackendAiCanvasNotes(backendNoteId!);
+    loadCanvasNotes
+      .then((notes) => {
+        if (!cancelled) setAiRagCanvasCandidates(notes);
+      })
+      .catch(() => {
+        if (!cancelled) setAiRagCanvasCandidates([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentBackendFolderId, studyDocument, workspaceHydrated]);
   useEffect(() => {
     if (!workspaceHydrated) return;
     if (!studyDocumentId) {
@@ -689,6 +761,95 @@ export function useStudyWorkspace(props: {
     aiChatSearchQuery,
     backendPageIdsByDocument,
   });
+  const activeAiChatSession = activeAiChatSessionId
+    ? aiChatSessions.find((session) => session.id === activeAiChatSessionId)
+      ?? allChatSessions.find((session) => session.id === activeAiChatSessionId)
+      ?? null
+    : null;
+  const defaultAiRagScope = useMemo(() => buildDefaultRagScope(studyDocument), [studyDocument]);
+  const activeAiRagScope = useMemo(() => (
+    getNonEmptyRagScope(activeAiChatSession?.ragScope)
+    ?? getNonEmptyRagScope(studyDocumentId ? draftAiRagScopeByDocument[studyDocumentId] : null)
+    ?? defaultAiRagScope
+  ), [activeAiChatSession?.ragScope, defaultAiRagScope, draftAiRagScopeByDocument, studyDocumentId]);
+  const noteTitleByBackendId = useMemo(() => {
+    const titles = new Map<string, string>();
+    allStudyDocuments.forEach((document) => {
+      const backendNoteId = getStudyDocumentBackendNoteId(document);
+      if (backendNoteId) titles.set(String(backendNoteId), document.title);
+    });
+    return titles;
+  }, [allStudyDocuments]);
+  const aiRagReferenceCandidates = useMemo(() => {
+    const isCurrentReferenceDocument = (document: StudyDocumentEntry) => {
+      const documentBackendFolderId = getStudyDocumentBackendFolderId(document);
+      if (currentBackendFolderId && documentBackendFolderId) return documentBackendFolderId === currentBackendFolderId;
+      return document.subjectId === subject?.id;
+    };
+    const noteCandidates: BackendRagScopeSource[] = allStudyDocuments
+      .filter(isCurrentReferenceDocument)
+      .flatMap((document) => {
+        const backendNoteId = getStudyDocumentBackendNoteId(document);
+        if (!backendNoteId) return [];
+        return [{ id: String(backendNoteId), type: 'note' as const, title: document.title }];
+      });
+    const canvasCandidates: BackendRagScopeSource[] = aiRagCanvasCandidates
+      .filter((canvas) => !currentBackendFolderId || canvas.folder_id === currentBackendFolderId)
+      .map((canvas) => ({
+        id: String(canvas.id),
+        type: 'canvas_note' as const,
+        title: `${noteTitleByBackendId.get(String(canvas.note_id)) ?? '노트'} - ${canvas.title}`,
+      }));
+    return [...noteCandidates, ...canvasCandidates];
+  }, [aiRagCanvasCandidates, allStudyDocuments, currentBackendFolderId, noteTitleByBackendId, subject?.id]);
+  const syncRagScopeToSessions = useCallback((sessionId: number, scope: BackendRagScope | null) => {
+    setChatSessionsByDocument((current) => {
+      const next: Record<number, BackendChatSession[]> = {};
+      Object.entries(current).forEach(([key, sessions]) => {
+        next[Number(key)] = sessions.map((session) => (
+          session.id === sessionId ? { ...session, ragScope: scope } : session
+        ));
+      });
+      return next;
+    });
+    setAllChatSessions((current) => current.map((session) => (
+      session.id === sessionId ? { ...session, ragScope: scope } : session
+    )));
+  }, []);
+  const resetDraftAiRagScope = useCallback(() => {
+    if (!studyDocumentId) return;
+    setDraftAiRagScopeByDocument((current) => {
+      const next = { ...current };
+      delete next[studyDocumentId];
+      return next;
+    });
+  }, [studyDocumentId]);
+  const setActiveAiRagScope = useCallback((scope: BackendRagScope | null) => {
+    if (!studyDocumentId) return;
+    const fallbackScope = buildDefaultRagScope(studyDocument);
+    const nextScope = scope?.sources.length ? scope : fallbackScope;
+    if (!nextScope) return;
+    if (activeAiChatSessionId) {
+      syncRagScopeToSessions(activeAiChatSessionId, nextScope);
+      if (isBackendApiEnabled()) {
+        void updateBackendChatSession({ sessionId: activeAiChatSessionId, ragScope: nextScope })
+          .then((session) => syncRagScopeToSessions(session.id, session.ragScope ?? nextScope))
+          .catch(() => setWorkspaceFeedback('참고 자료 저장에 실패했어요.'));
+      }
+    } else {
+      setDraftAiRagScopeByDocument((current) => ({ ...current, [studyDocumentId]: nextScope }));
+    }
+  }, [activeAiChatSessionId, studyDocument, studyDocumentId, syncRagScopeToSessions, setWorkspaceFeedback]);
+  const addAiRagScopeSource = useCallback((source: BackendRagScopeSource) => {
+    setActiveAiRagScope(buildRagScope([...(activeAiRagScope?.sources ?? []), source]));
+  }, [activeAiRagScope?.sources, setActiveAiRagScope]);
+  const removeAiRagScopeSource = useCallback((sourceKey: string) => {
+    const remainingSources = (activeAiRagScope?.sources ?? []).filter((source) => getRagScopeSourceKey(source) !== sourceKey);
+    setActiveAiRagScope(buildRagScope(remainingSources));
+  }, [activeAiRagScope?.sources, setActiveAiRagScope]);
+  const resetAiRagScopeToCurrentNote = useCallback(() => {
+    setActiveAiRagScope(buildDefaultRagScope(studyDocument));
+  }, [setActiveAiRagScope, studyDocument]);
   const recordWorkspaceActionTarget = useCallback((target: WorkspaceFocusTarget) => {
     setFocusedWorkspaceTarget(target);
     setWorkspaceActionHistory((current) => [...current, target].slice(-100));
@@ -1121,6 +1282,11 @@ export function useStudyWorkspace(props: {
           listBackendFolders(),
           listBackendNotes(),
         ]);
+        const nextBackendFolderIdBySubjectId: Record<number, number> = {};
+        folders.forEach((folder) => {
+          const matchedSubject = availableSubjects.find((item) => item.name === folder.name);
+          if (matchedSubject) nextBackendFolderIdBySubjectId[matchedSubject.id] = folder.id;
+        });
         const documents = await Promise.all(
           backendNotes.map(async (backendNote) => {
             const folder = folders.find((item) => item.id === backendNote.folder_id);
@@ -1134,6 +1300,7 @@ export function useStudyWorkspace(props: {
               id: backendNote.id,
               subjectId: subject?.id ?? props.initialSubjectId ?? 101,
               backendNoteId: backendNote.id,
+              backendFolderId: backendNote.folder_id,
               title: backendNote.title,
               type: documentType,
               updatedAt: 'DB 저장됨',
@@ -1148,6 +1315,7 @@ export function useStudyWorkspace(props: {
         );
 
         if (!mounted) return;
+        setBackendFolderIdBySubjectId(nextBackendFolderIdBySubjectId);
         const backendDocumentIds = new Set(documents.map((document) => document.id));
         setUserStudyDocuments((current) => {
           const backendDocumentByBackendId = new Map<number, StudyDocumentEntry>();
@@ -1227,6 +1395,13 @@ export function useStudyWorkspace(props: {
         if (!mounted) return;
 
         setChatSessionsByDocument((current) => ({ ...current, [studyDocumentId]: sessions }));
+        setAllChatSessions((current) => {
+          const incomingSessionIds = new Set(sessions.map((item) => item.id));
+          return [
+            ...sessions,
+            ...current.filter((item) => !incomingSessionIds.has(item.id)),
+          ];
+        });
         setChatSessionByDocument((current) => ({ ...current, [studyDocumentId]: session.id }));
         setLastChatSessionByDocument((current) => ({ ...current, [studyDocumentId]: session.id }));
         setAiMessagesBySession((current) => ({ ...current, [session.id]: messages }));
@@ -1563,6 +1738,7 @@ export function useStudyWorkspace(props: {
     setAiError,
     setAiLoading,
     setAiCanvasRequestBusy,
+    setWorkspaceFeedback,
     setSelectionPreviewByDocument,
     setChatSessionByDocument,
     setViewingAiChatSessionId,
@@ -1570,10 +1746,13 @@ export function useStudyWorkspace(props: {
     setChatSessionsByDocument,
     setAllChatSessions,
     setAiMessagesBySession,
+    activeRagScope: activeAiRagScope,
     activeCanvasNoteId: aiCanvas.activeNoteId,
     activeCanvasMarkdown: aiCanvas.markdownDraft,
     activeCanvasDocumentJson: aiCanvas.documentDraft,
     onApplyCanvasEditFromChat: applyCanvasEditFromChat,
+    onSyncRagScope: syncRagScopeToSessions,
+    onResetDraftRagScope: resetDraftAiRagScope,
     onOpenChatForCanvasAnswer: () => {
       setViewingAiChatSessionId(null);
       setAiPanelOpen(true);
@@ -2155,6 +2334,9 @@ export function useStudyWorkspace(props: {
     allAiChatSessions: allChatSessions,
     aiChatScope,
     aiChatSearchQuery,
+    activeAiRagScope,
+    aiRagReferenceCandidates,
+    aiRagScopeCollapsed,
     activeAiChatSessionId,
     aiChatReadOnly,
     aiLoading,
@@ -2254,6 +2436,10 @@ export function useStudyWorkspace(props: {
     setAiChatScope: changeAiChatScope,
     onChangeAiChatScope: changeAiChatScope,
     onLoadAllAiChatSessions: loadAllAiChatSessions,
+    onToggleAiRagScopeCollapsed: () => setAiRagScopeCollapsed((current) => !current),
+    onAddAiRagScopeSource: addAiRagScopeSource,
+    onRemoveAiRagScopeSource: removeAiRagScopeSource,
+    onResetAiRagScope: resetAiRagScopeToCurrentNote,
     setAiChatSearchQuery,
     selectAiChatSession,
     renameAiChatSession,

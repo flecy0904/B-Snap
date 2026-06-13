@@ -3,7 +3,7 @@
 
 > **An all-in-one learning workspace connecting class materials, notes, PDFs, blackboard captures, and AI summaries.**
 
-B-Snap is a study assistant application that integrates various learning materials from college classes into a single workspace, providing an efficient review workflow through AI-driven summaries, Q&A, and quiz generation. 
+B-Snap is a study assistant application that integrates various learning materials from college classes into a single workspace, providing an efficient review workflow through AI-driven summaries, Q&A, and quiz generation.
 
 Our goal is to seamlessly connect timetables, PDF annotations, blackboard captures, handwritten notes, and AI chat into one unified workspace.
 
@@ -151,6 +151,8 @@ backend/.venv/bin/python -m backend.scripts.init_db
 
 ```
 
+Note: `cd frontend && npm run backend` also tries to prepare the backend virtual environment and packages when they are missing.
+
 ---
 
 ## 💻 How to Run
@@ -215,4 +217,3 @@ Uploading images (like blackboard captures) follows this flow:
 ## 📄 License
 
 This project is licensed under the **MIT License**.
-
