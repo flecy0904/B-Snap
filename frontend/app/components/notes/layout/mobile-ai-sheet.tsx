@@ -43,6 +43,7 @@ export function MobileAiSheet(props: MobileNotesViewProps) {
     && !props.aiQuestion.trim()
     && !props.aiChatReadOnly
   );
+  const canSubmitAiQuestion = Boolean(props.aiQuestion.trim() || props.selectionRect);
   const canRequestMoreImportantPages = hasClassInsightSuggestions && !props.aiChatReadOnly;
   const requestMoreImportantPages = React.useCallback(() => {
     void props.onRequestAiAnswerForQuestion(MORE_IMPORTANT_PAGES_QUESTION);
@@ -157,9 +158,9 @@ export function MobileAiSheet(props: MobileNotesViewProps) {
             style={props.styles.aiComposerInput}
           />
           <Pressable
-            style={[props.styles.aiSendButton, (props.aiLoading || props.aiChatReadOnly) && props.styles.aiSendButtonDisabled]}
+            style={[props.styles.aiSendButton, (props.aiLoading || props.aiChatReadOnly || !canSubmitAiQuestion) && props.styles.aiSendButtonDisabled]}
             onPress={props.onRequestAiAnswer}
-            disabled={props.aiLoading || props.aiChatReadOnly}
+            disabled={props.aiLoading || props.aiChatReadOnly || !canSubmitAiQuestion}
           >
             {props.aiLoading ? (
               <ActivityIndicator size="small" color="#FFFFFF" />
