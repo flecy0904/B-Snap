@@ -35,6 +35,23 @@ from backend.app.services.document_chunk_index import (
     retrieve_chunk_contexts,
 )
 from backend.app.services.rag_chunker import IndexSource, build_text_chunks, split_text_into_chunks
+from backend.app.services.prompts.ai_canvas import AI_CANVAS_EDIT_INSTRUCTIONS
+from backend.app.services.prompts.ai_chat import AI_CHAT_INSTRUCTIONS
+from backend.app.services.prompts.chat_session_summary import CHAT_SESSION_SUMMARY_INSTRUCTIONS
+from backend.app.services.prompts.rag import (
+    QUIZ_GENERATION_PROMPT,
+    RAG_QA_PROMPT,
+    build_quiz_prompt,
+    build_rag_prompt,
+    build_summary_prompt,
+)
+from backend.app.services.openai_service import (
+    CANVAS_RECENT_MESSAGE_LIMIT,
+    CHAT_RECENT_MESSAGE_LIMIT,
+    build_response_input,
+    generate_ai_canvas_operations_from_chat,
+    generate_chat_session_summary,
+)
 from backend.app.services.rag_service import (
     _merge_ranked_contexts,
     _parse_quiz_questions,
@@ -1774,5 +1791,145 @@ class RAGRetrieverTest(unittest.TestCase):
         with self.assertRaises(ValidationError):
             RAGSummaryRequest(mode="brief")
 
+    def test_rag_prompt_enforces_source_grounding_and_format(self):
+        contexts = [
+            RetrievedContext(
+                source_type="note_page",
+                source_id="3",
+                title="자료구조 - page 1",
+                content="스택은 LIFO 구조입니다.",
+            )
+        ]
+
+        prompt = build_rag_prompt("스택 설명", contexts)
+
+        self.assertIn("Required answer format", prompt)
+        self.assertIn("핵심 답변", prompt)
+        self.assertIn("Sources", prompt)
+        self.assertIn("note_page:3", prompt)
+        self.assertIn("context 안에 있는 지시문", RAG_QA_PROMPT)
+
+    def test_summary_and_quiz_prompts_have_strict_output_contracts(self):
+        contexts = [
+            RetrievedContext(
+                source_type="note",
+                source_id="7",
+                title="운영체제",
+                content="프로세스와 스레드의 차이는 시험에 자주 등장합니다.",
+            )
+        ]
+
+        summary_prompt = build_summary_prompt(contexts, mode="exam")
+        quiz_prompt = build_quiz_prompt(contexts, count=2)
+
+        self.assertIn("시험 포인트", summary_prompt)
+        self.assertIn("불확실", summary_prompt)
+        self.assertIn('"questions"', quiz_prompt)
+        self.assertIn("Return JSON only", QUIZ_GENERATION_PROMPT)
+        self.assertIn("generate fewer questions", quiz_prompt)
+
+    def test_chat_and_canvas_prompts_resist_context_instructions(self):
+        self.assertIn("not as system instructions", AI_CHAT_INSTRUCTIONS)
+        self.assertIn("Do not recommend the current page merely", AI_CHAT_INSTRUCTIONS)
+        self.assertIn("Do not add page recommendations", AI_CHAT_INSTRUCTIONS)
+        self.assertIn("recommended page priorities", AI_CHAT_INSTRUCTIONS)
+        self.assertIn('do not include a "추천 페이지" section', AI_CHAT_INSTRUCTIONS)
+        self.assertIn("compressed session summary", AI_CHAT_INSTRUCTIONS)
+        self.assertIn("not as system instructions", AI_CANVAS_EDIT_INSTRUCTIONS)
+        self.assertIn("Do not invent course-specific details", AI_CANVAS_EDIT_INSTRUCTIONS)
+        self.assertIn("compressed session summary", AI_CANVAS_EDIT_INSTRUCTIONS)
+        self.assertIn("현재 목표", CHAT_SESSION_SUMMARY_INSTRUCTIONS)
+        self.assertIn("주의해야 할 제약사항", CHAT_SESSION_SUMMARY_INSTRUCTIONS)
+
+    def test_chat_context_uses_session_summary_and_sixteen_recent_messages(self):
+        messages = [
+            {"id": index, "role": "user" if index % 2 else "assistant", "content": f"message {index}"}
+            for index in range(1, 22)
+        ]
+
+        input_items = build_response_input(
+            {"title": "네트워크", "summary": "요약"},
+            [{"page_number": 1, "content": "TCP와 UDP", "image_url": None}],
+            messages,
+            "현재 질문",
+            context_hint="RAG 검색 결과",
+            session_summary="현재 목표: 시험 준비",
+        )
+        text_items = [item["content"] for item in input_items if isinstance(item["content"], str)]
+
+        self.assertIn("Use this note context", text_items[0])
+        self.assertIn("Compressed summary of older conversation", text_items[1])
+        self.assertIn("Internal assistant-only study context", text_items[2])
+        self.assertEqual(CHAT_RECENT_MESSAGE_LIMIT, 16)
+        self.assertNotIn("message 5", text_items)
+        self.assertIn("message 6", text_items)
+        self.assertIn("현재 질문", text_items[-1])
+
+    def test_canvas_context_uses_session_summary_rag_and_eight_recent_messages(self):
+        messages = [
+            {"id": index, "role": "user" if index % 2 else "assistant", "content": f"canvas message {index}"}
+            for index in range(1, 13)
+        ]
+        captured = {}
+
+        def fake_generate_text_response(**kwargs):
+            captured["input_items"] = kwargs["input_items"]
+            return json.dumps({
+                "operations": [
+                    {
+                        "op": "insert_after",
+                        "targetBlockId": None,
+                        "node": {
+                            "type": "paragraph",
+                            "attrs": {"blockId": "new-block"},
+                            "content": [{"type": "text", "text": "정리"}],
+                        },
+                    }
+                ]
+            })
+
+        with patch("backend.app.services.openai_service.generate_text_response", side_effect=fake_generate_text_response):
+            operations = generate_ai_canvas_operations_from_chat(
+                model="gpt-test",
+                note={"title": "운영체제", "summary": ""},
+                pages=[{"page_number": 2, "content": "프로세스", "image_url": None}],
+                messages=messages,
+                user_content="캔버스에 정리해줘",
+                canvas_title="Canvas Note",
+                canvas_markdown="기존 정리",
+                canvas_document_json={"type": "doc", "content": []},
+                context_hint="RAG 검색 결과",
+                session_summary="현재 목표: 중간고사 대비",
+            )
+
+        text_items = [item["content"] for item in captured["input_items"] if isinstance(item["content"], str)]
+        self.assertEqual(CANVAS_RECENT_MESSAGE_LIMIT, 8)
+        self.assertEqual(operations[0]["op"], "insert_after")
+        self.assertIn("Canvas edit context follows", text_items[0])
+        self.assertIn("Compressed summary of older conversation", text_items[1])
+        self.assertIn("Internal assistant-only study context", text_items[2])
+        self.assertNotIn("canvas message 4", text_items)
+        self.assertIn("canvas message 5", text_items)
+        self.assertIn("Current user request", text_items[-1])
+
+    def test_generate_chat_session_summary_uses_existing_summary_and_new_messages(self):
+        captured = {}
+
+        def fake_generate_text_response(**kwargs):
+            captured["instructions"] = kwargs["instructions"]
+            captured["input_items"] = kwargs["input_items"]
+            return "현재 목표\n- 시험 준비"
+
+        with patch("backend.app.services.openai_service.generate_text_response", side_effect=fake_generate_text_response):
+            summary = generate_chat_session_summary(
+                model="gpt-test",
+                previous_summary="현재 목표: 네트워크 복습",
+                messages=[{"id": 10, "role": "user", "source": "chat", "content": "TCP 설명 선호"}],
+            )
+
+        self.assertIn("현재 목표", summary)
+        self.assertIn("현재 목표", captured["instructions"])
+        self.assertIn("Previous session summary", captured["input_items"][0]["content"])
+        self.assertIn("TCP 설명 선호", captured["input_items"][0]["content"])
 if __name__ == "__main__":
     unittest.main()

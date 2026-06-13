@@ -1,3 +1,5 @@
+import re
+
 from fastapi import APIRouter, Depends, HTTPException
 from psycopg import Connection
 from psycopg.types.json import Jsonb
@@ -25,9 +27,13 @@ from backend.app.services.ai_context_builder import (
 from backend.app.services.ai_context_router import AiContextRoute, route_ai_context
 from backend.app.services.ai_page_references import resolve_context_page_number
 from backend.app.services.openai_service import (
+    CANVAS_RECENT_MESSAGE_LIMIT,
+    CHAT_RECENT_MESSAGE_LIMIT,
+    CANVAS_RECOMMENDATION_MODE_MEANINGS,
     generate_ai_canvas_intent,
     generate_ai_canvas_operations_from_chat,
     generate_ai_canvas_title,
+    generate_chat_session_summary,
     generate_chat_title,
     generate_note_chat_answer,
 )
@@ -50,6 +56,19 @@ DEFAULT_CANVAS_DOCUMENT_JSON = {"type": "doc", "content": []}
 RAG_SEARCH_UNAVAILABLE_MESSAGE = "지금은 자료 검색을 사용할 수 없습니다. 잠시 후 다시 시도해 주세요."
 RAG_NO_RESULTS_MESSAGE = "관련된 자료를 찾지 못했습니다."
 RAG_TEXT_PROCESSING_MESSAGE = "자료를 읽는 중입니다. 잠시 후 다시 질문해 주세요."
+DEFAULT_CANVAS_TITLE_RE = re.compile(r"^Canvas Note(?:\s+\d+)?$")
+CANVAS_PAGE_FALLBACK_TITLE_RE = re.compile(r"^p\.\d+(?:-\d+)?\s+메모$")
+GENERIC_CANVAS_TITLES = {
+    DEFAULT_CANVAS_TITLE,
+    "AI Canvas",
+    "Canvas",
+    "캔버스",
+    "정리",
+    "요약",
+    "현재 페이지",
+    "정리 보강",
+}
+CANVAS_EVIDENCE_RECOMMENDATION_MODES = {"expand", "mark_uncertain"}
 
 CANVAS_TARGET_KEYWORDS = (
     "canvas",
@@ -176,6 +195,72 @@ CANVAS_CREATE_KEYWORDS = (
 )
 
 
+def build_default_canvas_title(index: int | None = None) -> str:
+    return f"{DEFAULT_CANVAS_TITLE} {index}" if index else DEFAULT_CANVAS_TITLE
+
+
+def is_default_canvas_title(title: str | None) -> bool:
+    normalized = " ".join((title or "").split()).strip()
+    if not normalized:
+        return True
+    if DEFAULT_CANVAS_TITLE_RE.match(normalized):
+        return True
+    return bool(CANVAS_PAGE_FALLBACK_TITLE_RE.match(normalized))
+
+
+def extract_canvas_node_text(value: object) -> str:
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list):
+        return "\n".join(part for item in value if (part := extract_canvas_node_text(item)))
+    if not isinstance(value, dict):
+        return ""
+
+    parts: list[str] = []
+    text = value.get("text")
+    if isinstance(text, str):
+        parts.append(text)
+
+    for key in ("content", "node"):
+        nested_text = extract_canvas_node_text(value.get(key))
+        if nested_text:
+            parts.append(nested_text)
+
+    return "\n".join(parts)
+
+
+def extract_canvas_operations_text(operations: object) -> str:
+    if not isinstance(operations, list):
+        return ""
+
+    parts: list[str] = []
+    for operation in operations:
+        if not isinstance(operation, dict):
+            text = extract_canvas_node_text(operation)
+            if text:
+                parts.append(text)
+            continue
+
+        for key in ("node", "content", "text"):
+            text = extract_canvas_node_text(operation.get(key))
+            if text:
+                parts.append(text)
+
+    return "\n".join(" ".join(part.split()) for part in parts if part.strip())[:4000]
+
+
+def normalize_generated_canvas_title(title: str | None, fallback_title: str | None = None) -> str:
+    normalized = " ".join((title or "").replace("\n", " ").split()).strip()
+    normalized = normalized.strip("\"'`“”‘’[](){}")
+    fallback = " ".join(str(fallback_title or DEFAULT_CANVAS_TITLE).replace("\n", " ").split()).strip()
+    fallback = fallback.strip("\"'`“”‘’[](){}") or DEFAULT_CANVAS_TITLE
+    if CANVAS_PAGE_FALLBACK_TITLE_RE.match(fallback):
+        fallback = DEFAULT_CANVAS_TITLE
+    if not normalized or normalized in GENERIC_CANVAS_TITLES or is_default_canvas_title(normalized):
+        return fallback[:30]
+    return normalized[:30]
+
+
 def keyword_canvas_action(content: str, *, target_implied: bool = False) -> str | None:
     normalized = content.lower()
     if any(keyword in normalized for keyword in CANVAS_CREATE_KEYWORDS):
@@ -241,7 +326,8 @@ def create_canvas_note_for_chat(note: dict, connection: Connection) -> dict:
         "SELECT COUNT(*) AS count FROM ai_canvas_notes WHERE note_id = %s",
         (note["id"],),
     )
-    if count_row and count_row["count"] >= MAX_AI_CANVAS_NOTES_PER_NOTE:
+    existing_count = int(count_row["count"] if count_row else 0)
+    if existing_count >= MAX_AI_CANVAS_NOTES_PER_NOTE:
         raise HTTPException(
             status_code=409,
             detail=f"AI Canvas Notes are limited to {MAX_AI_CANVAS_NOTES_PER_NOTE} per note",
@@ -257,7 +343,7 @@ def create_canvas_note_for_chat(note: dict, connection: Connection) -> dict:
         (
             note["folder_id"],
             note["id"],
-            DEFAULT_CANVAS_TITLE,
+            build_default_canvas_title(existing_count + 1),
             DEFAULT_CANVAS_MARKDOWN,
             Jsonb(DEFAULT_CANVAS_DOCUMENT_JSON),
             None,
@@ -406,6 +492,112 @@ def get_rag_failure_answer(debug: dict | None, *, has_local_context: bool) -> st
     return None
 
 
+def maybe_update_chat_session_summary(
+    connection: Connection,
+    *,
+    session: dict,
+    messages: list[dict],
+    model: str,
+    recent_message_limit: int,
+) -> str | None:
+    eligible_messages = [
+        message
+        for message in messages
+        if message.get("role") in {"user", "assistant"} and str(message.get("content") or "").strip()
+    ]
+    if len(eligible_messages) <= recent_message_limit:
+        return session.get("summary")
+
+    older_messages = eligible_messages[:-recent_message_limit]
+    if not older_messages:
+        return session.get("summary")
+
+    previous_summary = session.get("summary")
+    summarized_message_id = session.get("summarized_message_id")
+    latest_older_message_id = older_messages[-1]["id"]
+    if summarized_message_id is not None and summarized_message_id >= latest_older_message_id:
+        return previous_summary
+
+    if summarized_message_id is None:
+        messages_to_summarize = older_messages
+    else:
+        messages_to_summarize = [
+            message
+            for message in older_messages
+            if message["id"] > summarized_message_id
+        ]
+    if not messages_to_summarize:
+        return previous_summary
+
+    try:
+        next_summary = generate_chat_session_summary(
+            model=model,
+            previous_summary=previous_summary,
+            messages=messages_to_summarize,
+        )
+    except Exception:
+        return previous_summary
+
+    if not next_summary:
+        return previous_summary
+
+    execute_commit(
+        connection,
+        """
+        UPDATE chat_sessions
+        SET summary = %s,
+            summarized_message_id = %s,
+            summary_updated_at = now(),
+            updated_at = now()
+        WHERE id = %s
+        """,
+        (next_summary, latest_older_message_id, session["id"]),
+    )
+    session["summary"] = next_summary
+    session["summarized_message_id"] = latest_older_message_id
+    return next_summary
+
+
+def select_current_page_context_pages(pages: list[dict], page_number: int | None) -> list[dict]:
+    if not pages:
+        return []
+    if page_number is None:
+        return pages[:1]
+    selected_pages = [page for page in pages if page["page_number"] == page_number]
+    return selected_pages or pages[:1]
+
+
+def select_ai_canvas_context_pages(
+    pages: list[dict],
+    page_number: int | None,
+    *,
+    canvas_markdown: str | None,
+    canvas_document_json: object,
+    canvas_recommendation_mode: str | None,
+    has_selection_image: bool = False,
+) -> list[dict]:
+    if canvas_recommendation_mode not in CANVAS_RECOMMENDATION_MODE_MEANINGS:
+        return select_chat_context_pages(pages, page_number)
+
+    canvas_text = "\n".join(
+        part
+        for part in [
+            canvas_markdown or "",
+            extract_canvas_node_text(canvas_document_json),
+        ]
+        if part.strip()
+    )
+    if has_selection_image or not canvas_text.strip() or canvas_recommendation_mode in CANVAS_EVIDENCE_RECOMMENDATION_MODES:
+        return select_current_page_context_pages(pages, page_number)
+    return []
+
+
+def select_ai_canvas_messages(messages: list[dict], canvas_recommendation_mode: str | None) -> list[dict]:
+    if canvas_recommendation_mode in CANVAS_RECOMMENDATION_MODE_MEANINGS:
+        return []
+    return messages
+
+
 @router.post("/notes/{note_id}/chat-sessions", response_model=ChatSessionRead)
 def create_chat_session(
     note_id: int,
@@ -478,7 +670,8 @@ def get_chat_session(
         fetch_one(
             connection,
             """
-            SELECT s.id, s.note_id, s.title, s.model, s.rag_scope, s.created_at, s.updated_at
+            SELECT s.id, s.note_id, s.title, s.model, s.rag_scope, s.created_at, s.updated_at,
+                   s.summary, s.summarized_message_id, s.summary_updated_at
             FROM chat_sessions s
             JOIN notes n ON n.id = s.note_id
             WHERE s.id = %s AND n.user_id = %s
@@ -700,6 +893,19 @@ def create_ai_chat_message(
     if canvas_origin_request and canvas_action == "canvas_create":
         canvas_action = "chat_only"
 
+    recent_message_limit = (
+        CANVAS_RECENT_MESSAGE_LIMIT
+        if canvas_action in {"canvas_edit", "canvas_create"}
+        else CHAT_RECENT_MESSAGE_LIMIT
+    )
+    session_summary = maybe_update_chat_session_summary(
+        connection,
+        session=session,
+        messages=previous_messages,
+        model=model,
+        recent_message_limit=recent_message_limit,
+    )
+
     if canvas_action in {"canvas_edit", "canvas_create"}:
         if canvas_origin_request and not payload.canvas_note_id:
             canvas_action = "chat_only"
@@ -753,11 +959,20 @@ def create_ai_chat_message(
                 if canvas_action == "canvas_edit" and payload.canvas_document_json is not None
                 else canvas_note["document_json"]
             )
+            context_pages = select_ai_canvas_context_pages(
+                pages,
+                payload.page_number,
+                canvas_markdown=current_canvas_markdown,
+                canvas_document_json=current_canvas_document_json,
+                canvas_recommendation_mode=payload.canvas_recommendation_mode,
+                has_selection_image=bool(payload.selection_image or payload.selection_image_url),
+            )
+            context_messages = select_ai_canvas_messages(previous_messages, payload.canvas_recommendation_mode)
             operations = generate_ai_canvas_operations_from_chat(
                 model=model,
                 note=note,
-                pages=built_context.context_pages,
-                messages=previous_messages,
+                pages=context_pages,
+                messages=context_messages,
                 user_content=payload.content,
                 canvas_title=canvas_note["title"],
                 canvas_markdown=current_canvas_markdown,
@@ -766,34 +981,51 @@ def create_ai_chat_message(
                 selection_image=payload.selection_image,
                 selection_image_url=payload.selection_image_url,
                 context_hint=built_context.context_hint,
+                session_summary=session_summary,
                 canvas_block_context=payload.canvas_block_context,
+                canvas_recommendation_mode=payload.canvas_recommendation_mode,
             )
-            canvas_title = canvas_note["title"]
-            if canvas_action == "canvas_create" or payload.canvas_note_needs_title:
-                try:
-                    canvas_title = generate_ai_canvas_title(
-                        model=model,
-                        note=note,
-                        user_content=payload.content,
-                        canvas_markdown=current_canvas_markdown,
-                    )
-                except Exception:
-                    canvas_title = canvas_note["title"]
+            if not operations and canvas_action == "canvas_create" and created_canvas_note:
+                execute_commit(connection, "DELETE FROM ai_canvas_notes WHERE id = %s", (canvas_note["id"],))
+                created_canvas_note = False
+                canvas_note = None
+                canvas_action = "chat_only"
 
-            if canvas_title != canvas_note["title"]:
-                canvas_note = execute_returning(
-                    connection,
-                    """
-                    UPDATE ai_canvas_notes
-                    SET title = %s, updated_at = now()
-                    WHERE id = %s
-                    RETURNING id, folder_id, note_id, title, markdown, document_json, revision, source_page_start, source_page_end, created_at, updated_at
-                    """,
-                    (
-                        canvas_title,
-                        canvas_note["id"],
-                    ),
+            if canvas_note is not None:
+                canvas_title = canvas_note["title"]
+                should_generate_canvas_title = canvas_action == "canvas_create" or (
+                    payload.canvas_note_needs_title and is_default_canvas_title(canvas_note["title"])
                 )
+                if should_generate_canvas_title:
+                    try:
+                        operations_text = extract_canvas_operations_text(operations)
+                        title_source_markdown = "\n\n".join(
+                            part for part in (current_canvas_markdown, operations_text) if part.strip()
+                        )
+                        generated_canvas_title = generate_ai_canvas_title(
+                            model=model,
+                            note=note,
+                            user_content=payload.content,
+                            canvas_markdown=title_source_markdown,
+                        )
+                        canvas_title = normalize_generated_canvas_title(generated_canvas_title, canvas_note["title"])
+                    except Exception:
+                        canvas_title = canvas_note["title"]
+
+                if canvas_title != canvas_note["title"]:
+                    canvas_note = execute_returning(
+                        connection,
+                        """
+                        UPDATE ai_canvas_notes
+                        SET title = %s, updated_at = now()
+                        WHERE id = %s
+                        RETURNING id, folder_id, note_id, title, markdown, document_json, revision, source_page_start, source_page_end, created_at, updated_at
+                        """,
+                        (
+                            canvas_title,
+                            canvas_note["id"],
+                        ),
+                    )
         except Exception:
             if created_canvas_note:
                 try:
@@ -801,18 +1033,24 @@ def create_ai_chat_message(
                 except Exception:
                     pass
             raise
-        answer = (
-            "새 Canvas를 만들고 반영했습니다. Canvas 패널에서 확인해 주세요."
-            if canvas_action == "canvas_create"
-            else "Canvas에 반영했습니다."
-        )
-        canvas_edit = {
-            "action": canvas_action,
-            "canvas_note_id": canvas_note["id"],
-            "title": canvas_note["title"],
-            "canvas_note": canvas_note,
-            "operations": operations,
-        }
+        if operations:
+            answer = (
+                "새 Canvas를 만들고 반영했습니다. Canvas 패널에서 확인해 주세요."
+                if canvas_action == "canvas_create"
+                else "Canvas에 반영했습니다."
+            )
+        elif canvas_note is None:
+            answer = "적용할 만한 Canvas 변경이 없어 새 Canvas를 만들지 않았습니다."
+        else:
+            answer = "적용할 만한 Canvas 변경이 없어 현재 내용을 유지했습니다."
+        if canvas_note is not None:
+            canvas_edit = {
+                "action": canvas_action,
+                "canvas_note_id": canvas_note["id"],
+                "title": canvas_note["title"],
+                "canvas_note": canvas_note,
+                "operations": operations,
+            }
     else:
         answer = generate_note_chat_answer(
             model=model,
@@ -825,6 +1063,7 @@ def create_ai_chat_message(
             page_number=effective_page_number,
             selection_image_url=payload.selection_image_url,
             context_hint=built_context.context_hint,
+            session_summary=session_summary,
             canvas_block_context=payload.canvas_block_context,
             rag_image_inputs=image_recheck.image_inputs,
         )

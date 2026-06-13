@@ -2,6 +2,46 @@ import type { InkImageAnnotation, InkStroke, InkTextAnnotation } from '../../../
 
 export type RagExtractionMetadata = Record<string, unknown>;
 
+export type HandwritingRecognitionCluster = {
+  id: string;
+  pageNumber: number;
+  bbox: { x: number; y: number; width: number; height: number };
+  text: string;
+  candidates?: Array<{ text: string; confidence?: number }>;
+  keywords: string[];
+  symbols: string[];
+  confidence: number;
+  source?: string;
+  clusterKind?: 'text_like' | 'symbol_like' | 'mixed' | 'unknown' | string;
+  textLikeScore?: number;
+  symbolLikeScore?: number;
+  symbolCandidates?: Array<{
+    symbol: string;
+    confidence: number;
+    accepted: boolean;
+    rejectionReason?: string;
+  }>;
+};
+
+export type HandwritingRecognitionState = {
+  status: 'pending' | 'ready' | 'failed' | 'unavailable' | string;
+  strokeHash?: string;
+  engine?: string;
+  text?: string;
+  keywords?: string[];
+  symbols?: string[];
+  confidence?: number;
+  candidates?: Array<{ text: string; confidence?: number }>;
+  clusters?: HandwritingRecognitionCluster[];
+  updatedAt?: string;
+  visionFallbackUsed?: boolean;
+  visionFallbackSkippedReason?: string;
+  analyzedClusterCount?: number;
+  visionAnalyzedClusterCount?: number;
+  cached?: boolean;
+  stale?: boolean;
+};
+
 export type StoredNotePageContent = {
   kind: 'bsnap-page-state';
   version: 1;
@@ -12,6 +52,7 @@ export type StoredNotePageContent = {
   photoReferenceCount: number;
   memoPageCount: number;
   ragExtraction?: RagExtractionMetadata;
+  handwritingRecognition?: HandwritingRecognitionState | null;
 };
 
 export function serializeNotePageContent(params: {
@@ -22,10 +63,11 @@ export function serializeNotePageContent(params: {
   photoReferenceCount?: number;
   memoPageCount?: number;
   ragExtraction?: RagExtractionMetadata | null;
+  handwritingRecognition?: HandwritingRecognitionState | null;
 }) {
   const photoReferenceCount = Math.max(0, Math.floor(params.photoReferenceCount ?? 0));
   const memoPageCount = Math.max(0, Math.floor(params.memoPageCount ?? 0));
-  const nextContent: StoredNotePageContent = {
+  const pageState: StoredNotePageContent = {
     kind: 'bsnap-page-state',
     version: 1,
     inkStrokes: params.inkStrokes,
@@ -36,9 +78,12 @@ export function serializeNotePageContent(params: {
     memoPageCount,
   };
   if (params.ragExtraction && typeof params.ragExtraction === 'object' && !Array.isArray(params.ragExtraction)) {
-    nextContent.ragExtraction = params.ragExtraction;
+    pageState.ragExtraction = params.ragExtraction;
   }
-  return JSON.stringify(nextContent);
+  if (params.handwritingRecognition) {
+    pageState.handwritingRecognition = params.handwritingRecognition;
+  }
+  return JSON.stringify(pageState);
 }
 
 function normalizeCount(value: unknown) {
@@ -48,11 +93,15 @@ function normalizeCount(value: unknown) {
   return 0;
 }
 
-export function parseNotePageContent(content: string | null): StoredNotePageContent | null {
+export function parseNotePageContent(content: string | Partial<StoredNotePageContent> | null): StoredNotePageContent | null {
   if (!content) return null;
 
   try {
-    const parsed = JSON.parse(content) as Partial<StoredNotePageContent> & Record<string, unknown>;
+    const parsed = (
+      typeof content === 'string'
+        ? JSON.parse(content)
+        : content
+    ) as Partial<StoredNotePageContent> & Record<string, unknown>;
     if (parsed.kind !== 'bsnap-page-state' || parsed.version !== 1) return null;
     const bookmarkCount = normalizeCount(parsed.bookmarked)
       + normalizeCount(parsed.bookmarkCount)
@@ -83,6 +132,9 @@ export function parseNotePageContent(content: string | null): StoredNotePageCont
       ragExtraction: parsed.ragExtraction && typeof parsed.ragExtraction === 'object' && !Array.isArray(parsed.ragExtraction)
         ? parsed.ragExtraction as RagExtractionMetadata
         : undefined,
+      handwritingRecognition: typeof parsed.handwritingRecognition === 'object' && parsed.handwritingRecognition !== null
+        ? parsed.handwritingRecognition as HandwritingRecognitionState
+        : null,
     };
   } catch {
     return null;

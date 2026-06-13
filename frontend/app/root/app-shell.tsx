@@ -56,6 +56,21 @@ export function AppShell(props: {
     initialSubjectId: wide ? scheduleState.semesterSubjects[0]?.id ?? null : null,
     onOpenNotesTab: () => setTab('notes'),
   });
+  const handwritingDebugProps = {
+    currentPageHandwritingRecognition: notesState.currentPageHandwritingRecognition,
+    handwritingAnalysisBusy: notesState.handwritingAnalysisBusy,
+    mlKitHandwritingDebug: notesState.mlKitHandwritingDebug,
+    handwritingDebugReadiness: notesState.handwritingDebugReadiness,
+    canAnalyzeCurrentPageHandwriting: notesState.canAnalyzeCurrentPageHandwriting,
+    analyzeCurrentPageHandwriting: notesState.analyzeCurrentPageHandwriting,
+    forceAnalyzeCurrentPageHandwriting: notesState.forceAnalyzeCurrentPageHandwriting,
+    analyzeCurrentPageHandwritingWithVision: notesState.analyzeCurrentPageHandwritingWithVision,
+    analyzeCurrentNoteHandwriting: notesState.analyzeCurrentNoteHandwriting,
+    checkMlKitHandwritingAvailability: notesState.checkMlKitHandwritingAvailability,
+    prepareKoreanHandwritingModel: notesState.prepareKoreanHandwritingModel,
+    recognizeCurrentPageWithMlKit: notesState.recognizeCurrentPageWithMlKit,
+    recognizeAndSaveCurrentPageWithMlKit: notesState.recognizeAndSaveCurrentPageWithMlKit,
+  };
 
   const changeTab = (next: TabKey) => {
     setTab(next);
@@ -299,6 +314,7 @@ export function AppShell(props: {
                   aiCanvas={notesState.aiCanvas}
                   classInsight={notesState.classInsight}
                   importantPageRecommendations={notesState.importantPageRecommendations}
+                  {...handwritingDebugProps}
                   incomingAssetSuggestion={notesState.incomingAssetSuggestion}
                   inboxHint={notesState.inboxHint}
                   inboxPendingCount={notesState.inboxPendingCount}
@@ -364,6 +380,7 @@ export function AppShell(props: {
                   onStartNewAiChatSession={notesState.startNewAiChatSession}
                   onCreateAiChatSession={notesState.createAiChatSession}
                   onRequestAiAnswer={notesState.requestAiAnswer}
+                  onRequestAiAnswerForQuestion={notesState.requestAiAnswerForQuestion}
                   onAskAiAboutSelection={notesState.askAiAboutSelection}
                   onRequestAiCanvasCommand={notesState.requestAiCanvasCommand}
                   onInsertAiAnswerPage={notesState.insertAiAnswerPage}
@@ -577,6 +594,8 @@ export function AppShell(props: {
                   aiLoading={notesState.aiLoading}
                   aiError={notesState.aiError}
                   classInsight={notesState.classInsight}
+                  importantPageRecommendations={notesState.importantPageRecommendations}
+                  {...handwritingDebugProps}
                   incomingAssetSuggestion={notesState.incomingAssetSuggestion}
                   inboxHint={notesState.inboxHint}
                   inboxPendingCount={notesState.inboxPendingCount}
@@ -611,6 +630,7 @@ export function AppShell(props: {
                   onStartNewAiChatSession={notesState.startNewAiChatSession}
                   onCreateAiChatSession={notesState.createAiChatSession}
                   onRequestAiAnswer={notesState.requestAiAnswer}
+                  onRequestAiAnswerForQuestion={notesState.requestAiAnswerForQuestion}
                   onAskAiAboutSelection={notesState.askAiAboutSelection}
                   onRequestAiCanvasCommand={notesState.requestAiCanvasCommand}
                   onInsertAiAnswerPage={notesState.insertAiAnswerPage}

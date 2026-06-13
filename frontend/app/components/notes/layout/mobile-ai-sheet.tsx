@@ -7,12 +7,9 @@ import { AiResponseContent } from '../ai/ai-response-content';
 import type { MobileNotesViewProps } from './mobile-notes-view';
 
 const CLASS_INSIGHT_QUICK_PROMPTS = [
-  { label: '시험 부분', question: '시험에 나올만한 부분 알려줘' },
   { label: '중요 페이지', question: '시험에 나올만한 중요 페이지 추천해줘' },
-  { label: '복습 순서', question: '이 PDF에서 먼저 복습할 순서 알려줘' },
-  { label: '예상 문제', question: '이 내용에서 시험 예상 문제를 만들어줘' },
-  { label: '암기 포인트', question: '시험 전에 외워야 할 핵심 포인트만 정리해줘' },
 ] as const;
+const MORE_IMPORTANT_PAGES_QUESTION = '중요 페이지 더 보여줘';
 
 const DEFAULT_AI_QUICK_PROMPTS = [
   { label: '그래프 의미', question: '이 그래프 의미 뭐야?' },
@@ -32,17 +29,24 @@ export function MobileAiSheet(props: MobileNotesViewProps) {
   const normalizedQuestion = props.aiAnswer?.question ?? props.aiQuestion.trim();
   const aiResponseSections = props.aiAnswer?.sections ?? null;
   const aiResponse = props.aiAnswer?.response ?? (props.selectionRect ? '응답 생성을 누르면 선택 영역 기준으로 AI 답변을 요청합니다.' : '먼저 선택 모드로 문서 영역을 드래그해 주세요.');
-  const aiSuggestionPrompts = React.useMemo(() => (
+  const hasClassInsightSuggestions = Boolean(
     isClassInsightTargetDocument(props.studyDocument, props.subject)
     && hasEnoughClassInsightData(props.classInsight)
+  );
+  const aiSuggestionPrompts = React.useMemo(() => (
+    hasClassInsightSuggestions
       ? CLASS_INSIGHT_QUICK_PROMPTS
       : DEFAULT_AI_QUICK_PROMPTS
-  ), [props.classInsight, props.studyDocument, props.subject]);
+  ), [hasClassInsightSuggestions]);
   const showAiSuggestionPrompts = Boolean(
     aiSuggestionPrompts.length
     && !props.aiQuestion.trim()
     && !props.aiChatReadOnly
   );
+  const canRequestMoreImportantPages = hasClassInsightSuggestions && !props.aiChatReadOnly;
+  const requestMoreImportantPages = React.useCallback(() => {
+    void props.onRequestAiAnswerForQuestion(MORE_IMPORTANT_PAGES_QUESTION);
+  }, [props.onRequestAiAnswerForQuestion]);
   const activeSession = props.aiChatSessions.find((session) => session.id === props.activeAiChatSessionId) ?? null;
 
   if (!props.aiPanelOpen) return null;
@@ -188,6 +192,8 @@ export function MobileAiSheet(props: MobileNotesViewProps) {
                       textStyle={props.styles.aiResponseBody}
                       linkStyle={props.styles.aiResponsePageLink}
                       onOpenPage={props.onSetCurrentPdfPage}
+                      onRequestMoreRecommendations={canRequestMoreImportantPages ? requestMoreImportantPages : undefined}
+                      moreRecommendationsDisabled={props.aiLoading || props.aiChatReadOnly}
                     />
                   )}
                 </View>
@@ -212,6 +218,8 @@ export function MobileAiSheet(props: MobileNotesViewProps) {
                 textStyle={props.styles.aiResponseBody}
                 linkStyle={props.styles.aiResponsePageLink}
                 onOpenPage={props.onSetCurrentPdfPage}
+                onRequestMoreRecommendations={canRequestMoreImportantPages ? requestMoreImportantPages : undefined}
+                moreRecommendationsDisabled={props.aiLoading || props.aiChatReadOnly}
               />
             </View>
           )) : (
@@ -222,6 +230,8 @@ export function MobileAiSheet(props: MobileNotesViewProps) {
               textStyle={props.styles.aiResponseBody}
               linkStyle={props.styles.aiResponsePageLink}
               onOpenPage={props.onSetCurrentPdfPage}
+              onRequestMoreRecommendations={canRequestMoreImportantPages ? requestMoreImportantPages : undefined}
+              moreRecommendationsDisabled={props.aiLoading || props.aiChatReadOnly}
             />
           )}
         </View>

@@ -240,6 +240,7 @@ export function PdfPreview(props: {
   file: number | string | { uri: string };
   viewStateKey?: string | null;
   pageAlign?: 'center' | 'start' | 'end';
+  viewportSafeArea?: { left: number; right: number };
   page: number;
   inkTool: InkTool;
   fingerDrawingEnabled?: boolean;
@@ -282,6 +283,15 @@ export function PdfPreview(props: {
   activeGeneratedPageId?: string | null;
   pageCaptureReferences?: PageCaptureReference[];
   incomingAssetSuggestion?: CaptureAsset | null;
+  handwritingDebugClusters?: Array<{
+    id?: string;
+    pageNumber?: number;
+    bbox?: { x: number; y: number; width: number; height: number };
+    keywords?: string[];
+    symbols?: string[];
+    confidence?: number;
+    source?: string;
+  }>;
   onAcceptIncomingAsset?: () => void;
   onArchiveIncomingAsset?: () => void;
   onDismissIncomingAsset?: () => void;
@@ -718,6 +728,7 @@ export function PdfPreview(props: {
   const clampPointToPage = (page: NotebookPage, x: number, y: number, mode: 'draw' | 'annotate' = 'draw'): InkPoint => ({
     x: Math.max(0, Math.min(viewerWidth - (mode === 'annotate' ? 180 : 0), x)),
     y: Math.max(0, Math.min(viewerHeight - (mode === 'annotate' ? 110 : 0), y)),
+    t: Date.now(),
     pageNumber: page.pageNumber,
     generatedPageId: page.generatedPageId,
     pageWidth: viewerWidth,

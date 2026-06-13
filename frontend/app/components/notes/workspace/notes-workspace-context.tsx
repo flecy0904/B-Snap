@@ -1,9 +1,11 @@
 import React from 'react';
 import type { BackendChatMessage, BackendChatSession, BackendClassInsight, BackendRagScope, BackendRagScopeSource } from '../../../services/backend-api';
 import type { UseAiCanvasNotesResult } from '../../../hooks/notes/ai-canvas/use-ai-canvas-notes';
-import type { AiCanvasBlockContext } from '../../../types/ai-canvas';
+import type { AiCanvasBlockContext, AiCanvasRecommendationMode } from '../../../types/ai-canvas';
 import type { ImportantPageRecommendation } from '../../../hooks/notes/class-insight';
-import type { AiFloatingPanelSize, AppChatMode, AppRightSidebarPanel, AppSidebarPosition, StudyInteractionMode, WorkspaceFocusTarget } from '../../../hooks/notes/use-study-workspace';
+import type { HandwritingRecognitionState } from '../../../hooks/notes/document/note-page-content';
+import type { MlKitHandwritingDebugState } from '../../../services/handwriting-recognition';
+import type { AiFloatingPanelSize, AppChatMode, AppRightSidebarPanel, AppSidebarPosition, HandwritingDebugReadiness, StudyInteractionMode, WorkspaceFocusTarget } from '../../../hooks/notes/use-study-workspace';
 import { AiAnswer, NoteSummarySection, BookmarkedPage, CaptureAsset, DocumentPageView, GeneratedWorkspacePage, NotebookPage, NotebookPageTemplate, NoteWorkspaceMode, PageCaptureReference, StudyDocumentEntry, Subject, WorkspaceAttachment } from '../../../types';
 import { InkBrush, InkBrushSettings, InkEraserMode, InkImageAnnotation, InkLinePattern, InkPoint, InkSelectionMode, InkStroke, InkTextAnnotation, InkTool, SelectionRect } from '../../../ui-types';
 import { CanvasProvider } from '../canvas/canvas-context';
@@ -27,6 +29,7 @@ export type DesktopNotesWorkspaceContextValue = {
   studyInteractionMode: StudyInteractionMode;
   webChatSidebarWidth: number;
   webAiCanvasPanelWidth: number;
+  webPdfViewportSafeArea: { left: number; right: number };
   focusedWorkspaceTarget: WorkspaceFocusTarget | null;
   canUndoFocusedWorkspaceAction: boolean;
   canRedoFocusedWorkspaceAction: boolean;
@@ -55,6 +58,11 @@ export type DesktopNotesWorkspaceContextValue = {
   aiCanvas: UseAiCanvasNotesResult;
   classInsight: BackendClassInsight | null;
   importantPageRecommendations: ImportantPageRecommendation[];
+  currentPageHandwritingRecognition: HandwritingRecognitionState | null;
+  handwritingAnalysisBusy: 'page' | 'note' | null;
+  mlKitHandwritingDebug: MlKitHandwritingDebugState;
+  handwritingDebugReadiness: HandwritingDebugReadiness;
+  canAnalyzeCurrentPageHandwriting: boolean;
   inkTool: InkTool;
   fingerDrawingEnabled: boolean;
   penColor: string;
@@ -143,12 +151,15 @@ export type DesktopNotesWorkspaceContextValue = {
   onStartNewAiChatSession: () => void;
   onCreateAiChatSession: () => void;
   onRequestAiAnswer: () => void;
+  onRequestAiAnswerForQuestion: (question: string) => Promise<boolean>;
   onAskAiAboutSelection: (selectionPreviewUri?: string | null) => void;
   onRequestAiCanvasCommand: (command: string, options?: {
     selectionImageUri?: string | null;
     canvasAction?: 'auto' | 'chat_only' | 'canvas_edit';
     source?: 'canvas-mini' | 'canvas-block';
     canvasBlockContext?: AiCanvasBlockContext | null;
+    canvasNoteNeedsTitle?: boolean;
+    canvasRecommendationMode?: AiCanvasRecommendationMode | null;
   }) => Promise<boolean>;
   onInsertAiAnswerPage: () => void;
   onGoToPreviousDocumentPage: () => void;
@@ -186,6 +197,14 @@ export type DesktopNotesWorkspaceContextValue = {
   onRemovePdfPage: (pageNumber?: number) => void;
   onMovePdfPage: (pageNumber: number | undefined, delta: -1 | 1) => void;
   onCreateMemoPage: (insertAfterPage?: number) => void;
+  analyzeCurrentPageHandwriting: () => Promise<void>;
+  forceAnalyzeCurrentPageHandwriting: () => Promise<void>;
+  analyzeCurrentPageHandwritingWithVision: () => Promise<void>;
+  analyzeCurrentNoteHandwriting: () => Promise<void>;
+  checkMlKitHandwritingAvailability: () => Promise<void>;
+  prepareKoreanHandwritingModel: () => Promise<void>;
+  recognizeCurrentPageWithMlKit: () => Promise<void>;
+  recognizeAndSaveCurrentPageWithMlKit: () => Promise<void>;
   onChangeBlankNoteTemplate: (template: NotebookPageTemplate) => void;
   onInsertInboxAsset: (assetId: string) => void;
   onRemoveInboxAsset: (assetId: string) => void;

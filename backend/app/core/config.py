@@ -17,6 +17,11 @@ class Settings(BaseSettings):
     openai_api_key: str | None = Field(default=None, validation_alias="OPENAI_API_KEY")
     openai_default_model: str = Field(default="gpt-4.1-mini", validation_alias="OPENAI_DEFAULT_MODEL")
     openai_embedding_model: str = Field(default="text-embedding-3-small", validation_alias="OPENAI_EMBEDDING_MODEL")
+    handwriting_vision_fallback_enabled: bool = Field(default=False, validation_alias="HANDWRITING_VISION_FALLBACK_ENABLED")
+    handwriting_vision_max_clusters_per_page: int = Field(default=6, validation_alias="HANDWRITING_VISION_MAX_CLUSTERS_PER_PAGE")
+    handwriting_vision_max_pages_per_note: int = Field(default=8, validation_alias="HANDWRITING_VISION_MAX_PAGES_PER_NOTE")
+    handwriting_vision_min_cluster_strokes: int = Field(default=2, validation_alias="HANDWRITING_VISION_MIN_CLUSTER_STROKES")
+    handwriting_vision_cache_ttl_days: int = Field(default=14, validation_alias="HANDWRITING_VISION_CACHE_TTL_DAYS")
     gemini_api_key: str | None = Field(default=None, validation_alias="GEMINI_API_KEY")
     gemini_default_model: str = Field(default="gemini-2.5-flash", validation_alias="GEMINI_DEFAULT_MODEL")
     allowed_origins: str = Field(

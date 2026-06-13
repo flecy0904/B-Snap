@@ -1,392 +1,219 @@
-# B-Snap
 
-B-Snap은 수업 시간표, 캡처 자료, PDF 필기, AI 정리 흐름을 하나로 묶는 학습 워크스페이스 앱입니다.
+# 📸 B-Snap
 
-현재 프로젝트는 **Expo + React Native frontend**, **FastAPI + PostgreSQL backend** 구조입니다.
+> **An all-in-one learning workspace connecting class materials, notes, PDFs, blackboard captures, and AI summaries.**
 
-## 폴더 구조
+B-Snap is a study assistant application that integrates various learning materials from college classes into a single workspace, providing an efficient review workflow through AI-driven summaries, Q&A, and quiz generation.
+
+Our goal is to seamlessly connect timetables, PDF annotations, blackboard captures, handwritten notes, and AI chat into one unified workspace.
+
+---
+
+## 🔄 Main Flow
 
 ```text
-B-Snap-team/
-  frontend/          # Expo React Native 앱
-  backend/           # FastAPI backend
-  img_preprocessing/ # 이미지 전처리 모듈
+1️⃣ Upload learning materials (PDFs, images, blackboard captures, etc.)
+        ↓
+2️⃣ Take notes and memos in a unified workspace
+        ↓
+3️⃣ Multimodal AI summaries & RAG-based customized Q&A
+        ↓
+4️⃣ Generate quizzes & review for exams
+
 ```
 
-## 처음 세팅
+---
 
-### 1. Frontend 패키지 설치
+## ✨ Key Features
+
+### 📱 Frontend (Mobile & Web)
+
+* **Unified Workspace**: Timetable view, PDF & blank note canvas provided.
+* **Drawing Tools**: Pen, highlighter, eraser, and selection tools (save/load handwriting).
+* **Material Management**: Upload captured materials, view note list, and edit note titles.
+* **AI Interaction**: AI chat panel, conversation session list, and history display.
+* **User Management**: Email/password-based login and token management.
+
+### ⚙️ Backend & AI
+
+* **Server & DB**: FastAPI-based asynchronous API server, PostgreSQL integration, and user-specific data isolation.
+* **Multimodal Pipeline**: Image upload, pre-processed image generation, and photo description generation using vision models.
+* **RAG System**: Context-aware Q&A based on learning materials (note summaries, PDFs, user memos, etc.).
+* **Learning Assistant AI**: Note summaries, exam prep summaries, and automated customized quiz generation.
+* **Security**: JWT-based user authentication.
+
+---
+
+## 🛠 Tech Stack
+
+| Category | Technology |
+| --- | --- |
+| **Frontend** | Expo, React Native, TypeScript |
+| **Backend** | FastAPI, Python |
+| **Database** | PostgreSQL, pgvector |
+| **AI** | LLM API (Select GPT or Gemini), RAG |
+| **Mobile** | iOS, Android |
+| **DevOps** | npm, Python venv, Docker |
+
+---
+
+## 📂 Project Structure
+
+```text
+B-Snap/
+├── Document/          # Planning and design documents
+├── backend/           # FastAPI backend
+├── docs/              # Feature design and development docs
+├── frontend/          # Expo React Native app
+├── img_preprocessing/ # Image preprocessing module
+├── scripts/           # Development/deployment auxiliary scripts
+├── tests/             # Test codes
+├── Dockerfile
+├── cloudbuild.yaml
+├── requirements.txt
+└── README.md
+
+```
+
+---
+
+## 🚀 Quick Start
+
+### 1. Clone the Repository
+
+```bash
+git clone [https://github.com/flecy0904/B-Snap.git](https://github.com/flecy0904/B-Snap.git)
+cd B-Snap
+
+```
+
+### 2. Install Frontend Dependencies
+
+We recommend using `clean-install` to maintain the exact same dependency tree based on `package-lock.json` among team members.
 
 ```bash
 cd frontend
 npm clean-install
+
 ```
 
-`npm install` 대신 `npm clean-install`을 권장합니다. 팀원 간 `package-lock.json` 기준으로 같은 의존성을 설치하기 위함입니다.
+### 3. Setup Backend Environment Variables
 
-
-### 2. Backend 환경변수 생성
-
-`backend/.env.example`을 참고해서 `backend/.env` 파일을 만듭니다.
-
-macOS/Linux:
+Copy the environment variable file in the project root and fill in the necessary settings (DB address, API Key, etc.).
 
 ```bash
+# macOS / Linux
 cp backend/.env.example backend/.env
+
+# Windows PowerShell
+Copy-Item backend/.env.example backend/.env
+
 ```
 
-예시:
+> ⚠️ **Warning**: Never share actual API Keys, DB passwords, or JWT Secrets on GitHub or messengers.
 
-```env
-APP_ENV=local
-APP_NAME=B-Snap API
-DATABASE_URL=postgresql+psycopg://postgres:<password>@localhost:5432/bsnap
-AI_PROVIDER=openai
-OPENAI_API_KEY=<your_openai_api_key>
-OPENAI_DEFAULT_MODEL=gpt-4.1-mini
-OPENAI_EMBEDDING_MODEL=text-embedding-3-small
-ALLOWED_ORIGINS=http://localhost:8081,http://localhost:19006
-JWT_SECRET_KEY=replace_with_openssl_rand_hex_32
-JWT_ALGORITHM=HS256
-JWT_ACCESS_TOKEN_MINUTES=10080
-UPLOAD_DIR=backend/uploads
-UPLOAD_MAX_BYTES=31457280
-```
+### 4. Setup Frontend Environment Variables
 
-주의:
-
-- 실제 `.env` 파일은 git에 올리지 않습니다.
-- 실제 API key나 DB 비밀번호를 README, 이슈, PR, 채팅에 적지 않습니다.
-- `JWT_SECRET_KEY`는 팀/환경마다 충분히 긴 랜덤 문자열로 설정합니다.
-- 저비용 AI 채팅/사진 설명 기본 모델은 `gpt-4.1-mini`입니다.
-
-### 2-1. Frontend 환경변수 생성
-
-`frontend/.env.example`을 참고해서 `frontend/.env` 파일을 만듭니다.
 
 ```bash
+# macOS / Linux
 cp frontend/.env.example frontend/.env
+
+# Windows PowerShell
+Copy-Item frontend/.env.example frontend/.env
+
 ```
 
-시뮬레이터만 사용할 때는 `localhost`도 가능하지만, 실기기와 같이 테스트할 때는 Mac의 같은 Wi-Fi IP를 넣습니다.
+### 5. DB & Backend Environment Setup
+
+1. Create the `bsnap` database in your local PostgreSQL. (`CREATE DATABASE bsnap;`)
+2. Create the backend virtual environment and install packages:
 
 ```bash
-ipconfig getifaddr en0
-```
+# macOS / Linux
+python -m venv backend/.venv
+backend/.venv/bin/python -m pip install -r backend/requirements.txt
 
-예시:
-
-```env
-EXPO_PUBLIC_BACKEND_URL=http://172.31.97.89:8000
-```
-
-Wi-Fi가 바뀌면 IP도 바뀔 수 있으므로 `frontend/.env`를 수정하고 Metro를 다시 시작합니다.
-
-### 3. PostgreSQL DB 생성
-
-로컬 PostgreSQL에서 DB를 하나 만듭니다.
-
-```sql
-CREATE DATABASE bsnap;
-```
-
-### 4. Backend 가상환경/패키지 설치
-
-```powershell
-cd B-Snap
+# Windows PowerShell
 python -m venv backend\.venv
 .\backend\.venv\Scripts\python.exe -m pip install -r backend\requirements.txt
+
 ```
 
-참고: `cd frontend && npm run backend` 명령도 backend 가상환경과 패키지가 없으면 자동으로 준비를 시도합니다.
-
-### 5. DB 테이블 생성
-
-DB를 만든 뒤 한 번 실행합니다.
-
-```powershell
-cd C:\Users\User\Desktop\WorkSpace\B-Snap
-.\backend\.venv\Scripts\python.exe -m backend.scripts.init_db
-```
-
-### 5-1. RAG vector index 생성
-
-RAG는 저장된 PDF 페이지 텍스트, AI Canvas Markdown, 이미지 AI 분석 요약을 `document_chunks`에 저장하고 pgvector로 검색합니다.
-
-현재 출시 기준 방향은 vector-only입니다. keyword 검색, hybrid 점수 병합, keyword fallback은 사용하지 않습니다. `backend/.env`에 `OPENAI_API_KEY`와 `OPENAI_EMBEDDING_MODEL`을 설정한 뒤 기존 노트 데이터를 한 번 index해야 자료 기반 검색을 사용할 수 있습니다.
-
-```powershell
-.\backend\.venv\Scripts\python.exe -m backend.scripts.backfill_document_chunks
-```
-
-macOS/Linux:
+3. Create DB tables:
 
 ```bash
-backend/.venv/bin/python -m backend.scripts.backfill_document_chunks
+# macOS / Linux
+backend/.venv/bin/python -m backend.scripts.init_db
+
+# Windows PowerShell
+.\backend\.venv\Scripts\python.exe -m backend.scripts.init_db
+
 ```
 
-이 과정을 거치면 `document_chunks` 테이블에 embedding이 저장되고, RAG는 vector 검색으로만 동작합니다. pgvector나 API key가 준비되지 않은 환경에서는 앱/서버 전체는 계속 실행되지만 RAG 요청은 사용할 수 없습니다.
-## 실행 방법
+Note: `cd frontend && npm run backend` also tries to prepare the backend virtual environment and packages when they are missing.
 
-개발 중에는 보통 터미널을 2개 사용합니다.
+---
 
-### Terminal 1. Backend 실행
+## 💻 How to Run
 
-```powershell
+During development, open two terminals for Backend and Frontend respectively.
+
+### Terminal 1: Run Backend
+
+```bash
 cd frontend
 npm run backend:dev
+
 ```
 
-기본 주소:
+* Default Address: `http://localhost:8000`
+* Health Check: `http://localhost:8000/health`
 
-```text
-http://localhost:8000
-```
+### Terminal 2: Run Frontend
 
-확인 URL:
-
-```text
-http://localhost:8000/health
-http://localhost:8000/health/db
-```
-
-### Terminal 2. Web 실행
+Choose one of the commands below depending on your environment.
 
 ```bash
 cd frontend
-npm run web
+
+npm run web         # Run on Web
+npm run ios         # Run iOS Simulator (macOS only, requires pod install)
+npm run ios:ipad    # Run iPad Simulator
+npm run android     # Run Android Emulator
+
 ```
 
-### iOS 실행
+---
 
-iOS는 **macOS + Xcode + CocoaPods** 환경에서만 실행됩니다.
+## 🧠 AI / RAG Learning Pipeline
 
-처음 한 번, 또는 `package-lock.json` / 네이티브 모듈 변경 후:
+B-Snap's RAG system vectorizes saved learning materials (note summaries, PDF text, user memos) for search, and injects the retrieved context into prompts to improve the accuracy of the AI's response.
+
+To enable semantic vector search, set the embedding model in `backend/.env` and run the script below to generate the index.
 
 ```bash
-cd frontend/ios
-pod install
-cd ..
+# macOS / Linux
+backend/.venv/bin/python -m backend.scripts.backfill_document_chunks
+
 ```
 
-실행:
+For detailed architecture, please refer to `backend/README_RAG.md`.
 
-```bash
-cd frontend
-npm run start:reset -- --host lan
-```
+---
 
-새 터미널:
+## 🖼️ Image Preprocessing & Capture Analysis
 
-```bash
-cd frontend
-npm run ios
-```
+Uploading images (like blackboard captures) follows this flow:
 
-iPad A16 시뮬레이터로 실행:
+1. Save the original image (`backend/uploads`).
+2. Generate and save a pre-processed PNG image (`backend/uploads/processed-images`).
+3. For AI photo descriptions and text extraction, use the **pre-processed image** first for better readability (fallback to original if failed).
+4. Render the original photo in the App UI to prevent user confusion.
 
-```bash
-cd frontend
-npm run ios:ipad
-```
 
-실기기는 같은 Wi-Fi에 연결한 뒤 Metro QR을 개발 빌드에서 열거나, USB 연결 후 Xcode/React Native CLI로 설치한 개발 빌드를 실행합니다. `No script URL provided`가 뜨면 Metro가 꺼져 있거나, 앱이 다른 Metro 포트/주소를 보고 있는 상태입니다. 이때는 Expo 서버를 하나만 남기고 다시 시작합니다.
+---
 
-```bash
-pkill -f "expo start --dev-client"
-cd frontend
-npm run start:reset -- --host lan
-```
+## 📄 License
 
-앱과 Metro가 같은 서버에 붙어 있으면 터미널의 `r` 또는 시뮬레이터의 `Cmd+R`로 리로드할 수 있습니다.
-### Android 실행
-
-필수:
-
-- Android Studio
-- Android SDK
-- Android Emulator 또는 실기기
-
-SDK 경로가 자동으로 잡히지 않으면 `frontend/android/local.properties` 파일을 직접 만듭니다. 이 파일은 git에 올리지 않습니다.
-
-macOS:
-
-```properties
-sdk.dir=/Users/<username>/Library/Android/sdk
-```
-
-Windows:
-
-```properties
-sdk.dir=C:\\Users\\<username>\\AppData\\Local\\Android\\Sdk
-```
-
-실행:
-
-```bash
-cd frontend
-npm run start
-```
-
-새 터미널:
-
-```bash
-cd frontend
-npm run android
-```
-
-## 자주 쓰는 명령어
-
-```bash
-npm run start       # Expo dev client Metro 실행
-npm run start:reset # Metro 캐시 초기화 후 실행
-npm run web         # 웹 실행
-npm run ios         # iOS 기본 시뮬레이터 실행
-npm run ios:ipad    # iPad (A16) 시뮬레이터 실행
-npm run android     # Android 실행
-npm run check       # 타입 체크
-```
-
-## Push 전 확인
-
-```bash
-cd frontend
-npm run check
-```
-
-## 현재 구현 상태
-
-Frontend:
-
-- 이메일/비밀번호 로그인 및 계정별 토큰 저장
-- 시간표 화면
-- 캡처 업로드 프로토타입
-- PDF/빈 노트 워크스페이스
-- 펜/형광펜/지우개/선택 도구
-- 백엔드 API를 통한 노트 목록 불러오기
-- 노트 제목 수정 UI와 백엔드 저장 연결
-- 손글씨 필기 저장/불러오기 연결
-- AI 채팅 패널
-- AI 채팅방 목록/전체 채팅 목록 표시
-- AI 채팅 내역 표시
-
-Backend:
-
-- FastAPI 앱 구조
-- users/auth API와 JWT 인증
-- PostgreSQL 연결
-- folders/notes/note_pages CRUD
-- folders/notes/chat/upload/RAG API의 사용자별 데이터 제한
-- chat_sessions/chat_messages CRUD
-- 전체 chat session 조회
-- 노트 제목 및 노트 페이지 내용 저장 API
-- OpenAI `gpt-4.1-mini` 연결
-- AI 질문/응답 DB 저장
-- RAG 기반 AI 학습 어시스턴트 API
-- pgvector 기반 vector-only RAG retrieval
-- RAG 프롬프트 템플릿, 노트 요약, 시험 대비 요약, 퀴즈 생성 프롬프트
-- 기존 AI 채팅 흐름에 RAG context hint 연결
-- 이미지 업로드 시 원본 파일 저장, 전처리 이미지 생성, 전처리 이미지를 우선 사용한 AI 사진 설명 생성
-
-## RAG / AI 학습 어시스턴트 흐름
-
-RAG는 B-Snap에 저장된 학습 자료를 검색한 뒤, 검색된 context를 AI 프롬프트에 붙여 답변을 생성하는 구조입니다.
-
-지원 API:
-
-- `POST /ai/rag/ask`: 저장된 학습 자료 기반 질의응답
-- `POST /ai/rag/summary`: 노트 요약 / 시험 대비 요약
-- `POST /ai/rag/quiz`: context 기반 퀴즈 생성
-
-검색 대상:
-
-- `notes.summary`
-- `note_pages.content`에서 추출한 PDF/OCR 텍스트
-- note page의 사용자 텍스트 메모
-- `ai_canvas_notes.markdown`
-
-기존 `POST /chat-sessions/{session_id}/ai-messages` 흐름에도 RAG context가 연결되어 있습니다. `use_rag: true`를 보내면 RAG 답변을 직접 생성하고, 기본 AI 채팅에서는 검색된 context를 내부 hint로 붙여 답변 품질을 보강합니다.
-
-시연 환경에서 vector RAG까지 사용하려면 다음 순서로 준비합니다.
-
-1. PostgreSQL에서 pgvector 사용 가능 여부를 확인합니다.
-2. `backend/.env`에 `OPENAI_API_KEY`와 `OPENAI_EMBEDDING_MODEL`을 설정합니다.
-3. `backend.scripts.init_db`를 실행해 `document_chunks` 테이블을 생성합니다.
-4. `backend.scripts.backfill_document_chunks`를 실행해 기존 노트 데이터를 embedding으로 색인합니다.
-
-자세한 RAG 구조, curl 예시, vector DB 교체 지점은 `backend/README_RAG.md`를 참고합니다.
-
-## 이미지 전처리/사진 설명 흐름
-
-사진 업로드 흐름은 다음 구조를 따릅니다.
-
-1. 원본 이미지는 `backend/uploads`에 저장합니다.
-2. 가능한 경우 전처리 이미지는 `backend/uploads/processed-images`에 PNG로 저장합니다.
-3. AI 사진 설명은 전처리 이미지를 우선 사용하고, 전처리 실패 시 원본 이미지로 fallback합니다.
-4. 앱 UI는 원본 사진을 우선 보여주고, `AI로 더 보기` 같은 분석 요청에는 전처리 URL을 우선 사용합니다.
-
-따라서 팀원이 로컬에서 사진 설명까지 테스트하려면 `backend/.env`의 `AI_PROVIDER`, `OPENAI_API_KEY`, `UPLOAD_DIR`, `AI_IMAGE_MAX_BYTES` 설정이 필요합니다.
-
-## 팀 개발 참고 문서
-
-- [Notes Data Contract Draft](docs/notes-data-contract.md): OCR/RAG 연동 전 현재 노트/페이지/업로드 데이터 구조 초안
-
-## 자주 나는 오류
-
-### `Unable to resolve module expo-asset`
-
-의존성 설치가 꼬였을 가능성이 큽니다.
-
-```bash
-cd frontend
-npm clean-install
-npm run start:reset
-```
-
-iOS라면 추가로:
-
-```bash
-cd ios
-pod install
-cd ..
-```
-
-### iOS에서 `ExpoAsset ... node_modules/expo/node_modules/expo-asset` 오류
-
-Pods가 예전 경로를 보고 있는 상태입니다.
-
-```bash
-cd frontend/ios
-pod install
-cd ..
-```
-
-그 다음:
-
-```bash
-npm run start:reset
-npm run ios
-```
-
-### Android에서 `SDK location not found`
-
-`frontend/android/local.properties`를 만듭니다.
-
-macOS:
-
-```properties
-sdk.dir=/Users/<username>/Library/Android/sdk
-```
-
-Windows:
-
-```properties
-sdk.dir=C:\\Users\\<username>\\AppData\\Local\\Android\\Sdk
-```
-
-### Metro가 꼬였을 때
-
-```bash
-cd frontend
-npm run start:reset
-```
+This project is licensed under the **MIT License**.
