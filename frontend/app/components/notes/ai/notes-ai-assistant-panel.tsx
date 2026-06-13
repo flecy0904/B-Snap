@@ -379,6 +379,9 @@ export function NotesAiAssistantPanel() {
   const noteRagStatusDisplay = React.useMemo(() => buildNoteRagStatusDisplay(noteRagStatus), [noteRagStatus]);
   const ragScopeTitle = React.useMemo(() => {
     if (activeRagScopeSources.length === 0) {
+      if (workspace.activeAiRagScope) {
+        return '참고자료 0개';
+      }
       return noteRagStatusDisplay?.currentNoteScopeLabel ?? '참고 자료 준비 중';
     }
     if (activeRagScopeSources.length === 1) {
@@ -393,7 +396,7 @@ export function NotesAiAssistantPanel() {
       return `${shortTitle} 참고중`;
     }
     return `참고자료 ${activeRagScopeSources.length}개`;
-  }, [activeRagScopeSources, currentBackendNoteId, noteRagStatusDisplay]);
+  }, [activeRagScopeSources, currentBackendNoteId, noteRagStatusDisplay, workspace.activeAiRagScope]);
   const getRagDebugSessionId = React.useCallback(() => {
     const currentNoteId = currentBackendNoteIdRef.current;
     const session = activeSession
@@ -2195,7 +2198,7 @@ export function NotesAiAssistantPanel() {
         <View style={workspace.styles.aiComposer}>
           {Platform.OS === 'web' ? (
             <View style={workspace.styles.aiRagScopePanel}>
-              {noteRagStatusDisplay?.progressLabel ? (
+              {activeRagScopeSources.length > 0 && noteRagStatusDisplay?.progressLabel ? (
                 <View style={workspace.styles.aiRagProgressHint}>
                   <ActivityIndicator size="small" color="#7A8394" />
                   <Text style={workspace.styles.aiRagProgressHintText} numberOfLines={1}>

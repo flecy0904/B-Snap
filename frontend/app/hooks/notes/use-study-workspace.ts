@@ -258,8 +258,8 @@ function buildDefaultRagScope(document: StudyDocumentEntry | null): BackendRagSc
   return buildRagScope([{ id: String(backendNoteId), type: 'note', title: document.title }]);
 }
 
-function getNonEmptyRagScope(scope: BackendRagScope | null | undefined): BackendRagScope | null {
-  return scope?.sources.length ? scope : null;
+function getValidRagScope(scope: BackendRagScope | null | undefined): BackendRagScope | null {
+  return Array.isArray(scope?.sources) ? scope : null;
 }
 
 function getStudyDocumentBackendFolderId(document: StudyDocumentEntry | null | undefined) {
@@ -767,11 +767,14 @@ export function useStudyWorkspace(props: {
       ?? null
     : null;
   const defaultAiRagScope = useMemo(() => buildDefaultRagScope(studyDocument), [studyDocument]);
-  const activeAiRagScope = useMemo(() => (
-    getNonEmptyRagScope(activeAiChatSession?.ragScope)
-    ?? getNonEmptyRagScope(studyDocumentId ? draftAiRagScopeByDocument[studyDocumentId] : null)
-    ?? defaultAiRagScope
-  ), [activeAiChatSession?.ragScope, defaultAiRagScope, draftAiRagScopeByDocument, studyDocumentId]);
+  const activeAiRagScope = useMemo(() => {
+    const sessionScope = getValidRagScope(activeAiChatSession?.ragScope);
+    if (sessionScope) return sessionScope;
+    if (studyDocumentId && Object.prototype.hasOwnProperty.call(draftAiRagScopeByDocument, studyDocumentId)) {
+      return draftAiRagScopeByDocument[studyDocumentId] ?? buildRagScope([]);
+    }
+    return defaultAiRagScope;
+  }, [activeAiChatSession?.ragScope, defaultAiRagScope, draftAiRagScopeByDocument, studyDocumentId]);
   const noteTitleByBackendId = useMemo(() => {
     const titles = new Map<string, string>();
     allStudyDocuments.forEach((document) => {
@@ -826,9 +829,7 @@ export function useStudyWorkspace(props: {
   }, [studyDocumentId]);
   const setActiveAiRagScope = useCallback((scope: BackendRagScope | null) => {
     if (!studyDocumentId) return;
-    const fallbackScope = buildDefaultRagScope(studyDocument);
-    const nextScope = scope?.sources.length ? scope : fallbackScope;
-    if (!nextScope) return;
+    const nextScope = scope ?? buildRagScope([]);
     if (activeAiChatSessionId) {
       syncRagScopeToSessions(activeAiChatSessionId, nextScope);
       if (isBackendApiEnabled()) {
@@ -839,7 +840,7 @@ export function useStudyWorkspace(props: {
     } else {
       setDraftAiRagScopeByDocument((current) => ({ ...current, [studyDocumentId]: nextScope }));
     }
-  }, [activeAiChatSessionId, studyDocument, studyDocumentId, syncRagScopeToSessions, setWorkspaceFeedback]);
+  }, [activeAiChatSessionId, studyDocumentId, syncRagScopeToSessions, setWorkspaceFeedback]);
   const addAiRagScopeSource = useCallback((source: BackendRagScopeSource) => {
     setActiveAiRagScope(buildRagScope([...(activeAiRagScope?.sources ?? []), source]));
   }, [activeAiRagScope?.sources, setActiveAiRagScope]);
