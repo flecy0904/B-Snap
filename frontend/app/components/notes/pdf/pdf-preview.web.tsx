@@ -502,9 +502,13 @@ function WebPdfInkCanvasLayer(props: {
 
 const MIN_TEXT_BOX_WIDTH = 96;
 const MIN_TEXT_BOX_HEIGHT = 56;
+const MIN_ACTIVE_TEXT_BOX_HEIGHT = 88;
 const DEFAULT_TEXT_FONT_SIZE = 17;
 const MIN_TEXT_FONT_SIZE = 12;
 const MAX_TEXT_FONT_SIZE = 40;
+const TEXT_BOX_ACTIVE_TOP_PADDING = 42;
+const TEXT_BOX_ACTIVE_BOTTOM_PADDING = 10;
+type TextAnnotationFrame = { x: number; y: number; width: number; height: number };
 
 function clamp(value: number, min: number, max: number) {
   return Math.max(min, Math.min(max, value));
@@ -564,6 +568,32 @@ function WebPdfTextAnnotationLayer(props: {
       height: annotation.height ?? 88,
     }
   );
+
+  const fitTextBoxToContent = useCallback((annotation: InkTextAnnotation, frame: TextAnnotationFrame, textarea: HTMLTextAreaElement) => {
+    const onResize = props.onResize;
+    const pageHeight = props.pageHeight;
+    if (!onResize) return;
+    window.requestAnimationFrame(() => {
+      const requiredHeight = Math.ceil(
+        textarea.scrollHeight + TEXT_BOX_ACTIVE_TOP_PADDING + TEXT_BOX_ACTIVE_BOTTOM_PADDING,
+      );
+      const nextRenderHeight = Math.max(MIN_ACTIVE_TEXT_BOX_HEIGHT, requiredHeight);
+      if (nextRenderHeight <= frame.height + 1) return;
+
+      const sourcePageHeight = annotation.pageHeight ?? pageHeight;
+      const nextSourceHeight = nextRenderHeight / Math.max(1, pageHeight) * sourcePageHeight;
+      onResize(annotation.id, annotation.width, nextSourceHeight);
+    });
+  }, [props.onResize, props.pageHeight]);
+
+  useEffect(() => {
+    if (!activeAnnotationId) return;
+    const annotation = props.annotations.find((item) => item.id === activeAnnotationId);
+    const textarea = textareaRefs.current[activeAnnotationId];
+    if (!annotation || !textarea) return;
+    const renderAnnotation = scaleTextAnnotationToPageSize(annotation, props.pageWidth, props.pageHeight);
+    fitTextBoxToContent(annotation, getFrame(renderAnnotation), textarea);
+  }, [activeAnnotationId, fitTextBoxToContent, props.annotations, props.pageHeight, props.pageWidth]);
 
   const activate = (id: string) => {
     setActiveAnnotationId(id);
@@ -802,12 +832,15 @@ function WebPdfTextAnnotationLayer(props: {
               }}
               value={annotation.text}
               onFocus={() => setActiveAnnotationId(annotation.id)}
-              onChange={(event) => props.onChangeText(annotation.id, event.currentTarget.value)}
+              onChange={(event) => {
+                props.onChangeText(annotation.id, event.currentTarget.value);
+                fitTextBoxToContent(annotation, frame, event.currentTarget);
+              }}
               placeholder="텍스트 입력"
               style={{
                 width: '100%',
                 height: '100%',
-                minHeight: Math.max(32, frame.height - (active ? 56 : 24)),
+                minHeight: Math.max(32, frame.height - (active ? TEXT_BOX_ACTIVE_TOP_PADDING + TEXT_BOX_ACTIVE_BOTTOM_PADDING : 24)),
                 resize: 'none',
                 border: 0,
                 outline: 'none',
@@ -817,6 +850,8 @@ function WebPdfTextAnnotationLayer(props: {
                 lineHeight: `${Math.round(fontSize * 1.35)}px`,
                 fontWeight: 700,
                 boxSizing: 'border-box',
+                display: 'block',
+                overflowY: 'hidden',
               }}
             />
             {active ? (
