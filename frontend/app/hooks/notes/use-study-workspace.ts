@@ -847,9 +847,6 @@ export function useStudyWorkspace(props: {
     const remainingSources = (activeAiRagScope?.sources ?? []).filter((source) => getRagScopeSourceKey(source) !== sourceKey);
     setActiveAiRagScope(buildRagScope(remainingSources));
   }, [activeAiRagScope?.sources, setActiveAiRagScope]);
-  const resetAiRagScopeToCurrentNote = useCallback(() => {
-    setActiveAiRagScope(buildDefaultRagScope(studyDocument));
-  }, [setActiveAiRagScope, studyDocument]);
   const recordWorkspaceActionTarget = useCallback((target: WorkspaceFocusTarget) => {
     setFocusedWorkspaceTarget(target);
     setWorkspaceActionHistory((current) => [...current, target].slice(-100));
@@ -2439,7 +2436,6 @@ export function useStudyWorkspace(props: {
     onToggleAiRagScopeCollapsed: () => setAiRagScopeCollapsed((current) => !current),
     onAddAiRagScopeSource: addAiRagScopeSource,
     onRemoveAiRagScopeSource: removeAiRagScopeSource,
-    onResetAiRagScope: resetAiRagScopeToCurrentNote,
     setAiChatSearchQuery,
     selectAiChatSession,
     renameAiChatSession,

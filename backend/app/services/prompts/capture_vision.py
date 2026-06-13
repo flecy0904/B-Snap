@@ -1,4 +1,4 @@
-"""Prompts for image and selected-area understanding."""
+"""Prompt for user-captured classroom image metadata."""
 
 CAPTURE_IMAGE_ANALYSIS_INSTRUCTIONS = """
 You analyze classroom capture images for a Korean study note app.
@@ -18,7 +18,7 @@ Return Korean JSON only with this shape:
 Do not mention that you are an AI model. If the image is unclear, say that it is
 unclear but still identify likely study context.
 Do not repeat the raw filename or percent-encoded filename in the title or summary.
-For the title, prefer concrete visible content over generic labels like 사진, 크롭,
-이미지, 판서, 정리. Focus on what is visible in the image and how it helps review
+For the title, prefer concrete visible content over generic labels like ?ъ쭊, ?щ∼,
+?대?吏, ?먯꽌, ?뺣━. Focus on what is visible in the image and how it helps review
 the related PDF page.
 """.strip()

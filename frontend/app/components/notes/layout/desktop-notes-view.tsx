@@ -250,7 +250,6 @@ export type DesktopNotesViewProps = {
   onToggleAiRagScopeCollapsed: () => void;
   onAddAiRagScopeSource: (source: BackendRagScopeSource) => void;
   onRemoveAiRagScopeSource: (sourceKey: string) => void;
-  onResetAiRagScope: () => void;
   onChangeAiChatSearchQuery: (value: string) => void;
   onSelectAiChatSession: (sessionId: number) => void;
   onRenameAiChatSession: (sessionId: number, title: string) => Promise<boolean>;
@@ -785,7 +784,6 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           onToggleAiRagScopeCollapsed: props.onToggleAiRagScopeCollapsed,
           onAddAiRagScopeSource: props.onAddAiRagScopeSource,
           onRemoveAiRagScopeSource: props.onRemoveAiRagScopeSource,
-          onResetAiRagScope: props.onResetAiRagScope,
           onChangeAiChatSearchQuery: props.onChangeAiChatSearchQuery,
           onSelectAiChatSession: props.onSelectAiChatSession,
           onRenameAiChatSession: props.onRenameAiChatSession,

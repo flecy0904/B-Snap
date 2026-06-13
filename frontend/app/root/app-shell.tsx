@@ -373,7 +373,6 @@ export function AppShell(props: {
                   onToggleAiRagScopeCollapsed={notesState.onToggleAiRagScopeCollapsed}
                   onAddAiRagScopeSource={notesState.onAddAiRagScopeSource}
                   onRemoveAiRagScopeSource={notesState.onRemoveAiRagScopeSource}
-                  onResetAiRagScope={notesState.onResetAiRagScope}
                   onChangeAiChatSearchQuery={notesState.setAiChatSearchQuery}
                   onSelectAiChatSession={notesState.selectAiChatSession}
                   onRenameAiChatSession={notesState.renameAiChatSession}

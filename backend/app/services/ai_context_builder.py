@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from typing import Any
 
+from backend.app.core.config import get_settings
 from backend.app.schemas.rag import RetrievedContext
 
 
@@ -71,7 +72,7 @@ def format_answer_sources(contexts: list[RetrievedContext], *, max_sources: int 
         page_label = f"{context.page_number}페이지" if context.page_number else ""
         if page_label and page_label not in label:
             label = f"{label} {page_label}".strip()
-        key = f"{context.source_type}:{context.source_id}:{context.page_number}"
+        key = f"{label}:{context.page_number}"
         if key in seen:
             continue
         seen.add(key)
@@ -92,25 +93,37 @@ def build_ai_context(
     base_context_hints: list[str | None],
     rag_sources: list[RetrievedContext],
     rag_debug: dict[str, Any] | None = None,
+    priority_context_hints: list[str | None] | None = None,
+    extra_answer_sources_text: str | None = None,
 ) -> BuiltAiContext:
     context_pages = [] if mode == "general" else select_rag_context_pages(pages, page_number)
     rag_support_hint = format_rag_support_context(rag_sources) if mode == "rag" else None
     context_hint = "\n\n".join(
         hint
-        for hint in [*base_context_hints, rag_support_hint]
+        for hint in [*base_context_hints, *(priority_context_hints or []), rag_support_hint]
         if hint
     ) or None
     debug = {
         "retrieved_source_count": len({f"{context.source_type}:{context.source_id}" for context in rag_sources}),
         "retrieved_chunk_count": len(rag_sources),
+        "context_page_count": len(context_pages),
+        "context_page_number": page_number,
         "fallback": False,
         "fallback_reason": None,
     }
     if rag_debug:
         debug.update(rag_debug)
+    source_display_max = max(1, int(get_settings().rag_source_display_max or 4))
+    answer_sources_text = format_answer_sources(rag_sources, max_sources=source_display_max) if mode == "rag" else None
+    if extra_answer_sources_text and mode == "rag":
+        answer_sources_text = "\n".join(
+            part
+            for part in [answer_sources_text, extra_answer_sources_text]
+            if part
+        )
     return BuiltAiContext(
         context_pages=context_pages,
         context_hint=context_hint,
-        answer_sources_text=format_answer_sources(rag_sources, max_sources=4) if mode == "rag" else None,
+        answer_sources_text=answer_sources_text,
         debug=debug,
     )

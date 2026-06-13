@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import {
   ensureFolderForSubject,
-  extractBackendPdfText,
   isBackendApiEnabled,
   listBackendNotePages,
   updateBackendNotePage,
@@ -59,6 +58,7 @@ function serializeBackendPageForSavedState(page: BackendNotePage) {
     bookmarked: storedPage.bookmarked,
     photoReferenceCount: storedPage.photoReferenceCount,
     memoPageCount: storedPage.memoPageCount,
+    ragExtraction: storedPage.ragExtraction,
     handwritingRecognition: storedPage.handwritingRecognition,
   });
 }
@@ -140,6 +140,7 @@ export function useBackendNotePageSync({
         bookmarked: storedPage.bookmarked,
         photoReferenceCount: storedPage.photoReferenceCount,
         memoPageCount: storedPage.memoPageCount,
+        ragExtraction: storedPage.ragExtraction,
         handwritingRecognition: storedPage.handwritingRecognition,
       });
       documentInk.push(...normalizedInkStrokes);
@@ -266,6 +267,7 @@ export function useBackendNotePageSync({
           page.pageKind === 'memo' && page.insertAfterPage === pageNumber
         )).length;
 
+        const previousSavedContent = parseNotePageContent(lastSavedPageContentRef.current[key] ?? null);
         const content = serializeNotePageContent({
           inkStrokes: pageInkStrokes,
           textAnnotations: pageTextAnnotations,
@@ -273,6 +275,7 @@ export function useBackendNotePageSync({
           bookmarked: pageBookmarked,
           photoReferenceCount,
           memoPageCount,
+          ragExtraction: previousSavedContent?.ragExtraction,
         });
         const savedContent = lastSavedPageContentRef.current[key];
         if (savedContent === undefined && content === EMPTY_PAGE_CONTENT) {
@@ -477,29 +480,6 @@ export function useBackendNotePageSync({
           })()
           : item
       )));
-
-      void extractBackendPdfText({ noteId: result.note.id })
-        .then((textResult) => {
-          const textPageIdsByNumber = textResult.pages.reduce<Record<number, number>>((next, page) => {
-            next[page.page_number] = page.id;
-            return next;
-          }, {});
-          setBackendPageIdsByDocument((current) => ({
-            ...current,
-            [document.id]: {
-              ...(current[document.id] ?? {}),
-              ...textPageIdsByNumber,
-            },
-          }));
-          setUserStudyDocuments((current) => current.map((item) => (
-            item.id === document.id
-              ? { ...item, pageCount: Math.max(item.pageCount, textResult.pages_extracted) }
-              : item
-          )));
-        })
-        .catch(() => {
-          setWorkspaceFeedback('PDF에서 텍스트 추출에 실패했어요.');
-        });
 
       setWorkspaceFeedback(`${Math.max(document.pageCount, result.note.page_count ?? result.upload.page_count)}페이지 PDF를 서버에 저장했어요.`);
     } catch (error) {

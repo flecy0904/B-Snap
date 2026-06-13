@@ -208,9 +208,35 @@ export type BackendAiMessageResponse = {
     scope_count?: number;
     retrieved_source_count?: number;
     retrieved_chunk_count?: number;
+    context_page_count?: number;
+    context_page_number?: number | null;
     fallback?: boolean;
     fallback_reason?: string | null;
     router_reason?: string | null;
+    image_recheck?: BackendImageRecheckDebug | null;
+  } | null;
+};
+
+export type BackendImageRecheckDebug = {
+  enabled?: boolean;
+  candidate_count?: number;
+  judge_called?: boolean;
+  needed?: boolean;
+  selected_ids?: string[];
+  rechecked_count?: number;
+  items?: Array<{
+    image_ai_summary_id?: string;
+    page_number?: number | null;
+    image_mode?: string;
+    title?: string;
+  }>;
+  failures?: Array<Record<string, unknown>>;
+  judge?: {
+    needs_image_recheck?: boolean;
+    image_ai_summary_ids?: string[];
+    allow_multiple?: boolean;
+    preferred_image_mode?: string;
+    reason?: string;
   } | null;
 };
 
@@ -232,6 +258,42 @@ export type BackendRagDebugResult = {
   updated_at?: string | null;
 };
 
+export type BackendRagDebugParserName = 'pymupdf' | 'pypdf_plain' | 'docling';
+
+export type BackendRagDebugParserCompareResponse = {
+  note: {
+    id: number;
+    folder_id: number;
+    title: string;
+  };
+  summary: {
+    parser: BackendRagDebugParserName | string;
+    page_count: number;
+    chunk_count: number;
+    text_length: number;
+    elapsed_ms: number;
+    page_start: number | null;
+    page_end: number | null;
+  };
+  pages: Array<{
+    page_number: number;
+    text_length: number;
+    text_snippet: string;
+    text: string;
+    elapsed_ms?: number | null;
+    metadata?: Record<string, unknown>;
+    parser?: string;
+  }>;
+  chunks: Array<{
+    parser: string;
+    page_number: number;
+    chunk_index: number;
+    content_length: number;
+    content_snippet: string;
+    content: string;
+  }>;
+};
+
 export type BackendRagDebugIndexResponse = {
   note: {
     id: number;
@@ -245,8 +307,16 @@ export type BackendRagDebugIndexResponse = {
     chunk_limit: number;
     source_counts: Record<string, number>;
     embedding_model?: string | null;
-    embedding_models?: string[];
+    embedding_models: string[];
     last_indexed_at?: string | null;
+    index_status: string;
+    last_error?: string | null;
+    image_summary_error?: string | null;
+    parser?: string | null;
+    text_block_count: number;
+    image_block_count: number;
+    visual_block_count: number;
+    extraction_strategies: string[];
   };
   pages: Array<{
     id: number;
@@ -255,8 +325,68 @@ export type BackendRagDebugIndexResponse = {
     text_snippet: string;
     text: string;
     updated_at?: string | null;
+    parser?: string | null;
+    extraction_strategy?: string | null;
+    reading_order_strategy?: string | null;
+    column_count?: number | null;
+    column_confidence?: number | null;
+    text_block_count: number;
+    image_block_count: number;
+    visual_block_count: number;
+    header_footer_candidate_count: number;
+    side_label_candidate_count: number;
+    rag_extraction?: Record<string, unknown>;
+    elements?: Array<Record<string, unknown>>;
+    elements_returned: number;
   }>;
   chunks: BackendRagDebugResult[];
+  image_ai_summaries: Array<{
+    id: number;
+    page_number?: number | null;
+    candidate_type?: string | null;
+    status?: string | null;
+    skipped_reason?: string | null;
+    confidence?: string | null;
+    importance?: string | null;
+    confidence_reason?: string | null;
+    importance_reason?: string | null;
+    indexed: boolean;
+    summary_snippet?: string | null;
+    summary: string;
+    ocr_text: string;
+    metadata?: Record<string, unknown>;
+    analyzed_at?: string | null;
+    indexed_at?: string | null;
+    updated_at?: string | null;
+  }>;
+};
+
+export type BackendRagDebugImageSummaryPreviewResponse = {
+  id: number;
+  page_number?: number | null;
+  candidate_type?: string | null;
+  status?: string | null;
+  skipped_reason?: string | null;
+  confidence?: string | null;
+  importance?: string | null;
+  confidence_reason?: string | null;
+  importance_reason?: string | null;
+  indexed: boolean;
+  summary_snippet?: string | null;
+  summary: string;
+  ocr_text: string;
+  metadata?: Record<string, unknown>;
+  analyzed_at?: string | null;
+  indexed_at?: string | null;
+  updated_at?: string | null;
+  image_bbox: number[];
+  context_bbox: number[];
+  image_crop_data_uri: string;
+  context_crop_data_uri: string;
+  image_crop_width: number;
+  image_crop_height: number;
+  context_crop_width: number;
+  context_crop_height: number;
 };
 
 export type BackendRagDebugContextSection = {
@@ -274,6 +404,7 @@ export type BackendRagDebugContext = {
   nearby_pages_included: boolean;
   canvas_context_included: boolean;
   vision_image_attached: boolean;
+  image_recheck?: BackendImageRecheckDebug | null;
   fallback: boolean;
   fallback_reason?: string | null;
   context_preview: string;
@@ -295,7 +426,10 @@ export type BackendRagDebugEvaluateResponse = {
     fallback_reason?: string | null;
     retrieved_source_count?: number;
     retrieved_chunk_count?: number;
+    context_page_count?: number;
+    context_page_number?: number | null;
     scope_count?: number;
+    image_recheck?: BackendImageRecheckDebug | null;
   };
   context?: BackendRagDebugContext | null;
   results: BackendRagDebugResult[];
@@ -313,16 +447,79 @@ export type BackendRagDebugStatusResponse = {
     chunk_count: number;
     last_indexed_at?: string | null;
   }>;
+  rag_job?: {
+    text_status?: string | null;
+    image_status?: string | null;
+    overall_status?: string | null;
+    page_count: number;
+    processed_page_count: number;
+    total_batches: number;
+    completed_batches: number;
+    text_chunk_count: number;
+    image_candidate_count: number;
+    image_processed_count?: number;
+    image_completed_count: number;
+    image_indexed_count: number;
+    last_error?: string | null;
+    started_at?: string | null;
+    text_ready_at?: string | null;
+    image_ready_at?: string | null;
+    updated_at?: string | null;
+  } | null;
+  docling_batches: Array<{
+    status?: string | null;
+    count: number;
+    page_start?: number | null;
+    page_end?: number | null;
+    updated_at?: string | null;
+  }>;
+  image_summary_status: Array<{
+    status?: string | null;
+    importance?: string | null;
+    indexed: boolean;
+    count: number;
+  }>;
+  recent_image_summaries: Array<{
+    id?: number | null;
+    page_number?: number | null;
+    candidate_type?: string | null;
+    status?: string | null;
+    skipped_reason?: string | null;
+    confidence?: string | null;
+    importance?: string | null;
+    indexed: boolean;
+    summary_snippet?: string | null;
+    updated_at?: string | null;
+  }>;
   failed_indexes: Array<Record<string, unknown>>;
   last_error?: string | null;
+  image_summary_error?: string | null;
   rag_scope: BackendRagScope;
   ragScope?: BackendRagScope | null;
 };
 
-export type BackendPdfTextExtractionResponse = {
-  note_id: number;
-  pages_extracted: number;
-  pages: BackendNotePage[];
+export type BackendNoteRagStatusResponse = {
+  rag_job?: {
+    text_status?: string | null;
+    image_status?: string | null;
+    overall_status?: string | null;
+    page_count: number;
+    processed_page_count: number;
+    total_batches: number;
+    completed_batches: number;
+    text_chunk_count: number;
+    image_candidate_count: number;
+    image_processed_count?: number;
+    image_completed_count: number;
+    image_indexed_count: number;
+    last_error?: string | null;
+    started_at?: string | null;
+    text_ready_at?: string | null;
+    image_ready_at?: string | null;
+    updated_at?: string | null;
+  } | null;
+  current_note_chunk_count: number;
+  image_summary_error?: string | null;
 };
 
 export type BackendHandwritingAnalysisResponse = {
@@ -811,6 +1008,12 @@ export function getBackendClassInsight(noteId: number, limit = 12) {
   return request<BackendClassInsight>(`/notes/${noteId}/class-insights?limit=${limit}`);
 }
 
+export function getBackendNoteRagStatus(noteId: number) {
+  return request<BackendNoteRagStatusResponse>(`/notes/${noteId}/rag-status`, {
+    timeoutMs: 8000,
+  });
+}
+
 export async function createBackendNote(payload: {
   folderId: number;
   title: string;
@@ -963,16 +1166,6 @@ export async function moveBackendNotePage(payload: {
   return request<BackendNotePage[]>(`/notes/${payload.noteId}/pages/${payload.pageNumber}/move?delta=${payload.delta}`, {
     method: 'POST',
   }).then(normalizeBackendNotePages);
-}
-
-export async function extractBackendPdfText(payload: {
-  noteId: number;
-  pdfData?: string;
-}) {
-  return request<BackendPdfTextExtractionResponse>(`/notes/${payload.noteId}/extract-pdf-text`, {
-    method: 'POST',
-    body: payload.pdfData ? { pdf_data: payload.pdfData } : {},
-  });
 }
 
 export function listBackendAiCanvasNotes(noteId: number) {
@@ -1140,8 +1333,25 @@ export async function sendBackendAiMessage(payload: {
   }).then(normalizeBackendAiMessageResponse);
 }
 
-export function getBackendRagDebugIndex(noteId: number) {
-  return request<BackendRagDebugIndexResponse>(`/notes/${noteId}/rag-debug/index`);
+export function getBackendRagDebugParserCompare(noteId: number, parserName: BackendRagDebugParserName) {
+  return request<BackendRagDebugParserCompareResponse>(`/notes/${noteId}/rag-debug/parser/${parserName}`, {
+    timeoutMs: 10 * 60 * 1000,
+  });
+}
+
+export function getBackendRagDebugIndex(noteId: number, options?: { limit?: number }) {
+  const params = new URLSearchParams();
+  if (options?.limit) params.set('limit', String(options.limit));
+  const query = params.toString();
+  return request<BackendRagDebugIndexResponse>(`/notes/${noteId}/rag-debug/index${query ? `?${query}` : ''}`, {
+    timeoutMs: 60 * 1000,
+  });
+}
+
+export function getBackendRagDebugImageSummaryPreview(noteId: number, summaryId: number) {
+  return request<BackendRagDebugImageSummaryPreviewResponse>(`/notes/${noteId}/rag-debug/image-summaries/${summaryId}/preview`, {
+    timeoutMs: 60 * 1000,
+  });
 }
 
 export function reindexBackendNoteRag(noteId: number) {

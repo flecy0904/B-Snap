@@ -98,6 +98,104 @@ def apply_document_chunk_migration(engine) -> None:
             connection.execute(
                 text(
                     """
+                    CREATE TABLE IF NOT EXISTS note_rag_jobs (
+                        id BIGSERIAL PRIMARY KEY,
+                        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        folder_id INTEGER REFERENCES folders(id) ON DELETE CASCADE,
+                        note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+                        file_hash VARCHAR(64),
+                        parser VARCHAR(40) NOT NULL DEFAULT 'docling',
+                        parser_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+                        text_status VARCHAR(24) NOT NULL DEFAULT 'pending',
+                        image_status VARCHAR(24) NOT NULL DEFAULT 'pending',
+                        overall_status VARCHAR(24) NOT NULL DEFAULT 'pending',
+                        page_count INTEGER NOT NULL DEFAULT 0,
+                        processed_page_count INTEGER NOT NULL DEFAULT 0,
+                        total_batches INTEGER NOT NULL DEFAULT 0,
+                        completed_batches INTEGER NOT NULL DEFAULT 0,
+                        text_chunk_count INTEGER NOT NULL DEFAULT 0,
+                        image_candidate_count INTEGER NOT NULL DEFAULT 0,
+                        image_completed_count INTEGER NOT NULL DEFAULT 0,
+                        image_indexed_count INTEGER NOT NULL DEFAULT 0,
+                        last_error TEXT,
+                        started_at TIMESTAMPTZ,
+                        text_ready_at TIMESTAMPTZ,
+                        image_ready_at TIMESTAMPTZ,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                        UNIQUE (user_id, note_id)
+                    )
+                    """
+                )
+            )
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_note_rag_jobs_user_note ON note_rag_jobs(user_id, note_id)"))
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_note_rag_jobs_status ON note_rag_jobs(user_id, overall_status)"))
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS docling_batch_results (
+                        id BIGSERIAL PRIMARY KEY,
+                        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        folder_id INTEGER REFERENCES folders(id) ON DELETE CASCADE,
+                        note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+                        file_hash VARCHAR(64) NOT NULL,
+                        parser VARCHAR(40) NOT NULL DEFAULT 'docling',
+                        parser_config JSONB NOT NULL DEFAULT '{}'::jsonb,
+                        batch_index INTEGER NOT NULL,
+                        page_start INTEGER NOT NULL,
+                        page_end INTEGER NOT NULL,
+                        page_count INTEGER NOT NULL DEFAULT 0,
+                        status VARCHAR(24) NOT NULL DEFAULT 'ready',
+                        result JSONB NOT NULL DEFAULT '{}'::jsonb,
+                        elapsed_ms INTEGER,
+                        error TEXT,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                        UNIQUE (user_id, note_id, file_hash, batch_index)
+                    )
+                    """
+                )
+            )
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_docling_batch_results_user_note ON docling_batch_results(user_id, note_id)"))
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_docling_batch_results_note_hash ON docling_batch_results(note_id, file_hash)"))
+            connection.execute(
+                text(
+                    """
+                    CREATE TABLE IF NOT EXISTS image_ai_summaries (
+                        id BIGSERIAL PRIMARY KEY,
+                        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                        folder_id INTEGER REFERENCES folders(id) ON DELETE CASCADE,
+                        note_id INTEGER NOT NULL REFERENCES notes(id) ON DELETE CASCADE,
+                        page_number INTEGER NOT NULL,
+                        candidate_type VARCHAR(40) NOT NULL,
+                        docling_ref TEXT,
+                        crop_hash VARCHAR(64) NOT NULL,
+                        image_hash VARCHAR(64),
+                        status VARCHAR(24) NOT NULL,
+                        skipped_reason TEXT,
+                        summary TEXT,
+                        ocr_text TEXT,
+                        confidence VARCHAR(16),
+                        importance VARCHAR(16),
+                        confidence_reason TEXT,
+                        importance_reason TEXT,
+                        indexed BOOLEAN NOT NULL DEFAULT false,
+                        metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+                        analyzed_at TIMESTAMPTZ,
+                        indexed_at TIMESTAMPTZ,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                        updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+                        UNIQUE (user_id, note_id, page_number, crop_hash)
+                    )
+                    """
+                )
+            )
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_image_ai_summaries_user_note ON image_ai_summaries(user_id, note_id)"))
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_image_ai_summaries_status ON image_ai_summaries(user_id, status)"))
+            connection.execute(text("CREATE INDEX IF NOT EXISTS ix_image_ai_summaries_note_page ON image_ai_summaries(note_id, page_number)"))
+            connection.execute(
+                text(
+                    """
                     CREATE TABLE IF NOT EXISTS document_chunks (
                         id BIGSERIAL PRIMARY KEY,
                         user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,

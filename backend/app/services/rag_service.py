@@ -31,6 +31,9 @@ from backend.app.services.prompts.rag import (
 logger = logging.getLogger(__name__)
 JSON_FENCE_PATTERN = re.compile(r"```(?:json)?\s*(.*?)\s*```", re.DOTALL | re.IGNORECASE)
 Document = dict[str, Any]
+TEXT_RAG_SOURCE_TYPES = ["pdf_page", "canvas_note"]
+IMAGE_RAG_SOURCE_TYPES = ["image_ai_summary"]
+PAGE_LOCAL_RAG_SOURCE_TYPES = ["pdf_page", "image_ai_summary"]
 
 
 def load_note_documents(
@@ -232,14 +235,35 @@ def retrieve_rag_contexts_with_debug(
     documents: list[Document] | None = None,
     top_k: int = 5,
 ) -> tuple[list[RetrievedContext], dict[str, Any]]:
+    settings = get_settings()
+    context_limit = max(1, min(int(top_k or 5), int(settings.rag_context_max_chunks or 5)))
+    internal_top_k = max(context_limit, int(settings.rag_internal_top_k or context_limit))
+    image_top_k = max(1, int(settings.rag_image_search_top_k or 5))
+    image_reserve_count = min(
+        context_limit,
+        max(0, min(int(settings.rag_image_recheck_judge_top_k or 0), int(settings.rag_image_search_top_k or 0))),
+    )
     debug: dict[str, Any] = {
         "fallback": False,
         "fallback_reason": None,
         "retrieved_source_count": 0,
         "retrieved_chunk_count": 0,
+        "score_meaning": "similarity_higher_is_better",
+        "score_formula": "1 - cosine_distance",
+        "thresholds": {
+            "text_min_score": settings.rag_text_min_score,
+            "image_summary_min_score": settings.rag_image_summary_min_score,
+        },
+        "retrieval_limits": {
+            "requested_top_k": top_k,
+            "internal_text_top_k": internal_top_k,
+            "internal_image_top_k": image_top_k,
+            "context_limit": context_limit,
+            "image_reserve_count": image_reserve_count,
+        },
     }
     try:
-        contexts = retrieve_chunk_contexts(
+        text_contexts = retrieve_chunk_contexts(
             connection,
             user_id=user_id,
             query=question,
@@ -247,11 +271,28 @@ def retrieve_rag_contexts_with_debug(
             folder_id=folder_id,
             canvas_note_ids=canvas_note_ids,
             exclude_canvas_for_notes=exclude_canvas_for_notes,
-            top_k=top_k,
+            source_types=TEXT_RAG_SOURCE_TYPES,
+            min_score=float(settings.rag_text_min_score),
+            top_k=internal_top_k,
         )
+        image_contexts = retrieve_chunk_contexts(
+            connection,
+            user_id=user_id,
+            query=question,
+            note_ids=note_ids,
+            folder_id=folder_id,
+            canvas_note_ids=canvas_note_ids,
+            exclude_canvas_for_notes=exclude_canvas_for_notes,
+            source_types=IMAGE_RAG_SOURCE_TYPES,
+            min_score=float(settings.rag_image_summary_min_score),
+            top_k=image_top_k,
+        )
+        contexts = _merge_ranked_contexts(text_contexts, image_contexts, limit=context_limit, image_reserve_count=image_reserve_count)
         if contexts:
             debug["retrieved_source_count"] = len({f"{context.source_type}:{context.source_id}" for context in contexts})
             debug["retrieved_chunk_count"] = len(contexts)
+            debug["retrieved_text_chunk_count"] = len([context for context in contexts if context.source_type != "image_ai_summary"])
+            debug["retrieved_image_summary_count"] = len([context for context in contexts if context.source_type == "image_ai_summary"])
             return contexts, debug
         debug["fallback_reason"] = "vector_empty"
         debug["no_results"] = True
@@ -275,6 +316,144 @@ def retrieve_rag_contexts_with_debug(
         )
 
     return [], debug
+
+
+def load_page_local_rag_contexts(
+    connection: Connection,
+    *,
+    user_id: int,
+    note_ids: list[int],
+    page_number: int,
+    source_types: list[str] | None = None,
+    limit: int = 8,
+) -> list[RetrievedContext]:
+    if not note_ids or page_number < 1:
+        return []
+    active_source_types = source_types or PAGE_LOCAL_RAG_SOURCE_TYPES
+    rows = fetch_all(
+        connection,
+        """
+        SELECT source_type, source_id, title, content, folder_id, note_id, page_number, chunk_index, metadata
+        FROM document_chunks
+        WHERE user_id = %s
+          AND note_id = ANY(%s::int[])
+          AND page_number = %s
+          AND source_type = ANY(%s::text[])
+          AND content IS NOT NULL
+          AND btrim(content) <> ''
+        ORDER BY
+          CASE source_type
+            WHEN 'pdf_page' THEN 0
+            WHEN 'image_ai_summary' THEN 1
+            ELSE 2
+          END,
+          chunk_index ASC NULLS LAST,
+          source_id ASC
+        LIMIT %s
+        """,
+        (user_id, note_ids, page_number, active_source_types, max(1, int(limit))),
+    )
+    contexts: list[RetrievedContext] = []
+    for row in rows:
+        metadata = row.get("metadata") if isinstance(row.get("metadata"), dict) else {}
+        contexts.append(
+            RetrievedContext(
+                source_type=str(row["source_type"]),
+                source_id=str(row["source_id"]),
+                title=str(row["title"]),
+                content=str(row["content"]),
+                score=1.0,
+                folder_id=row.get("folder_id"),
+                note_id=row.get("note_id"),
+                page_number=row.get("page_number"),
+                chunk_index=row.get("chunk_index"),
+                metadata={**metadata, "retrieval_kind": "page_local"},
+            )
+        )
+    return contexts
+
+
+def merge_retrieved_contexts(*context_groups: list[RetrievedContext], limit: int | None = None) -> list[RetrievedContext]:
+    merged: list[RetrievedContext] = []
+    seen: set[tuple[str, str, int | None, int | None]] = set()
+    for contexts in context_groups:
+        for context in contexts:
+            key = _context_key(context)
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(context)
+            if limit is not None and len(merged) >= limit:
+                return merged
+    return merged
+
+
+def update_rag_debug_for_contexts(
+    debug: dict[str, Any],
+    contexts: list[RetrievedContext],
+    *,
+    page_local_contexts: list[RetrievedContext] | None = None,
+) -> dict[str, Any]:
+    if page_local_contexts:
+        debug["page_local_context_count"] = len(page_local_contexts)
+        if debug.get("no_results"):
+            debug["vector_no_results"] = True
+            debug["no_results"] = False
+        if debug.get("fallback_reason") == "vector_empty":
+            debug["fallback_reason"] = None
+    debug["retrieved_source_count"] = len({f"{context.source_type}:{context.source_id}" for context in contexts})
+    debug["retrieved_chunk_count"] = len(contexts)
+    debug["retrieved_text_chunk_count"] = len([context for context in contexts if context.source_type != "image_ai_summary"])
+    debug["retrieved_image_summary_count"] = len([context for context in contexts if context.source_type == "image_ai_summary"])
+    return debug
+
+
+def _context_key(context: RetrievedContext) -> tuple[str, str, int | None, int | None]:
+    return (context.source_type, context.source_id, context.page_number, context.chunk_index)
+
+
+def _dedupe_ranked_contexts(contexts: list[RetrievedContext]) -> list[RetrievedContext]:
+    selected: list[RetrievedContext] = []
+    seen: set[tuple[str, str, int | None, int | None]] = set()
+    for context in sorted(contexts, key=lambda item: item.score, reverse=True):
+        key = _context_key(context)
+        if key in seen:
+            continue
+        seen.add(key)
+        selected.append(context)
+    return selected
+
+
+def _merge_ranked_contexts(
+    text_contexts: list[RetrievedContext],
+    image_contexts: list[RetrievedContext],
+    *,
+    limit: int,
+    image_reserve_count: int = 0,
+) -> list[RetrievedContext]:
+    ranked_text = _dedupe_ranked_contexts(text_contexts)
+    ranked_images = _dedupe_ranked_contexts(image_contexts)
+    selected: list[RetrievedContext] = []
+    seen: set[tuple[str, str, int | None, int | None]] = set()
+
+    for context in ranked_images[:image_reserve_count]:
+        key = _context_key(context)
+        if key in seen:
+            continue
+        seen.add(key)
+        selected.append(context)
+        if len(selected) >= limit:
+            return sorted(selected, key=lambda item: item.score, reverse=True)
+
+    for context in sorted([*ranked_text, *ranked_images], key=lambda item: item.score, reverse=True):
+        key = _context_key(context)
+        if key in seen:
+            continue
+        seen.add(key)
+        selected.append(context)
+        if len(selected) >= limit:
+            return sorted(selected, key=lambda item: item.score, reverse=True)
+    return sorted(selected, key=lambda item: item.score, reverse=True)
 
 
 def summarize_retrieved_contexts(

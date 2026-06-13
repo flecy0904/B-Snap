@@ -1,5 +1,7 @@
 import type { InkImageAnnotation, InkStroke, InkTextAnnotation } from '../../../ui-types';
 
+export type RagExtractionMetadata = Record<string, unknown>;
+
 export type HandwritingRecognitionCluster = {
   id: string;
   pageNumber: number;
@@ -49,6 +51,7 @@ export type StoredNotePageContent = {
   bookmarked: boolean;
   photoReferenceCount: number;
   memoPageCount: number;
+  ragExtraction?: RagExtractionMetadata;
   handwritingRecognition?: HandwritingRecognitionState | null;
 };
 
@@ -59,6 +62,7 @@ export function serializeNotePageContent(params: {
   bookmarked?: boolean;
   photoReferenceCount?: number;
   memoPageCount?: number;
+  ragExtraction?: RagExtractionMetadata | null;
   handwritingRecognition?: HandwritingRecognitionState | null;
 }) {
   const photoReferenceCount = Math.max(0, Math.floor(params.photoReferenceCount ?? 0));
@@ -73,6 +77,9 @@ export function serializeNotePageContent(params: {
     photoReferenceCount,
     memoPageCount,
   };
+  if (params.ragExtraction && typeof params.ragExtraction === 'object' && !Array.isArray(params.ragExtraction)) {
+    pageState.ragExtraction = params.ragExtraction;
+  }
   if (params.handwritingRecognition) {
     pageState.handwritingRecognition = params.handwritingRecognition;
   }
@@ -122,6 +129,9 @@ export function parseNotePageContent(content: string | Partial<StoredNotePageCon
         normalizeCount(parsed.memoPages),
         normalizeCount(parsed.generatedMemoPages),
       ),
+      ragExtraction: parsed.ragExtraction && typeof parsed.ragExtraction === 'object' && !Array.isArray(parsed.ragExtraction)
+        ? parsed.ragExtraction as RagExtractionMetadata
+        : undefined,
       handwritingRecognition: typeof parsed.handwritingRecognition === 'object' && parsed.handwritingRecognition !== null
         ? parsed.handwritingRecognition as HandwritingRecognitionState
         : null,

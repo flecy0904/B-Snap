@@ -91,6 +91,32 @@ class NotePageRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class NoteRagJobStatusRead(BaseModel):
+    text_status: str | None = None
+    image_status: str | None = None
+    overall_status: str | None = None
+    page_count: int = 0
+    processed_page_count: int = 0
+    total_batches: int = 0
+    completed_batches: int = 0
+    text_chunk_count: int = 0
+    image_candidate_count: int = 0
+    image_processed_count: int = 0
+    image_completed_count: int = 0
+    image_indexed_count: int = 0
+    last_error: str | None = None
+    started_at: datetime | None = None
+    text_ready_at: datetime | None = None
+    image_ready_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
+class NoteRagStatusRead(BaseModel):
+    rag_job: NoteRagJobStatusRead | None = None
+    current_note_chunk_count: int = 0
+    image_summary_error: str | None = None
+
+
 class PdfTextExtractionRead(BaseModel):
     note_id: int
     pages_extracted: int

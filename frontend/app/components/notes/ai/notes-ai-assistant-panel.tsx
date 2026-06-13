@@ -6,11 +6,18 @@ import { useAppKeyboardInset } from '../../../hooks/notes/use-app-keyboard-inset
 import { useDelayedTooltip } from '../../../hooks/notes/use-delayed-tooltip';
 import {
   evaluateBackendRagDebug,
-  getBackendRagDebugStatus,
   getBackendRagDebugIndex,
+  getBackendRagDebugImageSummaryPreview,
+  getBackendRagDebugParserCompare,
+  getBackendRagDebugStatus,
+  getBackendNoteRagStatus,
   reindexBackendNoteRag,
-  type BackendRagDebugEvaluateResponse,
+  type BackendNoteRagStatusResponse,
+  type BackendRagDebugImageSummaryPreviewResponse,
   type BackendRagDebugIndexResponse,
+  type BackendRagDebugEvaluateResponse,
+  type BackendRagDebugParserCompareResponse,
+  type BackendRagDebugParserName,
   type BackendRagDebugStatusResponse,
   type BackendRagScopeSource,
 } from '../../../services/backend-api';
@@ -63,17 +70,52 @@ type WebMessageScrollbarDragState = {
 const WEB_MESSAGE_SCROLLBAR_MIN_THUMB_HEIGHT = 32;
 const AI_COMPOSER_INPUT_MIN_HEIGHT = 36;
 const AI_COMPOSER_INPUT_MAX_HEIGHT = 132;
+const NOTE_RAG_STATUS_POLL_MS = 5000;
 const RAG_DEV_PANEL_WIDTH = 480;
-const RAG_DEV_PANEL_DEFAULT_HEIGHT = 640;
+const RAG_DEV_PANEL_DEFAULT_HEIGHT = 9999;
 const RAG_DEV_PANEL_MARGIN = 16;
-const RAG_DEV_PANEL_TOP = 82;
+const RAG_DEV_PANEL_TOP = 88;
 const RAG_DEBUG_ENABLED = Platform.OS === 'web' && typeof __DEV__ !== 'undefined' && __DEV__;
 const RAG_DEV_TABS = ['search', 'index', 'context', 'status'] as const;
 
 type RagDevTab = typeof RAG_DEV_TABS[number];
 
+const RAG_DEV_TAB_LABELS: Record<RagDevTab, string> = {
+  search: '검색 테스트',
+  index: '페이지별 자료',
+  context: 'Context',
+  status: '처리 상태',
+};
+
 function clamp(value: number, min: number, max: number) {
   return Math.min(Math.max(value, min), max);
+}
+
+function getRagDebugIndexChunkKey(chunk: { source_type: string; source_id?: string | number | null; page_number?: number | null; chunk_index?: number | null }, index: number) {
+  return `index:chunk:${chunk.source_type}:${chunk.source_id ?? 'none'}:${chunk.page_number ?? 'none'}:${chunk.chunk_index ?? index}`;
+}
+
+function getRagDebugImageSummaryIdFromChunk(chunk: { source_type: string; source_id?: string | number | null; metadata?: Record<string, unknown> }) {
+  if (chunk.source_type !== 'image_ai_summary') return null;
+  const metadataId = chunk.metadata?.image_ai_summary_id;
+  const rawId = metadataId ?? chunk.source_id;
+  const id = Number(rawId);
+  return Number.isFinite(id) && id > 0 ? id : null;
+}
+
+function getRagDebugImageChunkLabel(chunk: { source_id?: string | number | null; chunk_index?: number | null; metadata?: Record<string, unknown> }, fallbackIndex: number) {
+  const summaryId = getRagDebugImageSummaryIdFromChunk({ ...chunk, source_type: 'image_ai_summary' });
+  const sourceLabel = summaryId ? `#${summaryId}` : `#${chunk.source_id ?? fallbackIndex + 1}`;
+  const partLabel = Number.isFinite(Number(chunk.chunk_index)) ? Number(chunk.chunk_index) : fallbackIndex + 1;
+  return `이미지 요약 ${sourceLabel} · part ${partLabel}`;
+}
+
+function getRagDebugParserPageKey(parser: string, pageNumber: number) {
+  return `parser:${parser}:page:${pageNumber}`;
+}
+
+function getRagDebugParserChunkKey(chunk: { parser: string; page_number: number; chunk_index?: number | null }, index: number) {
+  return `parser:${chunk.parser}:page:${chunk.page_number}:chunk:${chunk.chunk_index ?? index}`;
 }
 
 function handleWebSubmitKeyPress(event: any, submit: () => void) {
@@ -92,8 +134,63 @@ function isWebRagMenuInteractiveTarget(target: unknown) {
   return Boolean(target.closest('[data-ai-rag-menu-interactive="true"]'));
 }
 
+function isWebModelMenuInteractiveTarget(target: unknown) {
+  if (Platform.OS !== 'web' || typeof Element === 'undefined' || !(target instanceof Element)) {
+    return false;
+  }
+  return Boolean(target.closest('[data-ai-model-menu-interactive="true"]'));
+}
+
 function getFloatingPanelHeight(windowHeight: number, panelY: number, requestedHeight = FLOATING_PANEL_HEIGHT) {
   return Math.min(requestedHeight, Math.max(FLOATING_PANEL_MIN_HEIGHT, windowHeight - panelY - FLOATING_PANEL_MARGIN));
+}
+
+type NoteRagStatusDisplay = {
+  progressLabel: string | null;
+  currentNoteScopeLabel: string;
+};
+
+const AI_CHAT_MODEL_OPTIONS = [
+  { id: 'gemini-3.1-pro', label: 'Gemini 3.1 Pro', icon: 'star-four-points', iconColor: '#5F79FF' },
+  { id: 'gpt-5.2', label: 'GPT-5.2', icon: 'star-four-points', iconColor: '#5F79FF' },
+  { id: 'gpt-5.4', label: 'GPT-5.4', icon: 'star-four-points', iconColor: '#5F79FF' },
+  { id: 'gpt-5.5', label: 'GPT-5.5', icon: 'star-four-points', iconColor: '#5F79FF' },
+] as const;
+
+type AiChatModelId = typeof AI_CHAT_MODEL_OPTIONS[number]['id'];
+
+function formatPercentProgress(done: number, total: number) {
+  if (!Number.isFinite(total) || total <= 0) return '';
+  const safeDone = Math.max(0, Math.min(Number(done) || 0, Number(total)));
+  const percent = Math.max(0, Math.min(100, Math.round((safeDone / Number(total)) * 100)));
+  return ` · ${percent}%`;
+}
+
+function buildNoteRagStatusDisplay(status: BackendNoteRagStatusResponse | null): NoteRagStatusDisplay | null {
+  if (!status) return null;
+  const job = status.rag_job;
+  if (!job) {
+    return (status.current_note_chunk_count ?? 0) > 0
+      ? { progressLabel: null, currentNoteScopeLabel: '현재 노트 참고중' }
+      : { progressLabel: '노트 분석중', currentNoteScopeLabel: '노트 분석중' };
+  }
+  if (job.text_status === 'failed' || job.overall_status === 'failed') {
+    return { progressLabel: null, currentNoteScopeLabel: '노트 분석 실패' };
+  }
+  if (job.text_status !== 'ready') {
+    return {
+      progressLabel: `노트 분석중${formatPercentProgress(job.processed_page_count, job.page_count)}`,
+      currentNoteScopeLabel: '노트 분석중',
+    };
+  }
+  if (job.image_status !== 'ready' && job.image_status !== 'partial_failed') {
+    const imageProcessedCount = job.image_processed_count ?? job.image_completed_count;
+    return {
+      progressLabel: `이미지 분석 중${formatPercentProgress(imageProcessedCount, job.image_candidate_count)}`,
+      currentNoteScopeLabel: '노트 내용 참고중',
+    };
+  }
+  return { progressLabel: null, currentNoteScopeLabel: '현재 노트 참고중' };
 }
 
 const CLASS_INSIGHT_QUICK_PROMPTS = [
@@ -125,6 +222,8 @@ export function NotesAiAssistantPanel() {
   const [deleteTarget, setDeleteTarget] = React.useState<{ id: number; title: string } | null>(null);
   const [ragMenuOpen, setRagMenuOpen] = React.useState(false);
   const [ragMenuQuery, setRagMenuQuery] = React.useState('');
+  const [modelMenuOpen, setModelMenuOpen] = React.useState(false);
+  const [selectedAiModelId, setSelectedAiModelId] = React.useState<AiChatModelId>('gpt-5.5');
   const [aiComposerInputHeight, setAiComposerInputHeight] = React.useState(AI_COMPOSER_INPUT_MIN_HEIGHT);
   const [ragDebugOpen, setRagDebugOpen] = React.useState(false);
   const [ragDevTab, setRagDevTab] = React.useState<RagDevTab>('search');
@@ -132,12 +231,19 @@ export function NotesAiAssistantPanel() {
   const ragDevPositionRef = React.useRef(ragDevPosition);
   const webRagDevDragRef = React.useRef<WebFloatingDragState | null>(null);
   const [ragDebugQuery, setRagDebugQuery] = React.useState('');
-  const [ragDebugLoading, setRagDebugLoading] = React.useState<'evaluate' | 'index' | 'status' | 'reindex' | null>(null);
+  const [ragDebugLoading, setRagDebugLoading] = React.useState<'evaluate' | 'status' | 'index' | 'reindex' | 'parserCompare' | null>(null);
   const [ragDebugError, setRagDebugError] = React.useState<string | null>(null);
+  const [ragDebugNotice, setRagDebugNotice] = React.useState<string | null>(null);
   const [ragDebugEvaluation, setRagDebugEvaluation] = React.useState<BackendRagDebugEvaluateResponse | null>(null);
   const [ragDebugIndex, setRagDebugIndex] = React.useState<BackendRagDebugIndexResponse | null>(null);
+  const [ragDebugParserCompare, setRagDebugParserCompare] = React.useState<BackendRagDebugParserCompareResponse | null>(null);
+  const [ragDebugParserCompareName, setRagDebugParserCompareName] = React.useState<BackendRagDebugParserName | null>(null);
+  const [ragDebugImagePreview, setRagDebugImagePreview] = React.useState<BackendRagDebugImageSummaryPreviewResponse | null>(null);
+  const [ragDebugImagePreviewLoading, setRagDebugImagePreviewLoading] = React.useState(false);
+  const [ragDebugImagePreviewError, setRagDebugImagePreviewError] = React.useState<string | null>(null);
   const [ragDebugStatus, setRagDebugStatus] = React.useState<BackendRagDebugStatusResponse | null>(null);
   const [ragDebugSelectedKey, setRagDebugSelectedKey] = React.useState<string | null>(null);
+  const [noteRagStatus, setNoteRagStatus] = React.useState<BackendNoteRagStatusResponse | null>(null);
   const aiQuestionInputRef = React.useRef<TextInput | null>(null);
   const messagesScrollRef = React.useRef<ScrollView | null>(null);
   const [messageScrollbarState, setMessageScrollbarState] = React.useState<WebMessageScrollbarState>({
@@ -148,6 +254,10 @@ export function NotesAiAssistantPanel() {
   });
   const messageScrollbarStateRef = React.useRef(messageScrollbarState);
   const hasChatHistory = workspace.aiMessages.length > 0;
+  const selectedAiModel = React.useMemo(
+    () => AI_CHAT_MODEL_OPTIONS.find((model) => model.id === selectedAiModelId) ?? AI_CHAT_MODEL_OPTIONS[AI_CHAT_MODEL_OPTIONS.length - 1],
+    [selectedAiModelId],
+  );
   const latestUserMessageContent = React.useMemo(() => {
     for (let index = workspace.aiMessages.length - 1; index >= 0; index -= 1) {
       const message = workspace.aiMessages[index] as any;
@@ -180,6 +290,22 @@ export function NotesAiAssistantPanel() {
       ?? workspace.noteAiChatSessions.find((session: any) => session.id === workspace.activeAiChatSessionId)
       ?? null
     : null;
+  const activeSessionIdRef = React.useRef<number | null>(activeSession?.id ?? null);
+  React.useEffect(() => {
+    activeSessionIdRef.current = activeSession?.id ?? null;
+    setRagDebugEvaluation(null);
+    setRagDebugIndex(null);
+    setRagDebugParserCompare(null);
+    setRagDebugParserCompareName(null);
+    setRagDebugImagePreview(null);
+    setRagDebugImagePreviewError(null);
+    setRagDebugImagePreviewLoading(false);
+    setRagDebugStatus(null);
+    setRagDebugSelectedKey(null);
+    setRagDebugError(null);
+    setRagDebugNotice(null);
+    setRagDebugLoading((current) => (current === 'evaluate' || current === 'status' ? null : current));
+  }, [activeSession?.id]);
   const openLinkedPdfPage = React.useCallback((pageNumber: number) => {
     workspace.onSetCurrentPdfPage?.(pageNumber);
     workspace.onChangeInkTool?.('view');
@@ -207,14 +333,63 @@ export function NotesAiAssistantPanel() {
     if (document?.backendSyncStatus === 'synced' && typeof document?.id === 'number') return String(document.id);
     return null;
   }, [workspace.studyDocument]);
+  const currentBackendNoteIdRef = React.useRef(currentBackendNoteId);
+  React.useEffect(() => {
+    currentBackendNoteIdRef.current = currentBackendNoteId;
+    setRagDebugEvaluation(null);
+    setRagDebugIndex(null);
+    setRagDebugParserCompare(null);
+    setRagDebugParserCompareName(null);
+    setRagDebugImagePreview(null);
+    setRagDebugImagePreviewError(null);
+    setRagDebugImagePreviewLoading(false);
+    setRagDebugStatus(null);
+    setRagDebugSelectedKey(null);
+    setRagDebugError(null);
+    setRagDebugNotice(null);
+    setRagDebugLoading(null);
+    setNoteRagStatus(null);
+  }, [currentBackendNoteId]);
+  React.useEffect(() => {
+    if (Platform.OS !== 'web') return;
+    const noteId = Number(currentBackendNoteId);
+    if (!Number.isFinite(noteId) || noteId <= 0) {
+      setNoteRagStatus(null);
+      return;
+    }
+
+    let cancelled = false;
+    const loadStatus = async () => {
+      try {
+        const result = await getBackendNoteRagStatus(noteId);
+        if (!cancelled && currentBackendNoteIdRef.current === String(noteId)) {
+          setNoteRagStatus(result);
+        }
+      } catch {
+        if (!cancelled && currentBackendNoteIdRef.current === String(noteId)) {
+          setNoteRagStatus(null);
+        }
+      }
+    };
+
+    void loadStatus();
+    const intervalId = window.setInterval(() => {
+      void loadStatus();
+    }, NOTE_RAG_STATUS_POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(intervalId);
+    };
+  }, [currentBackendNoteId]);
+  const noteRagStatusDisplay = React.useMemo(() => buildNoteRagStatusDisplay(noteRagStatus), [noteRagStatus]);
   const ragScopeTitle = React.useMemo(() => {
     if (activeRagScopeSources.length === 0) {
-      return '참고 자료 준비 중';
+      return noteRagStatusDisplay?.currentNoteScopeLabel ?? '참고 자료 준비 중';
     }
     if (activeRagScopeSources.length === 1) {
       const source = activeRagScopeSources[0];
       if (source?.type === 'note' && source.id === currentBackendNoteId) {
-        return '현재 노트 참고중';
+        return noteRagStatusDisplay?.currentNoteScopeLabel ?? '현재 노트 참고중';
       }
       const title = source?.title ?? '현재 노트';
       const shortTitle = title.length > RAG_SCOPE_TITLE_MAX_LENGTH
@@ -222,8 +397,16 @@ export function NotesAiAssistantPanel() {
         : title;
       return `${shortTitle} 참고중`;
     }
-    return `참고 자료 ${activeRagScopeSources.length}개`;
-  }, [activeRagScopeSources, currentBackendNoteId]);
+    return `참고자료 ${activeRagScopeSources.length}개`;
+  }, [activeRagScopeSources, currentBackendNoteId, noteRagStatusDisplay]);
+  const getRagDebugSessionId = React.useCallback(() => {
+    const currentNoteId = currentBackendNoteIdRef.current;
+    const session = activeSession
+      ?? workspace.noteAiChatSessions.find((item: any) => String(item.note_id) === currentNoteId)
+      ?? workspace.allAiChatSessions.find((item: any) => String(item.note_id) === currentNoteId)
+      ?? null;
+    return session?.id ?? null;
+  }, [activeSession, workspace.allAiChatSessions, workspace.noteAiChatSessions]);
   const ragDebugDetail = React.useMemo(() => {
     if (!ragDebugSelectedKey) return null;
     if (ragDebugEvaluation) {
@@ -250,88 +433,159 @@ export function NotesAiAssistantPanel() {
         }
       }
     }
-    if (ragDebugIndex) {
-      const page = ragDebugIndex.pages.find((item) => `page:${item.id}` === ragDebugSelectedKey);
-      if (page) {
+    if (ragDebugParserCompare) {
+      const parserPage = ragDebugParserCompare.pages.find((page) => (
+        getRagDebugParserPageKey(page.parser ?? ragDebugParserCompare.summary.parser, page.page_number) === ragDebugSelectedKey
+      ));
+      if (parserPage) {
         return {
-          title: `Page ${page.page_number}`,
-          meta: `${page.text_length} chars extracted from current note page`,
-          text: page.text,
+          title: `${parserPage.parser ?? ragDebugParserCompare.summary.parser} / Page ${parserPage.page_number}`,
+          meta: `parser 비교 추출 원문 · ${parserPage.text_length} chars`,
+          text: parserPage.text,
         };
       }
-      const chunk = ragDebugIndex.chunks.find((item, index) => (
-        `chunk:${item.source_type}:${item.source_id}:${item.chunk_index ?? index}` === ragDebugSelectedKey
+      const parserChunk = ragDebugParserCompare.chunks.find((chunk, index) => (
+        getRagDebugParserChunkKey(chunk, index) === ragDebugSelectedKey
       ));
-      if (chunk) {
+      if (parserChunk) {
         return {
-          title: chunk.title,
-          meta: `${chunk.source_type} · p.${chunk.page_number ?? '-'} · chunk ${chunk.chunk_index ?? '-'} · ${chunk.content_length} chars`,
-          text: chunk.content,
+          title: `${parserChunk.parser} / Page ${parserChunk.page_number}`,
+          meta: `parser 비교 chunk ${parserChunk.chunk_index ?? '-'} · embedding 직전 content · ${parserChunk.content_length} chars`,
+          text: parserChunk.content,
+        };
+      }
+    }
+    if (ragDebugIndex) {
+      const indexChunk = ragDebugIndex.chunks.find((chunk, index) => (
+        getRagDebugIndexChunkKey(chunk, index) === ragDebugSelectedKey
+      ));
+      if (indexChunk) {
+        const confidence = typeof indexChunk.metadata?.confidence === 'string' ? indexChunk.metadata.confidence : null;
+        const importance = typeof indexChunk.metadata?.importance === 'string' ? indexChunk.metadata.importance : null;
+        const imageMeta = indexChunk.source_type === 'image_ai_summary'
+          ? ` · confidence ${confidence ?? '-'} · importance ${importance ?? '-'}`
+          : '';
+        return {
+          title: `${indexChunk.title || indexChunk.source_type} / Page ${indexChunk.page_number ?? '-'}`,
+          meta: `${indexChunk.source_type} · chunk ${indexChunk.chunk_index ?? '-'} · embedding 직전 content${imageMeta}`,
+          text: indexChunk.content,
+        };
+      }
+      const imageSummary = ragDebugIndex.image_ai_summaries.find((summary) => (
+        `index:image-summary:${summary.id}` === ragDebugSelectedKey
+      ));
+      if (imageSummary) {
+        return {
+          title: `이미지 요약 / Page ${imageSummary.page_number ?? '-'}`,
+          meta: `status ${imageSummary.status ?? '-'} · confidence ${imageSummary.confidence ?? '-'} · importance ${imageSummary.importance ?? '-'} · indexed ${imageSummary.indexed ? 'yes' : 'no'}`,
+          text: [
+            imageSummary.summary ? `요약:\n${imageSummary.summary}` : null,
+            imageSummary.ocr_text ? `이미지 안 텍스트:\n${imageSummary.ocr_text}` : null,
+            imageSummary.skipped_reason ? `제외 사유:\n${imageSummary.skipped_reason}` : null,
+            imageSummary.confidence_reason ? `confidence 이유:\n${imageSummary.confidence_reason}` : null,
+            imageSummary.importance_reason ? `importance 이유:\n${imageSummary.importance_reason}` : null,
+          ].filter(Boolean).join('\n\n') || '저장된 이미지 요약 내용이 없습니다.',
         };
       }
     }
     return null;
-  }, [ragDebugEvaluation, ragDebugIndex, ragDebugSelectedKey]);
-  const runRagDebugIndex = React.useCallback(async () => {
-    if (!RAG_DEBUG_ENABLED) return;
-    const noteId = Number(currentBackendNoteId);
-    if (!Number.isFinite(noteId) || noteId <= 0) {
-      setRagDebugError('현재 노트가 backend note와 연결되어 있지 않습니다.');
+  }, [ragDebugEvaluation, ragDebugIndex, ragDebugParserCompare, ragDebugSelectedKey]);
+  React.useEffect(() => {
+    if (!RAG_DEBUG_ENABLED || !ragDebugIndex || !ragDebugSelectedKey) {
+      setRagDebugImagePreview(null);
+      setRagDebugImagePreviewError(null);
+      setRagDebugImagePreviewLoading(false);
       return;
     }
-    setRagDebugLoading('index');
-    setRagDebugError(null);
-    try {
-      const result = await getBackendRagDebugIndex(noteId);
-      setRagDebugIndex(result);
-      if (result.pages[0]) {
-        setRagDebugSelectedKey(`page:${result.pages[0].id}`);
-      } else if (result.chunks[0]) {
-        setRagDebugSelectedKey(`chunk:${result.chunks[0].source_type}:${result.chunks[0].source_id}:${result.chunks[0].chunk_index ?? 0}`);
-      } else {
-        setRagDebugSelectedKey(null);
-      }
-    } catch (error: any) {
-      setRagDebugError(error?.detail || error?.message || 'RAG index 확인에 실패했습니다.');
-    } finally {
-      setRagDebugLoading(null);
+    let summaryId: number | null = null;
+    const selectedChunk = ragDebugIndex.chunks.find((chunk, index) => (
+      getRagDebugIndexChunkKey(chunk, index) === ragDebugSelectedKey
+    ));
+    if (selectedChunk) {
+      summaryId = getRagDebugImageSummaryIdFromChunk(selectedChunk);
+    } else {
+      const selectedSummary = ragDebugIndex.image_ai_summaries.find((summary) => (
+        `index:image-summary:${summary.id}` === ragDebugSelectedKey
+      ));
+      summaryId = selectedSummary?.id ?? null;
     }
-  }, [currentBackendNoteId]);
+    if (!summaryId) {
+      setRagDebugImagePreview(null);
+      setRagDebugImagePreviewError(null);
+      setRagDebugImagePreviewLoading(false);
+      return;
+    }
+    const noteId = Number(currentBackendNoteIdRef.current);
+    if (!Number.isFinite(noteId) || noteId <= 0) {
+      setRagDebugImagePreview(null);
+      setRagDebugImagePreviewError('현재 노트가 backend note와 연결되어 있지 않습니다.');
+      setRagDebugImagePreviewLoading(false);
+      return;
+    }
+    let cancelled = false;
+    setRagDebugImagePreview(null);
+    setRagDebugImagePreviewError(null);
+    setRagDebugImagePreviewLoading(true);
+    getBackendRagDebugImageSummaryPreview(noteId, summaryId)
+      .then((preview) => {
+        if (cancelled || currentBackendNoteIdRef.current !== String(noteId)) return;
+        setRagDebugImagePreview(preview);
+      })
+      .catch((error: any) => {
+        if (cancelled || currentBackendNoteIdRef.current !== String(noteId)) return;
+        setRagDebugImagePreviewError(error?.detail || error?.message || '이미지 미리보기를 불러오지 못했습니다.');
+      })
+      .finally(() => {
+        if (cancelled || currentBackendNoteIdRef.current !== String(noteId)) return;
+        setRagDebugImagePreviewLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [ragDebugIndex, ragDebugSelectedKey]);
   const runRagDevEvaluate = React.useCallback(async () => {
     if (!RAG_DEBUG_ENABLED) return;
     const question = (ragDebugQuery || workspace.aiQuestion || latestUserMessageContent).trim();
     if (!question) {
-      setRagDebugError('Search query를 입력하세요.');
+      setRagDebugError('검색 테스트 질문을 입력하세요.');
       return;
     }
-    if (!activeSession?.id) {
-      setRagDebugError('Active AI Chat session이 없습니다.');
+    const sessionId = getRagDebugSessionId();
+    const noteId = currentBackendNoteIdRef.current;
+    if (!sessionId) {
+      setRagDebugError('활성 AI Chat 세션이 없습니다.');
       return;
     }
     setRagDebugQuery(question);
     setRagDebugLoading('evaluate');
     setRagDebugError(null);
+    setRagDebugNotice(null);
     try {
       const result = await evaluateBackendRagDebug({
-        sessionId: activeSession.id,
+        sessionId,
         content: question,
         pageNumber: workspace.currentPdfPage ?? null,
         selectionImageUri: workspace.selectionPreviewUri ?? null,
         selectionRect: workspace.selectionRect ?? null,
         ragScope: workspace.activeAiRagScope ?? null,
+        useRag: true,
         topK: 10,
       });
+      if (activeSessionIdRef.current !== sessionId || currentBackendNoteIdRef.current !== noteId) return;
       setRagDebugEvaluation(result);
       setRagDebugSelectedKey(result.results[0]
         ? `result:${result.results[0].source_type}:${result.results[0].source_id}:${result.results[0].chunk_index ?? 0}`
         : null);
     } catch (error: any) {
-      setRagDebugError(error?.detail || error?.message || 'RAG search evaluation failed.');
+      if (activeSessionIdRef.current !== sessionId || currentBackendNoteIdRef.current !== noteId) return;
+      setRagDebugError(error?.detail || error?.message || 'RAG 검색 테스트에 실패했습니다.');
     } finally {
-      setRagDebugLoading(null);
+      if (activeSessionIdRef.current === sessionId && currentBackendNoteIdRef.current === noteId) {
+        setRagDebugLoading(null);
+      }
     }
   }, [
-    activeSession?.id,
+    getRagDebugSessionId,
     latestUserMessageContent,
     ragDebugQuery,
     workspace.activeAiRagScope,
@@ -340,58 +594,126 @@ export function NotesAiAssistantPanel() {
     workspace.selectionPreviewUri,
     workspace.selectionRect,
   ]);
-  const runRagDevIndex = React.useCallback(async () => {
+  const runRagDevLoadIndex = React.useCallback(async () => {
     if (!RAG_DEBUG_ENABLED) return;
-    await runRagDebugIndex();
-  }, [runRagDebugIndex]);
-  const runRagDevStatus = React.useCallback(async () => {
-    if (!RAG_DEBUG_ENABLED) return;
-    if (!activeSession?.id) {
-      setRagDebugError('Active AI Chat session이 없습니다.');
+    const noteId = Number(currentBackendNoteId);
+    if (!Number.isFinite(noteId) || noteId <= 0) {
+      setRagDebugError('현재 노트가 backend note와 연결되어 있지 않습니다.');
       return;
     }
-    setRagDebugLoading('status');
+    setRagDebugLoading('index');
     setRagDebugError(null);
+    setRagDebugNotice(null);
+    setRagDebugIndex(null);
+    setRagDebugParserCompare(null);
+    setRagDebugParserCompareName(null);
+    setRagDebugSelectedKey(null);
     try {
-      const result = await getBackendRagDebugStatus({
-        sessionId: activeSession.id,
-        ragScope: workspace.activeAiRagScope ?? null,
-      });
-      setRagDebugStatus(result);
+      const result = await getBackendRagDebugIndex(noteId, { limit: 500 });
+      if (currentBackendNoteIdRef.current !== String(noteId)) return;
+      setRagDebugIndex(result);
+      const firstChunk = result.chunks.find((chunk) => chunk.source_type === 'pdf_page')
+        ?? result.chunks.find((chunk) => chunk.source_type === 'image_ai_summary')
+        ?? result.chunks[0];
+      if (firstChunk) {
+        const firstChunkIndex = result.chunks.indexOf(firstChunk);
+        setRagDebugSelectedKey(getRagDebugIndexChunkKey(firstChunk, firstChunkIndex >= 0 ? firstChunkIndex : 0));
+        return;
+      }
+      const firstImageSummary = result.image_ai_summaries[0];
+      setRagDebugSelectedKey(firstImageSummary ? `index:image-summary:${firstImageSummary.id}` : null);
     } catch (error: any) {
-      setRagDebugError(error?.detail || error?.message || 'RAG status check failed.');
+      if (currentBackendNoteIdRef.current !== String(noteId)) return;
+      setRagDebugError(error?.detail || error?.message || '현재 노트 index를 불러오지 못했습니다.');
     } finally {
-      setRagDebugLoading(null);
+      if (currentBackendNoteIdRef.current === String(noteId)) {
+        setRagDebugLoading(null);
+      }
     }
-  }, [activeSession?.id, workspace.activeAiRagScope]);
+  }, [currentBackendNoteId]);
+  const runRagDevParserCompare = React.useCallback(async (parserName: BackendRagDebugParserName) => {
+    if (!RAG_DEBUG_ENABLED) return;
+    const noteId = Number(currentBackendNoteId);
+    if (!Number.isFinite(noteId) || noteId <= 0) {
+      setRagDebugError('현재 노트가 backend note와 연결되어 있지 않습니다.');
+      return;
+    }
+    setRagDebugLoading('parserCompare');
+    setRagDebugError(null);
+    setRagDebugNotice(null);
+    setRagDebugIndex(null);
+    setRagDebugParserCompare(null);
+    setRagDebugParserCompareName(parserName);
+    setRagDebugSelectedKey(null);
+    try {
+      const result = await getBackendRagDebugParserCompare(noteId, parserName);
+      if (currentBackendNoteIdRef.current !== String(noteId)) return;
+      setRagDebugParserCompare(result);
+      const firstPage = result.pages[0];
+      if (firstPage) {
+        setRagDebugSelectedKey(getRagDebugParserPageKey(firstPage.parser ?? result.summary.parser, firstPage.page_number));
+      }
+    } catch (error: any) {
+      if (currentBackendNoteIdRef.current !== String(noteId)) return;
+      setRagDebugParserCompareName(null);
+      setRagDebugError(error?.detail || error?.message || 'parser 비교 추출에 실패했습니다.');
+    } finally {
+      if (currentBackendNoteIdRef.current === String(noteId)) {
+        setRagDebugLoading(null);
+      }
+    }
+  }, [currentBackendNoteId]);
   const runRagDevReindex = React.useCallback(async () => {
     if (!RAG_DEBUG_ENABLED) return;
     const noteId = Number(currentBackendNoteId);
     if (!Number.isFinite(noteId) || noteId <= 0) {
-      setRagDebugError('현재 note가 backend note와 연결되어 있지 않습니다.');
+      setRagDebugError('현재 노트가 backend note와 연결되어 있지 않습니다.');
       return;
     }
     setRagDebugLoading('reindex');
     setRagDebugError(null);
+    setRagDebugNotice(null);
     try {
       await reindexBackendNoteRag(noteId);
-      await runRagDevIndex();
-      await runRagDevStatus();
+      if (currentBackendNoteIdRef.current !== String(noteId)) return;
+      setRagDebugStatus(null);
+      setRagDebugNotice('현재 노트 검색 자료를 다시 만드는 작업을 시작했습니다. 잠시 뒤 처리 상태를 새로고침하세요.');
     } catch (error: any) {
-      setRagDebugError(error?.detail || error?.message || 'Current note reindex failed.');
+      if (currentBackendNoteIdRef.current !== String(noteId)) return;
+      setRagDebugError(error?.detail || error?.message || '현재 노트 검색 자료 다시 만들기 요청에 실패했습니다.');
     } finally {
-      setRagDebugLoading(null);
+      if (currentBackendNoteIdRef.current === String(noteId)) {
+        setRagDebugLoading(null);
+      }
     }
-  }, [currentBackendNoteId, runRagDevIndex, runRagDevStatus]);
-  const refreshRagDevScope = React.useCallback(async () => {
-    await Promise.all([
-      runRagDevIndex(),
-      runRagDevStatus(),
-    ]);
-    if ((ragDebugQuery || workspace.aiQuestion || latestUserMessageContent).trim()) {
-      await runRagDevEvaluate();
+  }, [currentBackendNoteId]);
+  const runRagDevStatus = React.useCallback(async () => {
+    if (!RAG_DEBUG_ENABLED) return;
+    const sessionId = getRagDebugSessionId();
+    const noteId = currentBackendNoteIdRef.current;
+    if (!sessionId) {
+      setRagDebugError('활성 AI Chat 세션이 없습니다.');
+      return;
     }
-  }, [latestUserMessageContent, ragDebugQuery, runRagDevEvaluate, runRagDevIndex, runRagDevStatus, workspace.aiQuestion]);
+    setRagDebugLoading('status');
+    setRagDebugError(null);
+    setRagDebugNotice(null);
+    try {
+      const result = await getBackendRagDebugStatus({
+        sessionId,
+        ragScope: workspace.activeAiRagScope ?? null,
+      });
+      if (activeSessionIdRef.current !== sessionId || currentBackendNoteIdRef.current !== noteId) return;
+      setRagDebugStatus(result);
+    } catch (error: any) {
+      if (activeSessionIdRef.current !== sessionId || currentBackendNoteIdRef.current !== noteId) return;
+      setRagDebugError(error?.detail || error?.message || 'RAG status check failed.');
+    } finally {
+      if (activeSessionIdRef.current === sessionId && currentBackendNoteIdRef.current === noteId) {
+        setRagDebugLoading(null);
+      }
+    }
+  }, [getRagDebugSessionId, workspace.activeAiRagScope]);
   const removeMentionToken = React.useCallback((value: string) => (
     value.replace(/(^|\s)@[^\s@]*$/, (match, prefix) => prefix.trimEnd())
   ).trimStart(), []);
@@ -404,18 +726,27 @@ export function NotesAiAssistantPanel() {
       }, 0);
     }
   }, []);
+  const closeModelMenu = React.useCallback((options?: { focusComposer?: boolean }) => {
+    setModelMenuOpen(false);
+    if (Platform.OS === 'web' && options?.focusComposer) {
+      window.setTimeout(() => {
+        aiQuestionInputRef.current?.focus();
+      }, 0);
+    }
+  }, []);
   const handleAiQuestionChange = React.useCallback((value: string) => {
     workspace.onChangeAiQuestion(value);
     if (!value) setAiComposerInputHeight(AI_COMPOSER_INPUT_MIN_HEIGHT);
     if (Platform.OS !== 'web') return;
     const match = value.match(/(?:^|\s)@([^\s@]*)$/);
     if (match) {
+      closeModelMenu();
       setRagMenuOpen(true);
       setRagMenuQuery(match[1] ?? '');
       return;
     }
     closeRagReferenceMenu();
-  }, [closeRagReferenceMenu, workspace.onChangeAiQuestion]);
+  }, [closeModelMenu, closeRagReferenceMenu, workspace.onChangeAiQuestion]);
   const handleAiQuestionContentSizeChange = React.useCallback((event: any) => {
     const contentHeight = Number(event?.nativeEvent?.contentSize?.height ?? 0);
     if (!Number.isFinite(contentHeight) || contentHeight <= 0) return;
@@ -440,6 +771,17 @@ export function NotesAiAssistantPanel() {
       } as any)
       : {}
   ), []);
+  const webModelMenuInteractiveProps = React.useMemo(() => (
+    Platform.OS === 'web'
+      ? ({
+        'data-ai-model-menu-interactive': 'true',
+        onPointerDown: (event: any) => {
+          event.stopPropagation?.();
+          event.nativeEvent?.stopPropagation?.();
+        },
+      } as any)
+      : {}
+  ), []);
   const getWebRagMenuItemProps = React.useCallback((source: BackendRagScopeSource) => (
     Platform.OS === 'web'
       ? ({
@@ -455,6 +797,13 @@ export function NotesAiAssistantPanel() {
   const handleAiComposerKeyPress = React.useCallback((event: any) => {
     if (Platform.OS === 'web') {
       const key = event?.key ?? event?.nativeEvent?.key;
+      if (key === 'Escape' && modelMenuOpen) {
+        event.preventDefault?.();
+        event.stopPropagation?.();
+        event.nativeEvent?.stopPropagation?.();
+        closeModelMenu({ focusComposer: true });
+        return;
+      }
       if (key === 'Escape' && ragMenuOpen) {
         event.preventDefault?.();
         event.stopPropagation?.();
@@ -466,7 +815,7 @@ export function NotesAiAssistantPanel() {
     handleWebSubmitKeyPress(event, () => {
       void workspace.onRequestAiAnswer();
     });
-  }, [closeRagReferenceMenu, ragMenuOpen, workspace.onRequestAiAnswer]);
+  }, [closeModelMenu, closeRagReferenceMenu, modelMenuOpen, ragMenuOpen, workspace.onRequestAiAnswer]);
   const appFloatingChat = Boolean(
     workspace.usesAppAiPanelLayout
     && workspace.appChatMode === 'floating'
@@ -493,9 +842,9 @@ export function NotesAiAssistantPanel() {
   const floatingMaxX = Math.max(FLOATING_PANEL_MARGIN, width - floatingPanelWidth - FLOATING_PANEL_MARGIN);
   const floatingMaxY = Math.max(FLOATING_PANEL_TOP, height - floatingPanelHeight - FLOATING_PANEL_MARGIN);
   const ragDevPanelWidth = Math.min(RAG_DEV_PANEL_WIDTH, Math.max(320, width - RAG_DEV_PANEL_MARGIN * 2));
-  const ragDevPanelHeight = Math.min(RAG_DEV_PANEL_DEFAULT_HEIGHT, Math.max(360, height - RAG_DEV_PANEL_MARGIN * 2));
+  const ragDevPanelHeight = Math.min(RAG_DEV_PANEL_DEFAULT_HEIGHT, Math.max(360, height - RAG_DEV_PANEL_TOP));
   const ragDevMaxX = Math.max(RAG_DEV_PANEL_MARGIN, width - ragDevPanelWidth - RAG_DEV_PANEL_MARGIN);
-  const ragDevMaxY = Math.max(RAG_DEV_PANEL_MARGIN, height - ragDevPanelHeight - RAG_DEV_PANEL_MARGIN);
+  const ragDevMaxY = Math.max(RAG_DEV_PANEL_TOP, height - ragDevPanelHeight - RAG_DEV_PANEL_MARGIN);
   const sidebarMaxWidth = Math.max(SIDEBAR_MIN_WIDTH, Math.floor(width * 0.5));
   const useWebFloatingDrag = Platform.OS === 'web' && !appChatSidebar && workspace.aiPanelMode === 'floating';
   const useWebSidebarResize = Platform.OS === 'web' && !workspace.usesAppAiPanelLayout && workspace.aiPanelMode === 'sidebar';
@@ -528,7 +877,7 @@ export function NotesAiAssistantPanel() {
     setRagDevPosition((current) => {
       const next = {
         x: clamp(current.x, RAG_DEV_PANEL_MARGIN, ragDevMaxX),
-        y: clamp(current.y, RAG_DEV_PANEL_MARGIN, ragDevMaxY),
+        y: clamp(current.y, RAG_DEV_PANEL_TOP, ragDevMaxY),
       };
       return next.x === current.x && next.y === current.y ? current : next;
     });
@@ -553,6 +902,25 @@ export function NotesAiAssistantPanel() {
     };
   }, [closeRagReferenceMenu, ragMenuOpen]);
 
+  React.useEffect(() => {
+    if (Platform.OS !== 'web' || !modelMenuOpen) return undefined;
+    const handlePointerDown = (event: PointerEvent) => {
+      if (isWebModelMenuInteractiveTarget(event.target)) return;
+      closeModelMenu();
+    };
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      closeModelMenu({ focusComposer: true });
+    };
+    window.addEventListener('pointerdown', handlePointerDown);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('pointerdown', handlePointerDown);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [closeModelMenu, modelMenuOpen]);
+
   const handleRagDevPointerDown = React.useCallback((event: any) => {
     if (Platform.OS !== 'web') return;
     const native = event?.nativeEvent ?? event;
@@ -576,7 +944,7 @@ export function NotesAiAssistantPanel() {
       if (!drag) return;
       if (drag.pointerId !== null && event.pointerId !== drag.pointerId) return;
       const nextX = clamp(drag.startPanelX + event.clientX - drag.startClientX, RAG_DEV_PANEL_MARGIN, ragDevMaxX);
-      const nextY = clamp(drag.startPanelY + event.clientY - drag.startClientY, RAG_DEV_PANEL_MARGIN, ragDevMaxY);
+      const nextY = clamp(drag.startPanelY + event.clientY - drag.startClientY, RAG_DEV_PANEL_TOP, ragDevMaxY);
       setRagDevPosition({ x: nextX, y: nextY });
     };
     const handlePointerUp = (event: PointerEvent) => {
@@ -1067,6 +1435,7 @@ export function NotesAiAssistantPanel() {
     setHeaderMenuOpen(false);
     setMenuSessionId(null);
     closeRagReferenceMenu();
+    closeModelMenu();
   };
 
   const closeChatPanel = () => {
@@ -1309,8 +1678,8 @@ export function NotesAiAssistantPanel() {
           >
             <View style={workspace.styles.aiRagDevHeader} {...({ onPointerDown: handleRagDevPointerDown } as any)}>
               <View style={workspace.styles.aiRagDevTitleWrap}>
-                <Text style={workspace.styles.aiRagDevTitle}>RAG DevTools</Text>
-                <Text style={workspace.styles.aiRagDevSubtitle} numberOfLines={1}>Developer-only search, index, context, and status checks</Text>
+                <Text style={workspace.styles.aiRagDevTitle}>RAG 확인 도구</Text>
+                <Text style={workspace.styles.aiRagDevSubtitle} numberOfLines={1}>검색 결과, 페이지별 index, 처리 상태를 확인합니다.</Text>
               </View>
               <Pressable
                 style={workspace.styles.aiRagDevCloseButton}
@@ -1333,16 +1702,17 @@ export function NotesAiAssistantPanel() {
                   onPress={() => setRagDevTab(tab)}
                 >
                   <Text style={[workspace.styles.aiRagDevTabText, ragDevTab === tab && workspace.styles.aiRagDevTabTextActive]}>
-                    {tab[0].toUpperCase() + tab.slice(1)}
+                    {RAG_DEV_TAB_LABELS[tab]}
                   </Text>
                 </Pressable>
               ))}
             </View>
             <ScrollView style={workspace.styles.aiRagDevScroll} contentContainerStyle={workspace.styles.aiRagDevContent} showsVerticalScrollIndicator>
               {ragDebugError ? <Text style={workspace.styles.aiRagDevError}>{ragDebugError}</Text> : null}
+              {ragDebugNotice ? <Text style={workspace.styles.aiRagDevMeta}>{ragDebugNotice}</Text> : null}
               {ragDevTab === 'search' ? (
                 <View style={workspace.styles.aiRagDevSection}>
-                  <Text style={workspace.styles.aiRagDevLabel}>Test query</Text>
+                  <Text style={workspace.styles.aiRagDevLabel}>검색 테스트 질문</Text>
                   <TextInput
                     value={ragDebugQuery}
                     onChangeText={setRagDebugQuery}
@@ -1352,7 +1722,7 @@ export function NotesAiAssistantPanel() {
                   />
                   <View style={workspace.styles.aiRagDevActions}>
                     <Pressable style={workspace.styles.aiRagDevPrimaryButton} onPress={runRagDevEvaluate} disabled={ragDebugLoading !== null}>
-                      <Text style={workspace.styles.aiRagDevPrimaryButtonText}>{ragDebugLoading === 'evaluate' ? 'Evaluating' : 'Run Search'}</Text>
+                      <Text style={workspace.styles.aiRagDevPrimaryButtonText}>{ragDebugLoading === 'evaluate' ? '검색 중' : '검색 결과 확인'}</Text>
                     </Pressable>
                   </View>
                   {ragDebugEvaluation ? (
@@ -1360,12 +1730,23 @@ export function NotesAiAssistantPanel() {
                       <Text style={workspace.styles.aiRagDevMeta}>
                         mode {ragDebugEvaluation.mode} · scope {ragDebugEvaluation.debug?.scope_count ?? ragDebugEvaluation.ragScope?.sources.length ?? 0} · sources {ragDebugEvaluation.debug?.retrieved_source_count ?? 0} · chunks {ragDebugEvaluation.debug?.retrieved_chunk_count ?? 0}
                       </Text>
+                      <Text style={workspace.styles.aiRagDevMeta} numberOfLines={1}>
+                        context pages: {ragDebugEvaluation.debug?.context_page_count ?? 0}
+                        {ragDebugEvaluation.debug?.context_page_number ? ` · current p.${ragDebugEvaluation.debug.context_page_number}` : ''}
+                      </Text>
                       <Text style={workspace.styles.aiRagDevMeta} numberOfLines={2}>rewritten: {ragDebugEvaluation.rewritten_query}</Text>
                       <Text style={workspace.styles.aiRagDevMeta} numberOfLines={2}>reason: {ragDebugEvaluation.router_reason}</Text>
                       <Text style={workspace.styles.aiRagDevMeta} numberOfLines={2}>
                         scope: {(ragDebugEvaluation.ragScope?.sources ?? activeRagScopeSources).map((source) => `${source.type}:${source.title}`).join(', ') || '-'}
                       </Text>
-                      <Text style={workspace.styles.aiRagDevSectionTitle}>Top results</Text>
+                      {ragDebugEvaluation.debug?.image_recheck ? (
+                        <Text style={workspace.styles.aiRagDevMeta} numberOfLines={3}>
+                          image recheck: candidates {ragDebugEvaluation.debug.image_recheck.candidate_count ?? 0} · judge {ragDebugEvaluation.debug.image_recheck.judge_called ? 'yes' : 'no'} · needed {ragDebugEvaluation.debug.image_recheck.needed ? 'yes' : 'no'} · rechecked {ragDebugEvaluation.debug.image_recheck.rechecked_count ?? 0}
+                          {ragDebugEvaluation.debug.image_recheck.items?.length ? ` · ${ragDebugEvaluation.debug.image_recheck.items.map((item) => `p.${item.page_number ?? '-'} ${item.image_mode ?? '-'}`).join(', ')}` : ''}
+                          {ragDebugEvaluation.debug.image_recheck.judge?.reason ? ` · ${ragDebugEvaluation.debug.image_recheck.judge.reason}` : ''}
+                        </Text>
+                      ) : null}
+                      <Text style={workspace.styles.aiRagDevSectionTitle}>검색된 상위 자료</Text>
                       {ragDebugEvaluation.results.length ? ragDebugEvaluation.results.map((result, index) => {
                         const key = `result:${result.source_type}:${result.source_id}:${result.chunk_index ?? index}`;
                         return (
@@ -1378,7 +1759,7 @@ export function NotesAiAssistantPanel() {
                           </Pressable>
                         );
                       }) : (
-                        <Text style={workspace.styles.aiRagDevEmpty}>No search results.</Text>
+                        <Text style={workspace.styles.aiRagDevEmpty}>검색 결과가 없습니다.</Text>
                       )}
                     </View>
                   ) : null}
@@ -1387,108 +1768,351 @@ export function NotesAiAssistantPanel() {
               {ragDevTab === 'index' ? (
                 <View style={workspace.styles.aiRagDevSection}>
                   <View style={workspace.styles.aiRagDevActions}>
-                    <Pressable style={workspace.styles.aiRagDevPrimaryButton} onPress={runRagDevIndex} disabled={ragDebugLoading !== null}>
-                      <Text style={workspace.styles.aiRagDevPrimaryButtonText}>{ragDebugLoading === 'index' ? 'Loading' : 'Load Current Note Index'}</Text>
+                    <Pressable
+                      style={workspace.styles.aiRagDevPrimaryButton}
+                      onPress={runRagDevLoadIndex}
+                      disabled={ragDebugLoading !== null}
+                    >
+                      <Text style={workspace.styles.aiRagDevPrimaryButtonText}>
+                        {ragDebugLoading === 'index' ? '불러오는 중' : 'Docling 추출 불러오기'}
+                      </Text>
                     </Pressable>
-                    <Pressable style={workspace.styles.aiRagDevSecondaryButton} onPress={runRagDevReindex} disabled={ragDebugLoading !== null}>
-                      <Text style={workspace.styles.aiRagDevSecondaryButtonText}>{ragDebugLoading === 'reindex' ? 'Queued' : 'Reindex'}</Text>
-                    </Pressable>
-                    <Pressable style={workspace.styles.aiRagDevSecondaryButton} onPress={refreshRagDevScope} disabled={ragDebugLoading !== null}>
-                      <Text style={workspace.styles.aiRagDevSecondaryButtonText}>Refresh Scope</Text>
+                    <Pressable
+                      style={workspace.styles.aiRagDevSecondaryButton}
+                      onPress={runRagDevReindex}
+                      disabled={ragDebugLoading !== null}
+                    >
+                      <Text style={workspace.styles.aiRagDevSecondaryButtonText}>
+                        {ragDebugLoading === 'reindex' ? '다시 만드는 중' : '현재 노트 검색 자료 다시 만들기'}
+                      </Text>
                     </Pressable>
                   </View>
-                  {ragDebugIndex ? (
-                    <View style={workspace.styles.aiRagDevSection}>
-                      <Text style={workspace.styles.aiRagDevSectionTitle} numberOfLines={1}>{ragDebugIndex.note.title}</Text>
-                      <Text style={workspace.styles.aiRagDevMeta}>pages {ragDebugIndex.summary.page_count} · chunks {ragDebugIndex.summary.chunk_count} · shown {ragDebugIndex.summary.chunks_returned}</Text>
-                      <Text style={workspace.styles.aiRagDevMeta} numberOfLines={1}>model {ragDebugIndex.summary.embedding_model ?? '-'} · last indexed {ragDebugIndex.summary.last_indexed_at ?? '-'}</Text>
-                      <Text style={workspace.styles.aiRagDevSectionTitle}>Extracted page text</Text>
-                      {ragDebugIndex.pages.slice(0, 8).map((page) => {
-                        const key = `page:${page.id}`;
-                        return (
-                          <Pressable key={key} style={[workspace.styles.aiRagDevCard, ragDebugSelectedKey === key && workspace.styles.aiRagDevCardActive]} onPress={() => setRagDebugSelectedKey(key)}>
-                            <Text style={workspace.styles.aiRagDevCardTitle}>page {page.page_number} · {page.text_length} chars</Text>
-                            <Text style={workspace.styles.aiRagDevSnippet} numberOfLines={2}>{page.text_snippet || 'No extracted text.'}</Text>
-                          </Pressable>
-                        );
-                      })}
-                      <Text style={workspace.styles.aiRagDevSectionTitle}>Chunks</Text>
-                      {ragDebugIndex.chunks.map((chunk, index) => {
-                        const key = `chunk:${chunk.source_type}:${chunk.source_id}:${chunk.chunk_index ?? index}`;
-                        return (
-                          <Pressable key={key} style={[workspace.styles.aiRagDevCard, ragDebugSelectedKey === key && workspace.styles.aiRagDevCardActive]} onPress={() => setRagDebugSelectedKey(key)}>
-                            <Text style={workspace.styles.aiRagDevCardTitle} numberOfLines={1}>{chunk.title}</Text>
-                            <Text style={workspace.styles.aiRagDevMeta} numberOfLines={1}>{chunk.source_type} · p.{chunk.page_number ?? '-'} · chunk {chunk.chunk_index ?? '-'} · {chunk.content_length} chars</Text>
-                            <Text style={workspace.styles.aiRagDevSnippet} numberOfLines={2}>{chunk.content_snippet}</Text>
-                          </Pressable>
-                        );
-                      })}
-                    </View>
-                  ) : null}
+                  <View style={workspace.styles.aiRagDevActions}>
+                    {([
+                      ['pypdf_plain', 'pypdf 텍스트 추출'],
+                      ['pymupdf', 'PyMuPDF 추출'],
+                    ] as Array<[BackendRagDebugParserName, string]>).map(([parserName, label]) => {
+                      const active = ragDebugParserCompareName === parserName;
+                      const loading = ragDebugLoading === 'parserCompare' && active;
+                      return (
+                        <Pressable
+                          key={parserName}
+                          style={[
+                            workspace.styles.aiRagDevParserButton,
+                            active && workspace.styles.aiRagDevParserButtonActive,
+                          ]}
+                          onPress={() => runRagDevParserCompare(parserName)}
+                          disabled={ragDebugLoading !== null}
+                        >
+                          <Text
+                            style={[
+                              workspace.styles.aiRagDevParserButtonText,
+                              active && workspace.styles.aiRagDevParserButtonTextActive,
+                            ]}
+                          >
+                            {loading ? '추출 중' : label}
+                          </Text>
+                        </Pressable>
+                      );
+                    })}
+                  </View>
+                  <Text style={workspace.styles.aiRagDevMeta}>
+                    Docling 추출 불러오기는 이미 저장된 page text, text chunk, image summary chunk를 조회합니다. 다시 파싱하거나 embedding을 새로 만들지 않습니다.
+                  </Text>
+                  {ragDebugParserCompare ? (() => {
+                    const pages = [...ragDebugParserCompare.pages].sort((a, b) => Number(a.page_number) - Number(b.page_number));
+                    const parserLabel = ragDebugParserCompare.summary.parser === 'pypdf_plain'
+                      ? 'pypdf 텍스트 추출'
+                      : ragDebugParserCompare.summary.parser === 'pymupdf'
+                        ? 'PyMuPDF 추출'
+                        : ragDebugParserCompare.summary.parser;
+                    return (
+                      <View style={workspace.styles.aiRagDevSection}>
+                        <Text style={workspace.styles.aiRagDevSectionTitle}>{parserLabel} 비교 결과</Text>
+                        <Text style={workspace.styles.aiRagDevMeta}>
+                          pages {ragDebugParserCompare.summary.page_count} · chunks {ragDebugParserCompare.summary.chunk_count} · text {ragDebugParserCompare.summary.text_length} chars · {Math.round(ragDebugParserCompare.summary.elapsed_ms)}ms
+                        </Text>
+                        {pages.length ? pages.map((page) => {
+                          const pageParser = page.parser ?? ragDebugParserCompare.summary.parser;
+                          const pageKey = getRagDebugParserPageKey(pageParser, page.page_number);
+                          const pageChunks = ragDebugParserCompare.chunks.filter((chunk) => Number(chunk.page_number) === Number(page.page_number));
+                          return (
+                            <View key={pageKey} style={workspace.styles.aiRagDevCard}>
+                              <Pressable
+                                style={[workspace.styles.aiRagDevCard, ragDebugSelectedKey === pageKey && workspace.styles.aiRagDevCardActive]}
+                                onPress={() => setRagDebugSelectedKey(pageKey)}
+                              >
+                                <Text style={workspace.styles.aiRagDevCardTitle}>Page {page.page_number} · {page.text_length} chars</Text>
+                                <Text style={workspace.styles.aiRagDevSnippet} numberOfLines={3}>{page.text_snippet || page.text || '추출된 텍스트 없음'}</Text>
+                              </Pressable>
+                              {pageChunks.length ? pageChunks.map((chunk, index) => {
+                                const chunkKey = getRagDebugParserChunkKey(chunk, index);
+                                return (
+                                  <Pressable
+                                    key={chunkKey}
+                                    style={[workspace.styles.aiRagDevCard, ragDebugSelectedKey === chunkKey && workspace.styles.aiRagDevCardActive]}
+                                    onPress={() => setRagDebugSelectedKey(chunkKey)}
+                                  >
+                                    <Text style={workspace.styles.aiRagDevCardTitle}>chunk {chunk.chunk_index ?? index} · {chunk.content_length} chars</Text>
+                                    <Text style={workspace.styles.aiRagDevSnippet} numberOfLines={2}>{chunk.content_snippet || chunk.content || 'chunk 없음'}</Text>
+                                  </Pressable>
+                                );
+                              }) : (
+                                <Text style={workspace.styles.aiRagDevEmpty}>이 페이지에는 비교용 chunk가 없습니다.</Text>
+                              )}
+                            </View>
+                          );
+                        }) : (
+                          <Text style={workspace.styles.aiRagDevEmpty}>비교 추출 결과가 없습니다.</Text>
+                        )}
+                      </View>
+                    );
+                  })() : null}
+                  {ragDebugIndex ? (() => {
+                    const pages = [...ragDebugIndex.pages].sort((a, b) => Number(a.page_number) - Number(b.page_number));
+                    const sourceCounts = Object.entries(ragDebugIndex.summary.source_counts ?? {})
+                      .map(([sourceType, count]) => `${sourceType} ${count}`)
+                      .join(' · ');
+                    return (
+                      <View style={workspace.styles.aiRagDevSection}>
+                        <Text style={workspace.styles.aiRagDevSectionTitle} numberOfLines={1}>{ragDebugIndex.note.title}</Text>
+                        <Text style={workspace.styles.aiRagDevMeta}>
+                          pages {ragDebugIndex.summary.page_count} · chunks {ragDebugIndex.summary.chunk_count} · returned {ragDebugIndex.summary.chunks_returned}/{ragDebugIndex.summary.chunk_limit}
+                        </Text>
+                        <Text style={workspace.styles.aiRagDevMeta} numberOfLines={2}>
+                          status {ragDebugIndex.summary.index_status} · parser {ragDebugIndex.summary.parser ?? '-'} · model {(ragDebugIndex.summary.embedding_models ?? []).join(', ') || ragDebugIndex.summary.embedding_model || '-'}
+                        </Text>
+                        {sourceCounts ? <Text style={workspace.styles.aiRagDevMeta} numberOfLines={2}>source: {sourceCounts}</Text> : null}
+                        {ragDebugIndex.summary.last_error ? <Text style={workspace.styles.aiRagDevError}>index error: {ragDebugIndex.summary.last_error}</Text> : null}
+                        {ragDebugIndex.summary.image_summary_error ? <Text style={workspace.styles.aiRagDevError}>image summary error: {ragDebugIndex.summary.image_summary_error}</Text> : null}
+                        {pages.length ? pages.map((page) => {
+                          const pageNumber = Number(page.page_number);
+                          const textChunks = ragDebugIndex.chunks.filter((chunk) => chunk.source_type === 'pdf_page' && Number(chunk.page_number) === pageNumber);
+                          const imageChunks = ragDebugIndex.chunks.filter((chunk) => chunk.source_type === 'image_ai_summary' && Number(chunk.page_number) === pageNumber);
+                          const imageSummaries = ragDebugIndex.image_ai_summaries.filter((summary) => (
+                            Number(summary.page_number) === pageNumber
+                            && summary.skipped_reason !== 'stale_candidate'
+                          ));
+                          return (
+                            <View key={`index:page:${pageNumber}`} style={workspace.styles.aiRagDevCard}>
+                              <Text style={workspace.styles.aiRagDevCardTitle}>Page {pageNumber}</Text>
+                              <Text style={workspace.styles.aiRagDevMeta} numberOfLines={2}>
+                                text chunks {textChunks.length} · image summaries {imageSummaries.length} · indexed image chunks {imageChunks.length} · page text {page.text_length} chars
+                              </Text>
+                              <Text style={workspace.styles.aiRagDevMeta} numberOfLines={1}>
+                                parser {page.parser ?? '-'} · text blocks {page.text_block_count} · image blocks {page.image_block_count} · visual blocks {page.visual_block_count}
+                              </Text>
+                              <Text style={workspace.styles.aiRagDevSectionTitle}>텍스트 embedding 입력</Text>
+                              {textChunks.length ? textChunks.map((chunk, index) => {
+                                const chunkIndex = ragDebugIndex.chunks.indexOf(chunk);
+                                const key = getRagDebugIndexChunkKey(chunk, chunkIndex >= 0 ? chunkIndex : index);
+                                return (
+                                  <Pressable key={key} style={[workspace.styles.aiRagDevCard, ragDebugSelectedKey === key && workspace.styles.aiRagDevCardActive]} onPress={() => setRagDebugSelectedKey(key)}>
+                                    <Text style={workspace.styles.aiRagDevCardTitle}>chunk {chunk.chunk_index ?? index} · {chunk.content_length ?? chunk.content.length} chars</Text>
+                                    <Text style={workspace.styles.aiRagDevSnippet} numberOfLines={3}>{chunk.content_snippet || chunk.content || '내용 없음'}</Text>
+                                  </Pressable>
+                                );
+                              }) : (
+                                <Text style={workspace.styles.aiRagDevEmpty}>이 페이지에는 text embedding 입력이 없습니다.</Text>
+                              )}
+                              <Text style={workspace.styles.aiRagDevSectionTitle}>이미지 summary embedding 입력</Text>
+                              {imageChunks.length ? imageChunks.map((chunk, index) => {
+                                const chunkIndex = ragDebugIndex.chunks.indexOf(chunk);
+                                const key = getRagDebugIndexChunkKey(chunk, chunkIndex >= 0 ? chunkIndex : index);
+                                const confidence = typeof chunk.metadata?.confidence === 'string' ? chunk.metadata.confidence : '-';
+                                const importance = typeof chunk.metadata?.importance === 'string' ? chunk.metadata.importance : '-';
+                                return (
+                                  <Pressable key={key} style={[workspace.styles.aiRagDevCard, ragDebugSelectedKey === key && workspace.styles.aiRagDevCardActive]} onPress={() => setRagDebugSelectedKey(key)}>
+                                    <Text style={workspace.styles.aiRagDevCardTitle}>{getRagDebugImageChunkLabel(chunk, index)} · {chunk.content_length ?? chunk.content.length} chars</Text>
+                                    <Text style={workspace.styles.aiRagDevMeta} numberOfLines={1}>confidence {confidence} · importance {importance}</Text>
+                                    <Text style={workspace.styles.aiRagDevSnippet} numberOfLines={3}>{chunk.content_snippet || chunk.content || '내용 없음'}</Text>
+                                  </Pressable>
+                                );
+                              }) : imageSummaries.length ? (
+                                <View style={workspace.styles.aiRagDevSection}>
+                                  <Text style={workspace.styles.aiRagDevEmpty}>저장된 이미지 요약은 있지만 아직 embedding 대상 chunk는 없습니다.</Text>
+                                  {imageSummaries.map((summary) => {
+                                    const key = `index:image-summary:${summary.id}`;
+                                    return (
+                                      <Pressable key={key} style={[workspace.styles.aiRagDevCard, ragDebugSelectedKey === key && workspace.styles.aiRagDevCardActive]} onPress={() => setRagDebugSelectedKey(key)}>
+                                        <Text style={workspace.styles.aiRagDevCardTitle}>summary {summary.id} · {summary.status ?? '-'} · importance {summary.importance ?? '-'}</Text>
+                                        <Text style={workspace.styles.aiRagDevMeta} numberOfLines={1}>indexed {summary.indexed ? 'yes' : 'no'} · confidence {summary.confidence ?? '-'}</Text>
+                                        <Text style={workspace.styles.aiRagDevSnippet} numberOfLines={3}>{summary.summary_snippet || summary.summary || summary.skipped_reason || '요약 내용 없음'}</Text>
+                                      </Pressable>
+                                    );
+                                  })}
+                                </View>
+                              ) : (
+                                <Text style={workspace.styles.aiRagDevEmpty}>이 페이지에는 이미지 요약 자료가 없습니다.</Text>
+                              )}
+                            </View>
+                          );
+                        }) : (
+                          <Text style={workspace.styles.aiRagDevEmpty}>저장된 페이지가 없습니다.</Text>
+                        )}
+                      </View>
+                    );
+                  })() : (
+                    <Text style={workspace.styles.aiRagDevEmpty}>Docling 추출 불러오기를 누르면 저장된 페이지별 검색 자료가 표시됩니다.</Text>
+                  )}
                 </View>
               ) : null}
               {ragDevTab === 'context' ? (
                 <View style={workspace.styles.aiRagDevSection}>
-                  <View style={workspace.styles.aiRagDevActions}>
-                    <Pressable style={workspace.styles.aiRagDevPrimaryButton} onPress={runRagDevEvaluate} disabled={ragDebugLoading !== null}>
-                      <Text style={workspace.styles.aiRagDevPrimaryButtonText}>{ragDebugLoading === 'evaluate' ? 'Building' : 'Build Context Preview'}</Text>
-                    </Pressable>
-                  </View>
                   {ragDebugEvaluation?.context ? (
-                    <View style={workspace.styles.aiRagDevSection}>
-                      <Text style={workspace.styles.aiRagDevMeta}>mode {ragDebugEvaluation.context.mode} · scope {ragDebugEvaluation.context.scope_count} · sources {ragDebugEvaluation.context.source_count} · chunks {ragDebugEvaluation.context.retrieved_chunk_count}</Text>
-                      <Text style={workspace.styles.aiRagDevMeta}>current page {ragDebugEvaluation.context.current_page_included ? 'yes' : 'no'} · nearby {ragDebugEvaluation.context.nearby_pages_included ? 'yes' : 'no'} · canvas {ragDebugEvaluation.context.canvas_context_included ? 'yes' : 'no'} · vision {ragDebugEvaluation.context.vision_image_attached ? 'yes' : 'no'}</Text>
-                      {ragDebugEvaluation.context.fallback ? <Text style={workspace.styles.aiRagDevError}>fallback: {ragDebugEvaluation.context.fallback_reason ?? 'unknown'}</Text> : null}
+                    <>
+                      <Text style={workspace.styles.aiRagDevSectionTitle}>최근 검색 테스트 Context</Text>
+                      <Text style={workspace.styles.aiRagDevMeta}>
+                        mode {ragDebugEvaluation.context.mode} · scope {ragDebugEvaluation.context.scope_count} · sources {ragDebugEvaluation.context.source_count} · chunks {ragDebugEvaluation.context.retrieved_chunk_count}
+                      </Text>
+                      <Text style={workspace.styles.aiRagDevMeta}>
+                        current page {ragDebugEvaluation.context.current_page_included ? 'yes' : 'no'} · nearby {ragDebugEvaluation.context.nearby_pages_included ? 'yes' : 'no'} · canvas {ragDebugEvaluation.context.canvas_context_included ? 'yes' : 'no'} · vision {ragDebugEvaluation.context.vision_image_attached ? 'yes' : 'no'}
+                      </Text>
+                      {ragDebugEvaluation.context.fallback ? (
+                        <Text style={workspace.styles.aiRagDevError}>fallback: {ragDebugEvaluation.context.fallback_reason ?? '-'}</Text>
+                      ) : null}
+                      {ragDebugEvaluation.context.context_preview ? (
+                        <View style={workspace.styles.aiRagDevCard}>
+                          <Text style={workspace.styles.aiRagDevCardTitle}>최종 context preview</Text>
+                          <Text style={workspace.styles.aiRagDevSnippet} numberOfLines={6}>{ragDebugEvaluation.context.context_preview}</Text>
+                        </View>
+                      ) : null}
                       {ragDebugEvaluation.context.sections.map((section) => (
-                        <View key={section.title} style={workspace.styles.aiRagDevSection}>
-                          <Text style={workspace.styles.aiRagDevSectionTitle}>{section.title} ({section.count})</Text>
+                        <View key={`context-section:${section.title}`} style={workspace.styles.aiRagDevSection}>
+                          <Text style={workspace.styles.aiRagDevSectionTitle}>{section.title} · {section.count}</Text>
                           {section.items.length ? section.items.map((item, index) => {
                             const key = `context:${section.title}:${item.source_type}:${item.source_id ?? 'none'}:${item.chunk_index ?? index}`;
                             return (
-                              <Pressable key={key} style={[workspace.styles.aiRagDevCard, ragDebugSelectedKey === key && workspace.styles.aiRagDevCardActive]} onPress={() => setRagDebugSelectedKey(key)}>
+                              <Pressable
+                                key={key}
+                                style={[workspace.styles.aiRagDevCard, ragDebugSelectedKey === key && workspace.styles.aiRagDevCardActive]}
+                                onPress={() => setRagDebugSelectedKey(key)}
+                              >
                                 <Text style={workspace.styles.aiRagDevCardTitle} numberOfLines={1}>{item.title}</Text>
-                                <Text style={workspace.styles.aiRagDevSnippet} numberOfLines={2}>{item.content_snippet}</Text>
+                                <Text style={workspace.styles.aiRagDevMeta} numberOfLines={1}>
+                                  {item.source_type} · p.{item.page_number ?? '-'} · chunk {item.chunk_index ?? '-'} · {item.content_length} chars
+                                </Text>
+                                <Text style={workspace.styles.aiRagDevSnippet} numberOfLines={3}>{item.content_snippet || item.content || '내용 없음'}</Text>
                               </Pressable>
                             );
-                          }) : <Text style={workspace.styles.aiRagDevEmpty}>No context in this section.</Text>}
+                          }) : (
+                            <Text style={workspace.styles.aiRagDevEmpty}>이 섹션에는 context가 없습니다.</Text>
+                          )}
                         </View>
                       ))}
-                      <Text style={workspace.styles.aiRagDevSectionTitle}>Final context preview</Text>
-                      <Text style={workspace.styles.aiRagDevDetailText}>{ragDebugEvaluation.context.context_preview || 'No context preview.'}</Text>
-                    </View>
-                  ) : <Text style={workspace.styles.aiRagDevEmpty}>Run context preview first.</Text>}
+                    </>
+                  ) : (
+                    <Text style={workspace.styles.aiRagDevEmpty}>검색 테스트를 먼저 실행하면 실제 요청 context가 여기에 표시됩니다.</Text>
+                  )}
                 </View>
               ) : null}
               {ragDevTab === 'status' ? (
                 <View style={workspace.styles.aiRagDevSection}>
                   <View style={workspace.styles.aiRagDevActions}>
                     <Pressable style={workspace.styles.aiRagDevPrimaryButton} onPress={runRagDevStatus} disabled={ragDebugLoading !== null}>
-                      <Text style={workspace.styles.aiRagDevPrimaryButtonText}>{ragDebugLoading === 'status' ? 'Checking' : 'Refresh Status'}</Text>
+                      <Text style={workspace.styles.aiRagDevPrimaryButtonText}>{ragDebugLoading === 'status' ? '확인 중' : '처리 상태 새로고침'}</Text>
                     </Pressable>
                   </View>
                   {ragDebugStatus ? (
+                    (() => {
+                      const doclingBatches = Array.isArray(ragDebugStatus.docling_batches) ? ragDebugStatus.docling_batches : [];
+                      const embeddingModels = Array.isArray(ragDebugStatus.embedding_models) ? ragDebugStatus.embedding_models : [];
+                      const recentIndexStatus = Array.isArray(ragDebugStatus.recent_index_status) ? ragDebugStatus.recent_index_status : [];
+                      const imageSummaryStatus = Array.isArray(ragDebugStatus.image_summary_status) ? ragDebugStatus.image_summary_status : [];
+                      const recentImageSummaries = Array.isArray(ragDebugStatus.recent_image_summaries) ? ragDebugStatus.recent_image_summaries : [];
+                      return (
                     <View style={workspace.styles.aiRagDevSection}>
                       <Text style={workspace.styles.aiRagDevMeta}>pgvector {ragDebugStatus.pgvector_available ? 'available' : 'not available'}</Text>
+                      <Text style={workspace.styles.aiRagDevSectionTitle}>현재 노트 처리 작업</Text>
+                      {ragDebugStatus.rag_job ? (
+                        <>
+                          <Text style={workspace.styles.aiRagDevMeta}>
+                            text {ragDebugStatus.rag_job.text_status ?? '-'} · image {ragDebugStatus.rag_job.image_status ?? '-'} · overall {ragDebugStatus.rag_job.overall_status ?? '-'}
+                          </Text>
+                          <Text style={workspace.styles.aiRagDevMeta}>
+                            pages {ragDebugStatus.rag_job.processed_page_count}/{ragDebugStatus.rag_job.page_count} · batches {ragDebugStatus.rag_job.completed_batches}/{ragDebugStatus.rag_job.total_batches}
+                          </Text>
+                          <Text style={workspace.styles.aiRagDevMeta}>
+                            text chunks {ragDebugStatus.rag_job.text_chunk_count} · image candidates {ragDebugStatus.rag_job.image_candidate_count} · image indexed {ragDebugStatus.rag_job.image_indexed_count}
+                          </Text>
+                          {ragDebugStatus.rag_job.last_error ? <Text style={workspace.styles.aiRagDevError}>job error: {ragDebugStatus.rag_job.last_error}</Text> : null}
+                        </>
+                      ) : <Text style={workspace.styles.aiRagDevEmpty}>아직 처리 작업 기록이 없습니다.</Text>}
+                      <Text style={workspace.styles.aiRagDevSectionTitle}>Docling 페이지 묶음 처리</Text>
+                      {doclingBatches.length ? doclingBatches.map((item, index) => (
+                        <Text key={`${item.status}:${index}`} style={workspace.styles.aiRagDevMeta}>
+                          {item.status ?? '-'} · {item.count} batches · pages {item.page_start ?? '-'}-{item.page_end ?? '-'}
+                        </Text>
+                      )) : <Text style={workspace.styles.aiRagDevEmpty}>아직 Docling 처리 기록이 없습니다.</Text>}
                       <Text style={workspace.styles.aiRagDevMeta}>total chunks {ragDebugStatus.document_chunks_total_count} · current note {ragDebugStatus.current_note_chunk_count} · current scope {ragDebugStatus.current_scope_chunk_count}</Text>
-                      <Text style={workspace.styles.aiRagDevSectionTitle}>Embedding models</Text>
-                      {ragDebugStatus.embedding_models.length ? ragDebugStatus.embedding_models.map((item) => <Text key={item.model} style={workspace.styles.aiRagDevMeta}>{item.model} · {item.count}</Text>) : <Text style={workspace.styles.aiRagDevEmpty}>No embedding model rows.</Text>}
-                      <Text style={workspace.styles.aiRagDevSectionTitle}>Recent index status</Text>
-                      {ragDebugStatus.recent_index_status.length ? ragDebugStatus.recent_index_status.map((item, index) => (
+                      <Text style={workspace.styles.aiRagDevSectionTitle}>Embedding 모델</Text>
+                      {embeddingModels.length ? embeddingModels.map((item) => <Text key={item.model} style={workspace.styles.aiRagDevMeta}>{item.model} · {item.count}</Text>) : <Text style={workspace.styles.aiRagDevEmpty}>저장된 embedding 모델 정보가 없습니다.</Text>}
+                      <Text style={workspace.styles.aiRagDevSectionTitle}>최근 index 상태</Text>
+                      {recentIndexStatus.length ? recentIndexStatus.map((item, index) => (
                         <Text key={`${item.note_id}:${item.source_type}:${index}`} style={workspace.styles.aiRagDevMeta}>note {item.note_id ?? '-'} · {item.source_type ?? '-'} · chunks {item.chunk_count} · {item.last_indexed_at ?? '-'}</Text>
-                      )) : <Text style={workspace.styles.aiRagDevEmpty}>No recent index rows.</Text>}
+                      )) : <Text style={workspace.styles.aiRagDevEmpty}>최근 index 기록이 없습니다.</Text>}
+                      <Text style={workspace.styles.aiRagDevSectionTitle}>이미지 AI 요약</Text>
+                      {imageSummaryStatus.length ? imageSummaryStatus.map((item, index) => (
+                        <Text key={`${item.status}:${item.importance}:${item.indexed}:${index}`} style={workspace.styles.aiRagDevMeta}>
+                          {item.status ?? '-'} · importance {item.importance ?? '-'} · indexed {item.indexed ? 'yes' : 'no'} · {item.count}
+                        </Text>
+                      )) : <Text style={workspace.styles.aiRagDevEmpty}>이미지 AI 요약 기록이 없습니다.</Text>}
+                      {recentImageSummaries.length ? recentImageSummaries.map((item) => (
+                        <Text key={`image-summary:${item.id}`} style={workspace.styles.aiRagDevMeta} numberOfLines={2}>
+                          p.{item.page_number ?? '-'} · {item.candidate_type ?? '-'} · {item.status ?? '-'} · conf {item.confidence ?? '-'} · imp {item.importance ?? '-'} · indexed {item.indexed ? 'yes' : 'no'} · {item.summary_snippet || item.skipped_reason || '-'}
+                        </Text>
+                      )) : null}
                       {ragDebugStatus.last_error ? <Text style={workspace.styles.aiRagDevError}>last error: {ragDebugStatus.last_error}</Text> : null}
+                      {ragDebugStatus.image_summary_error ? <Text style={workspace.styles.aiRagDevError}>image summary error: {ragDebugStatus.image_summary_error}</Text> : null}
                     </View>
+                      );
+                    })()
                   ) : null}
                 </View>
               ) : null}
+            </ScrollView>
+            <View style={workspace.styles.aiRagDevDetail}>
               {ragDebugDetail ? (
-                <View style={workspace.styles.aiRagDevDetail}>
+                <>
                   <Text style={workspace.styles.aiRagDevDetailTitle} numberOfLines={2}>{ragDebugDetail.title}</Text>
                   <Text style={workspace.styles.aiRagDevMeta} numberOfLines={2}>{ragDebugDetail.meta}</Text>
-                  <Text style={workspace.styles.aiRagDevDetailText}>{ragDebugDetail.text || 'No full text.'}</Text>
-                </View>
-              ) : null}
-            </ScrollView>
+                  <ScrollView style={workspace.styles.aiRagDevDetailScroll} contentContainerStyle={workspace.styles.aiRagDevDetailScrollContent} showsVerticalScrollIndicator>
+                    {ragDebugImagePreviewLoading ? (
+                      <Text style={workspace.styles.aiRagDevMeta}>이미지 미리보기를 불러오는 중입니다.</Text>
+                    ) : null}
+                    {ragDebugImagePreviewError ? (
+                      <Text style={workspace.styles.aiRagDevError}>{ragDebugImagePreviewError}</Text>
+                    ) : null}
+                    {ragDebugImagePreview ? (
+                      <>
+                        <Text style={workspace.styles.aiRagDevMeta}>
+                          confidence {ragDebugImagePreview.confidence ?? '-'} · importance {ragDebugImagePreview.importance ?? '-'} · indexed {ragDebugImagePreview.indexed ? 'yes' : 'no'}
+                        </Text>
+                        {ragDebugImagePreview.confidence_reason || ragDebugImagePreview.importance_reason ? (
+                          <Text style={workspace.styles.aiRagDevMeta}>
+                            confidence 이유: {ragDebugImagePreview.confidence_reason || '-'}{'\n'}
+                            importance 이유: {ragDebugImagePreview.importance_reason || '-'}
+                          </Text>
+                        ) : null}
+                        <View style={workspace.styles.aiRagDevCropDetailGrid}>
+                          <View style={workspace.styles.aiRagDevCropDetailItem}>
+                            <Text style={workspace.styles.aiRagDevMeta}>요약에 사용한 주변 포함 이미지</Text>
+                            <Image source={{ uri: ragDebugImagePreview.context_crop_data_uri }} style={workspace.styles.aiRagDevCropDetailImage} resizeMode="contain" />
+                          </View>
+                          <View style={workspace.styles.aiRagDevCropDetailItem}>
+                            <Text style={workspace.styles.aiRagDevMeta}>Docling이 잡은 원본 이미지 영역</Text>
+                            <Image source={{ uri: ragDebugImagePreview.image_crop_data_uri }} style={workspace.styles.aiRagDevCropDetailImage} resizeMode="contain" />
+                          </View>
+                        </View>
+                      </>
+                    ) : null}
+                    <Text style={workspace.styles.aiRagDevDetailText}>{ragDebugDetail.text || '상세 내용이 없습니다.'}</Text>
+                  </ScrollView>
+                </>
+              ) : (
+                <Text style={workspace.styles.aiRagDevEmpty}>위 목록에서 page나 chunk를 선택하면 상세 내용이 여기에 표시됩니다.</Text>
+              )}
+            </View>
           </View>
         ) : null}
 
@@ -1576,6 +2200,14 @@ export function NotesAiAssistantPanel() {
         <View style={workspace.styles.aiComposer}>
           {Platform.OS === 'web' ? (
             <View style={workspace.styles.aiRagScopePanel}>
+              {noteRagStatusDisplay?.progressLabel ? (
+                <View style={workspace.styles.aiRagProgressHint}>
+                  <ActivityIndicator size="small" color="#7A8394" />
+                  <Text style={workspace.styles.aiRagProgressHintText} numberOfLines={1}>
+                    {noteRagStatusDisplay.progressLabel}
+                  </Text>
+                </View>
+              ) : null}
               <Pressable
                 style={workspace.styles.aiRagScopeHeader}
                 onPress={() => workspace.onToggleAiRagScopeCollapsed?.()}
@@ -1600,13 +2232,6 @@ export function NotesAiAssistantPanel() {
                       </View>
                     );
                   })}
-                  <Pressable
-                    style={workspace.styles.aiRagScopeReset}
-                    onPress={() => workspace.onResetAiRagScope?.()}
-                    disabled={workspace.aiChatReadOnly || workspace.aiLoading}
-                  >
-                    <Text style={workspace.styles.aiRagScopeResetText}>현재 노트로 초기화</Text>
-                  </Pressable>
                 </View>
               ) : null}
             </View>
@@ -1679,6 +2304,32 @@ export function NotesAiAssistantPanel() {
                 )}
               </View>
             ) : null}
+            {modelMenuOpen ? (
+              <View style={workspace.styles.aiModelMenu} {...webModelMenuInteractiveProps}>
+                {AI_CHAT_MODEL_OPTIONS.map((model) => {
+                  const selected = model.id === selectedAiModelId;
+                  return (
+                    <Pressable
+                      key={model.id}
+                      style={[workspace.styles.aiModelMenuItem, selected && workspace.styles.aiModelMenuItemActive]}
+                      onPress={() => {
+                        setSelectedAiModelId(model.id);
+                        closeModelMenu();
+                      }}
+                      disabled={workspace.aiChatReadOnly || workspace.aiLoading}
+                    >
+                      <MaterialCommunityIcons name={model.icon as any} size={16} color={model.iconColor} />
+                      <Text style={workspace.styles.aiModelMenuItemText} numberOfLines={1}>{model.label}</Text>
+                      {selected ? (
+                        <MaterialCommunityIcons name="check" size={16} color="#303744" />
+                      ) : (
+                        <View style={workspace.styles.aiModelMenuCheckPlaceholder} />
+                      )}
+                    </Pressable>
+                  );
+                })}
+              </View>
+            ) : null}
             <TextInput
               ref={aiQuestionInputRef}
               value={workspace.aiQuestion}
@@ -1711,6 +2362,7 @@ export function NotesAiAssistantPanel() {
                       closeRagReferenceMenu({ focusComposer: true });
                       return;
                     }
+                    closeModelMenu();
                     setRagMenuOpen(true);
                     setRagMenuQuery('');
                   }}
@@ -1721,10 +2373,18 @@ export function NotesAiAssistantPanel() {
               ) : null}
               <View style={workspace.styles.aiComposerActionSpacer} />
               <Pressable
-                style={workspace.styles.aiComposerModeButton}
+                style={[
+                  workspace.styles.aiComposerModeButton,
+                  modelMenuOpen && workspace.styles.aiComposerModeButtonActive,
+                ]}
+                onPress={() => {
+                  closeRagReferenceMenu();
+                  setModelMenuOpen((open) => !open);
+                }}
                 disabled={workspace.aiChatReadOnly || workspace.aiLoading}
+                {...webModelMenuInteractiveProps}
               >
-                <Text style={workspace.styles.aiComposerModeText}>GPT-5.5</Text>
+                <Text style={workspace.styles.aiComposerModeText}>{selectedAiModel.label}</Text>
                 <MaterialCommunityIcons name="chevron-down" size={15} color="#5B6472" />
               </Pressable>
               <View style={workspace.styles.aiTooltipAnchor}>

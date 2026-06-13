@@ -1,5 +1,7 @@
 import json
+import tempfile
 import unittest
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -20,14 +22,22 @@ from backend.app.routes.chats import normalize_rag_scope, rag_scope_search_targe
 from backend.app.schemas.chats import RagScope, RagScopeSource
 from backend.app.services.ai_context_builder import build_ai_context, format_answer_sources, select_rag_context_pages
 from backend.app.services.ai_context_router import AiContextRoute, route_ai_context
+from backend.app.services.docling_crop_debug import _should_use_full_page_context
+from backend.app.services.pdf_image_recheck import _image_recheck_candidates, _selected_recheck_contexts, _server_image_mode
+from backend.app.services.pdf_image_recheck import maybe_recheck_pdf_images_for_chat
 from backend.app.services.document_chunk_index import (
     collect_canvas_index_sources,
     collect_note_index_sources,
     content_hash,
+    delete_note_page_chunks,
+    reindex_note_chunks_from_pages_background,
     replace_canvas_chunks,
+    replace_image_summary_chunks,
     replace_note_page_chunks,
+    replace_note_pages_chunks,
     replace_note_chunks,
     retrieve_chunk_contexts,
+    sync_note_rag_metadata,
 )
 from backend.app.services.rag_chunker import IndexSource, build_text_chunks, split_text_into_chunks
 from backend.app.services.prompts.ai_canvas import AI_CANVAS_EDIT_INSTRUCTIONS
@@ -48,14 +58,58 @@ from backend.app.services.openai_service import (
     generate_chat_session_summary,
 )
 from backend.app.services.rag_service import (
+    _merge_ranked_contexts,
     _parse_quiz_questions,
     load_canvas_documents,
     load_note_documents,
+    merge_retrieved_contexts,
     retrieve_rag_contexts_with_debug,
+    update_rag_debug_for_contexts,
 )
+from backend.app.services.openai_service import build_response_input, judge_pdf_image_recheck
 
 
 class RAGRetrieverTest(unittest.TestCase):
+    def test_full_page_context_ignores_tiny_far_apart_visual_candidate(self):
+        page = SimpleNamespace(
+            page_width=960.0,
+            page_height=540.0,
+            visual_candidates=[
+                SimpleNamespace(bbox=(853.7681, 487.252, 954.5335, 523.1219)),
+                SimpleNamespace(bbox=(282.7802, 82.7839, 670.6622, 211.073)),
+            ],
+        )
+
+        self.assertFalse(_should_use_full_page_context(page))
+
+    def test_full_page_context_uses_multiple_significant_visual_candidates(self):
+        page = SimpleNamespace(
+            page_width=1000.0,
+            page_height=1000.0,
+            visual_candidates=[
+                SimpleNamespace(bbox=(10.0, 10.0, 210.0, 210.0)),
+                SimpleNamespace(bbox=(240.0, 10.0, 440.0, 210.0)),
+                SimpleNamespace(bbox=(470.0, 10.0, 670.0, 210.0)),
+            ],
+        )
+
+        self.assertFalse(_should_use_full_page_context(page))
+
+        page.visual_candidates.append(SimpleNamespace(bbox=(700.0, 10.0, 900.0, 210.0)))
+
+        self.assertTrue(_should_use_full_page_context(page))
+
+    def test_full_page_context_uses_one_large_visual_candidate(self):
+        page = SimpleNamespace(
+            page_width=1000.0,
+            page_height=1000.0,
+            visual_candidates=[
+                SimpleNamespace(bbox=(50.0, 50.0, 750.0, 750.0)),
+            ],
+        )
+
+        self.assertTrue(_should_use_full_page_context(page))
+
     def test_router_uses_rules_before_llm(self):
         general = route_ai_context(question="스택이 뭐야?", model="test-model")
         current_page = route_ai_context(question="이 페이지 설명해줘", model="test-model", current_page_number=3)
@@ -100,6 +154,376 @@ class RAGRetrieverTest(unittest.TestCase):
 
         self.assertEqual([page["page_number"] for page in selected], [3, 2, 4])
 
+    def test_image_recheck_candidates_exclude_low_importance_summaries(self):
+        contexts = [
+            RetrievedContext(
+                source_type="image_ai_summary",
+                source_id="10",
+                title="low image",
+                content="low value image",
+                metadata={"importance": "low"},
+            ),
+            RetrievedContext(
+                source_type="image_ai_summary",
+                source_id="11",
+                title="medium image",
+                content="useful image",
+                metadata={"importance": "medium"},
+            ),
+            RetrievedContext(source_type="pdf_page", source_id="1", title="page", content="text"),
+        ]
+
+        candidates = _image_recheck_candidates(contexts, top_k=3)
+
+        self.assertEqual([candidate.source_id for candidate in candidates], ["11"])
+
+    def test_image_recheck_candidates_require_persisted_image_summary_id(self):
+        contexts = [
+            RetrievedContext(
+                source_type="image_ai_summary",
+                source_id="10:image-a:summary",
+                title="annotation image",
+                content="old annotation summary",
+                metadata={"importance": "high"},
+            ),
+            RetrievedContext(
+                source_type="image_ai_summary",
+                source_id="chunk-derived-id",
+                title="persisted image",
+                content="stored image summary",
+                metadata={"importance": "high", "image_ai_summary_id": 88},
+            ),
+        ]
+
+        candidates = _image_recheck_candidates(contexts, top_k=3)
+
+        self.assertEqual([candidate.title for candidate in candidates], ["persisted image"])
+
+    def test_image_recheck_candidates_apply_min_score_and_prioritize_current_page(self):
+        contexts = [
+            RetrievedContext(
+                source_type="image_ai_summary",
+                source_id="10",
+                title="other page high score",
+                content="other page",
+                score=0.95,
+                page_number=8,
+                metadata={"importance": "high"},
+            ),
+            RetrievedContext(
+                source_type="image_ai_summary",
+                source_id="11",
+                title="current page strong enough",
+                content="current page",
+                score=0.70,
+                page_number=3,
+                metadata={"importance": "high"},
+            ),
+            RetrievedContext(
+                source_type="image_ai_summary",
+                source_id="12",
+                title="current page too weak",
+                content="weak current page",
+                score=0.40,
+                page_number=3,
+                metadata={"importance": "high"},
+            ),
+        ]
+
+        candidates = _image_recheck_candidates(contexts, top_k=3, min_score=0.55, current_page_number=3)
+
+        self.assertEqual([candidate.source_id for candidate in candidates], ["11", "10"])
+
+    def test_image_recheck_selection_defaults_to_one_image(self):
+        first = RetrievedContext(source_type="image_ai_summary", source_id="10", title="first", content="first")
+        second = RetrievedContext(source_type="image_ai_summary", source_id="11", title="second", content="second")
+
+        selected = _selected_recheck_contexts(
+            [first, second],
+            selected_ids=["10", "11"],
+            allow_multiple=False,
+            max_images=2,
+        )
+
+        self.assertEqual([context.source_id for context in selected], ["10"])
+
+    def test_image_recheck_selection_allows_two_images_when_judge_allows_multiple(self):
+        first = RetrievedContext(source_type="image_ai_summary", source_id="10", title="first", content="first")
+        second = RetrievedContext(source_type="image_ai_summary", source_id="11", title="second", content="second")
+
+        selected = _selected_recheck_contexts(
+            [first, second],
+            selected_ids=["10", "11"],
+            allow_multiple=True,
+            max_images=2,
+        )
+
+        self.assertEqual([context.source_id for context in selected], ["10", "11"])
+
+    def test_image_recheck_selection_does_not_fallback_when_judge_returns_unknown_id(self):
+        first = RetrievedContext(source_type="image_ai_summary", source_id="10", title="first", content="first")
+
+        selected = _selected_recheck_contexts(
+            [first],
+            selected_ids=["999"],
+            allow_multiple=False,
+            max_images=2,
+        )
+
+        self.assertEqual(selected, [])
+
+    def test_image_recheck_selection_accepts_metadata_image_summary_id(self):
+        first = RetrievedContext(
+            source_type="image_ai_summary",
+            source_id="chunk-derived-id",
+            title="first",
+            content="first",
+            metadata={"image_ai_summary_id": 88},
+        )
+
+        selected = _selected_recheck_contexts(
+            [first],
+            selected_ids=["88"],
+            allow_multiple=False,
+            max_images=2,
+        )
+
+        self.assertEqual(selected, [first])
+
+    def test_image_recheck_server_uses_full_page_only_for_allowed_conditions(self):
+        self.assertEqual(
+            _server_image_mode(
+                preferred_mode="page_image",
+                metadata={"context_bbox": [1, 2, 100, 120], "crop_mode": "image_with_context"},
+                same_page_multiple=False,
+            ),
+            "context_crop",
+        )
+        self.assertEqual(
+            _server_image_mode(
+                preferred_mode="context_crop",
+                metadata={"context_bbox": [1, 2, 100, 120], "crop_mode": "full_page_context"},
+                same_page_multiple=False,
+            ),
+            "page_image",
+        )
+        self.assertEqual(
+            _server_image_mode(
+                preferred_mode="context_crop",
+                metadata={"crop_mode": "image_with_context"},
+                same_page_multiple=False,
+            ),
+            "page_image",
+        )
+
+    def test_image_recheck_multiple_selected_pages_are_scoped_by_note(self):
+        from backend.app.services.pdf_image_recheck import _has_multiple_selected_on_same_page
+
+        first = RetrievedContext(source_type="image_ai_summary", source_id="10", title="first", content="first", note_id=3, page_number=5)
+        second = RetrievedContext(source_type="image_ai_summary", source_id="11", title="second", content="second", note_id=4, page_number=5)
+        third = RetrievedContext(source_type="image_ai_summary", source_id="12", title="third", content="third", note_id=3, page_number=5)
+
+        self.assertFalse(_has_multiple_selected_on_same_page([first, second]))
+        self.assertTrue(_has_multiple_selected_on_same_page([first, third]))
+
+    def test_image_recheck_skips_judge_when_no_image_summary_candidate_exists(self):
+        with patch("backend.app.services.pdf_image_recheck.judge_pdf_image_recheck") as judge:
+            result = maybe_recheck_pdf_images_for_chat(
+                object(),
+                note={"id": 3, "title": "Network", "file_url": "/uploads/network.pdf"},
+                user_id=7,
+                model="test-model",
+                user_question="TCP 설명해줘",
+                rag_sources=[RetrievedContext(source_type="pdf_page", source_id="1", title="page", content="text")],
+                settings=Settings(rag_image_recheck_enabled=True),
+            )
+
+        judge.assert_not_called()
+        self.assertEqual(result.debug["candidate_count"], 0)
+        self.assertFalse(result.debug["judge_called"])
+
+    def test_image_recheck_passes_current_page_to_judge(self):
+        image_context = RetrievedContext(
+            source_type="image_ai_summary",
+            source_id="88",
+            title="Image",
+            content="diagram summary",
+            score=0.82,
+            page_number=51,
+            metadata={"importance": "high", "context_bbox": [1, 2, 100, 120]},
+        )
+        with patch(
+            "backend.app.services.pdf_image_recheck.judge_pdf_image_recheck",
+            return_value={"needs_image_recheck": False, "image_ai_summary_ids": []},
+        ) as judge:
+            maybe_recheck_pdf_images_for_chat(
+                object(),
+                note={"id": 3, "title": "Current Note", "file_url": "/uploads/current.pdf"},
+                user_id=7,
+                model="test-model",
+                user_question="지금 페이지는 어떻게 설명하고 있어?",
+                current_page_number=64,
+                rag_sources=[image_context],
+                settings=Settings(rag_image_recheck_enabled=True),
+            )
+
+        self.assertEqual(judge.call_args.kwargs["current_page_number"], 64)
+
+    def test_image_recheck_judge_input_includes_current_visible_page(self):
+        captured = {}
+
+        def fake_generate_text_response(**kwargs):
+            captured["input_items"] = kwargs["input_items"]
+            return '{"needs_image_recheck": false, "image_ai_summary_ids": [], "allow_multiple": false, "preferred_image_mode": "context_crop", "reason": "현재 페이지 후보가 아님"}'
+
+        with patch("backend.app.services.openai_service.generate_text_response", side_effect=fake_generate_text_response):
+            result = judge_pdf_image_recheck(
+                model="test-model",
+                user_question="지금 페이지는 어떻게 설명하고 있어?",
+                current_page_number=64,
+                text_contexts=[],
+                image_candidates=[{"image_ai_summary_id": "88", "page_number": 51, "summary": "old page image"}],
+            )
+
+        self.assertFalse(result["needs_image_recheck"])
+        self.assertIn("Current visible PDF page: 64", captured["input_items"][0]["content"])
+
+    def test_image_recheck_uses_source_note_pdf_for_selected_summary(self):
+        image_context = RetrievedContext(
+            source_type="image_ai_summary",
+            source_id="88",
+            title="Other note image",
+            content="diagram summary",
+            score=0.82,
+            note_id=9,
+            page_number=2,
+            metadata={"importance": "high", "context_bbox": [1, 2, 100, 120]},
+        )
+        captured = {}
+
+        def fake_stored_note_pdf_path(note, settings=None):
+            captured["note"] = note
+            return Path("other-note.pdf")
+
+        with patch(
+            "backend.app.services.pdf_image_recheck.judge_pdf_image_recheck",
+            return_value={
+                "needs_image_recheck": True,
+                "image_ai_summary_ids": ["88"],
+                "allow_multiple": False,
+                "preferred_image_mode": "context_crop",
+                "reason": "needs visual check",
+            },
+        ), patch("backend.app.services.pdf_image_recheck.fetch_all", return_value=[{
+            "id": 88,
+            "folder_id": 2,
+            "note_id": 9,
+            "page_number": 2,
+            "metadata": {"context_bbox": [1, 2, 100, 120], "crop_mode": "image_with_context"},
+            "confidence": "high",
+            "importance": "high",
+            "crop_hash": "crop",
+            "image_hash": "image",
+            "note_title": "Other Note",
+            "file_url": "/uploads/other.pdf",
+        }]), patch(
+            "backend.app.services.pdf_image_recheck.stored_note_pdf_path",
+            side_effect=fake_stored_note_pdf_path,
+        ), patch(
+            "backend.app.services.pdf_image_recheck._render_recheck_image",
+            return_value="data:image/png;base64,AA==",
+        ):
+            result = maybe_recheck_pdf_images_for_chat(
+                object(),
+                note={"id": 3, "title": "Current Note", "file_url": "/uploads/current.pdf"},
+                user_id=7,
+                model="test-model",
+                user_question="이미지 확인해줘",
+                rag_sources=[image_context],
+                settings=Settings(rag_image_recheck_enabled=True),
+            )
+
+        self.assertEqual(captured["note"]["id"], 9)
+        self.assertEqual(captured["note"]["file_url"], "/uploads/other.pdf")
+        self.assertEqual(result.debug["rechecked_count"], 1)
+        self.assertEqual(result.image_inputs[0]["image_data_uri"], "data:image/png;base64,AA==")
+
+    def test_image_recheck_loads_row_by_metadata_image_summary_id(self):
+        image_context = RetrievedContext(
+            source_type="image_ai_summary",
+            source_id="chunk-derived-id",
+            title="Persisted image",
+            content="diagram summary",
+            score=0.82,
+            note_id=9,
+            page_number=2,
+            metadata={"importance": "high", "image_ai_summary_id": 88, "context_bbox": [1, 2, 100, 120]},
+        )
+
+        with patch(
+            "backend.app.services.pdf_image_recheck.judge_pdf_image_recheck",
+            return_value={
+                "needs_image_recheck": True,
+                "image_ai_summary_ids": ["88"],
+                "allow_multiple": False,
+                "preferred_image_mode": "context_crop",
+                "reason": "needs visual check",
+            },
+        ), patch("backend.app.services.pdf_image_recheck.fetch_all", return_value=[{
+            "id": 88,
+            "folder_id": 2,
+            "note_id": 9,
+            "page_number": 2,
+            "metadata": {"context_bbox": [1, 2, 100, 120], "crop_mode": "image_with_context"},
+            "confidence": "high",
+            "importance": "high",
+            "crop_hash": "crop",
+            "image_hash": "image",
+            "note_title": "Other Note",
+            "file_url": "/uploads/other.pdf",
+        }]), patch(
+            "backend.app.services.pdf_image_recheck.stored_note_pdf_path",
+            return_value=Path("other-note.pdf"),
+        ), patch(
+            "backend.app.services.pdf_image_recheck._render_recheck_image",
+            return_value="data:image/png;base64,AA==",
+        ):
+            result = maybe_recheck_pdf_images_for_chat(
+                object(),
+                note={"id": 3, "title": "Current Note", "file_url": "/uploads/current.pdf"},
+                user_id=7,
+                model="test-model",
+                user_question="이미지 확인해줘",
+                rag_sources=[image_context],
+                settings=Settings(rag_image_recheck_enabled=True),
+            )
+
+        self.assertEqual(result.debug["selected_ids"], ["88"])
+        self.assertEqual(result.debug["rechecked_count"], 1)
+        self.assertEqual(result.image_inputs[0]["image_ai_summary_id"], "88")
+
+    def test_build_response_input_attaches_rag_recheck_images_to_final_answer_model(self):
+        input_items = build_response_input(
+            {"title": "Network", "summary": ""},
+            [],
+            [],
+            "이 도표 설명해줘",
+            context_hint="RAG context",
+            rag_image_inputs=[{
+                "image_ai_summary_id": "88",
+                "page_number": 2,
+                "title": "Network - page 2 image summary",
+                "image_mode": "context_crop",
+                "image_data_uri": "data:image/png;base64,AA==",
+                "image_summary": "TCP diagram summary.",
+            }],
+        )
+
+        final_item = input_items[-1]
+        self.assertIsInstance(final_item["content"], list)
+        self.assertTrue(any(part.get("type") == "input_image" for part in final_item["content"]))
+        self.assertTrue(any("Original PDF image recheck source" in part.get("text", "") for part in final_item["content"]))
+
     def test_build_ai_context_general_drops_page_and_rag_context(self):
         context = build_ai_context(
             mode="general",
@@ -113,6 +537,21 @@ class RAGRetrieverTest(unittest.TestCase):
         self.assertNotIn("RAG support context", context.context_hint or "")
         self.assertIsNone(context.answer_sources_text)
 
+    def test_build_ai_context_places_image_recheck_before_rag_support(self):
+        context = build_ai_context(
+            mode="rag",
+            pages=[],
+            page_number=None,
+            base_context_hints=["mode instruction"],
+            priority_context_hints=["Vision Recheck Result\nverified visual evidence"],
+            rag_sources=[RetrievedContext(source_type="image_ai_summary", source_id="1", title="Image", content="summary")],
+        )
+
+        self.assertLess(
+            (context.context_hint or "").find("Vision Recheck Result"),
+            (context.context_hint or "").find("RAG support context"),
+        )
+
     def test_retrieve_rag_contexts_with_debug_does_not_keyword_fallback_on_empty_vector_results(self):
         with patch("backend.app.services.rag_service.retrieve_chunk_contexts", return_value=[]):
             contexts, debug = retrieve_rag_contexts_with_debug(object(), user_id=7, question="TCP", documents=[])
@@ -122,6 +561,91 @@ class RAGRetrieverTest(unittest.TestCase):
         self.assertEqual(debug["fallback_reason"], "vector_empty")
         self.assertTrue(debug["no_results"])
         self.assertEqual(debug["retrieved_chunk_count"], 0)
+
+    def test_page_local_contexts_clear_vector_empty_debug_state(self):
+        page_context = RetrievedContext(
+            source_type="pdf_page",
+            source_id="page-5",
+            title="Page 5",
+            content="grading policy",
+            page_number=5,
+            chunk_index=0,
+        )
+        image_context = RetrievedContext(
+            source_type="image_ai_summary",
+            source_id="image-5",
+            title="Page 5 image",
+            content="grading chart",
+            page_number=5,
+            chunk_index=0,
+        )
+        merged = merge_retrieved_contexts([page_context, image_context])
+        debug = {
+            "fallback": False,
+            "fallback_reason": "vector_empty",
+            "no_results": True,
+            "retrieved_source_count": 0,
+            "retrieved_chunk_count": 0,
+        }
+
+        update_rag_debug_for_contexts(debug, merged, page_local_contexts=merged)
+
+        self.assertFalse(debug["no_results"])
+        self.assertTrue(debug["vector_no_results"])
+        self.assertIsNone(debug["fallback_reason"])
+        self.assertEqual(debug["page_local_context_count"], 2)
+        self.assertEqual(debug["retrieved_chunk_count"], 2)
+        self.assertEqual(debug["retrieved_text_chunk_count"], 1)
+        self.assertEqual(debug["retrieved_image_summary_count"], 1)
+
+    def test_retrieve_rag_contexts_uses_separate_text_and_image_threshold_searches(self):
+        text_context = RetrievedContext(
+            source_type="pdf_page",
+            source_id="1",
+            title="text",
+            content="TCP text",
+            score=0.80,
+        )
+        image_context = RetrievedContext(
+            source_type="image_ai_summary",
+            source_id="88",
+            title="image",
+            content="TCP image",
+            score=0.70,
+        )
+
+        with patch(
+            "backend.app.services.rag_service.retrieve_chunk_contexts",
+            side_effect=[[text_context], [image_context]],
+        ) as retrieve:
+            contexts, debug = retrieve_rag_contexts_with_debug(object(), user_id=7, question="TCP", documents=[])
+
+        self.assertEqual([context.source_id for context in contexts], ["1", "88"])
+        self.assertEqual(retrieve.call_args_list[0].kwargs["source_types"], ["pdf_page", "canvas_note"])
+        self.assertEqual(retrieve.call_args_list[1].kwargs["source_types"], ["image_ai_summary"])
+        self.assertEqual(retrieve.call_args_list[0].kwargs["min_score"], 0.45)
+        self.assertEqual(retrieve.call_args_list[1].kwargs["min_score"], 0.5)
+        self.assertEqual(debug["score_meaning"], "similarity_higher_is_better")
+        self.assertEqual(debug["retrieved_text_chunk_count"], 1)
+        self.assertEqual(debug["retrieved_image_summary_count"], 1)
+
+    def test_merge_ranked_contexts_reserves_image_candidates(self):
+        text_contexts = [
+            RetrievedContext(source_type="pdf_page", source_id=str(index), title=f"text {index}", content="text", score=0.95 - index * 0.01)
+            for index in range(5)
+        ]
+        image_context = RetrievedContext(
+            source_type="image_ai_summary",
+            source_id="88",
+            title="image",
+            content="image",
+            score=0.60,
+        )
+
+        contexts = _merge_ranked_contexts(text_contexts, [image_context], limit=5, image_reserve_count=1)
+
+        self.assertIn("88", [context.source_id for context in contexts])
+        self.assertEqual(len(contexts), 5)
 
     def test_retrieve_rag_contexts_rolls_back_after_vector_error(self):
         class FakeConnection:
@@ -181,6 +705,7 @@ class RAGRetrieverTest(unittest.TestCase):
                     "indexed_at": None,
                     "updated_at": None,
                 }],
+                [],
             ]
 
             result = get_note_rag_debug_index(
@@ -315,6 +840,55 @@ class RAGRetrieverTest(unittest.TestCase):
         self.assertIn("source_type = 'canvas_note'", captured["query"])
         self.assertIn(" OR ", captured["query"])
 
+    def test_retrieve_chunk_contexts_applies_source_type_and_min_score(self):
+        captured = {}
+
+        def fake_fetch_all(connection, query, params):
+            captured["query"] = query
+            captured["params"] = params
+            return [
+                {
+                    "source_type": "pdf_page",
+                    "source_id": "1",
+                    "title": "strong",
+                    "content": "strong text",
+                    "score": 0.72,
+                    "folder_id": 2,
+                    "note_id": 3,
+                    "page_number": 1,
+                    "chunk_index": 1,
+                    "metadata": {},
+                },
+                {
+                    "source_type": "pdf_page",
+                    "source_id": "2",
+                    "title": "weak",
+                    "content": "weak text",
+                    "score": 0.22,
+                    "folder_id": 2,
+                    "note_id": 3,
+                    "page_number": 2,
+                    "chunk_index": 1,
+                    "metadata": {},
+                },
+            ]
+
+        with patch("backend.app.services.document_chunk_index.generate_embedding", return_value=[0.0] * 1536), patch(
+            "backend.app.services.document_chunk_index.fetch_all",
+            side_effect=fake_fetch_all,
+        ):
+            contexts = retrieve_chunk_contexts(
+                object(),
+                user_id=7,
+                query="TCP",
+                source_types=["pdf_page"],
+                min_score=0.45,
+                top_k=10,
+            )
+
+        self.assertIn("source_type = ANY", captured["query"])
+        self.assertEqual([context.source_id for context in contexts], ["1"])
+
     def test_answer_sources_do_not_duplicate_page_label(self):
         source_text = format_answer_sources([
             RetrievedContext(
@@ -390,6 +964,7 @@ class RAGRetrieverTest(unittest.TestCase):
                         "updated_at": None,
                     }
                 ],
+                [],
             ]
 
             sources = collect_note_index_sources(object(), note_id=3, user_id=7)
@@ -400,6 +975,539 @@ class RAGRetrieverTest(unittest.TestCase):
         )
         canvas_source = next(source for source in sources if source.source_type == "canvas_note")
         self.assertEqual(canvas_source.metadata["block_ids"], ["b1"])
+
+    def test_collect_note_index_sources_includes_completed_pdf_image_summary(self):
+        page_state = json.dumps(
+            {
+                "kind": "bsnap-page-state",
+                "version": 1,
+                "pdfText": "PDF page text about TCP congestion control.",
+            },
+            ensure_ascii=False,
+        )
+
+        with patch("backend.app.services.document_chunk_index.fetch_one") as fetch_one, patch(
+            "backend.app.services.document_chunk_index.fetch_all"
+        ) as fetch_all:
+            fetch_one.return_value = {
+                "id": 3,
+                "user_id": 7,
+                "folder_id": 2,
+                "title": "Network",
+                "summary": "",
+                "updated_at": None,
+            }
+            fetch_all.side_effect = [
+                [{"id": 10, "note_id": 3, "page_number": 4, "content": page_state, "image_url": None, "updated_at": None}],
+                [],
+                [
+                    {
+                        "id": 99,
+                        "folder_id": 2,
+                        "note_id": 3,
+                        "page_number": 4,
+                        "candidate_type": "picture",
+                        "crop_hash": "hash-context",
+                        "image_hash": "hash-image",
+                        "summary": "TCP congestion window graph summary.",
+                        "ocr_text": "cwnd RTT",
+                        "confidence": "high",
+                        "importance": "medium",
+                        "confidence_reason": "clear labels",
+                        "importance_reason": "core diagram",
+                        "metadata": {"context_bbox": [1, 2, 3, 4]},
+                        "analyzed_at": None,
+                        "updated_at": None,
+                    }
+                ],
+            ]
+
+            sources = collect_note_index_sources(object(), note_id=3, user_id=7)
+
+        image_source = next(source for source in sources if source.source_type == "image_ai_summary")
+        self.assertEqual(image_source.source_id, "99")
+        self.assertEqual(image_source.page_number, 4)
+        self.assertIn("TCP congestion", image_source.content)
+        self.assertIn("cwnd RTT", image_source.content)
+        self.assertEqual(image_source.metadata["importance"], "medium")
+        self.assertEqual(image_source.metadata["context_bbox"], [1, 2, 3, 4])
+
+    def test_cached_completed_image_summary_counts_toward_duplicate_filter(self):
+        from backend.app.services.pdf_image_summary_index import refresh_note_image_ai_summaries
+
+        class Candidate:
+            page_number = 1
+            crop_hash = "same-context-hash"
+            image_crop_hash = "same-image-hash"
+            candidate_type = "picture"
+            self_ref = "#/pictures/1"
+            docling_bbox = (1.0, 2.0, 3.0, 4.0)
+            docling_coord_origin = "BOTTOMLEFT"
+            pdf_bbox = (1.0, 2.0, 3.0, 4.0)
+            image_bbox = (1.0, 2.0, 3.0, 4.0)
+            context_bbox = (0.0, 1.0, 4.0, 5.0)
+            crop_mode = "image_with_context"
+            page_width = 100.0
+            page_height = 100.0
+            area_ratio = 0.2
+            image_crop_width = 100
+            image_crop_height = 100
+            context_crop_width = 120
+            context_crop_height = 120
+            context_crop_data_uri = "data:image/png;base64,AA=="
+
+        with patch("backend.app.services.pdf_image_summary_index.fetch_one") as fetch_one, patch(
+            "backend.app.services.pdf_image_summary_index.fetch_all"
+        ) as fetch_all, patch(
+            "backend.app.services.pdf_image_summary_index.parse_and_cache_docling_batches"
+        ) as parse_batches, patch(
+            "backend.app.services.pdf_image_summary_index.cached_pages_from_batches"
+        ) as cached_pages, patch(
+            "backend.app.services.pdf_image_summary_index.extract_docling_crop_candidates_from_cached_pages"
+        ) as extract_candidates, patch("backend.app.services.pdf_image_summary_index.generate_pdf_image_rag_summary") as generate_summary:
+            fetch_one.return_value = {
+                "id": 3,
+                "user_id": 7,
+                "folder_id": 2,
+                "title": "Network",
+                "file_url": "/uploads/test.pdf",
+            }
+            fetch_all.return_value = [{"id": 99, "page_number": 1, "crop_hash": "same-context-hash", "status": "completed"}]
+            parse_batches.return_value = [object()]
+            cached_pages.return_value = [object()]
+            extract_candidates.return_value = type("Result", (), {"candidates": [Candidate(), Candidate()]})()
+
+            with tempfile.TemporaryDirectory() as temp_dir:
+                pdf_path = Path(temp_dir) / "test.pdf"
+                pdf_path.write_bytes(b"%PDF-1.4\n")
+                stats = refresh_note_image_ai_summaries(object(), note_id=3, user_id=7, pdf_path=pdf_path)
+
+        self.assertEqual(stats["cached"], 2)
+        generate_summary.assert_not_called()
+
+    def test_failed_image_summary_is_retried_on_refresh(self):
+        from backend.app.services.pdf_image_summary_index import _refresh_note_image_ai_summaries_from_candidates
+
+        class Candidate:
+            page_number = 1
+            crop_hash = "retry-context-hash"
+            image_crop_hash = "retry-image-hash"
+            candidate_type = "picture"
+            self_ref = "#/pictures/1"
+            docling_bbox = (1.0, 2.0, 3.0, 4.0)
+            docling_coord_origin = "BOTTOMLEFT"
+            pdf_bbox = (1.0, 2.0, 3.0, 4.0)
+            image_bbox = (1.0, 2.0, 3.0, 4.0)
+            context_bbox = (0.0, 1.0, 4.0, 5.0)
+            crop_mode = "image_with_context"
+            page_width = 100.0
+            page_height = 100.0
+            area_ratio = 0.2
+            image_crop_width = 100
+            image_crop_height = 100
+            context_crop_width = 120
+            context_crop_height = 120
+            context_crop_data_uri = "data:image/png;base64,AA=="
+            nearby_text = "nearby TCP text"
+
+        class FakeConnection:
+            def __init__(self):
+                self.commit_count = 0
+
+            def commit(self):
+                self.commit_count += 1
+
+        connection = FakeConnection()
+        with patch(
+            "backend.app.services.pdf_image_summary_index._fetch_existing_summaries",
+            return_value={(1, "retry-context-hash"): {"id": 99, "page_number": 1, "crop_hash": "retry-context-hash", "status": "failed"}},
+        ), patch(
+            "backend.app.services.pdf_image_summary_index._mark_stale_existing_summaries",
+            return_value=0,
+        ), patch(
+            "backend.app.services.pdf_image_summary_index._upsert_image_summary_status",
+        ) as upsert_status, patch(
+            "backend.app.services.pdf_image_summary_index._generate_summary_for_candidate",
+            return_value={"summary": "retry ok", "importance": "high", "confidence": "high"},
+        ) as generate_summary, patch(
+            "backend.app.services.pdf_image_summary_index._mark_image_summary_completed",
+            return_value=99,
+        ), patch("backend.app.services.document_chunk_index.replace_image_summary_chunks") as replace_chunks:
+            stats = _refresh_note_image_ai_summaries_from_candidates(
+                connection,
+                note={"id": 3, "user_id": 7, "folder_id": 2, "title": "Network"},
+                candidates=[Candidate()],
+                force=False,
+            )
+
+        self.assertEqual(stats["cached"], 0)
+        self.assertEqual(stats["completed"], 1)
+        upsert_status.assert_called_once()
+        generate_summary.assert_called_once()
+        replace_chunks.assert_called_once_with(connection, image_summary_id=99, user_id=7)
+
+    def test_image_summary_refresh_marks_old_page_candidates_stale(self):
+        from backend.app.services.pdf_image_summary_index import refresh_note_image_ai_summaries
+
+        class FakeCursor:
+            def __init__(self, connection):
+                self.connection = connection
+                self.last_query = ""
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def execute(self, query, params=None):
+                self.last_query = query
+                self.connection.executed.append((query, params))
+
+            def fetchall(self):
+                if "RETURNING id" in self.last_query:
+                    return [{"id": 11}]
+                return []
+
+        class FakeConnection:
+            def __init__(self):
+                self.executed = []
+                self.commits = 0
+
+            def cursor(self):
+                return FakeCursor(self)
+
+            def commit(self):
+                self.commits += 1
+
+        class Candidate:
+            page_number = 17
+            crop_hash = "current-full-page-hash"
+            image_crop_hash = "current-full-page-hash"
+            candidate_type = "full_page"
+            self_ref = None
+            docling_bbox = (0.0, 0.0, 960.0, 540.0)
+            docling_coord_origin = "TOPLEFT"
+            pdf_bbox = (0.0, 0.0, 960.0, 540.0)
+            image_bbox = (0.0, 0.0, 960.0, 540.0)
+            context_bbox = (0.0, 0.0, 960.0, 540.0)
+            crop_mode = "full_page_context"
+            page_width = 960.0
+            page_height = 540.0
+            area_ratio = 1.0
+            image_crop_width = 960
+            image_crop_height = 540
+            context_crop_width = 960
+            context_crop_height = 540
+            context_crop_data_uri = "data:image/png;base64,AA=="
+            nearby_text = None
+
+        connection = FakeConnection()
+        with patch("backend.app.services.pdf_image_summary_index.fetch_one") as fetch_one, patch(
+            "backend.app.services.pdf_image_summary_index.fetch_all"
+        ) as fetch_all, patch(
+            "backend.app.services.pdf_image_summary_index.parse_and_cache_docling_batches"
+        ) as parse_batches, patch(
+            "backend.app.services.pdf_image_summary_index.cached_pages_from_batches"
+        ) as cached_pages, patch(
+            "backend.app.services.pdf_image_summary_index.extract_docling_crop_candidates_from_cached_pages"
+        ) as extract_candidates, patch("backend.app.services.pdf_image_summary_index.generate_pdf_image_rag_summary") as generate_summary:
+            fetch_one.return_value = {
+                "id": 3,
+                "user_id": 7,
+                "folder_id": 2,
+                "title": "Network",
+                "file_url": "/uploads/test.pdf",
+            }
+            fetch_all.return_value = [
+                {"id": 11, "page_number": 17, "crop_hash": "old-picture-hash", "status": "completed"},
+                {"id": 12, "page_number": 17, "crop_hash": "current-full-page-hash", "status": "completed"},
+            ]
+            parse_batches.return_value = [object()]
+            cached_pages.return_value = [object()]
+            extract_candidates.return_value = type("Result", (), {"candidates": [Candidate()]})()
+
+            with tempfile.TemporaryDirectory() as temp_dir:
+                pdf_path = Path(temp_dir) / "test.pdf"
+                pdf_path.write_bytes(b"%PDF-1.4\n")
+                stats = refresh_note_image_ai_summaries(connection, note_id=3, user_id=7, pdf_path=pdf_path)
+
+        self.assertEqual(stats["stale"], 1)
+        self.assertEqual(stats["cached"], 1)
+        self.assertGreaterEqual(connection.commits, 1)
+        executed_sql = "\n".join(query for query, _params in connection.executed)
+        self.assertIn("skipped_reason = 'stale_candidate'", executed_sql)
+        self.assertIn("DELETE FROM document_chunks", executed_sql)
+        generate_summary.assert_not_called()
+
+    def test_stale_image_summary_candidate_can_be_reprocessed_when_current_again(self):
+        from backend.app.services.pdf_image_summary_index import refresh_note_image_ai_summaries
+
+        class FakeCursor:
+            def __init__(self, connection):
+                self.connection = connection
+                self.last_query = ""
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def execute(self, query, params=None):
+                self.last_query = query
+                self.connection.executed.append((query, params))
+
+            def fetchall(self):
+                return []
+
+        class FakeConnection:
+            def __init__(self):
+                self.executed = []
+
+            def cursor(self):
+                return FakeCursor(self)
+
+            def commit(self):
+                pass
+
+        class Candidate:
+            page_number = 17
+            crop_hash = "revived-hash"
+            image_crop_hash = "revived-image-hash"
+            candidate_type = "picture"
+            self_ref = "#/pictures/0"
+            docling_bbox = (10.0, 20.0, 300.0, 400.0)
+            docling_coord_origin = "TOPLEFT"
+            pdf_bbox = (10.0, 20.0, 300.0, 400.0)
+            image_bbox = (10.0, 20.0, 300.0, 400.0)
+            context_bbox = (0.0, 10.0, 320.0, 420.0)
+            crop_mode = "image_with_context"
+            page_width = 960.0
+            page_height = 540.0
+            area_ratio = 0.2
+            image_crop_width = 400
+            image_crop_height = 300
+            context_crop_width = 450
+            context_crop_height = 340
+            context_crop_data_uri = "data:image/png;base64,AA=="
+            nearby_text = None
+
+        with patch("backend.app.services.pdf_image_summary_index.fetch_one") as fetch_one, patch(
+            "backend.app.services.pdf_image_summary_index.fetch_all"
+        ) as fetch_all, patch(
+            "backend.app.services.pdf_image_summary_index.parse_and_cache_docling_batches"
+        ) as parse_batches, patch(
+            "backend.app.services.pdf_image_summary_index.cached_pages_from_batches"
+        ) as cached_pages, patch(
+            "backend.app.services.pdf_image_summary_index.extract_docling_crop_candidates_from_cached_pages"
+        ) as extract_candidates, patch("backend.app.services.pdf_image_summary_index.generate_pdf_image_rag_summary") as generate_summary:
+            fetch_one.return_value = {
+                "id": 3,
+                "user_id": 7,
+                "folder_id": 2,
+                "title": "Network",
+                "file_url": "/uploads/test.pdf",
+            }
+            fetch_all.return_value = [
+                {
+                    "id": 12,
+                    "page_number": 17,
+                    "crop_hash": "revived-hash",
+                    "status": "skipped",
+                    "skipped_reason": "stale_candidate",
+                }
+            ]
+            parse_batches.return_value = [object()]
+            cached_pages.return_value = [object()]
+            extract_candidates.return_value = type("Result", (), {"candidates": [Candidate()]})()
+            generate_summary.return_value = {
+                "summary": "Recovered image summary",
+                "ocr_text": "",
+                "confidence": "high",
+                "importance": "medium",
+                "confidence_reason": "clear",
+                "importance_reason": "useful",
+            }
+
+            with tempfile.TemporaryDirectory() as temp_dir:
+                pdf_path = Path(temp_dir) / "test.pdf"
+                pdf_path.write_bytes(b"%PDF-1.4\n")
+                stats = refresh_note_image_ai_summaries(FakeConnection(), note_id=3, user_id=7, pdf_path=pdf_path)
+
+        self.assertEqual(stats["cached"], 0)
+        self.assertEqual(stats["completed"], 1)
+        generate_summary.assert_called_once()
+
+    def test_collect_note_index_sources_preserves_layout_blocks_for_pdf_pages(self):
+        page_state = json.dumps(
+            {
+                "kind": "bsnap-page-state",
+                "version": 1,
+                "pdfText": "Main block text.\n\n[Figure labels]\nACK=100",
+                "ragExtraction": {
+                    "parser": "pymupdf",
+                    "extractionStrategy": "pymupdf_layout_blocks_v2",
+                    "readingOrderStrategy": "y_x_fallback",
+                    "textBlockCount": 2,
+                    "imageBlockCount": 0,
+                    "headerFooterCandidates": [{"textPreview": "Transport Layer3-8"}],
+                    "sideLabelCandidates": [{"textPreview": "ACK=100"}],
+                    "textBlocks": [
+                        {
+                            "type": "text",
+                            "role": "main_text",
+                            "readingOrder": 0,
+                            "blockIndex": 0,
+                            "bbox": [10, 10, 200, 40],
+                            "text": "Main block text.",
+                        },
+                        {
+                            "type": "text",
+                            "role": "side_label_candidate",
+                            "readingOrder": 1,
+                            "blockIndex": 1,
+                            "bbox": [250, 80, 320, 100],
+                            "text": "ACK=100",
+                        },
+                    ],
+                },
+            },
+            ensure_ascii=False,
+        )
+
+        with patch("backend.app.services.document_chunk_index.fetch_one") as fetch_one, patch(
+            "backend.app.services.document_chunk_index.fetch_all"
+        ) as fetch_all:
+            fetch_one.return_value = {
+                "id": 3,
+                "user_id": 7,
+                "folder_id": 2,
+                "title": "Network",
+                "summary": "",
+                "updated_at": None,
+            }
+            fetch_all.side_effect = [
+                [{"id": 10, "note_id": 3, "page_number": 1, "content": page_state, "image_url": None, "updated_at": None}],
+                [],
+                [],
+            ]
+
+            sources = collect_note_index_sources(object(), note_id=3, user_id=7)
+
+        pdf_source = sources[0]
+        self.assertEqual(pdf_source.source_type, "pdf_page")
+        self.assertEqual(pdf_source.metadata["extraction_strategy"], "pymupdf_layout_blocks_v2")
+        self.assertEqual(pdf_source.metadata["header_footer_candidate_count"], 1)
+        self.assertEqual(pdf_source.metadata["side_label_candidate_count"], 1)
+        self.assertEqual(len(pdf_source.layout_blocks), 2)
+
+    def test_collect_note_index_sources_uses_native_text_without_layout_block_chunking(self):
+        page_state = json.dumps(
+            {
+                "kind": "bsnap-page-state",
+                "version": 1,
+                "pdfText": "Native text order should remain the chunk input.",
+                "ragExtraction": {
+                    "parser": "pymupdf",
+                    "extractionStrategy": "pymupdf_native_text_with_blocks_v2",
+                    "readingOrderStrategy": "pymupdf_native_text",
+                    "textBlockCount": 1,
+                    "imageBlockCount": 0,
+                    "textBlocks": [
+                        {
+                            "type": "text",
+                            "role": "main_text",
+                            "readingOrder": 0,
+                            "blockIndex": 0,
+                            "bbox": [10, 10, 200, 40],
+                            "text": "Block order metadata should not override native text.",
+                        },
+                    ],
+                },
+            },
+            ensure_ascii=False,
+        )
+
+        with patch("backend.app.services.document_chunk_index.fetch_one") as fetch_one, patch(
+            "backend.app.services.document_chunk_index.fetch_all"
+        ) as fetch_all:
+            fetch_one.return_value = {
+                "id": 3,
+                "user_id": 7,
+                "folder_id": 2,
+                "title": "Network",
+                "summary": "",
+                "updated_at": None,
+            }
+            fetch_all.side_effect = [
+                [{"id": 10, "note_id": 3, "page_number": 1, "content": page_state, "image_url": None, "updated_at": None}],
+                [],
+                [],
+            ]
+
+            sources = collect_note_index_sources(object(), note_id=3, user_id=7)
+
+        pdf_source = sources[0]
+        self.assertEqual(pdf_source.source_type, "pdf_page")
+        self.assertEqual(pdf_source.metadata["reading_order_strategy"], "pymupdf_native_text")
+        self.assertEqual(pdf_source.layout_blocks, [])
+
+    def test_collect_note_index_sources_prefers_visual_blocks_for_pdf_pages(self):
+        page_state = json.dumps(
+            {
+                "kind": "bsnap-page-state",
+                "version": 1,
+                "pdfText": "[Title]\nNetwork\n\n[Content]\nTCP congestion control.",
+                "ragExtraction": {
+                    "parser": "pymupdf",
+                    "extractionStrategy": "pymupdf_visual_blocks_v3",
+                    "readingOrderStrategy": "visual_block_groups",
+                    "visualBlocks": [
+                        {
+                            "role": "title",
+                            "readingOrder": 0,
+                            "blockIndex": 0,
+                            "bbox": [10, 10, 300, 40],
+                            "text": "Network",
+                        },
+                        {
+                            "role": "content",
+                            "readingOrder": 1,
+                            "blockIndex": 1,
+                            "bbox": [10, 80, 300, 120],
+                            "text": "TCP congestion control.",
+                        },
+                    ],
+                },
+            },
+            ensure_ascii=False,
+        )
+
+        with patch("backend.app.services.document_chunk_index.fetch_one") as fetch_one, patch(
+            "backend.app.services.document_chunk_index.fetch_all"
+        ) as fetch_all:
+            fetch_one.return_value = {
+                "id": 3,
+                "user_id": 7,
+                "folder_id": 2,
+                "title": "Network",
+                "summary": "",
+                "updated_at": None,
+            }
+            fetch_all.side_effect = [
+                [{"id": 10, "note_id": 3, "page_number": 1, "content": page_state, "image_url": None, "updated_at": None}],
+                [],
+                [],
+            ]
+
+            sources = collect_note_index_sources(object(), note_id=3, user_id=7)
+
+        pdf_source = sources[0]
+        self.assertEqual(pdf_source.metadata["reading_order_strategy"], "visual_block_groups")
+        self.assertEqual(len(pdf_source.layout_blocks), 2)
+        chunks = build_text_chunks(pdf_source)
+        self.assertTrue(chunks[0].content.startswith("[Title]\nNetwork"))
 
     def test_replace_note_page_chunks_deletes_legacy_page_sources_before_insert(self):
         executed = []
@@ -424,7 +1532,10 @@ class RAGRetrieverTest(unittest.TestCase):
             def rollback(self):
                 executed.append(("ROLLBACK", None))
 
-        with patch("backend.app.services.document_chunk_index.collect_note_page_index_sources", return_value=[]):
+        with patch("backend.app.services.document_chunk_index.fetch_all", return_value=[]), patch(
+            "backend.app.services.document_chunk_index.collect_note_page_index_sources",
+            return_value=[],
+        ):
             count = replace_note_page_chunks(FakeConnection(), page_id=10, user_id=7)
 
         self.assertEqual(count, 0)
@@ -436,6 +1547,184 @@ class RAGRetrieverTest(unittest.TestCase):
         self.assertIn("note_page", delete_params[1])
         self.assertEqual(delete_params[2], "10")
         self.assertEqual(delete_params[3], "10:%")
+
+    def test_delete_note_page_chunks_removes_image_summary_chunks_for_page(self):
+        executed = []
+
+        class FakeCursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def execute(self, query, params=None):
+                executed.append((query, params))
+
+        class FakeConnection:
+            def cursor(self):
+                return FakeCursor()
+
+        with patch("backend.app.services.document_chunk_index.fetch_all", return_value=[{"id": 99}]):
+            delete_note_page_chunks(FakeConnection(), page_id=10, user_id=7)
+
+        delete_query, delete_params = executed[0]
+        self.assertIn("image_ai_summary", delete_query)
+        self.assertEqual(delete_params[4], "10:%")
+        self.assertEqual(delete_params[5], ["99"])
+
+    def test_page_structure_reindex_uses_current_pages_without_docling_reparse(self):
+        calls = []
+
+        class FakeConnection:
+            pass
+
+        class FakeConnect:
+            def __enter__(self):
+                return FakeConnection()
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+        with patch("backend.app.services.document_chunk_index.psycopg.connect", return_value=FakeConnect()), patch(
+            "backend.app.services.document_chunk_index.replace_note_chunks",
+            side_effect=lambda connection, note_id, user_id: calls.append((note_id, user_id)) or 3,
+        ), patch("backend.app.services.document_chunk_index._run_docling_note_reindex_pipeline") as docling_reindex:
+            reindex_note_chunks_from_pages_background(note_id=3, user_id=7)
+
+        self.assertEqual(calls, [(3, 7)])
+        docling_reindex.assert_not_called()
+
+    def test_replace_note_pages_chunks_updates_only_requested_pages(self):
+        executed = []
+        deleted_page_ids = []
+        inserted_chunks = []
+        source_one = IndexSource(
+            source_type="pdf_page",
+            source_id="10",
+            title="Network - page 1",
+            content="TCP congestion control keeps the network stable.",
+            user_id=7,
+            folder_id=2,
+            note_id=3,
+            page_number=1,
+            metadata={"note_page_id": 10, "page_label": "1"},
+        )
+        source_two = IndexSource(
+            source_type="pdf_page",
+            source_id="11",
+            title="Network - page 2",
+            content="UDP multiplexing uses port numbers.",
+            user_id=7,
+            folder_id=2,
+            note_id=3,
+            page_number=2,
+            metadata={"note_page_id": 11, "page_label": "2"},
+        )
+
+        class FakeConnection:
+            def commit(self):
+                executed.append(("COMMIT", None))
+
+            def rollback(self):
+                executed.append(("ROLLBACK", None))
+
+        with patch("backend.app.services.document_chunk_index.fetch_one", return_value={
+            "id": 3,
+            "user_id": 7,
+            "folder_id": 2,
+            "title": "Network",
+            "summary": "",
+            "updated_at": None,
+        }), patch("backend.app.services.document_chunk_index.fetch_all", return_value=[
+            {"id": 10, "note_id": 3, "page_number": 1, "content": "", "image_url": None, "updated_at": None},
+            {"id": 11, "note_id": 3, "page_number": 2, "content": "", "image_url": None, "updated_at": None},
+        ]), patch(
+            "backend.app.services.document_chunk_index._collect_page_index_sources",
+            side_effect=[[source_one], [source_two]],
+        ), patch(
+            "backend.app.services.document_chunk_index._delete_obsolete_chunks_for_page",
+            side_effect=lambda _connection, page_id, user_id, chunks: deleted_page_ids.append(page_id),
+        ), patch(
+            "backend.app.services.document_chunk_index._insert_chunks",
+            side_effect=lambda _connection, chunks, embedding_model: inserted_chunks.extend(chunks),
+        ), patch(
+            "backend.app.services.document_chunk_index.get_settings",
+            return_value=SimpleNamespace(openai_embedding_model="test-embedding-model"),
+        ):
+            count = replace_note_pages_chunks(FakeConnection(), note_id=3, user_id=7, page_numbers=[1, 2])
+
+        self.assertEqual(count, 2)
+        self.assertEqual(deleted_page_ids, [10, 11])
+        self.assertEqual([chunk.source.source_id for chunk in inserted_chunks], ["10", "11"])
+        self.assertEqual(executed, [("COMMIT", None)])
+
+    def test_replace_image_summary_chunks_updates_single_summary_index(self):
+        executed = []
+        inserted_chunks = []
+        deleted_summary_ids = []
+
+        class FakeCursor:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def execute(self, query, params=None):
+                executed.append((query, params))
+
+        class FakeConnection:
+            def cursor(self):
+                return FakeCursor()
+
+            def commit(self):
+                executed.append(("COMMIT", None))
+
+            def rollback(self):
+                executed.append(("ROLLBACK", None))
+
+        row = {
+            "id": 88,
+            "folder_id": 2,
+            "note_id": 3,
+            "page_number": 4,
+            "candidate_type": "picture",
+            "crop_hash": "crop-a",
+            "image_hash": "image-a",
+            "summary": "This image explains TCP congestion window growth.",
+            "ocr_text": "cwnd",
+            "confidence": "medium",
+            "importance": "high",
+            "confidence_reason": "Readable labels.",
+            "importance_reason": "Central lecture diagram.",
+            "metadata": {"crop_mode": "image_with_context"},
+            "analyzed_at": None,
+            "updated_at": None,
+            "title": "Network",
+            "note_folder_id": 2,
+        }
+
+        with patch("backend.app.services.document_chunk_index.fetch_one", return_value=row), patch(
+            "backend.app.services.document_chunk_index._delete_obsolete_chunks_for_image_summary",
+            side_effect=lambda _connection, image_summary_id, user_id, chunks: deleted_summary_ids.append(image_summary_id),
+        ), patch(
+            "backend.app.services.document_chunk_index._insert_chunks",
+            side_effect=lambda _connection, chunks, embedding_model: inserted_chunks.extend(chunks),
+        ), patch(
+            "backend.app.services.document_chunk_index.get_settings",
+            return_value=SimpleNamespace(openai_embedding_model="test-embedding-model"),
+        ):
+            count = replace_image_summary_chunks(FakeConnection(), image_summary_id=88, user_id=7)
+
+        self.assertEqual(count, 1)
+        self.assertEqual(deleted_summary_ids, [88])
+        self.assertEqual(inserted_chunks[0].source.source_type, "image_ai_summary")
+        self.assertEqual(inserted_chunks[0].source.source_id, "88")
+        update_query, update_params = executed[0]
+        self.assertIn("UPDATE image_ai_summaries", update_query)
+        self.assertEqual(update_params, (True, True, 88, 7))
+        self.assertEqual(executed[-1], ("COMMIT", None))
 
     def test_replace_canvas_chunks_deletes_legacy_canvas_sources_before_insert(self):
         executed = []
@@ -624,6 +1913,42 @@ class RAGRetrieverTest(unittest.TestCase):
         generate_embedding.assert_not_called()
         self.assertTrue(any("UPDATE document_chunks" in query for query, _params in executed))
 
+    def test_sync_note_rag_metadata_updates_existing_rows_only(self):
+        executed = []
+
+        class FakeCursor:
+            rowcount = 4
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, traceback):
+                return False
+
+            def execute(self, query, params=None):
+                executed.append((query, params))
+
+        class FakeConnection:
+            def cursor(self):
+                return FakeCursor()
+
+            def commit(self):
+                executed.append(("COMMIT", None))
+
+        with patch(
+            "backend.app.services.document_chunk_index.fetch_one",
+            return_value={"id": 3, "folder_id": 9, "title": "Updated Note"},
+        ):
+            count = sync_note_rag_metadata(FakeConnection(), note_id=3, user_id=7)
+
+        self.assertEqual(count, 4)
+        executed_sql = "\n".join(query for query, _params in executed if isinstance(query, str))
+        self.assertIn("UPDATE ai_canvas_notes", executed_sql)
+        self.assertIn("UPDATE image_ai_summaries", executed_sql)
+        self.assertIn("UPDATE document_chunks", executed_sql)
+        self.assertNotIn("INSERT INTO document_chunks", executed_sql)
+        self.assertEqual(executed[-1], ("COMMIT", None))
+
     def test_collect_canvas_index_sources_targets_one_canvas_note(self):
         with patch("backend.app.services.document_chunk_index.fetch_one") as fetch_one:
             fetch_one.return_value = {
@@ -647,10 +1972,15 @@ class RAGRetrieverTest(unittest.TestCase):
         self.assertEqual(sources[0].metadata["block_ids"], ["b1"])
 
     def test_split_text_into_chunks_uses_overlap(self):
+        chunks = split_text_into_chunks("alpha beta gamma delta epsilon zeta", chunk_size=18, overlap=6)
+
+        self.assertEqual(chunks[0], "alpha beta gamma")
+        self.assertTrue(chunks[1].startswith("gamma"))
+
+    def test_split_text_into_chunks_does_not_split_single_long_token(self):
         chunks = split_text_into_chunks("abcdefghijklmnopqrstuvwxyz", chunk_size=10, overlap=2)
 
-        self.assertEqual(chunks[0], "abcdefghij")
-        self.assertEqual(chunks[1], "ijklmnopqr")
+        self.assertEqual(chunks, ["abcdefghijklmnopqrstuvwxyz"])
 
     def test_load_note_documents_extracts_page_state_text_and_canvas_notes(self):
         page_state = json.dumps(
