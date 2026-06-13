@@ -757,7 +757,7 @@ function WebPdfTextAnnotationLayer(props: {
               width: percent(frame.width, props.pageWidth),
               height: percent(frame.height, props.pageHeight),
               minHeight: MIN_TEXT_BOX_HEIGHT,
-              padding: active ? '42px 10px 10px' : 10,
+              padding: `${TEXT_BOX_ACTIVE_TOP_PADDING}px 10px ${TEXT_BOX_ACTIVE_BOTTOM_PADDING}px`,
               borderRadius: 10,
               border: active ? '1px solid #5F79FF' : '1px solid transparent',
               backgroundColor: active ? 'rgba(255,255,255,0.74)' : 'transparent',
@@ -860,7 +860,7 @@ function WebPdfTextAnnotationLayer(props: {
               style={{
                 width: '100%',
                 height: '100%',
-                minHeight: Math.max(32, frame.height - (active ? TEXT_BOX_ACTIVE_TOP_PADDING + TEXT_BOX_ACTIVE_BOTTOM_PADDING : 24)),
+                minHeight: Math.max(32, frame.height - TEXT_BOX_ACTIVE_TOP_PADDING - TEXT_BOX_ACTIVE_BOTTOM_PADDING),
                 resize: 'none',
                 border: 0,
                 outline: 'none',
