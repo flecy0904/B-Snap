@@ -25,8 +25,9 @@ from backend.app.schemas.notes import (
 )
 from backend.app.services.document_chunk_index import (
     delete_note_page_chunks_background,
-    reindex_note_background,
+    reindex_note_chunks_from_pages_background,
     reindex_note_page_background,
+    sync_note_rag_metadata,
 )
 from backend.app.services.handwriting_signals import (
     build_handwriting_recognition_from_geometry,
@@ -54,8 +55,8 @@ logger = logging.getLogger("uvicorn.error")
 VISION_STAR_LIKE_CONFIDENCE_THRESHOLD = 0.45
 
 
-def _schedule_note_reindex(background_tasks: BackgroundTasks, note_id: int, user_id: int) -> None:
-    background_tasks.add_task(reindex_note_background, note_id, user_id)
+def _schedule_note_page_structure_reindex(background_tasks: BackgroundTasks, note_id: int, user_id: int) -> None:
+    background_tasks.add_task(reindex_note_chunks_from_pages_background, note_id, user_id)
 
 
 def _schedule_note_page_reindex(background_tasks: BackgroundTasks, page_id: int, user_id: int) -> None:
@@ -64,6 +65,131 @@ def _schedule_note_page_reindex(background_tasks: BackgroundTasks, page_id: int,
 
 def _schedule_note_page_chunk_delete(background_tasks: BackgroundTasks, page_id: int, user_id: int) -> None:
     background_tasks.add_task(delete_note_page_chunks_background, page_id, user_id)
+
+
+def _delete_image_summaries_for_page(cursor: Any, *, note_id: int, page_number: int, user_id: int) -> None:
+    cursor.execute(
+        """
+        DELETE FROM document_chunks
+        WHERE user_id = %s
+          AND source_type = 'image_ai_summary'
+          AND source_id = ANY(
+              SELECT id::text
+              FROM image_ai_summaries
+              WHERE user_id = %s
+                AND note_id = %s
+                AND page_number = %s
+          )
+        """,
+        (user_id, user_id, note_id, page_number),
+    )
+    cursor.execute(
+        """
+        DELETE FROM image_ai_summaries
+        WHERE user_id = %s
+          AND note_id = %s
+          AND page_number = %s
+        """,
+        (user_id, note_id, page_number),
+    )
+
+
+def _shift_image_summaries_after_page(cursor: Any, *, note_id: int, page_number: int, delta: int, user_id: int) -> None:
+    if delta == 0:
+        return
+    offset = 100000
+    cursor.execute(
+        """
+        UPDATE image_ai_summaries
+        SET page_number = page_number + %s,
+            indexed = false,
+            indexed_at = NULL,
+            updated_at = now()
+        WHERE user_id = %s
+          AND note_id = %s
+          AND page_number > %s
+        """,
+        (offset, user_id, note_id, page_number),
+    )
+    cursor.execute(
+        """
+        UPDATE image_ai_summaries
+        SET page_number = page_number - %s + %s,
+            indexed = false,
+            indexed_at = NULL,
+            updated_at = now()
+        WHERE user_id = %s
+          AND note_id = %s
+          AND page_number > %s
+        """,
+        (offset, delta, user_id, note_id, offset),
+    )
+
+
+def _duplicate_image_summaries_for_page(cursor: Any, *, note_id: int, page_number: int, user_id: int) -> None:
+    cursor.execute(
+        """
+        INSERT INTO image_ai_summaries (
+            user_id, folder_id, note_id, page_number, candidate_type, docling_ref,
+            crop_hash, image_hash, status, skipped_reason, summary, ocr_text,
+            confidence, importance, confidence_reason, importance_reason,
+            indexed, metadata, analyzed_at, indexed_at, created_at, updated_at
+        )
+        SELECT user_id, folder_id, note_id, %s, candidate_type, docling_ref,
+               crop_hash, image_hash, status, skipped_reason, summary, ocr_text,
+               confidence, importance, confidence_reason, importance_reason,
+               false, metadata, analyzed_at, NULL, now(), now()
+        FROM image_ai_summaries
+        WHERE user_id = %s
+          AND note_id = %s
+          AND page_number = %s
+        ON CONFLICT (user_id, note_id, page_number, crop_hash) DO NOTHING
+        """,
+        (page_number + 1, user_id, note_id, page_number),
+    )
+
+
+def _swap_image_summary_pages(cursor: Any, *, note_id: int, page_number: int, next_page_number: int, user_id: int) -> None:
+    temp_page_number = -max(page_number, next_page_number, 1)
+    cursor.execute(
+        """
+        UPDATE image_ai_summaries
+        SET page_number = %s,
+            indexed = false,
+            indexed_at = NULL,
+            updated_at = now()
+        WHERE user_id = %s
+          AND note_id = %s
+          AND page_number = %s
+        """,
+        (temp_page_number, user_id, note_id, page_number),
+    )
+    cursor.execute(
+        """
+        UPDATE image_ai_summaries
+        SET page_number = %s,
+            indexed = false,
+            indexed_at = NULL,
+            updated_at = now()
+        WHERE user_id = %s
+          AND note_id = %s
+          AND page_number = %s
+        """,
+        (page_number, user_id, note_id, next_page_number),
+    )
+    cursor.execute(
+        """
+        UPDATE image_ai_summaries
+        SET page_number = %s,
+            indexed = false,
+            indexed_at = NULL,
+            updated_at = now()
+        WHERE user_id = %s
+          AND note_id = %s
+          AND page_number = %s
+        """,
+        (next_page_number, user_id, note_id, temp_page_number),
+    )
 
 
 def get_note_for_user(note_id: int, user_id: int, connection: Connection):
@@ -1032,7 +1158,6 @@ def get_note_rag_status(
 def update_note(
     note_id: int,
     payload: NoteUpdate,
-    background_tasks: BackgroundTasks,
     connection: Connection = Depends(get_db_connection),
     current_user: dict = Depends(get_current_user),
 ):
@@ -1042,23 +1167,30 @@ def update_note(
         fetch_one(connection, "SELECT id FROM folders WHERE id = %s AND user_id = %s", (next_folder_id, current_user["id"])),
         "folder not found",
     )
-    updated = execute_returning(
-        connection,
-        """
-        UPDATE notes
-        SET folder_id = %s, title = %s, summary = %s, updated_at = now()
-        WHERE id = %s AND user_id = %s
-        RETURNING id, folder_id, title, summary, file_url, thumbnail_url, page_count, created_at, updated_at
-        """,
-        (
-            next_folder_id,
-            payload.title if payload.title is not None else current["title"],
-            payload.summary if payload.summary is not None else current["summary"],
-            note_id,
-            current_user["id"],
-        ),
-    )
-    _schedule_note_reindex(background_tasks, note_id, current_user["id"])
+    try:
+        updated = require_row(
+            fetch_one(
+                connection,
+                """
+                UPDATE notes
+                SET folder_id = %s, title = %s, summary = %s, updated_at = now()
+                WHERE id = %s AND user_id = %s
+                RETURNING id, folder_id, title, summary, file_url, thumbnail_url, page_count, created_at, updated_at
+                """,
+                (
+                    next_folder_id,
+                    payload.title if payload.title is not None else current["title"],
+                    payload.summary if payload.summary is not None else current["summary"],
+                    note_id,
+                    current_user["id"],
+                ),
+            )
+        )
+        sync_note_rag_metadata(connection, note_id=note_id, user_id=current_user["id"], commit=False)
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
     return updated
 
 
@@ -1132,6 +1264,8 @@ def duplicate_note_page(
 
     try:
         with connection.cursor() as cursor:
+            _shift_image_summaries_after_page(cursor, note_id=note_id, page_number=page_number, delta=1, user_id=current_user["id"])
+            _duplicate_image_summaries_for_page(cursor, note_id=note_id, page_number=page_number, user_id=current_user["id"])
             cursor.execute(
                 """
                 UPDATE note_pages
@@ -1152,7 +1286,7 @@ def duplicate_note_page(
         connection.rollback()
         raise
 
-    _schedule_note_reindex(background_tasks, note_id, current_user["id"])
+    _schedule_note_page_structure_reindex(background_tasks, note_id, current_user["id"])
     return _list_pages_for_note(connection, note_id)
 
 
@@ -1175,6 +1309,8 @@ def delete_note_page_by_number(
 
     try:
         with connection.cursor() as cursor:
+            _delete_image_summaries_for_page(cursor, note_id=note_id, page_number=page_number, user_id=current_user["id"])
+            _shift_image_summaries_after_page(cursor, note_id=note_id, page_number=page_number, delta=-1, user_id=current_user["id"])
             cursor.execute("DELETE FROM note_pages WHERE id = %s", (target["id"],))
             cursor.execute(
                 """
@@ -1189,7 +1325,7 @@ def delete_note_page_by_number(
         connection.rollback()
         raise
 
-    _schedule_note_reindex(background_tasks, note_id, current_user["id"])
+    _schedule_note_page_structure_reindex(background_tasks, note_id, current_user["id"])
     return _list_pages_for_note(connection, note_id)
 
 
@@ -1219,6 +1355,13 @@ def move_note_page_by_number(
 
     try:
         with connection.cursor() as cursor:
+            _swap_image_summary_pages(
+                cursor,
+                note_id=note_id,
+                page_number=page_number,
+                next_page_number=next_page_number,
+                user_id=current_user["id"],
+            )
             cursor.execute("UPDATE note_pages SET page_number = -1 WHERE id = %s", (target["id"],))
             cursor.execute(
                 "UPDATE note_pages SET page_number = %s, updated_at = now() WHERE id = %s",
@@ -1233,7 +1376,7 @@ def move_note_page_by_number(
         connection.rollback()
         raise
 
-    _schedule_note_reindex(background_tasks, note_id, current_user["id"])
+    _schedule_note_page_structure_reindex(background_tasks, note_id, current_user["id"])
     return _list_pages_for_note(connection, note_id)
 
 @router.post("/note-pages/{page_id}/analyze-handwriting", response_model=NotePageRead)
@@ -1418,7 +1561,7 @@ def delete_note_page(
         fetch_one(
             connection,
             """
-            SELECT p.id, p.note_id
+            SELECT p.id, p.note_id, p.page_number
             FROM note_pages p
             JOIN notes n ON n.id = p.note_id
             WHERE p.id = %s AND n.user_id = %s
@@ -1427,5 +1570,17 @@ def delete_note_page(
         ),
         "note page not found",
     )
-    execute_commit(connection, "DELETE FROM note_pages WHERE id = %s", (page_id,))
+    try:
+        with connection.cursor() as cursor:
+            _delete_image_summaries_for_page(
+                cursor,
+                note_id=int(current["note_id"]),
+                page_number=int(current["page_number"]),
+                user_id=current_user["id"],
+            )
+            cursor.execute("DELETE FROM note_pages WHERE id = %s", (page_id,))
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
     _schedule_note_page_chunk_delete(background_tasks, page_id, current_user["id"])
