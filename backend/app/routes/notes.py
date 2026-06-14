@@ -1,5 +1,6 @@
 import logging
 import math
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -53,6 +54,13 @@ from backend.app.services.note_page_content import merge_handwriting_recognition
 router = APIRouter(tags=["notes"])
 logger = logging.getLogger("uvicorn.error")
 VISION_STAR_LIKE_CONFIDENCE_THRESHOLD = 0.45
+VISION_AUXILIARY_SIGNAL_THRESHOLD = 26.0
+PAGE_REFERENCE_PATTERN = re.compile(r"(\d{1,3})\s*(?:페이지|쪽|p(?:age)?\.?)", re.IGNORECASE)
+MAX_STROKES_PER_PAGE_STATE = 28
+MAX_POINTS_PER_PAGE_STATE = 900
+MAX_HIGHLIGHTS_PER_PAGE_STATE = 10
+MAX_BOOKMARKS_PER_PAGE_STATE = 1
+MAX_PHOTO_REFERENCES_PER_PAGE_STATE = 5
 
 
 def _schedule_note_page_structure_reindex(background_tasks: BackgroundTasks, note_id: int, user_id: int) -> None:
@@ -297,6 +305,74 @@ def _recognition_confidence(recognition: dict[str, Any]) -> float:
         return max(0.0, min(1.0, float(recognition.get("confidence") or 0.0)))
     except (TypeError, ValueError):
         return 0.0
+
+
+def _normalize_count(value: Any) -> int:
+    if isinstance(value, bool):
+        return 1 if value else 0
+    if isinstance(value, (int, float)):
+        return max(0, int(value))
+    if isinstance(value, list):
+        return len(value)
+    return 0
+
+
+def _sum_state_counts(state: dict[str, Any], keys: tuple[str, ...]) -> int:
+    return sum(_normalize_count(state.get(key)) for key in keys)
+
+
+def _page_ink_activity_counts(state: dict[str, Any]) -> tuple[int, int, int]:
+    stroke_count = 0
+    point_count = 0
+    highlight_count = 0
+    ink_strokes = state.get("inkStrokes")
+    if not isinstance(ink_strokes, list):
+        return 0, 0, 0
+    for stroke in ink_strokes:
+        if not isinstance(stroke, dict):
+            continue
+        points = stroke.get("points")
+        stroke_count += 1
+        point_count += len(points) if isinstance(points, list) else 0
+        if stroke.get("style") == "highlight" or stroke.get("brush") == "highlighter":
+            highlight_count += 1
+    return (
+        min(stroke_count, MAX_STROKES_PER_PAGE_STATE),
+        min(point_count, MAX_POINTS_PER_PAGE_STATE),
+        min(highlight_count, MAX_HIGHLIGHTS_PER_PAGE_STATE),
+    )
+
+
+def _auxiliary_vision_signal_score(state: dict[str, Any], *, ai_question_count: int = 0) -> float:
+    stroke_count, point_count, highlight_count = _page_ink_activity_counts(state)
+    ink_density = min(1.0, (stroke_count * 0.045) + (point_count * 0.0015))
+    raw_ink_density_score = min(6.0, ink_density * 6)
+    bookmark_count = min(
+        _sum_state_counts(state, ("bookmarked", "bookmarkCount", "bookmark_count", "bookmarks")),
+        MAX_BOOKMARKS_PER_PAGE_STATE,
+    )
+    photo_reference_count = min(
+        _sum_state_counts(
+            state,
+            (
+                "photoReferenceCount",
+                "photo_reference_count",
+                "captureReferenceCount",
+                "capture_reference_count",
+                "pageCaptureReferences",
+                "captureReferences",
+                "photoReferences",
+            ),
+        ),
+        MAX_PHOTO_REFERENCES_PER_PAGE_STATE,
+    )
+    study_action_score = min(28.0, (
+        bookmark_count * 8
+        + min(10.0, highlight_count * 2)
+        + photo_reference_count * 4
+        + max(0, int(ai_question_count)) * 6
+    ))
+    return study_action_score + raw_ink_density_score
 
 
 def _cluster_looks_text_like(cluster: dict[str, Any]) -> bool:
@@ -595,6 +671,21 @@ def _cluster_has_loose_handwriting_shape(cluster: dict[str, Any]) -> bool:
     return False
 
 
+def _cluster_has_pen_ink(cluster: dict[str, Any]) -> bool:
+    strokes = cluster.get("strokes")
+    if not isinstance(strokes, list):
+        return False
+    for stroke in strokes:
+        if not isinstance(stroke, dict):
+            continue
+        if stroke.get("style") == "highlight" or stroke.get("brush") == "highlighter":
+            continue
+        if stroke.get("style") == "shape" or stroke.get("shape"):
+            continue
+        return True
+    return False
+
+
 def _star_cluster_has_attached_handwriting_shape(cluster: dict[str, Any]) -> bool:
     if _cluster_has_keyword_anchor_shape(cluster):
         return True
@@ -654,10 +745,43 @@ def _vision_candidate_clusters_for_star_page(
     return candidates
 
 
-def _needs_vision_fallback(geometry: dict[str, Any], raw_clusters: list[dict[str, Any]], *, force: bool) -> bool:
-    if not _has_vision_star_anchor(geometry, raw_clusters):
+def _vision_candidate_clusters_for_auxiliary_page(raw_clusters: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    return [
+        cluster
+        for cluster in raw_clusters
+        if isinstance(cluster, dict)
+        and _cluster_has_pen_ink(cluster)
+        and _cluster_has_loose_handwriting_shape(cluster)
+    ]
+
+
+def _merge_unique_clusters(*cluster_groups: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    seen_ids: set[str] = set()
+    for group in cluster_groups:
+        for cluster in group:
+            cluster_id = _cluster_id(cluster)
+            if cluster_id and cluster_id in seen_ids:
+                continue
+            merged.append(cluster)
+            if cluster_id:
+                seen_ids.add(cluster_id)
+    return merged
+
+
+def _needs_vision_fallback(
+    geometry: dict[str, Any],
+    raw_clusters: list[dict[str, Any]],
+    *,
+    force: bool,
+    has_star_anchor: bool,
+    has_auxiliary_trigger: bool,
+) -> bool:
+    if not (has_star_anchor or has_auxiliary_trigger):
         return False
     if force:
+        return True
+    if has_auxiliary_trigger and _vision_candidate_clusters_for_auxiliary_page(raw_clusters):
         return True
     confidence = _recognition_confidence(geometry)
     keywords = geometry.get("keywords") if isinstance(geometry.get("keywords"), list) else []
@@ -771,6 +895,7 @@ def _apply_vision_fallback_if_needed(
     use_vision_fallback: bool,
     vision_allowed: bool = True,
     vision_skip_reason: str | None = None,
+    auxiliary_score: float = 0.0,
 ) -> dict[str, Any]:
     analyzed_cluster_count = len(raw_clusters)
     if not use_vision_fallback:
@@ -805,7 +930,9 @@ def _apply_vision_fallback_if_needed(
             analyzed_cluster_count=analyzed_cluster_count,
             vision_analyzed_cluster_count=0,
         )
-    if not _has_vision_star_anchor(geometry, raw_clusters):
+    has_star_anchor = _has_vision_star_anchor(geometry, raw_clusters)
+    has_auxiliary_trigger = auxiliary_score >= VISION_AUXILIARY_SIGNAL_THRESHOLD
+    if not has_star_anchor and not has_auxiliary_trigger:
         return _add_handwriting_metadata(
             geometry,
             vision_used=False,
@@ -813,7 +940,13 @@ def _apply_vision_fallback_if_needed(
             analyzed_cluster_count=analyzed_cluster_count,
             vision_analyzed_cluster_count=0,
         )
-    if not _needs_vision_fallback(geometry, raw_clusters, force=force):
+    if not _needs_vision_fallback(
+        geometry,
+        raw_clusters,
+        force=force,
+        has_star_anchor=has_star_anchor,
+        has_auxiliary_trigger=has_auxiliary_trigger,
+    ):
         return _add_handwriting_metadata(
             geometry,
             vision_used=False,
@@ -825,16 +958,18 @@ def _apply_vision_fallback_if_needed(
     vision_results: list[dict[str, Any]] = []
     min_strokes = vision_min_cluster_strokes()
     max_clusters = vision_max_clusters_per_page()
+    star_candidates = _vision_candidate_clusters_for_star_page(geometry, raw_clusters, force=force) if has_star_anchor else []
+    auxiliary_candidates = _vision_candidate_clusters_for_auxiliary_page(raw_clusters) if has_auxiliary_trigger else []
     candidate_clusters = [
         cluster
-        for cluster in _vision_candidate_clusters_for_star_page(geometry, raw_clusters, force=force)
+        for cluster in _merge_unique_clusters(star_candidates, auxiliary_candidates)
         if int(cluster.get("strokeCount") or 0) >= min_strokes
     ]
     if not candidate_clusters:
         return _add_handwriting_metadata(
             geometry,
             vision_used=False,
-            vision_skipped_reason="no-star-text-anchor",
+            vision_skipped_reason="no-star-text-anchor" if has_star_anchor else "no-auxiliary-text-anchor",
             analyzed_cluster_count=analyzed_cluster_count,
             vision_analyzed_cluster_count=0,
         )
@@ -905,21 +1040,70 @@ def _vision_analyzed_cluster_count(content: str | None) -> int:
         return 0
 
 
+def _table_exists(connection: Connection, table_name: str) -> bool:
+    row = fetch_one(connection, "SELECT to_regclass(%s) AS table_name", (table_name,))
+    return bool(row and row.get("table_name"))
+
+
+def _page_ai_question_counts_for_note(connection: Connection, note_id: int, user_id: int) -> dict[int, int]:
+    if not _table_exists(connection, "chat_sessions") or not _table_exists(connection, "chat_messages"):
+        return {}
+    rows = fetch_all(
+        connection,
+        """
+        SELECT m.content
+        FROM chat_sessions s
+        JOIN notes n ON n.id = s.note_id
+        JOIN chat_messages m ON m.session_id = s.id
+        WHERE s.note_id = %s
+          AND n.user_id = %s
+          AND m.role = 'user'
+          AND COALESCE(m.source, 'chat') <> 'canvas-mini'
+        """,
+        (note_id, user_id),
+    )
+    counts: dict[int, int] = {}
+    for row in rows:
+        text = str(row.get("content") or "")
+        for match in PAGE_REFERENCE_PATTERN.finditer(text):
+            page_number = int(match.group(1))
+            if page_number >= 1:
+                counts[page_number] = counts.get(page_number, 0) + 1
+    return counts
+
+
 def _can_skip_existing_handwriting_recognition(
     current_recognition: Any,
     stroke_hash: str,
     *,
     force: bool,
     use_vision_fallback: bool,
+    auxiliary_score: float = 0.0,
 ) -> bool:
     if force or not isinstance(current_recognition, dict) or current_recognition.get("strokeHash") != stroke_hash:
         return False
+    if _recognition_has_mlkit_source(current_recognition):
+        return False
     if not use_vision_fallback:
         return True
+    if auxiliary_score >= VISION_AUXILIARY_SIGNAL_THRESHOLD and current_recognition.get("visionFallbackUsed") is not True:
+        return False
     if current_recognition.get("visionFallbackUsed") is True:
         return True
     retryable_skip_reasons = {None, "", "not-requested", "disabled", "missing-api-key", "unavailable", "failed"}
     return current_recognition.get("visionFallbackSkippedReason") not in retryable_skip_reasons
+
+
+def _recognition_has_mlkit_source(recognition: dict[str, Any]) -> bool:
+    if recognition.get("engine") == "mlkit-digital-ink":
+        return True
+    clusters = recognition.get("clusters")
+    if not isinstance(clusters, list):
+        return False
+    return any(
+        isinstance(cluster, dict) and cluster.get("source") == "mlkit-digital-ink"
+        for cluster in clusters
+    )
 
 
 def _analyze_page_handwriting_content(
@@ -929,6 +1113,8 @@ def _analyze_page_handwriting_content(
     use_vision_fallback: bool = False,
     vision_allowed: bool = True,
     vision_skip_reason: str | None = None,
+    ai_question_count: int = 0,
+    auxiliary_score: float | None = None,
 ) -> tuple[str | None, str]:
     state = parse_page_state(content)
     if state is None:
@@ -937,11 +1123,17 @@ def _analyze_page_handwriting_content(
     ink_strokes = extract_page_ink_strokes(state)
     stroke_hash = stable_stroke_hash(ink_strokes)
     current_recognition = state.get("handwritingRecognition")
+    resolved_auxiliary_score = (
+        auxiliary_score
+        if auxiliary_score is not None
+        else _auxiliary_vision_signal_score(state, ai_question_count=ai_question_count)
+    )
     if _can_skip_existing_handwriting_recognition(
         current_recognition,
         stroke_hash,
         force=force,
         use_vision_fallback=use_vision_fallback,
+        auxiliary_score=resolved_auxiliary_score,
     ):
         return content, "skipped"
 
@@ -954,6 +1146,7 @@ def _analyze_page_handwriting_content(
             use_vision_fallback=use_vision_fallback,
             vision_allowed=vision_allowed,
             vision_skip_reason=vision_skip_reason,
+            auxiliary_score=resolved_auxiliary_score,
         )
     except Exception:
         recognition = _failed_handwriting_recognition(stroke_hash)
@@ -1388,10 +1581,16 @@ def analyze_note_page_handwriting(
     current_user: dict = Depends(get_current_user),
 ):
     current = _get_note_page_for_user(page_id, current_user["id"], connection)
+    ai_question_count = _page_ai_question_counts_for_note(
+        connection,
+        int(current["note_id"]),
+        int(current_user["id"]),
+    ).get(int(current["page_number"]), 0) if use_vision_fallback else 0
     next_content, status = _analyze_page_handwriting_content(
         current["content"],
         force=force,
         use_vision_fallback=use_vision_fallback,
+        ai_question_count=ai_question_count,
     )
     if status == "skipped" or next_content is None or next_content == current["content"]:
         return current
@@ -1463,6 +1662,11 @@ def analyze_note_handwriting(
         "pages_failed": 0,
     }
     vision_pages_used = 0
+    ai_question_counts = (
+        _page_ai_question_counts_for_note(connection, note_id, int(current_user["id"]))
+        if use_vision_fallback
+        else {}
+    )
 
     for page in pages:
         vision_allowed, vision_skip_reason = _vision_page_limit_allows(
@@ -1475,6 +1679,7 @@ def analyze_note_handwriting(
             use_vision_fallback=use_vision_fallback,
             vision_allowed=vision_allowed,
             vision_skip_reason=vision_skip_reason,
+            ai_question_count=ai_question_counts.get(int(page["page_number"]), 0),
         )
         if use_vision_fallback and vision_allowed and _vision_analyzed_cluster_count(next_content) > 0:
             vision_pages_used += 1

@@ -22,6 +22,8 @@ function formatVisionSkipReason(reason?: string | null) {
       return 'no-star-anchor';
     case 'no-star-text-anchor':
       return 'no-star-text-anchor';
+    case 'no-auxiliary-text-anchor':
+      return 'no-auxiliary-text-anchor';
     default:
       return reason || '없음';
   }

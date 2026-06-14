@@ -158,6 +158,8 @@ function formatVisionSkipReason(reason?: string | null) {
       return 'no-star-anchor';
     case 'no-star-text-anchor':
       return 'no-star-text-anchor';
+    case 'no-auxiliary-text-anchor':
+      return 'no-auxiliary-text-anchor';
     case 'unavailable':
       return 'unavailable';
     case 'failed':
@@ -696,6 +698,25 @@ export function useStudyWorkspace(props: {
     onPageSaveSuccess: handlePageSaveSuccess,
     onBackendPagesLoaded: rememberHandwritingRecognitionFromPages,
   });
+  // Auto analysis intentionally uses only the backend geometry/star-gated Vision path.
+  // ML Kit stays available from the debug controls, but is not part of the product flow.
+  const runAutomaticHandwritingAnalysisForPage = useCallback(async (
+    documentId: number,
+    pageNumber: number,
+    pageId: number,
+  ) => {
+    const page = await analyzeBackendNotePageHandwriting(pageId, {
+      force: false,
+      useVisionFallback: HANDWRITING_AUTO_VISION_FALLBACK_ENABLED,
+    });
+    rememberHandwritingRecognitionFromPage(documentId, page);
+    rememberSavedBackendNotePage(documentId, page);
+    scheduleClassInsightRefresh(documentId);
+  }, [
+    rememberHandwritingRecognitionFromPage,
+    rememberSavedBackendNotePage,
+    scheduleClassInsightRefresh,
+  ]);
   useEffect(() => {
     if (!HANDWRITING_AUTO_ANALYZE_ENABLED || !handwritingAutoAnalyzeQueue.length) return undefined;
     const request = handwritingAutoAnalyzeQueue.find(({ documentId, pageNumber }) => (
@@ -717,17 +738,9 @@ export function useStudyWorkspace(props: {
     };
     handwritingAutoAnalyzeTimerRef.current = setTimeout(() => {
       handwritingAutoAnalyzeTimerRef.current = null;
-      analyzeBackendNotePageHandwriting(pageId, {
-        force: false,
-        useVisionFallback: HANDWRITING_AUTO_VISION_FALLBACK_ENABLED,
-      })
-        .then((page) => {
-          rememberHandwritingRecognitionFromPage(documentId, page);
-          rememberSavedBackendNotePage(documentId, page);
-          scheduleClassInsightRefresh(documentId);
-        })
+      runAutomaticHandwritingAnalysisForPage(documentId, pageNumber, pageId)
         .catch(() => {
-          // Debug-only automatic analysis should never interrupt normal page save flow.
+          // Automatic analysis should never interrupt normal page save flow.
         })
         .finally(() => {
           removeRequest();
@@ -743,9 +756,7 @@ export function useStudyWorkspace(props: {
   }, [
     backendPageIdsByDocument,
     handwritingAutoAnalyzeQueue,
-    rememberHandwritingRecognitionFromPage,
-    rememberSavedBackendNotePage,
-    scheduleClassInsightRefresh,
+    runAutomaticHandwritingAnalysisForPage,
   ]);
   const {
     activeAiChatSessionId,
@@ -1024,7 +1035,8 @@ export function useStudyWorkspace(props: {
 
     setHandwritingAnalysisBusy('note');
     try {
-      const summary = await analyzeBackendNoteHandwriting(currentBackendNoteId, options);
+      const analysisOptions = options ?? { useVisionFallback: HANDWRITING_AUTO_VISION_FALLBACK_ENABLED };
+      const summary = await analyzeBackendNoteHandwriting(currentBackendNoteId, analysisOptions);
       const pages = await listBackendNotePages(currentBackendNoteId);
       rememberHandwritingRecognitionFromPages(studyDocumentId, pages);
       pages.forEach((page) => rememberSavedBackendNotePage(studyDocumentId, page));

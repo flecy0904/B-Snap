@@ -36,39 +36,43 @@ HANDWRITING_VISION_CACHE_TTL_DAYS=14
 Current demo policy:
 
 - Core recommendation works without OpenAI: star, bookmarks, highlights, AI questions, memos, group overlap, and weak ink density.
-- When auto analyze is enabled, the frontend asks the backend to run cost-controlled Vision fallback automatically.
-- The backend should call OpenAI only for pages where geometry detects a star anchor and eligible handwriting clusters.
+- Product rule: important handwriting should be marked with a star. The star is both the semantic "important" signal and the trigger that allows Vision to inspect nearby ink.
+- Class insight may surface recommendations once at least 2 students have overlapping study signals for the document.
+- When auto analyze is enabled, the frontend asks only the backend to analyze saved `inkStrokes` through geometry plus cost-controlled Vision fallback.
+- The backend should call OpenAI only for pages where geometry detects a star anchor and eligible nearby handwriting clusters.
+- Secondary Vision trigger: when no star is detected, pages with very strong auxiliary study signals may use Vision if the auxiliary score is at least 26. The score combines ink density, bookmark, highlights, photo references, and AI questions. This keeps ordinary dense handwriting from triggering Vision while still covering pages the user clearly studied.
 - Vision analyzes only nearby B-Snap overlay ink clusters. It must not include the original PDF background.
-- ML Kit is optional. If it is unavailable or inaccurate, the app should continue with backend geometry/Vision.
-- Web and Android use the same backend `inkStrokes` analysis path as iOS. Android ML Kit is intentionally not part of this PR.
+- ML Kit is not part of the automatic product flow. The native module and manual debug actions may remain for future experiments, but autosave analysis must not call ML Kit.
+- Web, Android, and iOS all use the same automatic backend path: geometry symbols → optional server keyword classifier → star-gated Vision.
+- The automatic path should persist geometry/star signals even when Vision is disabled, skipped, or unavailable.
 
 ## Run Locally
 
 Backend:
 
 ```bash
-cd /Users/angibeom/B-Snap-team
+cd /Users/angibeom/developer/B-Snap-team
 backend/.venv/bin/uvicorn backend.app.main:app --reload
 ```
 
 Frontend web:
 
 ```bash
-cd /Users/angibeom/B-Snap-team/frontend
+cd /Users/angibeom/developer/B-Snap-team/frontend
 EXPO_PUBLIC_ENABLE_HANDWRITING_DEBUG=true EXPO_PUBLIC_ENABLE_HANDWRITING_AUTO_ANALYZE=true npm start
 ```
 
 Frontend Android dev build:
 
 ```bash
-cd /Users/angibeom/B-Snap-team/frontend
+cd /Users/angibeom/developer/B-Snap-team/frontend
 EXPO_PUBLIC_ENABLE_HANDWRITING_DEBUG=true EXPO_PUBLIC_ENABLE_HANDWRITING_AUTO_ANALYZE=true npm run android
 ```
 
 iOS dev build check:
 
 ```bash
-cd /Users/angibeom/B-Snap-team/frontend/ios
+cd /Users/angibeom/developer/B-Snap-team/frontend/ios
 pod install
 xcodebuild -workspace BSNAP.xcworkspace -scheme BSNAP -configuration Debug -sdk iphonesimulator -destination 'generic/platform=iOS Simulator' -quiet build CODE_SIGNING_ALLOWED=NO
 ```
@@ -107,10 +111,9 @@ This is the real non-debug flow used for demo and team testing.
 6. Expected:
    - Star-only pages are saved as semantic symbol pages through geometry.
    - Star plus nearby `중요`, `시험`, `기말`, `중간`, `암기`, or `필수` can use cost-controlled Vision if backend env allows it.
-   - Pages without a star are not sent to Vision automatically, even if they contain general handwriting.
+   - Pages without a star are normally skipped, but can use Vision when auxiliary study signals reach 26+ points.
    - Asking `중요 페이지 추천해줘` should use the saved `handwritingRecognition` data.
-7. Web expected ML Kit behavior: unavailable is normal.
-8. Android expected ML Kit behavior: unavailable is normal in this PR; Android still uses backend geometry/Vision after autosave.
+7. ML Kit should not run during autosave analysis on web, Android, or iOS. Manual debug buttons may still work separately.
 
 Suggested three-account demo pattern:
 
@@ -135,10 +138,14 @@ Expected ranking:
 5. Confirm `visionFallbackUsed`, `visionFallbackSkippedReason`, `analyzedClusterCount`, and `visionAnalyzedClusterCount` display clearly.
 6. Draw Korean handwriting without a star and wait for auto analysis, or run Vision fallback manually.
 7. Expected: Vision is skipped with `no-star-anchor`; OpenAI should not be called.
-8. Remove `OPENAI_API_KEY` or disable the env flag and rerun.
-9. Expected: analysis fails safely with `missing-api-key` or `fallback-disabled`; note save/PDF/chat/canvas flows keep working.
+8. Add strong auxiliary signals to a starless page, such as bookmark + several highlights + photo references + page-referenced AI questions.
+9. Expected: when the auxiliary score reaches 26+, Vision can analyze eligible pen-like handwriting clusters even without a star.
+10. Remove `OPENAI_API_KEY` or disable the env flag and rerun.
+11. Expected: analysis fails safely with `missing-api-key` or `fallback-disabled`; note save/PDF/chat/canvas flows keep working.
 
-## ML Kit QA
+## Manual ML Kit QA
+
+ML Kit is debug/future-only. These checks must not be required for the normal autosave recommendation flow.
 
 Web expected behavior:
 
@@ -165,7 +172,7 @@ iOS dev build:
 Seed semantic class-insight demo data:
 
 ```bash
-cd /Users/angibeom/B-Snap-team
+cd /Users/angibeom/developer/B-Snap-team
 backend/.venv/bin/python backend/scripts/seed_handwriting_semantic_demo.py
 ```
 
@@ -183,6 +190,31 @@ Page 13 outranks Page 75.
 Star and strong keywords outrank raw-stroke-heavy pages.
 Check/circle/underline-only pages should not become high priority.
 ```
+
+## Keyword Classifier (server-side)
+
+A pure-numpy closed-set classifier maps an ink cluster to one of the study
+keywords (중요/시험/중간/기말/암기/필수) or `none`. It runs on every platform
+(including web) as part of `build_handwriting_recognition_from_geometry` and is a
+safe no-op until a model artifact exists.
+
+- Default artifact path: `backend/app/services/models/handwriting_keyword_classifier.npz` (gitignored).
+- Override with `HANDWRITING_KEYWORD_CLASSIFIER_PATH`.
+- Train from a labelled JSONL dataset:
+
+  ```bash
+  backend/.venv/bin/python -m backend.scripts.train_handwriting_keyword_classifier --dataset path/to/clusters.jsonl
+  ```
+
+- Validate the train→infer pipeline without real data:
+
+  ```bash
+  backend/.venv/bin/python -m backend.scripts.train_handwriting_keyword_classifier --synthetic
+  ```
+
+When the artifact is present, the classifier keyword is folded into the backend
+geometry result and can be merged with Vision (`engine: hybrid`); when absent,
+geometry keeps emitting symbols only and page keywords stay empty.
 
 ## Prompt Examples
 
