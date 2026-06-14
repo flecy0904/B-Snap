@@ -1,4 +1,5 @@
 import base64
+from io import BytesIO
 import json
 import logging
 import mimetypes
@@ -67,6 +68,8 @@ HEIC_CONTENT_TYPES = {"image/heic", "image/heif"}
 PREPROCESS_INPUT_DIR_NAME = "preprocess-inputs"
 PREPROCESSED_IMAGE_DIR_NAME = "preprocessed-images"
 PROCESSED_IMAGE_DIR_NAME = "processed-images"
+AI_ANALYSIS_SOURCE_MAX_EDGE = 1600
+AI_ANALYSIS_SOURCE_JPEG_QUALITY = 85
 logger = logging.getLogger("uvicorn.error")
 
 
@@ -104,6 +107,8 @@ class CaptureUploadJob:
     updated_at: float
     upload: dict | None = None
     error: str | None = None
+    stored_upload: StoredUpload | None = None
+    source_path: str | None = None
 
 
 _capture_upload_jobs: dict[str, CaptureUploadJob] = {}
@@ -136,7 +141,7 @@ def _prune_capture_upload_jobs_locked() -> None:
         _capture_upload_jobs.pop(job.id, None)
 
 
-def _create_capture_upload_job(user_id: int) -> CaptureUploadJob:
+def _create_capture_upload_job(user_id: int, *, upload: StoredUpload | None = None, source_path: Path | None = None) -> CaptureUploadJob:
     now = time.time()
     job = CaptureUploadJob(
         id=uuid4().hex,
@@ -146,6 +151,8 @@ def _create_capture_upload_job(user_id: int) -> CaptureUploadJob:
         message="강의자료/칠판 찾기를 준비하고 있습니다.",
         created_at=now,
         updated_at=now,
+        stored_upload=upload,
+        source_path=str(source_path) if source_path is not None else None,
     )
     with _capture_upload_jobs_lock:
         _capture_upload_jobs[job.id] = job
@@ -490,6 +497,7 @@ def _preprocess_upload_image(
     stored_filename: str,
     content_type: str,
     progress_callback: Callable[[str, str], None] | None = None,
+    defer_segmentation_fallback: bool = False,
 ) -> ImagePreprocessResult:
     started_at = time.perf_counter()
     fallback_preprocessing: dict[str, Any] | None = None
@@ -579,6 +587,16 @@ def _preprocess_upload_image(
                     ],
                 )
             )
+            if (
+                defer_segmentation_fallback
+                and fallback_preprocessing.get("detail_code") == "segmentation_mask_not_found"
+            ):
+                return ImagePreprocessResult(
+                    processed_path=None,
+                    processed_url=None,
+                    thumbnail_url=None,
+                    preprocessing=fallback_preprocessing,
+                )
         except Exception as exc:
             fallback_preprocessing = _fallback_preprocessing_payload(
                 source="service_exception",
@@ -691,16 +709,55 @@ def _image_data_uri(path: Path, content_type: str, max_bytes: int) -> str | None
     return f"data:{content_type};base64,{encoded}"
 
 
+def _compressed_source_image_data_uri(
+    path: Path,
+    *,
+    max_bytes: int,
+    max_edge: int = AI_ANALYSIS_SOURCE_MAX_EDGE,
+    quality: int = AI_ANALYSIS_SOURCE_JPEG_QUALITY,
+) -> str | None:
+    try:
+        from PIL import Image, ImageOps
+
+        try:
+            from pillow_heif import register_heif_opener
+
+            register_heif_opener()
+        except Exception:
+            pass
+
+        with Image.open(path) as image:
+            normalized = ImageOps.exif_transpose(image)
+            if normalized.mode != "RGB":
+                normalized = normalized.convert("RGB")
+            normalized.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
+            buffer = BytesIO()
+            normalized.save(buffer, format="JPEG", quality=quality, optimize=True)
+            data = buffer.getvalue()
+    except Exception:
+        return None
+
+    if not data or len(data) > max_bytes:
+        return None
+    encoded = base64.b64encode(data).decode("ascii")
+    return f"data:image/jpeg;base64,{encoded}"
+
+
 def _build_upload_analysis_image_data_uri(
     *,
     source_path: Path,
     source_content_type: str,
     processed_path: Path | None,
     max_bytes: int,
+    compress_source: bool = False,
 ) -> str | None:
     candidates: list[tuple[Path, str]] = []
     if processed_path is not None:
         candidates.append((processed_path, _guess_image_content_type(processed_path)))
+    elif compress_source:
+        image_data_uri = _compressed_source_image_data_uri(source_path, max_bytes=max_bytes)
+        if image_data_uri:
+            return image_data_uri
     candidates.append((source_path, source_content_type))
 
     for path, content_type in candidates:
@@ -720,42 +777,29 @@ def _fallback_image_analysis(filename: str, status: str = "ready") -> dict:
     }
 
 
-def _analyze_image_upload(
+def _generate_upload_image_analysis(
     upload: StoredUpload,
     source_path: Path,
     settings: Settings,
+    *,
+    processed_path: Path | None,
     progress_callback: Callable[[str, str], None] | None = None,
+    announce_progress: bool = True,
+    compress_source_for_analysis: bool = False,
 ) -> None:
-    if ALLOWED_CONTENT_TYPES.get(upload.content_type) != "image":
-        return
-
-    preprocess_result = _preprocess_upload_image(
-        source_path,
-        settings.upload_path,
-        upload.stored_filename,
-        upload.content_type,
-        progress_callback=progress_callback,
-    )
-    upload.processed_url = preprocess_result.processed_url
-    upload.thumbnail_url = preprocess_result.thumbnail_url
-    upload.preprocessing = preprocess_result.preprocessing
     image_data_uri = _build_upload_analysis_image_data_uri(
         source_path=source_path,
         source_content_type=upload.content_type,
-        processed_path=preprocess_result.processed_path,
+        processed_path=processed_path,
         max_bytes=settings.ai_image_max_bytes,
+        compress_source=compress_source_for_analysis,
     )
 
     if not image_data_uri:
         upload.analysis = _fallback_image_analysis(upload.filename, status="failed")
         return
 
-    preprocessing_detail_code = (
-        preprocess_result.preprocessing.get("detail_code")
-        if isinstance(preprocess_result.preprocessing, dict)
-        else None
-    )
-    if progress_callback is not None and preprocessing_detail_code != "segmentation_mask_not_found":
+    if progress_callback is not None and announce_progress:
         progress_callback("ai-commenting", "AI가 사진 설명을 작성하고 있습니다.")
     try:
         upload.analysis = generate_capture_image_analysis(
@@ -765,6 +809,47 @@ def _analyze_image_upload(
         )
     except Exception:
         upload.analysis = _fallback_image_analysis(upload.filename, status="failed")
+
+
+def _analyze_image_upload(
+    upload: StoredUpload,
+    source_path: Path,
+    settings: Settings,
+    progress_callback: Callable[[str, str], None] | None = None,
+    defer_segmentation_fallback: bool = False,
+) -> str | None:
+    if ALLOWED_CONTENT_TYPES.get(upload.content_type) != "image":
+        return None
+
+    preprocess_result = _preprocess_upload_image(
+        source_path,
+        settings.upload_path,
+        upload.stored_filename,
+        upload.content_type,
+        progress_callback=progress_callback,
+        defer_segmentation_fallback=defer_segmentation_fallback,
+    )
+    upload.processed_url = preprocess_result.processed_url
+    upload.thumbnail_url = preprocess_result.thumbnail_url
+    upload.preprocessing = preprocess_result.preprocessing
+
+    preprocessing_detail_code = (
+        preprocess_result.preprocessing.get("detail_code")
+        if isinstance(preprocess_result.preprocessing, dict)
+        else None
+    )
+    if defer_segmentation_fallback and preprocessing_detail_code == "segmentation_mask_not_found":
+        return "needs_user_choice"
+
+    _generate_upload_image_analysis(
+        upload,
+        source_path,
+        settings,
+        processed_path=preprocess_result.processed_path,
+        progress_callback=progress_callback,
+        announce_progress=preprocessing_detail_code != "segmentation_mask_not_found",
+    )
+    return None
 
 
 def _cleanup_stored_upload(upload: StoredUpload, settings: Settings) -> None:
@@ -852,7 +937,22 @@ def _run_capture_upload_job(job_id: str, upload: StoredUpload, source_path: Path
         def progress(stage: str, message: str) -> None:
             _update_capture_upload_job(job_id, stage=stage, message=message)
 
-        _analyze_image_upload(upload, source_path, settings, progress_callback=progress)
+        result = _analyze_image_upload(
+            upload,
+            source_path,
+            settings,
+            progress_callback=progress,
+            defer_segmentation_fallback=True,
+        )
+        if result == "needs_user_choice":
+            _update_capture_upload_job(
+                job_id,
+                status="needs_user_choice",
+                stage="target-detecting",
+                message="강의자료/칠판 영역을 찾지 못했습니다. 원본 이미지를 사용할지 선택해 주세요.",
+                upload=_upload_response(upload),
+            )
+            return
         _update_capture_upload_job(
             job_id,
             status="completed",
@@ -871,6 +971,53 @@ def _run_capture_upload_job(job_id: str, upload: StoredUpload, source_path: Path
         )
 
 
+def _continue_capture_upload_job(job_id: str, settings: Settings) -> None:
+    with _capture_upload_jobs_lock:
+        job = _capture_upload_jobs.get(job_id)
+        upload = job.stored_upload if job is not None else None
+        source_path = Path(job.source_path) if job is not None and job.source_path else None
+
+    if job is None or upload is None or source_path is None:
+        _update_capture_upload_job(
+            job_id,
+            status="failed",
+            stage="failed",
+            message="원본 이미지 처리 작업을 찾지 못했습니다.",
+            error="capture upload job state is missing",
+        )
+        return
+
+    try:
+        def progress(stage: str, message: str) -> None:
+            _update_capture_upload_job(job_id, stage=stage, message=message)
+
+        _generate_upload_image_analysis(
+            upload,
+            source_path,
+            settings,
+            processed_path=None,
+            progress_callback=progress,
+            announce_progress=True,
+            compress_source_for_analysis=True,
+        )
+        _update_capture_upload_job(
+            job_id,
+            status="completed",
+            stage="completed",
+            message="원본 이미지 AI 설명 생성이 완료되었습니다.",
+            upload=_upload_response(upload),
+        )
+    except Exception as exc:
+        logger.exception("Capture upload continue job failed: %s", job_id)
+        _update_capture_upload_job(
+            job_id,
+            status="failed",
+            stage="failed",
+            message="원본 이미지 AI 설명 생성 중 문제가 발생했습니다.",
+            error=str(exc),
+        )
+
+
 @router.post("/capture-jobs")
 async def create_capture_upload_job(
     background_tasks: BackgroundTasks,
@@ -883,8 +1030,8 @@ async def create_capture_upload_job(
         _cleanup_stored_upload(upload, settings)
         raise HTTPException(status_code=415, detail="이미지 파일만 촬영 처리 작업으로 업로드할 수 있습니다.")
 
-    job = _create_capture_upload_job(int(current_user["id"]))
     source_path = settings.upload_path / upload.stored_filename
+    job = _create_capture_upload_job(int(current_user["id"]), upload=upload, source_path=source_path)
     background_tasks.add_task(_run_capture_upload_job, job.id, upload, source_path, settings)
     return _capture_upload_job_response(job)
 
@@ -896,6 +1043,33 @@ async def get_capture_upload_job(
 ):
     job = _get_capture_upload_job(job_id, int(current_user["id"]))
     return _capture_upload_job_response(job)
+
+
+@router.post("/capture-jobs/{job_id}/continue")
+async def continue_capture_upload_job(
+    job_id: str,
+    background_tasks: BackgroundTasks,
+    settings: Settings = Depends(get_settings),
+    current_user: dict = Depends(get_current_user),
+):
+    job = _get_capture_upload_job(job_id, int(current_user["id"]))
+    if job.status == "completed":
+        return _capture_upload_job_response(job)
+    if job.status == "failed":
+        raise HTTPException(status_code=409, detail=job.error or job.message or "업로드 작업이 실패했습니다.")
+    if job.status == "processing":
+        return _capture_upload_job_response(job)
+    if job.status != "needs_user_choice":
+        raise HTTPException(status_code=409, detail="원본 이미지 처리를 계속할 수 없는 작업 상태입니다.")
+
+    _update_capture_upload_job(
+        job_id,
+        status="processing",
+        stage="ai-commenting",
+        message="AI가 원본 사진 설명을 작성하고 있습니다.",
+    )
+    background_tasks.add_task(_continue_capture_upload_job, job_id, settings)
+    return _capture_upload_job_response(_get_capture_upload_job(job_id, int(current_user["id"])))
 
 
 @router.post("")

@@ -1,6 +1,10 @@
+import base64
+from io import BytesIO
 from pathlib import Path
 
 import img_preprocessing.pipeline as preprocessing_pipeline
+from PIL import Image
+
 from backend.app.routes import uploads
 
 
@@ -41,7 +45,13 @@ def test_preprocess_upload_image_returns_service_enhanced_color(tmp_path: Path, 
     source_path = upload_root / "stored-photo.jpg"
     source_path.write_bytes(b"raw image")
 
-    def fake_run_service_preprocessing(input_path: Path, output_dir: Path, *, output_name: str):
+    def fake_run_service_preprocessing(
+        input_path: Path,
+        output_dir: Path,
+        *,
+        output_name: str,
+        progress_callback=None,
+    ):
         assert input_path == source_path
         crop_path = output_dir / f"{output_name}_abc" / "crop" / f"{output_name}_crop.jpg"
         enhanced_path = output_dir / f"{output_name}_abc" / "scan_enhance" / f"{output_name}_crop_enhanced_color.jpg"
@@ -132,7 +142,13 @@ def test_heic_upload_is_converted_before_service_preprocessing(tmp_path: Path, m
         converted_path.write_bytes(b"converted jpeg")
         return converted_path
 
-    def fake_run_service_preprocessing(input_path: Path, output_dir: Path, *, output_name: str):
+    def fake_run_service_preprocessing(
+        input_path: Path,
+        output_dir: Path,
+        *,
+        output_name: str,
+        progress_callback=None,
+    ):
         seen_input_paths.append(input_path)
         crop_path = output_dir / f"{output_name}_abc" / "crop" / f"{output_name}_crop.jpg"
         enhanced_path = output_dir / f"{output_name}_abc" / "scan_enhance" / f"{output_name}_crop_enhanced_color.jpg"
@@ -172,7 +188,13 @@ def test_extensionless_jpeg_upload_is_copied_before_service_preprocessing(tmp_pa
     expected_input_path = upload_root / "preprocess-inputs" / "stored-photo-jpg.jpg"
     seen_input_paths: list[Path] = []
 
-    def fake_run_service_preprocessing(input_path: Path, output_dir: Path, *, output_name: str):
+    def fake_run_service_preprocessing(
+        input_path: Path,
+        output_dir: Path,
+        *,
+        output_name: str,
+        progress_callback=None,
+    ):
         seen_input_paths.append(input_path)
         crop_path = output_dir / f"{output_name}_abc" / "crop" / f"{output_name}_crop.jpg"
         enhanced_path = output_dir / f"{output_name}_abc" / "scan_enhance" / f"{output_name}_crop_enhanced_color.jpg"
@@ -219,6 +241,41 @@ def test_upload_analysis_data_uri_uses_processed_image_mime_type(tmp_path: Path)
 
     assert image_data_uri is not None
     assert image_data_uri.startswith("data:image/jpeg;base64,")
+
+
+def test_upload_analysis_data_uri_compresses_source_image_when_requested(tmp_path: Path) -> None:
+    source_path = tmp_path / "source.png"
+    Image.new("RGB", (2400, 1800), (240, 240, 240)).save(source_path, format="PNG")
+
+    image_data_uri = uploads._build_upload_analysis_image_data_uri(
+        source_path=source_path,
+        source_content_type="image/png",
+        processed_path=None,
+        max_bytes=1024 * 1024,
+        compress_source=True,
+    )
+
+    assert image_data_uri is not None
+    header, _, encoded = image_data_uri.partition(",")
+    assert header == "data:image/jpeg;base64"
+    with Image.open(BytesIO(base64.b64decode(encoded))) as image:
+        assert image.format == "JPEG"
+        assert max(image.size) == uploads.AI_ANALYSIS_SOURCE_MAX_EDGE
+
+
+def test_upload_analysis_data_uri_keeps_source_mime_without_compression(tmp_path: Path) -> None:
+    source_path = tmp_path / "source.png"
+    source_path.write_bytes(b"source")
+
+    image_data_uri = uploads._build_upload_analysis_image_data_uri(
+        source_path=source_path,
+        source_content_type="image/png",
+        processed_path=None,
+        max_bytes=1024,
+    )
+
+    assert image_data_uri is not None
+    assert image_data_uri.startswith("data:image/png;base64,")
 
 
 def test_format_upload_preprocessing_log_uses_readable_lines() -> None:
