@@ -158,6 +158,8 @@ function formatVisionSkipReason(reason?: string | null) {
       return 'no-star-anchor';
     case 'no-star-text-anchor':
       return 'no-star-text-anchor';
+    case 'no-auxiliary-text-anchor':
+      return 'no-auxiliary-text-anchor';
     case 'unavailable':
       return 'unavailable';
     case 'failed':
@@ -696,38 +698,13 @@ export function useStudyWorkspace(props: {
     onPageSaveSuccess: handlePageSaveSuccess,
     onBackendPagesLoaded: rememberHandwritingRecognitionFromPages,
   });
-  // Cascade: on-device ML Kit first (mobile), then server geometry/Vision.
-  // ML Kit is best-effort and must never block the server analysis fallback.
-  const runHandwritingCascadeForPage = useCallback(async (
+  // Auto analysis intentionally uses only the backend geometry/star-gated Vision path.
+  // ML Kit stays available from the debug controls, but is not part of the product flow.
+  const runAutomaticHandwritingAnalysisForPage = useCallback(async (
     documentId: number,
     pageNumber: number,
     pageId: number,
   ) => {
-    try {
-      const availability = await getHandwritingRecognitionAvailability();
-      if (availability.available && availability.state !== 'ready') {
-        // Kick off the Korean model download once; use server analysis this round.
-        void ensureKoreanHandwritingModel();
-      } else if (availability.available) {
-        const strokes = (inkByDocument[documentId] ?? []).filter((stroke) => (
-          !stroke.generatedPageId
-          && (!stroke.pageNumber || stroke.pageNumber === pageNumber)
-        ));
-        if (strokes.length) {
-          const result = await recognizeKoreanHandwritingByClusters(strokes, { pageNumber });
-          if (result.status === 'ready') {
-            // Persist via the hybrid-merge endpoint so geometry/Vision keywords are kept.
-            await persistBackendNotePageHandwritingRecognition(
-              pageId,
-              buildMlKitRecognitionWritePayload(result, pageNumber),
-            );
-          }
-        }
-      }
-    } catch {
-      // On-device recognition is optional; fall through to server analysis.
-    }
-
     const page = await analyzeBackendNotePageHandwriting(pageId, {
       force: false,
       useVisionFallback: HANDWRITING_AUTO_VISION_FALLBACK_ENABLED,
@@ -736,7 +713,6 @@ export function useStudyWorkspace(props: {
     rememberSavedBackendNotePage(documentId, page);
     scheduleClassInsightRefresh(documentId);
   }, [
-    inkByDocument,
     rememberHandwritingRecognitionFromPage,
     rememberSavedBackendNotePage,
     scheduleClassInsightRefresh,
@@ -762,7 +738,7 @@ export function useStudyWorkspace(props: {
     };
     handwritingAutoAnalyzeTimerRef.current = setTimeout(() => {
       handwritingAutoAnalyzeTimerRef.current = null;
-      runHandwritingCascadeForPage(documentId, pageNumber, pageId)
+      runAutomaticHandwritingAnalysisForPage(documentId, pageNumber, pageId)
         .catch(() => {
           // Automatic analysis should never interrupt normal page save flow.
         })
@@ -780,7 +756,7 @@ export function useStudyWorkspace(props: {
   }, [
     backendPageIdsByDocument,
     handwritingAutoAnalyzeQueue,
-    runHandwritingCascadeForPage,
+    runAutomaticHandwritingAnalysisForPage,
   ]);
   const {
     activeAiChatSessionId,
@@ -1059,7 +1035,8 @@ export function useStudyWorkspace(props: {
 
     setHandwritingAnalysisBusy('note');
     try {
-      const summary = await analyzeBackendNoteHandwriting(currentBackendNoteId, options);
+      const analysisOptions = options ?? { useVisionFallback: HANDWRITING_AUTO_VISION_FALLBACK_ENABLED };
+      const summary = await analyzeBackendNoteHandwriting(currentBackendNoteId, analysisOptions);
       const pages = await listBackendNotePages(currentBackendNoteId);
       rememberHandwritingRecognitionFromPages(studyDocumentId, pages);
       pages.forEach((page) => rememberSavedBackendNotePage(studyDocumentId, page));

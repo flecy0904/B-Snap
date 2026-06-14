@@ -110,7 +110,7 @@ const EXTENDED_RECOMMENDATION_LIMIT = 10;
 const MAX_RECOMMENDATION_LIMIT = 12;
 const PAGE_MENTION_PATTERN = /((?:\d{1,3}\s*(?:[-~–—]\s*\d{1,3})?\s*(?:[,，]|\s*(?:및|와|과|그리고)\s*)?\s*)+)\s*(?:페이지|쪽|p(?:age)?\.?)/gi;
 const PAGE_RANGE_PATTERN = /(\d{1,3})(?:\s*[-~–—]\s*(\d{1,3}))?/g;
-export const MIN_CLASS_INSIGHT_PARTICIPANTS = 3;
+export const MIN_CLASS_INSIGHT_PARTICIPANTS = 2;
 const SEMANTIC_KEYWORD_WEIGHTS: Record<string, number> = {
   시험: 20,
   중요: 18,
