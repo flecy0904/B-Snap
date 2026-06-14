@@ -525,8 +525,9 @@ export function useAiCanvasNotes({
       setDraftSnapshot(nextSnapshot);
       return;
     }
+    onRecordWorkspaceAction?.();
     setDraftSnapshot(nextSnapshot);
-  }, [currentSnapshot, setDraftSnapshot]);
+  }, [currentSnapshot, onRecordWorkspaceAction, setDraftSnapshot]);
 
   const changeSelectionDraft = useCallback((selection: AiCanvasSelection | null) => {
     const current = selectionDraftRef.current;
@@ -796,7 +797,7 @@ export function useAiCanvasNotes({
     }
 
     const previousSnapshot = action === 'canvas_create' ? createEmptyCanvasSnapshot() : currentSnapshot();
-    if (hasMeaningfulSnapshot(previousSnapshot)) {
+    if (action === 'canvas_create' || hasMeaningfulSnapshot(previousSnapshot)) {
       setUndoStack((current) => appendUndoSnapshot(current, previousSnapshot));
       setRedoStack([]);
       onRecordWorkspaceAction?.();
