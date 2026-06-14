@@ -39,8 +39,9 @@ Current demo policy:
 - When auto analyze is enabled, the frontend asks the backend to run cost-controlled Vision fallback automatically.
 - The backend should call OpenAI only for pages where geometry detects a star anchor and eligible handwriting clusters.
 - Vision analyzes only nearby B-Snap overlay ink clusters. It must not include the original PDF background.
-- ML Kit is optional. If it is unavailable or inaccurate, the app should continue with backend geometry/Vision.
-- Web and Android use the same backend `inkStrokes` analysis path as iOS. Android ML Kit is intentionally not part of this PR.
+- On-device ML Kit (iOS **and Android**) now runs automatically inside the auto-analyze cascade: ML Kit recognizes text first and is persisted via the hybrid-merge endpoint, then the backend merges geometry + the closed-set keyword classifier, and only falls back to Vision when the combined geometry+ML Kit confidence is low. ML Kit stays optional — if it is unavailable or inaccurate, the app continues with backend geometry/Vision.
+- Web has no native ML Kit, so it uses the backend `inkStrokes` path only (geometry + keyword classifier + star-gated Vision).
+- The cascade order is: geometry symbols → keyword classifier (server) → ML Kit text (on-device) → Vision (low-confidence fallback). The merge raises confidence when sources agree (`engine: hybrid`).
 
 ## Run Locally
 
@@ -109,8 +110,8 @@ This is the real non-debug flow used for demo and team testing.
    - Star plus nearby `중요`, `시험`, `기말`, `중간`, `암기`, or `필수` can use cost-controlled Vision if backend env allows it.
    - Pages without a star are not sent to Vision automatically, even if they contain general handwriting.
    - Asking `중요 페이지 추천해줘` should use the saved `handwritingRecognition` data.
-7. Web expected ML Kit behavior: unavailable is normal.
-8. Android expected ML Kit behavior: unavailable is normal in this PR; Android still uses backend geometry/Vision after autosave.
+7. Web expected ML Kit behavior: unavailable is normal; web uses backend geometry/classifier/Vision.
+8. Android expected ML Kit behavior: the Korean Digital Ink model downloads on first use; once ready, Android runs ML Kit on-device in the auto cascade. While the model is still downloading or if it is unavailable, Android falls back to backend geometry/Vision after autosave.
 
 Suggested three-account demo pattern:
 
@@ -183,6 +184,31 @@ Page 13 outranks Page 75.
 Star and strong keywords outrank raw-stroke-heavy pages.
 Check/circle/underline-only pages should not become high priority.
 ```
+
+## Keyword Classifier (server-side)
+
+A pure-numpy closed-set classifier maps an ink cluster to one of the study
+keywords (중요/시험/중간/기말/암기/필수) or `none`. It runs on every platform
+(including web) as part of `build_handwriting_recognition_from_geometry` and is a
+safe no-op until a model artifact exists.
+
+- Default artifact path: `backend/app/services/models/handwriting_keyword_classifier.npz` (gitignored).
+- Override with `HANDWRITING_KEYWORD_CLASSIFIER_PATH`.
+- Train from a labelled JSONL dataset:
+
+  ```bash
+  backend/.venv/bin/python -m backend.scripts.train_handwriting_keyword_classifier --dataset path/to/clusters.jsonl
+  ```
+
+- Validate the train→infer pipeline without real data:
+
+  ```bash
+  backend/.venv/bin/python -m backend.scripts.train_handwriting_keyword_classifier --synthetic
+  ```
+
+When the artifact is present, the classifier keyword is folded into the geometry
+result and merged with ML Kit/Vision (`engine: hybrid`); when absent, geometry
+keeps emitting symbols only and page keywords stay empty.
 
 ## Prompt Examples
 

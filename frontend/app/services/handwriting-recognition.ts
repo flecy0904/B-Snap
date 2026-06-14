@@ -78,7 +78,7 @@ const nativeModule = Platform.OS === 'ios' || Platform.OS === 'android'
 
 function getNativeModuleUnavailableDetail() {
   if (Platform.OS === 'web') return 'web fallback';
-  if (Platform.OS === 'android') return 'android native module unavailable; Android uses backend geometry/Vision handwriting analysis';
+  if (Platform.OS === 'android') return 'android ML Kit native module unavailable; falling back to backend geometry/Vision handwriting analysis';
   return 'native module unavailable';
 }
 

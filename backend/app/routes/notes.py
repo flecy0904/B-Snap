@@ -947,6 +947,19 @@ def _analyze_page_handwriting_content(
 
     try:
         recognition = build_handwriting_recognition_from_geometry(state)
+        # Preserve on-device ML Kit / classifier keywords for the same strokes so the
+        # geometry rebuild does not clobber them. The merged confidence then lets the
+        # Vision step skip pages already covered by on-device recognition.
+        if (
+            isinstance(current_recognition, dict)
+            and current_recognition.get("strokeHash") == stroke_hash
+            and current_recognition.get("engine") != "geometry"
+        ):
+            recognition = merge_handwriting_recognition_results(
+                current_recognition,
+                recognition,
+                stroke_hash,
+            )
         recognition = _apply_vision_fallback_if_needed(
             recognition,
             cluster_ink_strokes(ink_strokes),

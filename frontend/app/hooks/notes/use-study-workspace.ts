@@ -696,6 +696,51 @@ export function useStudyWorkspace(props: {
     onPageSaveSuccess: handlePageSaveSuccess,
     onBackendPagesLoaded: rememberHandwritingRecognitionFromPages,
   });
+  // Cascade: on-device ML Kit first (mobile), then server geometry/Vision.
+  // ML Kit is best-effort and must never block the server analysis fallback.
+  const runHandwritingCascadeForPage = useCallback(async (
+    documentId: number,
+    pageNumber: number,
+    pageId: number,
+  ) => {
+    try {
+      const availability = await getHandwritingRecognitionAvailability();
+      if (availability.available && availability.state !== 'ready') {
+        // Kick off the Korean model download once; use server analysis this round.
+        void ensureKoreanHandwritingModel();
+      } else if (availability.available) {
+        const strokes = (inkByDocument[documentId] ?? []).filter((stroke) => (
+          !stroke.generatedPageId
+          && (!stroke.pageNumber || stroke.pageNumber === pageNumber)
+        ));
+        if (strokes.length) {
+          const result = await recognizeKoreanHandwritingByClusters(strokes, { pageNumber });
+          if (result.status === 'ready') {
+            // Persist via the hybrid-merge endpoint so geometry/Vision keywords are kept.
+            await persistBackendNotePageHandwritingRecognition(
+              pageId,
+              buildMlKitRecognitionWritePayload(result, pageNumber),
+            );
+          }
+        }
+      }
+    } catch {
+      // On-device recognition is optional; fall through to server analysis.
+    }
+
+    const page = await analyzeBackendNotePageHandwriting(pageId, {
+      force: false,
+      useVisionFallback: HANDWRITING_AUTO_VISION_FALLBACK_ENABLED,
+    });
+    rememberHandwritingRecognitionFromPage(documentId, page);
+    rememberSavedBackendNotePage(documentId, page);
+    scheduleClassInsightRefresh(documentId);
+  }, [
+    inkByDocument,
+    rememberHandwritingRecognitionFromPage,
+    rememberSavedBackendNotePage,
+    scheduleClassInsightRefresh,
+  ]);
   useEffect(() => {
     if (!HANDWRITING_AUTO_ANALYZE_ENABLED || !handwritingAutoAnalyzeQueue.length) return undefined;
     const request = handwritingAutoAnalyzeQueue.find(({ documentId, pageNumber }) => (
@@ -717,17 +762,9 @@ export function useStudyWorkspace(props: {
     };
     handwritingAutoAnalyzeTimerRef.current = setTimeout(() => {
       handwritingAutoAnalyzeTimerRef.current = null;
-      analyzeBackendNotePageHandwriting(pageId, {
-        force: false,
-        useVisionFallback: HANDWRITING_AUTO_VISION_FALLBACK_ENABLED,
-      })
-        .then((page) => {
-          rememberHandwritingRecognitionFromPage(documentId, page);
-          rememberSavedBackendNotePage(documentId, page);
-          scheduleClassInsightRefresh(documentId);
-        })
+      runHandwritingCascadeForPage(documentId, pageNumber, pageId)
         .catch(() => {
-          // Debug-only automatic analysis should never interrupt normal page save flow.
+          // Automatic analysis should never interrupt normal page save flow.
         })
         .finally(() => {
           removeRequest();
@@ -743,9 +780,7 @@ export function useStudyWorkspace(props: {
   }, [
     backendPageIdsByDocument,
     handwritingAutoAnalyzeQueue,
-    rememberHandwritingRecognitionFromPage,
-    rememberSavedBackendNotePage,
-    scheduleClassInsightRefresh,
+    runHandwritingCascadeForPage,
   ]);
   const {
     activeAiChatSessionId,
