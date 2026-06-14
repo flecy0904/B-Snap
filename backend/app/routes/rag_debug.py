@@ -324,7 +324,7 @@ def _format_debug_context_preview(
         rag_sources=contexts,
         rag_debug=rag_debug,
         priority_context_hints=[image_recheck.context_hint if image_recheck else None],
-        extra_answer_sources_text=image_recheck.answer_sources_text if image_recheck else None,
+        rechecked_image_sources=image_recheck.items if image_recheck else None,
     )
     current_page_items = [
         _format_context_page_item(page)

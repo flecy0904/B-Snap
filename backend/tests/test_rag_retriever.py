@@ -23,7 +23,7 @@ from backend.app.services.ai_context_builder import build_ai_context, format_ans
 from backend.app.services.ai_context_router import AiContextRoute, route_ai_context
 from backend.app.services.docling_crop_debug import _should_use_full_page_context
 from backend.app.services.docling_batch_pipeline import note_rag_text_ready
-from backend.app.services.pdf_image_recheck import _image_recheck_candidates, _selected_recheck_contexts, _server_image_mode
+from backend.app.services.pdf_image_recheck import ImageRecheckItem, _image_recheck_candidates, _selected_recheck_contexts, _server_image_mode
 from backend.app.services.pdf_image_recheck import maybe_recheck_pdf_images_for_chat
 from backend.app.services.document_chunk_index import (
     collect_canvas_index_sources,
@@ -607,7 +607,7 @@ class RAGRetrieverTest(unittest.TestCase):
 
         self.assertLess(
             (context.context_hint or "").find("Vision Recheck Result"),
-            (context.context_hint or "").find("RAG support context"),
+            (context.context_hint or "").find("Scoped RAG reference context"),
         )
 
     def test_retrieve_rag_contexts_with_debug_does_not_keyword_fallback_on_empty_vector_results(self):
@@ -1089,6 +1089,50 @@ class RAGRetrieverTest(unittest.TestCase):
         ])
 
         self.assertEqual(source_text, "참고 자료\n- 자료구조 - 3페이지")
+
+    def test_answer_sources_group_same_page_text_image_and_recheck(self):
+        source_text = format_answer_sources(
+            [
+                RetrievedContext(
+                    source_type="pdf_page",
+                    source_id="page-31",
+                    title="[Lecture Note] Chapter 2. Application Layer (wide).pdf - 31페이지",
+                    content="HTTP text",
+                    page_number=31,
+                ),
+                RetrievedContext(
+                    source_type="image_ai_summary",
+                    source_id="image-31",
+                    title="[Lecture Note] Chapter 2. Application Layer (wide).pdf - 31페이지 이미지 요약",
+                    content="HTTP figure",
+                    page_number=31,
+                ),
+                RetrievedContext(
+                    source_type="image_ai_summary",
+                    source_id="image-32",
+                    title="[Lecture Note] Chapter 2. Application Layer (wide).pdf - 32페이지 이미지 요약",
+                    content="Another figure",
+                    page_number=32,
+                ),
+            ],
+            rechecked_image_sources=[
+                ImageRecheckItem(
+                    image_ai_summary_id="image-31",
+                    page_number=31,
+                    title="[Lecture Note] Chapter 2. Application Layer (wide).pdf - 31페이지 이미지 요약",
+                    image_mode="context_crop",
+                    image_data_uri="data:image/png;base64,test",
+                    image_summary="HTTP figure",
+                )
+            ],
+        )
+
+        self.assertEqual(
+            source_text,
+            "참고 자료\n"
+            "- [Lecture Note] Chapter 2. Application Layer (wide).pdf - 31페이지 (본문, 이미지 확인)\n"
+            "- [Lecture Note] Chapter 2. Application Layer (wide).pdf - 32페이지 (이미지)",
+        )
 
     def test_chunker_uses_default_metadata_and_chunk_index(self):
         source = IndexSource(
@@ -2077,7 +2121,8 @@ class RAGRetrieverTest(unittest.TestCase):
         )
         text_items = [item["content"] for item in input_items if isinstance(item["content"], str)]
 
-        self.assertIn("Use this note context", text_items[0])
+        self.assertIn("Local note/page context follows", text_items[0])
+        self.assertIn("scoped RAG reference context", text_items[0])
         self.assertIn("Compressed summary of older conversation", text_items[1])
         self.assertIn("Internal assistant-only study context", text_items[2])
         self.assertEqual(CHAT_RECENT_MESSAGE_LIMIT, 16)
