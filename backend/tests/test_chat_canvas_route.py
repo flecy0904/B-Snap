@@ -1,3 +1,4 @@
+from queue import Queue
 import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -627,6 +628,217 @@ class ChatCanvasRouteTests(unittest.TestCase):
                 )
 
         generate_canvas_operations.assert_not_called()
+
+    def test_stream_impl_emits_answer_delta_and_canvas_status(self):
+        session = {
+            "id": 5,
+            "note_id": 10,
+            "title": "AI chat",
+            "model": "gpt-test",
+            "rag_scope": {"sourceIds": [], "sources": []},
+            "created_at": None,
+            "updated_at": None,
+            "summary": None,
+            "summarized_message_id": None,
+        }
+        note = {"id": 10, "folder_id": 20, "title": "Network"}
+        canvas_note = {
+            "id": 99,
+            "folder_id": 20,
+            "note_id": 10,
+            "title": "Canvas Note 1",
+            "markdown": "",
+            "document_json": {"type": "doc", "content": []},
+            "revision": 1,
+            "source_page_start": None,
+            "source_page_end": None,
+            "created_at": None,
+            "updated_at": None,
+        }
+        operations = [
+            {
+                "op": "insert_after",
+                "targetBlockId": None,
+                "node": {"type": "paragraph", "attrs": {"blockId": "b1"}, "content": [{"type": "text", "text": "TCP"}]},
+            }
+        ]
+        events = []
+
+        def fake_execute_returning(_connection, query, params=()):
+            normalized_query = " ".join(query.split())
+            if "INSERT INTO chat_messages" in normalized_query:
+                role = "user" if "'user'" in normalized_query else "assistant"
+                return {
+                    "id": 501 if role == "user" else 502,
+                    "session_id": params[0],
+                    "role": role,
+                    "content": params[1],
+                    "source": params[2],
+                    "model": params[3],
+                    "created_at": None,
+                }
+            raise AssertionError(f"Unexpected execute_returning query: {normalized_query}")
+
+        def fake_stream_answer(**kwargs):
+            kwargs["on_delta"]("TCP ")
+            kwargs["on_delta"]("answer")
+            return "TCP answer"
+
+        with (
+            patch.object(chats, "get_chat_session", return_value=session),
+            patch.object(chats, "get_note_for_user", return_value=note),
+            patch.object(chats, "fetch_all", side_effect=[[], [{"id": 1, "role": "user", "content": "previous"}]]),
+            patch.object(chats, "fetch_one", return_value=canvas_note),
+            patch.object(chats, "execute_returning", side_effect=fake_execute_returning),
+            patch.object(chats, "execute_commit"),
+            patch.object(chats, "maybe_update_chat_session_summary", return_value=None),
+            patch.object(chats, "generate_note_chat_answer_stream", side_effect=fake_stream_answer),
+            patch.object(chats, "generate_note_chat_answer", side_effect=AssertionError("non-stream answer should not run")),
+            patch.object(chats, "generate_ai_canvas_operations_from_chat", return_value=operations),
+        ):
+            result = chats._create_ai_chat_message_impl(
+                session_id=session["id"],
+                payload=ChatAiMessageCreate(
+                    content="TCP 설명해주고 캔버스에 정리해줘",
+                    canvas_note_id=canvas_note["id"],
+                    rag_scope={"sourceIds": [], "sources": []},
+                ),
+                connection=object(),
+                current_user={"id": 7},
+                emit_event=lambda event, data: events.append((event, data)),
+                stream_chat_answer=True,
+            )
+
+        self.assertEqual(result["canvas_edit"]["operations"], operations)
+        self.assertIn(("answer_delta", {"delta": "TCP "}), events)
+        self.assertIn(("answer_delta", {"delta": "answer"}), events)
+        self.assertFalse(any(event == "canvas_done" for event, _data in events))
+        self.assertEqual([data["message"] for event, data in events if event == "status"][0], "질문 이해 중...")
+        self.assertIn("Canvas 반영 중...", [data["message"] for event, data in events if event == "status"])
+
+    def test_stream_queue_emits_canvas_done_after_request_result(self):
+        events: Queue[tuple[str, dict] | None] = Queue()
+        canvas_edit = {
+            "action": "canvas_edit",
+            "canvas_note_id": 99,
+            "title": "Canvas Note 1",
+            "canvas_note": {"id": 99, "title": "Canvas Note 1"},
+            "operations": [{"op": "insert_after"}],
+        }
+        result = {
+            "model": "gpt-test",
+            "user_message": {"id": 1, "session_id": 5, "role": "user", "content": "q", "source": "chat", "model": "gpt-test", "created_at": None},
+            "assistant_message": {"id": 2, "session_id": 5, "role": "assistant", "content": "a", "source": "chat", "model": "gpt-test", "created_at": None},
+            "canvas_edit": canvas_edit,
+        }
+
+        class FakeConnection:
+            def __enter__(self):
+                return object()
+
+            def __exit__(self, _exc_type, _exc, _tb):
+                return False
+
+        with (
+            patch.object(chats.Connection, "connect", return_value=FakeConnection()),
+            patch.object(chats, "_create_ai_chat_message_impl", return_value=result),
+        ):
+            chats.enqueue_ai_chat_stream_events(
+                events=events,
+                session_id=5,
+                payload=ChatAiMessageCreate(content="캔버스에 정리해줘"),
+                current_user={"id": 7},
+            )
+
+        drained = []
+        while True:
+            item = events.get_nowait()
+            if item is None:
+                break
+            drained.append(item)
+
+        self.assertEqual([event for event, _data in drained], ["canvas_done", "final"])
+        self.assertEqual(drained[0][1]["canvas_edit"], canvas_edit)
+        self.assertEqual(drained[1][1], result)
+
+    def test_stream_impl_emits_rag_and_image_statuses(self):
+        session = {
+            "id": 5,
+            "note_id": 10,
+            "title": "AI chat",
+            "model": "gpt-test",
+            "rag_scope": {"sourceIds": ["note:10"], "sources": [{"id": "10", "type": "note", "title": "Network"}]},
+            "created_at": None,
+            "updated_at": None,
+            "summary": None,
+            "summarized_message_id": None,
+        }
+        note = {"id": 10, "folder_id": 20, "title": "Network"}
+        pages = [{"id": 1, "note_id": 10, "page_number": 1, "content": "TCP", "image_url": None, "created_at": None, "updated_at": None}]
+        events = []
+
+        def fake_execute_returning(_connection, query, params=()):
+            normalized_query = " ".join(query.split())
+            if "INSERT INTO chat_messages" in normalized_query:
+                role = "user" if "'user'" in normalized_query else "assistant"
+                return {
+                    "id": 601 if role == "user" else 602,
+                    "session_id": params[0],
+                    "role": role,
+                    "content": params[1],
+                    "source": params[2],
+                    "model": params[3],
+                    "created_at": None,
+                }
+            raise AssertionError(f"Unexpected execute_returning query: {normalized_query}")
+
+        def fake_stream_answer(**kwargs):
+            kwargs["on_delta"]("RAG answer")
+            return "RAG answer"
+
+        with (
+            patch.object(chats, "get_chat_session", return_value=session),
+            patch.object(chats, "get_note_for_user", return_value=note),
+            patch.object(chats, "fetch_all", side_effect=[pages, []]),
+            patch.object(chats, "execute_returning", side_effect=fake_execute_returning),
+            patch.object(chats, "execute_commit"),
+            patch.object(chats, "get_note_course_name", return_value="Network"),
+            patch.object(chats, "normalize_rag_scope", return_value=session["rag_scope"]),
+            patch.object(chats, "route_ai_context", return_value=AiContextRoute(mode="rag", rewritten_query="TCP", reason="llm")),
+            patch.object(chats, "rag_scope_search_targets", return_value=([10], [])),
+            patch.object(chats, "note_rag_text_ready", return_value=(True, None)),
+            patch.object(chats, "retrieve_rag_contexts_with_debug", return_value=([SimpleNamespace()], {"retrieved_source_count": 1})),
+            patch.object(chats, "maybe_recheck_pdf_images_for_chat", return_value=chats.ImageRecheckResult()),
+            patch.object(
+                chats,
+                "build_ai_context",
+                return_value=SimpleNamespace(
+                    context_pages=pages,
+                    context_hint="CTX",
+                    debug={},
+                    answer_sources_text=None,
+                ),
+            ),
+            patch.object(chats, "maybe_update_chat_session_summary", return_value=None),
+            patch.object(chats, "generate_note_chat_answer_stream", side_effect=fake_stream_answer),
+        ):
+            chats._create_ai_chat_message_impl(
+                session_id=session["id"],
+                payload=ChatAiMessageCreate(
+                    content="TCP 설명해줘",
+                    rag_scope=session["rag_scope"],
+                ),
+                connection=object(),
+                current_user={"id": 7},
+                emit_event=lambda event, data: events.append((event, data)),
+                stream_chat_answer=True,
+            )
+
+        status_messages = [data["message"] for event, data in events if event == "status"]
+        self.assertIn("질문 이해 중...", status_messages)
+        self.assertIn("노트 참고 중...", status_messages)
+        self.assertIn("이미지 분석 중...", status_messages)
+        self.assertIn(("answer_delta", {"delta": "RAG answer"}), events)
 
 
 if __name__ == "__main__":

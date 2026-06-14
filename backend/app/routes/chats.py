@@ -1,12 +1,18 @@
+from collections.abc import Callable
+import json
+from queue import Queue
 import re
+from threading import Thread
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.encoders import jsonable_encoder
+from fastapi.responses import StreamingResponse
 from psycopg import Connection
 from psycopg.types.json import Jsonb
 
 from backend.app.core.auth import get_current_user
 from backend.app.db.crud import execute_commit, execute_returning, fetch_all, fetch_one, require_row
-from backend.app.db.session import get_db_connection
+from backend.app.db.session import get_database_url, get_db_connection
 from backend.app.core.config import get_settings
 from backend.app.routes.notes import get_note_for_user
 from backend.app.schemas.chats import (
@@ -36,6 +42,7 @@ from backend.app.services.openai_service import (
     generate_chat_session_summary,
     generate_chat_title,
     generate_note_chat_answer,
+    generate_note_chat_answer_stream,
 )
 from backend.app.services.docling_batch_pipeline import note_rag_text_ready
 from backend.app.services.pdf_image_recheck import ImageRecheckResult, maybe_recheck_pdf_images_for_chat
@@ -357,6 +364,41 @@ CANVAS_CHAT_ANSWER_DEPENDENCY_KEYWORDS = (
     "너가 설명",
     "설명한 내용",
 )
+
+AiChatEventEmitter = Callable[[str, dict], None]
+
+
+def encode_sse_event(event: str, data: dict) -> str:
+    payload = json.dumps(jsonable_encoder(data), ensure_ascii=False)
+    return f"event: {event}\ndata: {payload}\n\n"
+
+
+def enqueue_ai_chat_stream_events(
+    *,
+    events: Queue[tuple[str, dict] | None],
+    session_id: int,
+    payload: ChatAiMessageCreate,
+    current_user: dict,
+) -> None:
+    try:
+        with Connection.connect(get_database_url()) as connection:
+            result = _create_ai_chat_message_impl(
+                session_id,
+                payload,
+                connection,
+                current_user,
+                emit_event=lambda event, data: events.put((event, data)),
+                stream_chat_answer=True,
+            )
+        if result.get("canvas_edit"):
+            events.put(("canvas_done", {"canvas_edit": result["canvas_edit"]}))
+        events.put(("final", result))
+    except HTTPException as exc:
+        events.put(("error", {"message": str(exc.detail), "status": exc.status_code}))
+    except Exception:
+        events.put(("error", {"message": "AI 요청 처리 중 오류가 발생했습니다."}))
+    finally:
+        events.put(None)
 
 
 def build_default_canvas_title(index: int | None = None) -> str:
@@ -1053,13 +1095,20 @@ def create_chat_message(
     return message
 
 
-@router.post("/chat-sessions/{session_id}/ai-messages", response_model=ChatAiMessageRead)
-def create_ai_chat_message(
+def _create_ai_chat_message_impl(
     session_id: int,
     payload: ChatAiMessageCreate,
-    connection: Connection = Depends(get_db_connection),
-    current_user: dict = Depends(get_current_user),
+    connection: Connection,
+    current_user: dict,
+    *,
+    emit_event: AiChatEventEmitter | None = None,
+    stream_chat_answer: bool = False,
 ):
+    def emit_status(message: str) -> None:
+        if emit_event:
+            emit_event("status", {"message": message})
+
+    emit_status("질문 이해 중...")
     session = get_chat_session(session_id, connection, current_user)
     note = get_note_for_user(session["note_id"], current_user["id"], connection)
     pages = fetch_all(
@@ -1148,6 +1197,7 @@ def create_ai_chat_message(
     rag_processing_answer = None
     image_recheck = ImageRecheckResult()
     if context_route.mode == "rag":
+        emit_status("노트 참고 중...")
         note_ids, canvas_note_ids = rag_scope_search_targets(rag_scope)
         text_ready, pending_job = note_rag_text_ready(connection, note_ids=note_ids, user_id=current_user["id"])
         if not text_ready:
@@ -1170,20 +1220,22 @@ def create_ai_chat_message(
                 documents=None,
                 top_k=payload.top_k,
             )
-            page_local_contexts = (
-                load_page_local_rag_contexts(
+            should_load_page_local_contexts = (
+                effective_page_number is not None
+                and (
+                    context_route.reason in {"explicit_page_reference", "current_context_keyword"}
+                    or page_reference_debug.get("explicit_page_number") is not None
+                )
+            )
+            page_local_contexts = []
+            if should_load_page_local_contexts:
+                emit_status("관련 페이지 확인 중...")
+                page_local_contexts = load_page_local_rag_contexts(
                     connection,
                     user_id=current_user["id"],
                     note_ids=note_ids,
                     page_number=effective_page_number,
                 )
-                if effective_page_number is not None
-                and (
-                    context_route.reason in {"explicit_page_reference", "current_context_keyword"}
-                    or page_reference_debug.get("explicit_page_number") is not None
-                )
-                else []
-            )
             if page_local_contexts:
                 rag_sources = merge_retrieved_contexts(page_local_contexts, rag_sources)
                 rag_debug = rag_debug or {}
@@ -1240,6 +1292,7 @@ def create_ai_chat_message(
     )
     should_recheck_images = chat_answer_needed or canvas_visual_recheck_needed
     if context_route.mode == "rag" and should_recheck_images and not rag_processing_answer and not rag_failure_answer:
+        emit_status("이미지 분석 중...")
         image_recheck = maybe_recheck_pdf_images_for_chat(
             connection,
             note=note,
@@ -1285,24 +1338,33 @@ def create_ai_chat_message(
 
         if chat_answer_needed:
             try:
-                chat_answer = generate_note_chat_answer(
-                    model=model,
-                    note=note,
-                    pages=built_context.context_pages,
-                    messages=previous_messages,
-                    user_content=payload.content,
-                    selection_image=payload.selection_image,
-                    selection_rect=payload.selection_rect.model_dump() if payload.selection_rect else None,
-                    page_number=effective_page_number,
-                    selection_image_url=payload.selection_image_url,
-                    context_hint=built_context.context_hint,
-                    session_summary=session_summary,
-                    canvas_block_context=payload.canvas_block_context,
-                    rag_image_inputs=image_recheck.image_inputs,
-                )
+                chat_answer_kwargs = {
+                    "model": model,
+                    "note": note,
+                    "pages": built_context.context_pages,
+                    "messages": previous_messages,
+                    "user_content": payload.content,
+                    "selection_image": payload.selection_image,
+                    "selection_rect": payload.selection_rect.model_dump() if payload.selection_rect else None,
+                    "page_number": effective_page_number,
+                    "selection_image_url": payload.selection_image_url,
+                    "context_hint": built_context.context_hint,
+                    "session_summary": session_summary,
+                    "canvas_block_context": payload.canvas_block_context,
+                    "rag_image_inputs": image_recheck.image_inputs,
+                }
+                if stream_chat_answer and emit_event:
+                    chat_answer = generate_note_chat_answer_stream(
+                        **chat_answer_kwargs,
+                        on_delta=lambda delta: emit_event("answer_delta", {"delta": delta}),
+                    )
+                else:
+                    chat_answer = generate_note_chat_answer(**chat_answer_kwargs)
                 chat_answer_for_canvas = chat_answer
                 if built_context.answer_sources_text:
                     chat_answer = f"{chat_answer.rstrip()}\n\n{built_context.answer_sources_text}"
+                    if stream_chat_answer and emit_event:
+                        emit_event("answer_delta", {"delta": f"\n\n{built_context.answer_sources_text}"})
             except Exception as exc:
                 chat_answer_error = exc
 
@@ -1312,6 +1374,7 @@ def create_ai_chat_message(
             and not (chat_answer_dependency and chat_answer_error is not None)
         ):
             try:
+                emit_status("새 Canvas 생성 중..." if canvas_action == "canvas_create" else "Canvas 반영 중...")
                 current_canvas_markdown = (
                     payload.canvas_markdown
                     if canvas_action == "canvas_edit" and payload.canvas_markdown is not None
@@ -1518,6 +1581,59 @@ def create_ai_chat_message(
             "image_recheck": image_recheck.debug,
         },
     }
+
+
+@router.post("/chat-sessions/{session_id}/ai-messages", response_model=ChatAiMessageRead)
+def create_ai_chat_message(
+    session_id: int,
+    payload: ChatAiMessageCreate,
+    connection: Connection = Depends(get_db_connection),
+    current_user: dict = Depends(get_current_user),
+):
+    return _create_ai_chat_message_impl(
+        session_id,
+        payload,
+        connection,
+        current_user,
+    )
+
+
+@router.post("/chat-sessions/{session_id}/ai-messages/stream")
+def stream_ai_chat_message(
+    session_id: int,
+    payload: ChatAiMessageCreate,
+    current_user: dict = Depends(get_current_user),
+):
+    def event_generator():
+        events: Queue[tuple[str, dict] | None] = Queue()
+
+        worker = Thread(
+            target=enqueue_ai_chat_stream_events,
+            kwargs={
+                "events": events,
+                "session_id": session_id,
+                "payload": payload,
+                "current_user": current_user,
+            },
+            daemon=True,
+        )
+        worker.start()
+
+        while True:
+            item = events.get()
+            if item is None:
+                break
+            event, data = item
+            yield encode_sse_event(event, data)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("/chat-sessions/{session_id}/messages", response_model=list[ChatMessageRead])

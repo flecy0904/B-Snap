@@ -876,15 +876,19 @@ export function useStudyWorkspace(props: {
     payload: Parameters<typeof aiCanvas.applyChatCanvasEdit>[0],
   ) => {
     aiCanvas.applyChatCanvasEdit(payload);
-    if (appRightSidebarPanel === 'chat' && studyDocumentId) {
+    if (studyDocumentId) {
       setChatSidebarOpenByDocument((current) => (
         current[studyDocumentId] === false
           ? current
           : { ...current, [studyDocumentId]: false }
       ));
     }
+    if (appRightSidebarPanel === 'chat' && appChatMode === 'sidebar') {
+      setAppChatMode('floating');
+      setAiPanelMode('floating');
+      setAiPanelOpen(true);
+    }
     setAppRightSidebarPanel('canvas');
-    if (appChatMode === 'sidebar') setAiPanelOpen(false);
   }, [aiCanvas.applyChatCanvasEdit, appChatMode, appRightSidebarPanel, studyDocumentId]);
   const currentBackendNoteId = getStudyDocumentBackendNoteId(studyDocument);
   const currentHandwritingDebugPageNumber = currentDocumentPage?.kind === 'pdf'

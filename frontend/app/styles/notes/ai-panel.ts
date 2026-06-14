@@ -109,6 +109,8 @@ export const aiPanelStyles = {
   aiMessageText: { fontSize: 13, lineHeight: 19, fontWeight: '600' as const },
   aiMessageTextUser: { color: '#303744' },
   aiMessageTextAssistant: { color: '#303744' },
+  aiStreamStatusRow: { minHeight: 20, flexDirection: 'row' as const, alignItems: 'center' as const, gap: 7, marginTop: 2 },
+  aiStreamStatusText: { flex: 1, minWidth: 0, fontSize: 12, lineHeight: 17, fontWeight: '800' as const, color: '#7A8394' },
   aiMessagePageLink: { color: '#4F68D2', fontWeight: '900' as const, textDecorationLine: 'underline' as const },
   aiStructuredContent: { alignSelf: 'stretch' as const, width: '100%' as const, gap: 8 },
   aiStructuredParagraph: { marginBottom: 0 },

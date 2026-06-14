@@ -2139,6 +2139,9 @@ export function NotesAiAssistantPanel() {
             >
           {hasChatHistory ? workspace.aiMessages.map((message: any) => {
             const isUser = message.role === 'user';
+            const streamStatus = !isUser && typeof message.stream_status === 'string' && message.stream_status.trim()
+              ? message.stream_status.trim()
+              : null;
             return (
               <View
                 key={message.id}
@@ -2150,16 +2153,26 @@ export function NotesAiAssistantPanel() {
                 {isUser ? (
                   <Text style={[workspace.styles.aiMessageText, workspace.styles.aiMessageTextUser]}>{message.content}</Text>
                 ) : (
-                  <AiResponseContent
-                    content={message.content}
-                    pageCount={workspace.studyDocument?.pageCount}
-                    styles={workspace.styles}
-                    textStyle={[workspace.styles.aiMessageText, workspace.styles.aiMessageTextAssistant]}
-                    linkStyle={workspace.styles.aiMessagePageLink}
-                    onOpenPage={openLinkedPdfPage}
-                    onRequestMoreRecommendations={canRequestMoreImportantPages ? requestMoreImportantPages : undefined}
-                    moreRecommendationsDisabled={workspace.aiLoading || workspace.aiChatReadOnly}
-                  />
+                  <>
+                    {message.content ? (
+                      <AiResponseContent
+                        content={message.content}
+                        pageCount={workspace.studyDocument?.pageCount}
+                        styles={workspace.styles}
+                        textStyle={[workspace.styles.aiMessageText, workspace.styles.aiMessageTextAssistant]}
+                        linkStyle={workspace.styles.aiMessagePageLink}
+                        onOpenPage={openLinkedPdfPage}
+                        onRequestMoreRecommendations={canRequestMoreImportantPages ? requestMoreImportantPages : undefined}
+                        moreRecommendationsDisabled={workspace.aiLoading || workspace.aiChatReadOnly}
+                      />
+                    ) : null}
+                    {streamStatus ? (
+                      <View style={workspace.styles.aiStreamStatusRow}>
+                        <ActivityIndicator size="small" color="#7A8394" />
+                        <Text style={workspace.styles.aiStreamStatusText}>{streamStatus}</Text>
+                      </View>
+                    ) : null}
+                  </>
                 )}
               </View>
             );
@@ -2169,7 +2182,7 @@ export function NotesAiAssistantPanel() {
               <Text style={workspace.styles.aiEmptyConversationBody}>궁금한 부분에 대해 질문해 보세요.</Text>
             </View>
           )}
-          {workspace.aiLoading ? (
+          {workspace.aiLoading && !workspace.aiMessages.some((message: any) => message.streaming) ? (
             <View style={[workspace.styles.aiMessageBubble, workspace.styles.aiMessageBubbleAssistant]}>
               <Text style={[workspace.styles.aiMessageText, workspace.styles.aiMessageTextAssistant]}>···</Text>
             </View>

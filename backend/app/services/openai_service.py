@@ -1,4 +1,5 @@
 import base64
+from collections.abc import Callable
 from copy import deepcopy
 import json
 import logging
@@ -288,6 +289,46 @@ def generate_note_chat_answer(
             canvas_block_context=canvas_block_context,
             rag_image_inputs=rag_image_inputs,
         ),
+    )
+
+
+def generate_note_chat_answer_stream(
+    *,
+    model: str,
+    note: dict,
+    pages: list[dict],
+    messages: list[dict],
+    user_content: str,
+    on_delta: Callable[[str], None],
+    selection_image: str | None = None,
+    selection_rect: dict[str, Any] | None = None,
+    page_number: int | None = None,
+    current_page_number: int | None = None,
+    selection_image_url: str | None = None,
+    context_hint: str | None = None,
+    session_summary: str | None = None,
+    canvas_block_context: dict[str, Any] | None = None,
+    rag_image_inputs: list[dict[str, Any]] | None = None,
+) -> str:
+    return generate_text_response_stream(
+        model=model,
+        instructions=AI_CHAT_INSTRUCTIONS,
+        input_items=build_response_input(
+            note,
+            pages,
+            messages,
+            user_content,
+            selection_image=selection_image,
+            selection_rect=selection_rect,
+            page_number=page_number,
+            current_page_number=current_page_number,
+            selection_image_url=selection_image_url,
+            context_hint=context_hint,
+            session_summary=session_summary,
+            canvas_block_context=canvas_block_context,
+            rag_image_inputs=rag_image_inputs,
+        ),
+        on_delta=on_delta,
     )
 
 
@@ -2226,6 +2267,64 @@ def generate_text_response(
     answer = response.output_text.strip()
     if not answer:
         logger.warning("OpenAI returned an empty response: model=%s", selected_model)
+        raise HTTPException(status_code=502, detail="OpenAI returned an empty response")
+    return answer
+
+
+def generate_text_response_stream(
+    *,
+    model: str,
+    instructions: str,
+    input_items: list[dict[str, Any]],
+    on_delta: Callable[[str], None],
+    temperature: float | None = None,
+) -> str:
+    settings = get_settings()
+    provider = settings.ai_provider.strip().lower()
+    if provider == "gemini":
+        answer = _generate_gemini_text_response(
+            model=model,
+            instructions=instructions,
+            input_items=input_items,
+            allow_mock=False,
+            mock_response=None,
+            temperature=temperature,
+        )
+        if answer:
+            on_delta(answer)
+        return answer
+    if provider != "openai":
+        raise HTTPException(status_code=503, detail=f"Unsupported AI_PROVIDER: {settings.ai_provider}")
+
+    selected_model = model if model and not model.startswith("gemini-") else settings.openai_default_model
+    if not settings.openai_api_key or settings.openai_api_key == "your_openai_api_key_here":
+        raise HTTPException(status_code=503, detail="OPENAI_API_KEY is not configured")
+
+    client = OpenAI(api_key=settings.openai_api_key)
+    try:
+        create_kwargs: dict[str, Any] = {
+            "model": selected_model,
+            "instructions": instructions,
+            "input": input_items,
+        }
+        if temperature is not None:
+            create_kwargs["temperature"] = temperature
+
+        with client.responses.stream(**create_kwargs) as stream:
+            for event in stream:
+                if getattr(event, "type", None) != "response.output_text.delta":
+                    continue
+                delta = getattr(event, "delta", None)
+                if isinstance(delta, str) and delta:
+                    on_delta(delta)
+            response = stream.get_final_response()
+    except OpenAIError as exc:
+        logger.exception("OpenAI streaming request failed: model=%s", selected_model)
+        raise HTTPException(status_code=502, detail="OpenAI request failed") from exc
+
+    answer = response.output_text.strip()
+    if not answer:
+        logger.warning("OpenAI returned an empty streaming response: model=%s", selected_model)
         raise HTTPException(status_code=502, detail="OpenAI returned an empty response")
     return answer
 
