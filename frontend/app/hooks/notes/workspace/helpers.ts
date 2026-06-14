@@ -144,6 +144,7 @@ export function buildPageCaptureReference(props: {
     summary,
     aiSummary,
     keywords,
+    analysisConfidence: props.asset.analysisConfidence,
     createdAt: new Date().toISOString(),
     sourceDeviceLabel: props.asset.sourceDeviceLabel,
     previewImageKey: props.asset.previewImageKey,
