@@ -173,6 +173,7 @@ export function useAiChatActions(params: {
   activeAiChatSessionId: number | null;
   aiChatReadOnly: boolean;
   aiQuestion: string;
+  selectedAiChatModelId?: string | null;
   chatSessionByDocument: Record<number, number>;
   chatSessionsByDocument: Record<number, BackendChatSession[]>;
   allChatSessions: BackendChatSession[];
@@ -428,6 +429,7 @@ export function useAiChatActions(params: {
       const session = await createBackendChatSession({
         noteId: backendNoteId,
         title: params.studyDocument?.title ? `${params.studyDocument.title} AI 채팅` : 'AI 채팅',
+        model: params.selectedAiChatModelId ?? null,
         ragScope: params.activeRagScope ?? null,
       });
       upsertSession(session);
@@ -460,6 +462,7 @@ export function useAiChatActions(params: {
 
   const requestAiAnswerInternal = async (override?: {
     question?: string;
+    model?: string | null;
     selectionImageUri?: string | null;
     pageNumber?: number | null;
     source?: AiRequestSource;
@@ -497,6 +500,7 @@ export function useAiChatActions(params: {
     if (isCanvasOriginRequest && !rawQuestion) return false;
 
     const question = rawQuestion || (hasSelection ? '선택한 영역을 설명해줘' : '현재 페이지를 요약해줘');
+    const requestModel = override?.model ?? params.selectedAiChatModelId ?? null;
     const canvasAction = override?.canvasAction ?? 'auto';
     if (isCanvasOriginRequest && canvasAction === 'canvas_create') {
       params.setAiError('현재 Canvas를 수정해달라고 요청해 주세요.');
@@ -552,6 +556,7 @@ export function useAiChatActions(params: {
         const session = await createBackendChatSession({
           noteId: backendNoteId,
           title: buildAiChatTitle(requestContent, params.studyDocument?.title),
+          model: requestModel,
           ragScope: params.activeRagScope ?? null,
         });
         sessionId = session.id;
@@ -574,7 +579,7 @@ export function useAiChatActions(params: {
         content: requestContent,
         source: messageSource,
         selection_image_url: shouldHideSelectionAttachment ? null : selectionPreviewUri,
-        model: null,
+        model: requestModel,
         created_at: new Date().toISOString(),
       };
       params.setAiMessagesBySession((current) => ({
@@ -589,6 +594,7 @@ export function useAiChatActions(params: {
       const requestPayload: BackendAiMessagePayload = {
         sessionId,
         content: requestContent,
+        model: requestModel,
         selectionImage,
         selectionImageUri: selectionPreviewUri,
         selectionRect,
@@ -615,7 +621,7 @@ export function useAiChatActions(params: {
         role: 'assistant',
         content: '',
         source: messageSource,
-        model: null,
+        model: requestModel,
         created_at: new Date().toISOString(),
         streaming: true,
         stream_status: '질문 이해 중...',
@@ -788,6 +794,7 @@ export function useAiChatActions(params: {
 
   const requestAiAnswer = async (options?: {
     question?: string;
+    model?: string | null;
     source?: AiRequestSource;
     canvasAction?: CanvasAction;
     selectionImageUri?: string | null;

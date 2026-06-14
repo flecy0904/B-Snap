@@ -301,6 +301,7 @@ export function AppShell(props: {
                   aiChatSessions={notesState.aiChatSessions}
                   noteAiChatSessions={notesState.noteAiChatSessions}
                   allAiChatSessions={notesState.allAiChatSessions}
+                  selectedAiChatModelId={notesState.selectedAiChatModelId}
                   aiChatScope={notesState.aiChatScope}
                   aiChatSearchQuery={notesState.aiChatSearchQuery}
                   activeAiRagScope={notesState.activeAiRagScope}
@@ -374,6 +375,7 @@ export function AppShell(props: {
                   onAddAiRagScopeSource={notesState.onAddAiRagScopeSource}
                   onRemoveAiRagScopeSource={notesState.onRemoveAiRagScopeSource}
                   onChangeAiChatSearchQuery={notesState.setAiChatSearchQuery}
+                  onChangeSelectedAiChatModel={notesState.setSelectedAiChatModelId}
                   onSelectAiChatSession={notesState.selectAiChatSession}
                   onRenameAiChatSession={notesState.renameAiChatSession}
                   onRemoveAiChatSession={notesState.removeAiChatSession}
@@ -587,6 +589,7 @@ export function AppShell(props: {
                   aiChatSessions={notesState.aiChatSessions}
                   noteAiChatSessions={notesState.noteAiChatSessions}
                   allAiChatSessions={notesState.allAiChatSessions}
+                  selectedAiChatModelId={notesState.selectedAiChatModelId}
                   aiChatScope={notesState.aiChatScope}
                   aiChatSearchQuery={notesState.aiChatSearchQuery}
                   activeAiChatSessionId={notesState.activeAiChatSessionId}
@@ -623,6 +626,7 @@ export function AppShell(props: {
                   onToggleAiPanel={notesState.toggleAiPanel}
                   onChangeAiQuestion={notesState.setAiQuestion}
                   onChangeAiChatScope={notesState.setAiChatScope}
+                  onChangeSelectedAiChatModel={notesState.setSelectedAiChatModelId}
                   onChangeAiChatSearchQuery={notesState.setAiChatSearchQuery}
                   onSelectAiChatSession={notesState.selectAiChatSession}
                   onRenameAiChatSession={notesState.renameAiChatSession}

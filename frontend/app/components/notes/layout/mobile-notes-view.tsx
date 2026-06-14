@@ -92,6 +92,7 @@ export type MobileNotesViewProps = {
   aiChatSessions: BackendChatSession[];
   noteAiChatSessions: BackendChatSession[];
   allAiChatSessions: BackendChatSession[];
+  selectedAiChatModelId: string;
   aiChatScope: 'note' | 'all';
   activeAiChatSessionId: number | null;
   aiChatReadOnly: boolean;
@@ -126,9 +127,10 @@ export type MobileNotesViewProps = {
   onToggleAiPanel: () => void;
   onChangeAiQuestion: (value: string) => void;
   onChangeAiChatScope: (scope: 'note' | 'all') => void;
+  onChangeSelectedAiChatModel: (modelId: string) => void;
   onSelectAiChatSession: (sessionId: number) => void;
   onCreateAiChatSession: () => void;
-  onRequestAiAnswer: () => void;
+  onRequestAiAnswer: (options?: { model?: string | null }) => void;
   onRequestAiAnswerForQuestion: (question: string) => Promise<boolean>;
   onAskAiAboutSelection: (selectionPreviewUri?: string | null) => void;
   onInsertAiAnswerPage: () => void;

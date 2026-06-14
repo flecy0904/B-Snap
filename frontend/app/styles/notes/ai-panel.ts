@@ -157,6 +157,7 @@ export const aiPanelStyles = {
   aiEmptyConversationTitle: { fontSize: 18, lineHeight: 24, fontWeight: '800' as const, color: '#303744', textAlign: 'center' as const, marginBottom: 6 },
   aiEmptyConversationBody: { fontSize: 13, lineHeight: 19, fontWeight: '600' as const, color: '#737B88', textAlign: 'center' as const },
   aiComposer: { borderTopWidth: 1, borderTopColor: '#E6EAF2', paddingTop: 10 },
+  aiComposerWebAttached: { paddingRight: 18 },
   aiRagScopePanel: { position: 'relative' as const, borderTopLeftRadius: 12, borderTopRightRadius: 12, borderBottomLeftRadius: 0, borderBottomRightRadius: 0, backgroundColor: '#F5F7FB', borderWidth: 1, borderBottomWidth: 0, borderColor: '#DDE3EC', paddingHorizontal: 10, paddingVertical: 8, marginBottom: 0, zIndex: 30 },
   aiRagScopeHeader: { minHeight: 24, flexDirection: 'row' as const, alignItems: 'center' as const, justifyContent: 'space-between' as const, gap: 8 },
   aiRagScopeTitle: { flex: 1, minWidth: 0, fontSize: 12, lineHeight: 16, fontWeight: '900' as const, color: '#303744' },

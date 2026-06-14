@@ -151,13 +151,30 @@ type NoteRagStatusDisplay = {
 };
 
 const AI_CHAT_MODEL_OPTIONS = [
-  { id: 'gemini-3.1-pro', label: 'Gemini 3.1 Pro', icon: 'star-four-points', iconColor: '#5F79FF' },
-  { id: 'gpt-5.2', label: 'GPT-5.2', icon: 'star-four-points', iconColor: '#5F79FF' },
-  { id: 'gpt-5.4', label: 'GPT-5.4', icon: 'star-four-points', iconColor: '#5F79FF' },
-  { id: 'gpt-5.5', label: 'GPT-5.5', icon: 'star-four-points', iconColor: '#5F79FF' },
+  { id: 'gpt-4.1-mini', label: 'GPT-4.1 mini', provider: 'openai', icon: 'openai' },
+  { id: 'gemini-3.1-pro', label: 'Gemini 3.1 Pro', provider: 'gemini', icon: 'gemini' },
+  { id: 'gpt-5.2', label: 'GPT-5.2', provider: 'openai', icon: 'openai' },
+  { id: 'gpt-5.4', label: 'GPT-5.4', provider: 'openai', icon: 'openai' },
+  { id: 'gpt-5.5', label: 'GPT-5.5', provider: 'openai', icon: 'openai' },
 ] as const;
 
 type AiChatModelId = typeof AI_CHAT_MODEL_OPTIONS[number]['id'];
+type AiChatModelOption = typeof AI_CHAT_MODEL_OPTIONS[number];
+
+const AI_MODEL_ICON_SOURCES = {
+  gemini: require('../../../../assets/gemini.png'),
+  openai: require('../../../../assets/openai.png'),
+} as const;
+
+function renderAiModelIcon(model: AiChatModelOption, size = 16) {
+  return (
+    <Image
+      source={AI_MODEL_ICON_SOURCES[model.icon]}
+      style={{ width: size, height: size }}
+      resizeMode="contain"
+    />
+  );
+}
 
 function formatPercentProgress(done: number, total: number) {
   if (!Number.isFinite(total) || total <= 0) return '';
@@ -226,7 +243,6 @@ export function NotesAiAssistantPanel() {
   const [ragMenuOpen, setRagMenuOpen] = React.useState(false);
   const [ragMenuQuery, setRagMenuQuery] = React.useState('');
   const [modelMenuOpen, setModelMenuOpen] = React.useState(false);
-  const [selectedAiModelId, setSelectedAiModelId] = React.useState<AiChatModelId>('gpt-5.5');
   const [aiComposerInputHeight, setAiComposerInputHeight] = React.useState(AI_COMPOSER_INPUT_MIN_HEIGHT);
   const [ragDebugOpen, setRagDebugOpen] = React.useState(false);
   const [ragDevTab, setRagDevTab] = React.useState<RagDevTab>('search');
@@ -258,9 +274,10 @@ export function NotesAiAssistantPanel() {
   const messageScrollbarStateRef = React.useRef(messageScrollbarState);
   const hasChatHistory = workspace.aiMessages.length > 0;
   const selectedAiModel = React.useMemo(
-    () => AI_CHAT_MODEL_OPTIONS.find((model) => model.id === selectedAiModelId) ?? AI_CHAT_MODEL_OPTIONS[AI_CHAT_MODEL_OPTIONS.length - 1],
-    [selectedAiModelId],
+    () => AI_CHAT_MODEL_OPTIONS.find((model) => model.id === workspace.selectedAiChatModelId) ?? AI_CHAT_MODEL_OPTIONS[AI_CHAT_MODEL_OPTIONS.length - 1],
+    [workspace.selectedAiChatModelId],
   );
+  const selectedAiModelId = selectedAiModel.id;
   const latestUserMessageContent = React.useMemo(() => {
     for (let index = workspace.aiMessages.length - 1; index >= 0; index -= 1) {
       const message = workspace.aiMessages[index] as any;
@@ -283,6 +300,9 @@ export function NotesAiAssistantPanel() {
     && quickPrompts.length
     && !workspace.aiQuestion.trim()
   );
+  const requestAiAnswerWithSelectedModel = React.useCallback(() => {
+    void workspace.onRequestAiAnswer({ model: selectedAiModel.id });
+  }, [selectedAiModel.id, workspace.onRequestAiAnswer]);
   const activeSession = workspace.activeAiChatSessionId
     ? workspace.allAiChatSessions.find((session: any) => session.id === workspace.activeAiChatSessionId)
       ?? workspace.noteAiChatSessions.find((session: any) => session.id === workspace.activeAiChatSessionId)
@@ -748,6 +768,11 @@ export function NotesAiAssistantPanel() {
     }
     closeRagReferenceMenu();
   }, [closeModelMenu, closeRagReferenceMenu, workspace.onChangeAiQuestion]);
+  React.useEffect(() => {
+    if (!workspace.aiQuestion) {
+      setAiComposerInputHeight(AI_COMPOSER_INPUT_MIN_HEIGHT);
+    }
+  }, [workspace.aiQuestion]);
   const handleAiQuestionContentSizeChange = React.useCallback((event: any) => {
     const contentHeight = Number(event?.nativeEvent?.contentSize?.height ?? 0);
     if (!Number.isFinite(contentHeight) || contentHeight <= 0) return;
@@ -813,10 +838,8 @@ export function NotesAiAssistantPanel() {
         return;
       }
     }
-    handleWebSubmitKeyPress(event, () => {
-      void workspace.onRequestAiAnswer();
-    });
-  }, [closeModelMenu, closeRagReferenceMenu, modelMenuOpen, ragMenuOpen, workspace.onRequestAiAnswer]);
+    handleWebSubmitKeyPress(event, requestAiAnswerWithSelectedModel);
+  }, [closeModelMenu, closeRagReferenceMenu, modelMenuOpen, ragMenuOpen, requestAiAnswerWithSelectedModel]);
   const appFloatingChat = Boolean(
     workspace.usesAppAiPanelLayout
     && workspace.appChatMode === 'floating'
@@ -2209,9 +2232,15 @@ export function NotesAiAssistantPanel() {
             ) : null}
               </View>
             ) : null}
-          </View>
+        </View>
 
-        <View style={workspace.styles.aiComposer}>
+        <View
+          style={[
+            workspace.styles.aiComposer,
+            webSidebarAttachedPanel && workspace.styles.aiComposerWebAttached,
+          ]}
+        >
+          {workspace.aiError ? <Text style={workspace.styles.aiErrorText}>{workspace.aiError}</Text> : null}
           {Platform.OS === 'web' ? (
             <View style={workspace.styles.aiRagScopePanel}>
               {activeRagScopeSources.length > 0 && noteRagStatusDisplay?.progressLabel ? (
@@ -2273,7 +2302,6 @@ export function NotesAiAssistantPanel() {
               </Pressable>
             </View>
           ) : null}
-          {workspace.aiError ? <Text style={workspace.styles.aiErrorText}>{workspace.aiError}</Text> : null}
           {showQuickPrompts ? (
             <ScrollView
               horizontal
@@ -2327,12 +2355,12 @@ export function NotesAiAssistantPanel() {
                       key={model.id}
                       style={[workspace.styles.aiModelMenuItem, selected && workspace.styles.aiModelMenuItemActive]}
                       onPress={() => {
-                        setSelectedAiModelId(model.id);
+                        workspace.onChangeSelectedAiChatModel(model.id);
                         closeModelMenu();
                       }}
                       disabled={workspace.aiChatReadOnly || workspace.aiLoading}
                     >
-                      <MaterialCommunityIcons name={model.icon as any} size={16} color={model.iconColor} />
+                      {renderAiModelIcon(model, 16)}
                       <Text style={workspace.styles.aiModelMenuItemText} numberOfLines={1}>{model.label}</Text>
                       {selected ? (
                         <MaterialCommunityIcons name="check" size={16} color="#303744" />
@@ -2363,7 +2391,7 @@ export function NotesAiAssistantPanel() {
               submitBehavior="submit"
               blurOnSubmit={false}
               onSubmitEditing={() => {
-                void workspace.onRequestAiAnswer();
+                requestAiAnswerWithSelectedModel();
               }}
               onKeyPress={handleAiComposerKeyPress}
             />
@@ -2398,6 +2426,7 @@ export function NotesAiAssistantPanel() {
                 disabled={workspace.aiChatReadOnly || workspace.aiLoading}
                 {...webModelMenuInteractiveProps}
               >
+                {renderAiModelIcon(selectedAiModel, 15)}
                 <Text style={workspace.styles.aiComposerModeText}>{selectedAiModel.label}</Text>
                 <MaterialCommunityIcons name="chevron-down" size={15} color="#5B6472" />
               </Pressable>
@@ -2407,7 +2436,7 @@ export function NotesAiAssistantPanel() {
                 style={[workspace.styles.aiSendButton, workspace.aiChatReadOnly && workspace.styles.aiSendButtonDisabled]}
                 onPress={() => {
                   hideTooltip('ai-chat-send');
-                  void workspace.onRequestAiAnswer();
+                  requestAiAnswerWithSelectedModel();
                 }}
                 disabled={workspace.aiLoading || workspace.aiChatReadOnly}
               >

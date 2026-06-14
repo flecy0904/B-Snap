@@ -45,6 +45,7 @@ export type DesktopNotesWorkspaceContextValue = {
   aiChatSessions: BackendChatSession[];
   noteAiChatSessions: BackendChatSession[];
   allAiChatSessions: BackendChatSession[];
+  selectedAiChatModelId: string;
   aiChatScope: 'note' | 'all';
   aiChatSearchQuery: string;
   activeAiRagScope: BackendRagScope | null;
@@ -145,12 +146,13 @@ export type DesktopNotesWorkspaceContextValue = {
   onAddAiRagScopeSource: (source: BackendRagScopeSource) => void;
   onRemoveAiRagScopeSource: (sourceKey: string) => void;
   onChangeAiChatSearchQuery: (value: string) => void;
+  onChangeSelectedAiChatModel: (modelId: string) => void;
   onSelectAiChatSession: (sessionId: number) => void;
   onRenameAiChatSession: (sessionId: number, title: string) => Promise<boolean>;
   onRemoveAiChatSession: (sessionId: number) => void;
   onStartNewAiChatSession: () => void;
   onCreateAiChatSession: () => void;
-  onRequestAiAnswer: () => void;
+  onRequestAiAnswer: (options?: { model?: string | null }) => void;
   onRequestAiAnswerForQuestion: (question: string) => Promise<boolean>;
   onAskAiAboutSelection: (selectionPreviewUri?: string | null) => void;
   onRequestAiCanvasCommand: (command: string, options?: {

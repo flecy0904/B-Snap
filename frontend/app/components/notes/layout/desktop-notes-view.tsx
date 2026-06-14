@@ -173,6 +173,7 @@ export type DesktopNotesViewProps = {
   aiChatSessions: BackendChatSession[];
   noteAiChatSessions: BackendChatSession[];
   allAiChatSessions: BackendChatSession[];
+  selectedAiChatModelId: string;
   aiChatScope: 'note' | 'all';
   aiChatSearchQuery: string;
   activeAiRagScope: BackendRagScope | null;
@@ -251,12 +252,13 @@ export type DesktopNotesViewProps = {
   onAddAiRagScopeSource: (source: BackendRagScopeSource) => void;
   onRemoveAiRagScopeSource: (sourceKey: string) => void;
   onChangeAiChatSearchQuery: (value: string) => void;
+  onChangeSelectedAiChatModel: (modelId: string) => void;
   onSelectAiChatSession: (sessionId: number) => void;
   onRenameAiChatSession: (sessionId: number, title: string) => Promise<boolean>;
   onRemoveAiChatSession: (sessionId: number) => void;
   onStartNewAiChatSession: () => void;
   onCreateAiChatSession: () => void;
-  onRequestAiAnswer: () => void;
+  onRequestAiAnswer: (options?: { model?: string | null }) => void;
   onRequestAiAnswerForQuestion: (question: string) => Promise<boolean>;
   onAskAiAboutSelection: (selectionPreviewUri?: string | null) => void;
   onRequestAiCanvasCommand: (command: string, options?: {
@@ -685,6 +687,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           aiChatSessions: props.aiChatSessions,
           noteAiChatSessions: props.noteAiChatSessions,
           allAiChatSessions: props.allAiChatSessions,
+          selectedAiChatModelId: props.selectedAiChatModelId,
           aiChatScope: props.aiChatScope,
           aiChatSearchQuery: props.aiChatSearchQuery,
           activeAiRagScope: props.activeAiRagScope,
@@ -785,6 +788,7 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
           onAddAiRagScopeSource: props.onAddAiRagScopeSource,
           onRemoveAiRagScopeSource: props.onRemoveAiRagScopeSource,
           onChangeAiChatSearchQuery: props.onChangeAiChatSearchQuery,
+          onChangeSelectedAiChatModel: props.onChangeSelectedAiChatModel,
           onSelectAiChatSession: props.onSelectAiChatSession,
           onRenameAiChatSession: props.onRenameAiChatSession,
           onRemoveAiChatSession: props.onRemoveAiChatSession,
