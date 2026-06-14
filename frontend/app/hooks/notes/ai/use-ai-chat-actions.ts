@@ -51,58 +51,24 @@ function getAiContextModeFeedback(
   ].filter(Boolean).join(' · ');
 }
 
-function getCanvasAction(question: string, source: AiRequestSource = 'chat'): CanvasAction {
-  const lowerQuestion = question.toLowerCase();
-  const createKeywords = [
-    'new canvas',
-    '새 canvas',
-    '새 캔버스',
-    '새로운 canvas',
-    '새로운 캔버스',
-    '별도 canvas',
-    '별도 캔버스',
-    '다른 canvas',
-    '다른 캔버스',
-    '새 정리본',
-    '새 요약본',
-    '새 정리 노트',
-    '새 노트',
-  ];
-  if (createKeywords.some((keyword) => lowerQuestion.includes(keyword))) {
-    return 'canvas_create';
-  }
-
-  if (source === 'canvas-mini' || source === 'canvas-block') return 'auto';
-
-  const mentionsCanvas = lowerQuestion.includes('canvas') || question.includes('캔버스') || question.includes('정리 노트');
-  const editKeywords = [
-    '적어',
-    '써',
-    '정리',
-    '요약',
-    '추가',
-    '수정',
-    '반영',
-    '넣어',
-    '만들',
-    '작성',
-    '고쳐',
-  ];
-  if (mentionsCanvas && editKeywords.some((keyword) => question.includes(keyword))) {
-    return 'canvas_edit';
-  }
-
-  return 'auto';
-}
-
 function mightRequestCanvasEdit(question: string, source: AiRequestSource = 'chat') {
   if (source === 'canvas-mini' || source === 'canvas-block') return true;
   const lowerQuestion = question.toLowerCase();
-  if (getCanvasAction(question, source) === 'canvas_edit') return true;
+  const mentionsCanvas = lowerQuestion.includes('canvas')
+    || question.includes('캔버스')
+    || question.includes('정리노트')
+    || question.includes('정리 노트');
+  if (!mentionsCanvas) return false;
   const possibleCanvasEditKeywords = [
-    'canvas',
-    '캔버스',
-    '정리 노트',
+    'add',
+    'rewrite',
+    'revise',
+    'shorten',
+    'lengthen',
+    'simplify',
+    'polish',
+    'delete',
+    'remove',
     '정리',
     '요약',
     '추가',
@@ -121,6 +87,8 @@ function mightRequestCanvasEdit(question: string, source: AiRequestSource = 'cha
     '길게',
     '늘려',
     '줄여',
+    '삭제',
+    '빼줘',
     '개선',
   ];
   return possibleCanvasEditKeywords.some((keyword) => lowerQuestion.includes(keyword));
@@ -526,7 +494,7 @@ export function useAiChatActions(params: {
     if (isCanvasOriginRequest && !rawQuestion) return false;
 
     const question = rawQuestion || (hasSelection ? '선택한 영역을 설명해줘' : '현재 페이지를 요약해줘');
-    const canvasAction = override?.canvasAction ?? getCanvasAction(question, override?.source ?? 'chat');
+    const canvasAction = override?.canvasAction ?? 'auto';
     if (isCanvasOriginRequest && canvasAction === 'canvas_create') {
       params.setAiError('현재 Canvas를 수정해달라고 요청해 주세요.');
       return false;
@@ -701,8 +669,6 @@ export function useAiChatActions(params: {
           canvasNote: response.canvas_edit.canvas_note,
           operations: response.canvas_edit.operations,
         });
-      } else if (canvasAction === 'canvas_edit' || canvasAction === 'canvas_create') {
-        params.setAiError('Canvas 수정 중 서버와 연결 상태가 좋지 않아 문제가 발생했어요. 잠시 후 다시 시도해 주세요.');
       } else if (isCanvasOriginRequest) {
         params.onOpenChatForCanvasAnswer?.();
       }

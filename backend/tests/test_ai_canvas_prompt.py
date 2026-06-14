@@ -114,6 +114,12 @@ class AiCanvasPromptTests(unittest.TestCase):
         self.assertIn("Do not invent page numbers", prompt)
         self.assertIn("Do not invent exam predictions", prompt)
         self.assertIn("Recent conversation is not factual study evidence", prompt)
+        self.assertIn("both a chat answer and a Canvas change", prompt)
+        self.assertIn("handle only the Canvas-change part", prompt)
+        self.assertIn("Do not try to answer explanatory questions in Canvas operations", prompt)
+        self.assertIn("generated chat answer for the same user request", prompt)
+        self.assertIn("Never put Markdown control characters", prompt)
+        self.assertIn("convert them into supported Tiptap", prompt)
 
     def test_prompt_includes_insufficient_context_fallback(self):
         self.assertIn("확인 필요", AI_CANVAS_EDIT_INSTRUCTIONS)
