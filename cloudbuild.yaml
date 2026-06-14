@@ -26,8 +26,8 @@ steps:
       - --allow-unauthenticated
       - --execution-environment=gen2
       - --port=8080
-      - --cpu=4
-      - --memory=8Gi
+      - --cpu=8
+      - --memory=16Gi
       - --timeout=900
       - --min-instances=0
       - --max-instances=2
