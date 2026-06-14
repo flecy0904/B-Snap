@@ -28,6 +28,7 @@ frontend/expo-web.pid
 frontend/.playwright-cli/
 frontend/coverage/
 frontend/*.local
+/.firebase/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
@@ -111,6 +112,8 @@ img_preprocessing/target_area_yolo11n/
 # ==============================
 # Local Codex working notes
 # ==============================
+.agents/
+skills-lock.json
 docs/codex/
 Document/google-cloud-deploy-commands.md
 cloud-server.sh
