@@ -37,6 +37,25 @@ steps:
       - '--set-env-vars=^|^APP_ENV=production|APP_NAME=B-Snap API|AI_PROVIDER=openai|OPENAI_DEFAULT_MODEL=gpt-4.1-mini|UPLOAD_DIR=/mnt/uploads|UPLOAD_MAX_BYTES=31457280|AI_IMAGE_MAX_BYTES=29360128|ALLOWED_ORIGINS=https://gen-lang-client-0182409260.web.app,http://localhost:8081,http://localhost:19006'
       - --set-secrets=DATABASE_URL=bsnap-database-url:latest,JWT_SECRET_KEY=bsnap-jwt-secret-key:latest,GEMINI_API_KEY=bsnap-gemini-api-key:latest,OPENAI_API_KEY=bsnap-openai-api-key:latest
 
+  - id: build-frontend
+    name: node:22
+    dir: frontend
+    entrypoint: bash
+    env:
+      - EXPO_PUBLIC_BACKEND_URL=https://bsnap-api-878952831830.asia-northeast3.run.app
+    args:
+      - -lc
+      - |
+        npm ci
+        npm run build:web
+
+  - id: deploy-firebase-hosting
+    name: node:22
+    entrypoint: bash
+    args:
+      - -lc
+      - npx --yes firebase-tools@latest deploy --only hosting --project=${PROJECT_ID} --non-interactive
+
 images:
   - ${_REGION}-docker.pkg.dev/${PROJECT_ID}/${_REPOSITORY}/${_SERVICE}:${SHORT_SHA}
 

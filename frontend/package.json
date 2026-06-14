@@ -12,6 +12,7 @@
     "android": "node scripts/run-android.js",
     "ios": "react-native run-ios --no-packager",
     "ios:ipad": "react-native run-ios --simulator \"iPad (A16)\" --no-packager",
+    "build:web": "expo export --platform web --output-dir dist",
     "typecheck": "tsc --noEmit",
     "check": "npm run typecheck"
   },
