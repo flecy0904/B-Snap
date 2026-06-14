@@ -510,6 +510,8 @@ def _validate_canvas_operations(raw: Any) -> list[dict[str, Any]]:
         if op not in ALLOWED_CANVAS_OPERATION_TYPES:
             continue
         target_block_id = item.get("targetBlockId")
+        if op == "insert_after" and isinstance(target_block_id, str) and target_block_id.strip().lower() in {"", "null", "none", "undefined"}:
+            target_block_id = None
         if op != "insert_after" and not isinstance(target_block_id, str):
             continue
         if op == "insert_after" and target_block_id is not None and not isinstance(target_block_id, str):
