@@ -1786,6 +1786,15 @@ export function useStudyWorkspace(props: {
     },
   });
 
+  const rememberCurrentDocumentChatSidebar = (open: boolean) => {
+    if (!studyDocumentId) return;
+    setChatSidebarOpenByDocument((current) => (
+      current[studyDocumentId] === open
+        ? current
+        : { ...current, [studyDocumentId]: open }
+    ));
+  };
+
   const {
     toggleAiPanel,
     askAiAboutSelection,
@@ -1800,6 +1809,7 @@ export function useStudyWorkspace(props: {
       setAiPanelOpen(true);
       if (Platform.OS !== 'web' && props.wide) {
         if (appChatMode === 'sidebar') {
+          rememberCurrentDocumentChatSidebar(true);
           setAiPanelMode('sidebar');
           setAppRightSidebarPanel('chat');
         } else {
@@ -2247,14 +2257,6 @@ export function useStudyWorkspace(props: {
       setSelectionPreviewByDocument((current) => ({ ...current, [studyDocumentId]: null }));
       setSelectionPreviewAttachedByDocument((current) => ({ ...current, [studyDocumentId]: false }));
     }
-  };
-  const rememberCurrentDocumentChatSidebar = (open: boolean) => {
-    if (!studyDocumentId) return;
-    setChatSidebarOpenByDocument((current) => (
-      current[studyDocumentId] === open
-        ? current
-        : { ...current, [studyDocumentId]: open }
-    ));
   };
   const openAppChatSidebar = () => {
     rememberCurrentDocumentChatSidebar(true);
