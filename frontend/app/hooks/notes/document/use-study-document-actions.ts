@@ -44,7 +44,7 @@ type StudyDocumentActionsParams = {
   lastChatSessionByDocument: Record<number, number>;
   chatSidebarOpenByDocument: Record<number, boolean>;
   onOpenNotesTab: () => void;
-  syncPdfDocumentToBackend: (document: StudyDocumentEntry, subject: Subject, uploadBlob?: Blob | null) => void | Promise<void>;
+  syncPdfDocumentToBackend: (document: StudyDocumentEntry, subject: Subject, uploadBlob?: Blob | null) => void | Promise<void | boolean>;
   setSubjectId: SetState<number | null>;
   setNoteId: SetState<number | null>;
   setQuery: SetState<string>;

@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useRef, useState, type Dispatch, type SetStateAction } from 'react';
 import {
+  createBackendNote,
+  createBackendNotePage,
   ensureFolderForSubject,
   isBackendApiEnabled,
   listBackendNotePages,
   updateBackendNotePage,
+  uploadBackendFile,
   uploadBackendPdfNote,
   BackendApiError,
   type BackendNotePage,
@@ -69,6 +72,37 @@ function isTransientWebPdfUri(uri: string | null | undefined) {
   return normalizedUri.startsWith('blob:') || normalizedUri.startsWith('data:application/pdf');
 }
 
+function isRemoteAssetUri(uri: string | null | undefined) {
+  return typeof uri === 'string' && /^https?:\/\//i.test(uri);
+}
+
+function getDocumentFileUri(document: StudyDocumentEntry) {
+  return document.remoteFileUrl
+    ?? document.localFileUri
+    ?? (document.file && typeof document.file === 'object' && 'uri' in document.file ? document.file.uri : null);
+}
+
+function inferImageUploadType(uri: string | null | undefined) {
+  const normalized = uri?.toLowerCase() ?? '';
+  if (normalized.includes('image/png') || normalized.endsWith('.png')) return 'image/png';
+  if (normalized.includes('image/heic') || normalized.endsWith('.heic')) return 'image/heic';
+  if (normalized.includes('image/heif') || normalized.endsWith('.heif')) return 'image/heif';
+  return 'image/jpeg';
+}
+
+function inferImageUploadName(document: StudyDocumentEntry, uri: string | null | undefined) {
+  const normalized = uri?.toLowerCase() ?? '';
+  const extension = normalized.includes('image/png') || normalized.endsWith('.png')
+    ? 'png'
+    : normalized.includes('image/heic') || normalized.endsWith('.heic')
+      ? 'heic'
+      : normalized.includes('image/heif') || normalized.endsWith('.heif')
+        ? 'heif'
+        : 'jpg';
+  const safeTitle = document.title.trim().replace(/[^\w.-]+/g, '-').replace(/^-+|-+$/g, '') || 'image-note';
+  return `${safeTitle}.${extension}`;
+}
+
 export function useBackendNotePageSync({
   workspaceHydrated,
   studyDocumentId,
@@ -98,6 +132,44 @@ export function useBackendNotePageSync({
   const backendPageLoadsInFlightRef = useRef<Record<number, true>>({});
   const dirtyPageKeysRef = useRef<Set<string>>(new Set());
   const pdfSyncInFlightRef = useRef<Record<number, true>>({});
+  const pdfSyncPromiseRef = useRef<Record<number, Promise<boolean>>>({});
+
+  const buildPageContent = useCallback((documentId: number, pageNumber: number) => {
+    const documentInk = inkByDocument[documentId] ?? [];
+    const documentTextAnnotations = textAnnotationsByDocument[documentId] ?? [];
+    const documentImageAnnotations = imageAnnotationsByDocument[documentId] ?? [];
+    const pageInkStrokes = documentInk.filter((stroke) => !stroke.generatedPageId && (stroke.pageNumber ?? 1) === pageNumber);
+    const pageTextAnnotations = documentTextAnnotations.filter((annotation) => !annotation.generatedPageId && annotation.pageNumber === pageNumber);
+    const pageImageAnnotations = documentImageAnnotations.filter((annotation) => !annotation.generatedPageId && annotation.pageNumber === pageNumber);
+    const pageBookmarked = (bookmarksByDocument[documentId] ?? []).some((bookmark) => (
+      bookmark.page.kind === 'pdf' && bookmark.page.pageNumber === pageNumber
+    ));
+    const photoReferenceCount = (pageCaptureReferencesByDocument[documentId] ?? []).filter((reference) => (
+      reference.page.kind === 'pdf' && reference.page.pageNumber === pageNumber
+    )).length;
+    const memoPageCount = (generatedPagesByDocument[documentId] ?? []).filter((page) => (
+      page.pageKind === 'memo' && page.insertAfterPage === pageNumber
+    )).length;
+    const previousSavedContent = parseNotePageContent(lastSavedPageContentRef.current[getPageSaveKey(documentId, pageNumber)] ?? null);
+
+    return serializeNotePageContent({
+      inkStrokes: pageInkStrokes,
+      textAnnotations: pageTextAnnotations,
+      imageAnnotations: pageImageAnnotations,
+      bookmarked: pageBookmarked,
+      photoReferenceCount,
+      memoPageCount,
+      ragExtraction: previousSavedContent?.ragExtraction,
+      handwritingRecognition: previousSavedContent?.handwritingRecognition,
+    });
+  }, [
+    bookmarksByDocument,
+    generatedPagesByDocument,
+    imageAnnotationsByDocument,
+    inkByDocument,
+    pageCaptureReferencesByDocument,
+    textAnnotationsByDocument,
+  ]);
 
   const applyLoadedBackendPages = useCallback((documentId: number, pages: Awaited<ReturnType<typeof listBackendNotePages>>) => {
     const pageIdsByNumber: Record<number, number> = {};
@@ -251,32 +323,7 @@ export function useBackendNotePageSync({
         const pageId = backendPageIdsByDocument[documentId]?.[pageNumber];
         if (!documentId || !pageNumber || !pageId) return;
 
-        const documentInk = inkByDocument[documentId] ?? [];
-        const documentTextAnnotations = textAnnotationsByDocument[documentId] ?? [];
-        const documentImageAnnotations = imageAnnotationsByDocument[documentId] ?? [];
-        const pageInkStrokes = documentInk.filter((stroke) => !stroke.generatedPageId && (stroke.pageNumber ?? 1) === pageNumber);
-        const pageTextAnnotations = documentTextAnnotations.filter((annotation) => !annotation.generatedPageId && annotation.pageNumber === pageNumber);
-        const pageImageAnnotations = documentImageAnnotations.filter((annotation) => !annotation.generatedPageId && annotation.pageNumber === pageNumber);
-        const pageBookmarked = (bookmarksByDocument[documentId] ?? []).some((bookmark) => (
-          bookmark.page.kind === 'pdf' && bookmark.page.pageNumber === pageNumber
-        ));
-        const photoReferenceCount = (pageCaptureReferencesByDocument[documentId] ?? []).filter((reference) => (
-          reference.page.kind === 'pdf' && reference.page.pageNumber === pageNumber
-        )).length;
-        const memoPageCount = (generatedPagesByDocument[documentId] ?? []).filter((page) => (
-          page.pageKind === 'memo' && page.insertAfterPage === pageNumber
-        )).length;
-
-        const previousSavedContent = parseNotePageContent(lastSavedPageContentRef.current[key] ?? null);
-        const content = serializeNotePageContent({
-          inkStrokes: pageInkStrokes,
-          textAnnotations: pageTextAnnotations,
-          imageAnnotations: pageImageAnnotations,
-          bookmarked: pageBookmarked,
-          photoReferenceCount,
-          memoPageCount,
-          ragExtraction: previousSavedContent?.ragExtraction,
-        });
+        const content = buildPageContent(documentId, pageNumber);
         const savedContent = lastSavedPageContentRef.current[key];
         if (savedContent === undefined && content === EMPTY_PAGE_CONTENT) {
           lastSavedPageContentRef.current[key] = content;
@@ -323,11 +370,9 @@ export function useBackendNotePageSync({
     return () => clearTimeout(timer);
   }, [
     backendPageIdsByDocument,
-    bookmarksByDocument,
-    generatedPagesByDocument,
+    buildPageContent,
     imageAnnotationsByDocument,
     inkByDocument,
-    pageCaptureReferencesByDocument,
     textAnnotationsByDocument,
     workspaceHydrated,
   ]);
@@ -416,20 +461,197 @@ export function useBackendNotePageSync({
     return () => clearTimeout(timer);
   }, [pendingPageSaves, savingPageKeys]);
 
+  const flushBackendPageSaves = useCallback(async () => {
+    if (!workspaceHydrated || !isBackendApiEnabled()) return true;
+
+    const dirtyEntries: Record<string, PendingPageSave> = {};
+    Array.from(dirtyPageKeysRef.current).forEach((key) => {
+      const [documentIdText, pageNumberText] = key.split(':');
+      const documentId = Number(documentIdText);
+      const pageNumber = Number(pageNumberText);
+      const pageId = backendPageIdsByDocument[documentId]?.[pageNumber];
+      if (!documentId || !pageNumber || !pageId) return;
+
+      const content = buildPageContent(documentId, pageNumber);
+      const savedContent = lastSavedPageContentRef.current[key];
+      if (savedContent === content) {
+        lastQueuedPageContentRef.current[key] = content;
+        dirtyPageKeysRef.current.delete(key);
+        return;
+      }
+
+      dirtyEntries[key] = {
+        pageId,
+        documentId,
+        pageNumber,
+        content,
+        attempts: 0,
+        updatedAt: Date.now(),
+      };
+    });
+
+    const entries = Object.entries({
+      ...pendingPageSaves,
+      ...dirtyEntries,
+    }).filter(([key]) => !savingPageKeys[key]);
+    if (!entries.length) return true;
+
+    const results = await Promise.all(entries.map(async ([key, pending]) => {
+      setSavingPageKeys((current) => ({ ...current, [key]: true }));
+      try {
+        await updateBackendNotePage({
+          pageId: pending.pageId,
+          content: pending.content,
+        });
+        lastSavedPageContentRef.current[key] = pending.content;
+        lastQueuedPageContentRef.current[key] = pending.content;
+        dirtyPageKeysRef.current.delete(key);
+        setPendingPageSaves((current) => {
+          const currentPending = current[key];
+          if (!currentPending || currentPending.content !== pending.content) return current;
+          const next = { ...current };
+          delete next[key];
+          return next;
+        });
+        setFailedPageSaveKeys((current) => {
+          if (!current[key]) return current;
+          const next = { ...current };
+          delete next[key];
+          return next;
+        });
+        onPageSaveSuccess?.(pending.documentId, pending.pageNumber);
+        return true;
+      } catch {
+        lastQueuedPageContentRef.current[key] = '';
+        setPendingPageSaves((current) => ({
+          ...current,
+          [key]: {
+            ...pending,
+            attempts: pending.attempts + 1,
+            updatedAt: Date.now(),
+          },
+        }));
+        setFailedPageSaveKeys((current) => ({ ...current, [key]: true }));
+        return false;
+      } finally {
+        setSavingPageKeys((current) => {
+          const next = { ...current };
+          delete next[key];
+          return next;
+        });
+      }
+    }));
+
+    return results.every(Boolean);
+  }, [
+    backendPageIdsByDocument,
+    buildPageContent,
+    onPageSaveSuccess,
+    pendingPageSaves,
+    savingPageKeys,
+    workspaceHydrated,
+  ]);
+
   const syncPdfDocumentToBackend = useCallback(async (
     document: StudyDocumentEntry,
     targetSubject: Subject,
     uploadBlob?: Blob | null,
-  ) => {
+  ): Promise<boolean> => {
     if (!isBackendApiEnabled() || document.type !== 'pdf' || document.backendNoteId || pdfSyncInFlightRef.current[document.id]) {
-      return;
+      return pdfSyncPromiseRef.current[document.id] ?? false;
     }
 
     const sourceUri = document.localFileUri
       ?? (document.file && typeof document.file === 'object' && 'uri' in document.file ? document.file.uri : null);
-    if (!sourceUri) return;
+    if (!sourceUri) return false;
 
     pdfSyncInFlightRef.current[document.id] = true;
+    const syncPromise = (async () => {
+      setUserStudyDocuments((current) => current.map((item) => (
+        item.id === document.id
+          ? { ...item, backendSyncStatus: 'syncing', backendSyncError: undefined }
+          : item
+      )));
+
+      try {
+        const folder = await ensureFolderForSubject({ name: targetSubject.name, color: targetSubject.color });
+        const result = await uploadBackendPdfNote({
+          file: {
+            uri: sourceUri,
+            name: document.title || `${targetSubject.name} PDF`,
+            type: 'application/pdf',
+            blob: uploadBlob ?? null,
+          },
+          folderId: folder.id,
+          title: document.title || `${targetSubject.name} PDF`,
+          summary: '업로드한 PDF 문서',
+        });
+        const pagesByNumber = Object.fromEntries(
+          result.pages.map((page) => [page.page_number, page.id]),
+        );
+        setBackendPageIdsByDocument((current) => ({
+          ...current,
+          [document.id]: pagesByNumber,
+        }));
+        const remotePdfUrl = result.note.file_url ?? result.upload.url;
+        setUserStudyDocuments((current) => current.map((item) => (
+          item.id === document.id
+            ? (() => {
+              const hasTransientLocalFileUri = isTransientWebPdfUri(item.localFileUri);
+              const shouldUseRemotePdf = Boolean(remotePdfUrl) && (!item.localFileUri || hasTransientLocalFileUri);
+              return {
+                ...item,
+                backendNoteId: result.note.id,
+                backendFolderId: result.note.folder_id,
+                title: result.note.title,
+                updatedAt: 'DB 저장됨',
+                pageCount: Math.max(item.pageCount, result.note.page_count ?? result.upload.page_count),
+                preview: result.note.summary ?? '업로드한 PDF 문서입니다.',
+                file: shouldUseRemotePdf ? { uri: remotePdfUrl } : item.file,
+                localFileUri: hasTransientLocalFileUri ? undefined : item.localFileUri,
+                remoteFileUrl: remotePdfUrl,
+                thumbnailUrl: result.note.thumbnail_url ?? result.upload.thumbnail_url ?? undefined,
+                backendSyncStatus: 'synced',
+                backendSyncError: undefined,
+              };
+            })()
+            : item
+        )));
+
+        setWorkspaceFeedback(`${Math.max(document.pageCount, result.note.page_count ?? result.upload.page_count)}페이지 PDF를 서버에 저장했어요.`);
+        return true;
+      } catch (error) {
+        const syncError = error instanceof BackendApiError
+          ? error.detail ?? (error.status ? `백엔드 저장에 실패했습니다. (${error.status})` : error.message)
+          : '백엔드 저장에 실패했습니다.';
+        setWorkspaceFeedback(`${syncError} PDF는 이 기기에 유지할게요.`);
+        setUserStudyDocuments((current) => current.map((item) => (
+          item.id === document.id
+            ? {
+              ...item,
+              backendSyncStatus: 'failed',
+              backendSyncError: syncError,
+            }
+            : item
+        )));
+        return false;
+      } finally {
+        delete pdfSyncInFlightRef.current[document.id];
+        delete pdfSyncPromiseRef.current[document.id];
+      }
+    })();
+    pdfSyncPromiseRef.current[document.id] = syncPromise;
+    return syncPromise;
+  }, [setUserStudyDocuments, setWorkspaceFeedback]);
+
+  const syncLocalDocumentToBackend = useCallback(async (document: StudyDocumentEntry) => {
+    if (!isBackendApiEnabled() || getStudyDocumentBackendNoteId(document)) return true;
+    const targetSubject = availableSubjects.find((item) => item.id === document.subjectId) ?? availableSubjects[0] ?? null;
+    if (!targetSubject) return false;
+    if (document.type === 'pdf') {
+      return syncPdfDocumentToBackend(document, targetSubject);
+    }
+
     setUserStudyDocuments((current) => current.map((item) => (
       item.id === document.id
         ? { ...item, backendSyncStatus: 'syncing', backendSyncError: undefined }
@@ -438,68 +660,114 @@ export function useBackendNotePageSync({
 
     try {
       const folder = await ensureFolderForSubject({ name: targetSubject.name, color: targetSubject.color });
-      const result = await uploadBackendPdfNote({
-        file: {
-          uri: sourceUri,
-          name: document.title || `${targetSubject.name} PDF`,
-          type: 'application/pdf',
-          blob: uploadBlob ?? null,
-        },
+      let imageUrl = document.type === 'image' ? getDocumentFileUri(document) : null;
+      let thumbnailUrl: string | undefined;
+
+      if (document.type === 'image' && imageUrl && !isRemoteAssetUri(imageUrl)) {
+        const upload = await uploadBackendFile({
+          uri: imageUrl,
+          name: inferImageUploadName(document, imageUrl),
+          type: inferImageUploadType(imageUrl),
+        });
+        imageUrl = upload.processed_url ?? upload.url;
+        thumbnailUrl = upload.thumbnail_url ?? upload.processed_url ?? upload.url;
+      }
+
+      const backendNote = await createBackendNote({
         folderId: folder.id,
-        title: document.title || `${targetSubject.name} PDF`,
-        summary: '업로드한 PDF 문서',
+        title: document.title,
+        summary: document.preview,
       });
-      const pagesByNumber = Object.fromEntries(
-        result.pages.map((page) => [page.page_number, page.id]),
-      );
+      const pageIdsByNumber: Record<number, number> = {};
+      const pageCount = Math.max(1, document.pageCount);
+
+      for (let pageNumber = 1; pageNumber <= pageCount; pageNumber += 1) {
+        const backendPage = await createBackendNotePage({
+          noteId: backendNote.id,
+          pageNumber,
+          content: buildPageContent(document.id, pageNumber),
+          imageUrl: pageNumber === 1 ? imageUrl : null,
+        });
+        pageIdsByNumber[pageNumber] = backendPage.id;
+        rememberSavedBackendNotePage(document.id, backendPage);
+      }
+
       setBackendPageIdsByDocument((current) => ({
         ...current,
-        [document.id]: pagesByNumber,
+        [document.id]: pageIdsByNumber,
       }));
-      const remotePdfUrl = result.note.file_url ?? result.upload.url;
-      setUserStudyDocuments((current) => current.map((item) => (
-        item.id === document.id
-          ? (() => {
-            const hasTransientLocalFileUri = isTransientWebPdfUri(item.localFileUri);
-            const shouldUseRemotePdf = Boolean(remotePdfUrl) && (!item.localFileUri || hasTransientLocalFileUri);
-            return {
-              ...item,
-              backendNoteId: result.note.id,
-              backendFolderId: result.note.folder_id,
-              title: result.note.title,
-              updatedAt: 'DB 저장됨',
-              pageCount: Math.max(item.pageCount, result.note.page_count ?? result.upload.page_count),
-              preview: result.note.summary ?? '업로드한 PDF 문서입니다.',
-              file: shouldUseRemotePdf ? { uri: remotePdfUrl } : item.file,
-              localFileUri: hasTransientLocalFileUri ? undefined : item.localFileUri,
-              remoteFileUrl: remotePdfUrl,
-              thumbnailUrl: result.note.thumbnail_url ?? result.upload.thumbnail_url ?? undefined,
-              backendSyncStatus: 'synced',
-              backendSyncError: undefined,
-            };
-          })()
-          : item
-      )));
-
-      setWorkspaceFeedback(`${Math.max(document.pageCount, result.note.page_count ?? result.upload.page_count)}페이지 PDF를 서버에 저장했어요.`);
-    } catch (error) {
-      const syncError = error instanceof BackendApiError
-        ? error.detail ?? (error.status ? `백엔드 저장에 실패했습니다. (${error.status})` : error.message)
-        : '백엔드 저장에 실패했습니다.';
-      setWorkspaceFeedback(`${syncError} PDF는 이 기기에 유지할게요.`);
       setUserStudyDocuments((current) => current.map((item) => (
         item.id === document.id
           ? {
             ...item,
-            backendSyncStatus: 'failed',
-            backendSyncError: syncError,
+            backendNoteId: backendNote.id,
+            backendFolderId: backendNote.folder_id,
+            title: backendNote.title,
+            updatedAt: 'DB 저장됨',
+            preview: backendNote.summary ?? item.preview,
+            file: imageUrl ? { uri: imageUrl } : item.file,
+            remoteFileUrl: imageUrl ?? item.remoteFileUrl,
+            thumbnailUrl: backendNote.thumbnail_url ?? thumbnailUrl ?? item.thumbnailUrl,
+            backendSyncStatus: 'synced',
+            backendSyncError: undefined,
           }
           : item
       )));
-    } finally {
-      delete pdfSyncInFlightRef.current[document.id];
+      return true;
+    } catch (error) {
+      const syncError = error instanceof BackendApiError
+        ? error.detail ?? (error.status ? `백엔드 저장에 실패했습니다. (${error.status})` : error.message)
+        : '백엔드 저장에 실패했습니다.';
+      setUserStudyDocuments((current) => current.map((item) => (
+        item.id === document.id
+          ? { ...item, backendSyncStatus: 'failed', backendSyncError: syncError }
+          : item
+      )));
+      return false;
     }
-  }, [setUserStudyDocuments, setWorkspaceFeedback]);
+  }, [
+    availableSubjects,
+    buildPageContent,
+    rememberSavedBackendNotePage,
+    setUserStudyDocuments,
+    syncPdfDocumentToBackend,
+  ]);
+
+  const syncLocalDocumentsToBackend = useCallback(async () => {
+    if (!workspaceHydrated || !isBackendApiEnabled()) return { synced: 0, failed: 0 };
+    const localDocuments = userStudyDocuments.filter((document) => !getStudyDocumentBackendNoteId(document));
+    let synced = 0;
+    let failed = 0;
+
+    for (const document of localDocuments) {
+      const ok = await syncLocalDocumentToBackend(document);
+      if (ok) {
+        synced += 1;
+      } else {
+        failed += 1;
+      }
+    }
+
+    return { synced, failed };
+  }, [syncLocalDocumentToBackend, userStudyDocuments, workspaceHydrated]);
+
+  const refreshBackendDocumentPages = useCallback(async () => {
+    if (!workspaceHydrated || !isBackendApiEnabled()) return true;
+    let ok = true;
+
+    for (const document of userStudyDocuments) {
+      const backendNoteId = getStudyDocumentBackendNoteId(document);
+      if (!backendNoteId) continue;
+      try {
+        const pages = await listBackendNotePages(backendNoteId);
+        applyLoadedBackendPages(document.id, pages);
+      } catch {
+        ok = false;
+      }
+    }
+
+    return ok;
+  }, [applyLoadedBackendPages, userStudyDocuments, workspaceHydrated]);
 
   useEffect(() => {
     if (!workspaceHydrated || !isBackendApiEnabled()) return;
@@ -518,6 +786,9 @@ export function useBackendNotePageSync({
     markBackendPageDirty,
     rememberSavedBackendNotePage,
     syncPdfDocumentToBackend,
+    syncLocalDocumentsToBackend,
+    flushBackendPageSaves,
+    refreshBackendDocumentPages,
     failedPageSaveCount: Object.keys(failedPageSaveKeys).length,
     pendingPageSaveCount: Object.keys(pendingPageSaves).length,
     savingPageCount: Object.keys(savingPageKeys).length,

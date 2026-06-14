@@ -447,6 +447,8 @@ export function AppShell(props: {
                   onRestoreNote={notesState.restoreNote}
                   onRestoreStudyDocument={notesState.restoreStudyDocument}
                   onRenameStudyDocument={notesState.renameStudyDocument}
+                  onSyncBackendDocuments={notesState.syncBackendDocuments}
+                  backendDocumentSyncing={notesState.backendDocumentSyncing}
                   onCreateBlankNote={notesState.createBlankNote}
                   onUploadPdf={notesState.uploadPdfDocument}
                   onInsertImageFromLibrary={notesState.insertImageFromLibrary}
@@ -680,6 +682,8 @@ export function AppShell(props: {
                   onRestoreNote={notesState.restoreNote}
                   onRestoreStudyDocument={notesState.restoreStudyDocument}
                   onRenameStudyDocument={notesState.renameStudyDocument}
+                  onSyncBackendDocuments={notesState.syncBackendDocuments}
+                  backendDocumentSyncing={notesState.backendDocumentSyncing}
                   onCreateBlankNote={notesState.createBlankNote}
                   onUploadPdf={notesState.uploadPdfDocument}
                   onUpdateStudyDocumentPageCount={notesState.updateStudyDocumentPageCount}

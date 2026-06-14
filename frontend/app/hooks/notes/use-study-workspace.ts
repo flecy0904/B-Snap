@@ -376,6 +376,12 @@ export function useStudyWorkspace(props: {
   const [aiRagScopeCollapsed, setAiRagScopeCollapsed] = useState(true);
   const [aiRagCanvasCandidates, setAiRagCanvasCandidates] = useState<BackendAiCanvasNoteSummary[]>([]);
   const [backendFolderIdBySubjectId, setBackendFolderIdBySubjectId] = useState<Record<number, number>>({});
+  const [backendDocumentSyncing, setBackendDocumentSyncing] = useState(false);
+  const backendDocumentSyncRequestIdRef = useRef(0);
+  const workspaceMountedRef = useRef(true);
+  useEffect(() => () => {
+    workspaceMountedRef.current = false;
+  }, []);
   const loadAllAiChatSessions = useCallback(() => {
     if (!isBackendApiEnabled()) return;
 
@@ -664,6 +670,9 @@ export function useStudyWorkspace(props: {
     markBackendPageDirty,
     rememberSavedBackendNotePage,
     syncPdfDocumentToBackend,
+    syncLocalDocumentsToBackend,
+    flushBackendPageSaves,
+    refreshBackendDocumentPages,
     failedPageSaveCount,
     pendingPageSaveCount,
     savingPageCount,
@@ -1268,99 +1277,172 @@ export function useStudyWorkspace(props: {
     workspaceHydrated,
   ]);
 
-  useEffect(() => {
-    if (!workspaceHydrated || !isBackendApiEnabled()) return;
+  const pullBackendDocuments = useCallback(async (options?: {
+    showFeedback?: boolean;
+    requestIsCurrent?: () => boolean;
+  }) => {
+    const showFeedback = Boolean(options?.showFeedback);
+    if (!workspaceHydrated) return false;
+    if (!isBackendApiEnabled()) {
+      if (showFeedback) setWorkspaceFeedback('백엔드 URL이 설정되어 있지 않아 서버 동기화를 사용할 수 없어요.');
+      return false;
+    }
+    const requestIsCurrent = options?.requestIsCurrent ?? (() => workspaceMountedRef.current);
 
-    let mounted = true;
+    try {
+      const [folders, backendNotes] = await Promise.all([
+        listBackendFolders(),
+        listBackendNotes(),
+      ]);
+      if (!requestIsCurrent()) return false;
 
-    const loadBackendDocuments = async () => {
-      try {
-        const [folders, backendNotes] = await Promise.all([
-          listBackendFolders(),
-          listBackendNotes(),
-        ]);
-        const nextBackendFolderIdBySubjectId: Record<number, number> = {};
-        folders.forEach((folder) => {
-          const matchedSubject = availableSubjects.find((item) => item.name === folder.name);
-          if (matchedSubject) nextBackendFolderIdBySubjectId[matchedSubject.id] = folder.id;
+      const nextBackendFolderIdBySubjectId: Record<number, number> = {};
+      folders.forEach((folder) => {
+        const matchedSubject = availableSubjects.find((item) => item.name === folder.name);
+        if (matchedSubject) nextBackendFolderIdBySubjectId[matchedSubject.id] = folder.id;
+      });
+      const documents = await Promise.all(
+        backendNotes.map(async (backendNote) => {
+          const folder = folders.find((item) => item.id === backendNote.folder_id);
+          const subject = availableSubjects.find((item) => item.name === folder?.name) ?? availableSubjects[0] ?? null;
+          const fileUrl = backendNote.file_url ?? null;
+          const pageCount = Math.max(1, backendNote.page_count ?? 1);
+          const pdfLikeBackendNote = /\.pdf$/i.test(backendNote.title.trim()) || !!fileUrl || pageCount > 1;
+          let firstPageImageUrl: string | null = null;
+          let resolvedPageCount = pageCount;
+          if (!pdfLikeBackendNote) {
+            try {
+              const pages = await listBackendNotePages(backendNote.id);
+              firstPageImageUrl = pages[0]?.image_url ?? null;
+              resolvedPageCount = Math.max(pageCount, pages.length || 1);
+            } catch {
+              firstPageImageUrl = null;
+            }
+          }
+          const documentType = firstPageImageUrl ? 'image' as const : pdfLikeBackendNote ? 'pdf' as const : 'blank' as const;
+          const documentFileUrl = fileUrl ?? firstPageImageUrl;
+
+          return {
+            id: backendNote.id,
+            subjectId: subject?.id ?? props.initialSubjectId ?? 101,
+            backendNoteId: backendNote.id,
+            backendFolderId: backendNote.folder_id,
+            title: backendNote.title,
+            type: documentType,
+            updatedAt: 'DB 저장됨',
+            pageCount: resolvedPageCount,
+            preview: backendNote.summary ?? '백엔드에 저장된 노트입니다.',
+            file: documentFileUrl ? { uri: documentFileUrl } : undefined,
+            remoteFileUrl: documentFileUrl ?? undefined,
+            thumbnailUrl: backendNote.thumbnail_url ?? firstPageImageUrl ?? undefined,
+            backendSyncStatus: 'synced',
+          } satisfies StudyDocumentEntry;
+        }),
+      );
+      if (!requestIsCurrent()) return false;
+
+      setBackendFolderIdBySubjectId(nextBackendFolderIdBySubjectId);
+      const backendDocumentIds = new Set(documents.map((document) => document.id));
+      setUserStudyDocuments((current) => {
+        const backendDocumentByBackendId = new Map<number, StudyDocumentEntry>();
+        documents.forEach((document) => {
+          if (document.backendNoteId) backendDocumentByBackendId.set(document.backendNoteId, document);
         });
-        const documents = await Promise.all(
-          backendNotes.map(async (backendNote) => {
-            const folder = folders.find((item) => item.id === backendNote.folder_id);
-            const subject = availableSubjects.find((item) => item.name === folder?.name) ?? availableSubjects[0] ?? null;
-            const fileUrl = backendNote.file_url ?? null;
-            const pageCount = Math.max(1, backendNote.page_count ?? 1);
-            const pdfLikeBackendNote = /\.pdf$/i.test(backendNote.title.trim()) || !!fileUrl || pageCount > 1;
-            const documentType = pdfLikeBackendNote ? 'pdf' as const : 'blank' as const;
+        const mergedCurrent = current.map((document) => {
+          const backendNoteId = getStudyDocumentBackendNoteId(document);
+          const backendDocument = backendNoteId ? backendDocumentByBackendId.get(backendNoteId) : null;
+          if (!backendDocument) return document;
 
-            return {
-              id: backendNote.id,
-              subjectId: subject?.id ?? props.initialSubjectId ?? 101,
-              backendNoteId: backendNote.id,
-              backendFolderId: backendNote.folder_id,
-              title: backendNote.title,
-              type: documentType,
-              updatedAt: 'DB 저장됨',
-              pageCount,
-              preview: backendNote.summary ?? '백엔드에 저장된 노트입니다.',
-              file: fileUrl ? { uri: fileUrl } : undefined,
-              remoteFileUrl: fileUrl ?? undefined,
-              thumbnailUrl: backendNote.thumbnail_url ?? undefined,
-              backendSyncStatus: 'synced',
-            } satisfies StudyDocumentEntry;
-          }),
+          return {
+            ...backendDocument,
+            id: document.id,
+            localFileUri: isTransientWebFileUri(document.localFileUri) ? undefined : document.localFileUri,
+            file: document.localFileUri && !isTransientWebFileUri(document.localFileUri)
+              ? { uri: document.localFileUri }
+              : normalizeDocumentFile(backendDocument.file),
+          };
+        });
+        const existingBackendNoteIds = new Set(
+          mergedCurrent
+            .map((document) => getStudyDocumentBackendNoteId(document))
+            .filter((id): id is number => typeof id === 'number'),
         );
-
-        if (!mounted) return;
-        setBackendFolderIdBySubjectId(nextBackendFolderIdBySubjectId);
-        const backendDocumentIds = new Set(documents.map((document) => document.id));
-        setUserStudyDocuments((current) => {
-          const backendDocumentByBackendId = new Map<number, StudyDocumentEntry>();
-          documents.forEach((document) => {
-            if (document.backendNoteId) backendDocumentByBackendId.set(document.backendNoteId, document);
+        const nextById = new Map<number, StudyDocumentEntry>();
+        [...mergedCurrent, ...documents.filter((document) => !document.backendNoteId || !existingBackendNoteIds.has(document.backendNoteId))].forEach((document) => {
+          nextById.set(document.id, {
+            ...document,
+            file: normalizeDocumentFile(document.file),
           });
-          const mergedCurrent = current.map((document) => {
-            const backendNoteId = getStudyDocumentBackendNoteId(document);
-            const backendDocument = backendNoteId ? backendDocumentByBackendId.get(backendNoteId) : null;
-            if (!backendDocument) return document;
-
-            return {
-              ...backendDocument,
-              id: document.id,
-              localFileUri: isTransientWebFileUri(document.localFileUri) ? undefined : document.localFileUri,
-              file: document.localFileUri && !isTransientWebFileUri(document.localFileUri)
-                ? { uri: document.localFileUri }
-                : normalizeDocumentFile(backendDocument.file),
-            };
-          });
-          const existingBackendNoteIds = new Set(
-            mergedCurrent
-              .map((document) => getStudyDocumentBackendNoteId(document))
-              .filter((id): id is number => typeof id === 'number'),
-          );
-          const nextById = new Map<number, StudyDocumentEntry>();
-          [...mergedCurrent, ...documents.filter((document) => !document.backendNoteId || !existingBackendNoteIds.has(document.backendNoteId))].forEach((document) => {
-            nextById.set(document.id, {
-              ...document,
-              file: normalizeDocumentFile(document.file),
-            });
-          });
-          return Array.from(nextById.values()).sort((left, right) => right.id - left.id);
         });
-        setDeletedStudyDocumentIds((current) => current.filter((id) => !backendDocumentIds.has(id)));
-      } catch {
-        if (mounted) {
-          setWorkspaceFeedback('노트 목록을 불러오지 못했어요,.');
+        return Array.from(nextById.values()).sort((left, right) => right.id - left.id);
+      });
+      setDeletedStudyDocumentIds((current) => current.filter((id) => !backendDocumentIds.has(id)));
+      if (showFeedback) setWorkspaceFeedback('서버 자료를 동기화했어요.');
+      return true;
+    } catch {
+      if (requestIsCurrent()) {
+        setWorkspaceFeedback('노트 목록을 불러오지 못했어요.');
+      }
+      return false;
+    }
+  }, [availableSubjects, props.initialSubjectId, setWorkspaceFeedback, workspaceHydrated]);
+
+  const syncBackendDocuments = useCallback(async (options?: { showFeedback?: boolean }) => {
+    const showFeedback = Boolean(options?.showFeedback);
+    if (!workspaceHydrated) return false;
+    if (!isBackendApiEnabled()) {
+      if (showFeedback) setWorkspaceFeedback('백엔드 URL이 설정되어 있지 않아 서버 동기화를 사용할 수 없어요.');
+      return false;
+    }
+
+    const requestId = backendDocumentSyncRequestIdRef.current + 1;
+    backendDocumentSyncRequestIdRef.current = requestId;
+    setBackendDocumentSyncing(true);
+    const requestIsCurrent = () => workspaceMountedRef.current && backendDocumentSyncRequestIdRef.current === requestId;
+
+    try {
+      if (showFeedback) setWorkspaceFeedback('클라우드와 동기화하는 중입니다.');
+      const uploadResult = await syncLocalDocumentsToBackend();
+      if (!requestIsCurrent()) return false;
+      const savedPagesOk = await flushBackendPageSaves();
+      if (!requestIsCurrent()) return false;
+      const refreshedPagesOk = await refreshBackendDocumentPages();
+      if (!requestIsCurrent()) return false;
+      const pulledOk = await pullBackendDocuments({ requestIsCurrent });
+      const ok = uploadResult.failed === 0 && savedPagesOk && refreshedPagesOk && pulledOk;
+
+      if (showFeedback && requestIsCurrent()) {
+        if (ok) {
+          const uploadedText = uploadResult.synced > 0 ? `${uploadResult.synced}개 자료 업로드 · ` : '';
+          setWorkspaceFeedback(`${uploadedText}클라우드 동기화를 완료했어요.`);
+        } else {
+          setWorkspaceFeedback('일부 항목을 동기화하지 못했어요. 네트워크 상태를 확인한 뒤 다시 눌러주세요.');
         }
       }
-    };
+      return ok;
+    } catch {
+      if (requestIsCurrent()) {
+        setWorkspaceFeedback('클라우드 동기화 중 문제가 발생했어요.');
+      }
+      return false;
+    } finally {
+      if (requestIsCurrent()) {
+        setBackendDocumentSyncing(false);
+      }
+    }
+  }, [
+    flushBackendPageSaves,
+    pullBackendDocuments,
+    refreshBackendDocumentPages,
+    setWorkspaceFeedback,
+    syncLocalDocumentsToBackend,
+    workspaceHydrated,
+  ]);
 
-    void loadBackendDocuments();
-
-    return () => {
-      mounted = false;
-    };
-  }, [availableSubjects, props.initialSubjectId, workspaceHydrated]);
+  useEffect(() => {
+    if (!workspaceHydrated || !isBackendApiEnabled()) return;
+    void pullBackendDocuments();
+  }, [pullBackendDocuments, workspaceHydrated]);
 
   useEffect(() => {
     if (!workspaceHydrated || !aiPanelOpen || !isBackendApiEnabled() || !studyDocumentId || !currentDocumentHasBackendPages) {
@@ -2382,6 +2464,7 @@ export function useStudyWorkspace(props: {
     allStudyDocuments,
     deletedStudyDocuments,
     filteredStudyDocuments,
+    backendDocumentSyncing,
     openSubject,
     openNote,
     openStudyDocument,
@@ -2399,6 +2482,7 @@ export function useStudyWorkspace(props: {
     restoreNote,
     restoreStudyDocument,
     renameStudyDocument,
+    syncBackendDocuments,
     uploadPdfDocument,
     insertImageFromLibrary,
     resetNotes,
