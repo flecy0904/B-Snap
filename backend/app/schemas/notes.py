@@ -128,3 +128,5 @@ class HandwritingAnalysisRead(BaseModel):
     pages_analyzed: int = 0
     pages_skipped: int = 0
     pages_failed: int = 0
+    vision_pages_used: int = 0
+    vision_clusters_analyzed: int = 0

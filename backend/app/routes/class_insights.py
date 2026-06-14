@@ -10,6 +10,7 @@ from backend.app.core.auth import get_current_user
 from backend.app.db.crud import fetch_all, fetch_one, require_row
 from backend.app.db.session import get_db_connection
 from backend.app.schemas.class_insights import ClassInsightPageSignalRead, ClassInsightRead
+from backend.app.services import page_activity_signals
 from backend.app.services.document_matching import documents_match, normalize_subject_key, subjects_match
 from backend.app.services.handwriting_signals import SYMBOL_NAMES, normalize_korean_study_keywords
 from backend.app.services.note_page_content import parse_page_state
@@ -37,13 +38,13 @@ IMPORTANT_NOTE_KEYWORDS = (
     "주의",
 )
 PAGE_REFERENCE_PATTERN = re.compile(r"(\d{1,3})\s*(?:페이지|쪽|p(?:age)?\.?)", re.IGNORECASE)
-MAX_STROKES_PER_PAGE_STATE = 28
-MAX_POINTS_PER_PAGE_STATE = 900
-MAX_HIGHLIGHTS_PER_PAGE_STATE = 10
-MAX_BOOKMARKS_PER_PAGE_STATE = 1
+MAX_STROKES_PER_PAGE_STATE = page_activity_signals.MAX_STROKES_PER_PAGE_STATE
+MAX_POINTS_PER_PAGE_STATE = page_activity_signals.MAX_POINTS_PER_PAGE_STATE
+MAX_HIGHLIGHTS_PER_PAGE_STATE = page_activity_signals.MAX_HIGHLIGHTS_PER_PAGE_STATE
+MAX_BOOKMARKS_PER_PAGE_STATE = page_activity_signals.MAX_BOOKMARKS_PER_PAGE_STATE
 MAX_KEYWORD_HITS_PER_PAGE_STATE = 6
-MAX_PHOTO_REFERENCES_PER_PAGE_STATE = 5
-MAX_MEMO_PAGES_PER_PAGE_STATE = 4
+MAX_PHOTO_REFERENCES_PER_PAGE_STATE = page_activity_signals.MAX_PHOTO_REFERENCES_PER_PAGE_STATE
+MAX_MEMO_PAGES_PER_PAGE_STATE = page_activity_signals.MAX_MEMO_PAGES_PER_PAGE_STATE
 CONTENT_HINT_MAX_CHARS = 72
 STRONG_SEMANTIC_KEYWORDS = {"중요", "시험", "기말", "중간", "암기", "필수"}
 PRIMARY_SEMANTIC_SYMBOLS = {"star"}
@@ -221,16 +222,16 @@ class PageInsightAccumulator:
         return min(60.0, participant_score + star_consensus_score)
 
     def study_action_score(self) -> float:
-        return min(28.0, (
-            self.bookmark_count * 8
-            + min(10.0, self.highlight_count * 2)
-            + self.ai_question_count * 6
-            + self.memo_page_count * 7
-            + self.photo_reference_count * 4
-        ))
+        return page_activity_signals.study_action_score(
+            bookmark_count=self.bookmark_count,
+            highlight_count=self.highlight_count,
+            photo_reference_count=self.photo_reference_count,
+            ai_question_count=self.ai_question_count,
+            memo_page_count=self.memo_page_count,
+        )
 
     def raw_ink_density_score(self) -> float:
-        return min(6.0, self.ink_density * 6)
+        return page_activity_signals.raw_ink_density_score(self.stroke_count, self.point_count)
 
     def score(self) -> int:
         legacy_text_keyword_score = min(12.0, self.keyword_hits * 4)
@@ -407,20 +408,6 @@ def _apply_handwriting_recognition(
     return applied
 
 
-def _coerce_count(value: Any) -> int:
-    if isinstance(value, bool):
-        return 1 if value else 0
-    if isinstance(value, (int, float)):
-        return max(0, int(value))
-    if isinstance(value, list):
-        return len(value)
-    return 0
-
-
-def _sum_state_counts(state: dict[str, Any], keys: tuple[str, ...]) -> int:
-    return sum(_coerce_count(state.get(key)) for key in keys)
-
-
 def _page_placeholders(values: set[int]) -> tuple[str, tuple[int, ...]]:
     ordered_values = tuple(sorted(values))
     placeholders = ", ".join(["%s"] * len(ordered_values))
@@ -434,25 +421,14 @@ def _table_exists(connection: Connection, table_name: str) -> bool:
 
 def _apply_page_state(accumulator: PageInsightAccumulator, state: dict[str, Any], *, user_id: int, note_id: int) -> None:
     had_activity = False
-    stroke_count = 0
-    point_count = 0
-    highlight_count = 0
 
     ink_strokes = state.get("inkStrokes")
     if isinstance(ink_strokes, list):
-        for stroke in ink_strokes:
-            if not isinstance(stroke, dict):
-                continue
-            points = stroke.get("points")
-            stroke_point_count = len(points) if isinstance(points, list) else 0
-            stroke_count += 1
-            point_count += stroke_point_count
-            if stroke.get("style") == "highlight" or stroke.get("brush") == "highlighter":
-                highlight_count += 1
-            had_activity = True
-        accumulator.stroke_count += min(stroke_count, MAX_STROKES_PER_PAGE_STATE)
-        accumulator.point_count += min(point_count, MAX_POINTS_PER_PAGE_STATE)
-        accumulator.highlight_count += min(highlight_count, MAX_HIGHLIGHTS_PER_PAGE_STATE)
+        stroke_count, point_count, highlight_count = page_activity_signals.page_ink_activity_counts(state)
+        had_activity = True
+        accumulator.stroke_count += stroke_count
+        accumulator.point_count += point_count
+        accumulator.highlight_count += highlight_count
 
     keyword_hits = 0
     text_annotations = state.get("textAnnotations")
@@ -469,20 +445,18 @@ def _apply_page_state(accumulator: PageInsightAccumulator, state: dict[str, Any]
 
     had_activity = _apply_handwriting_recognition(accumulator, state, user_id=user_id, note_id=note_id) or had_activity
 
-    bookmark_count = _sum_state_counts(state, ("bookmarked", "bookmarkCount", "bookmark_count", "bookmarks"))
-    photo_reference_count = _sum_state_counts(
+    bookmark_count = page_activity_signals.sum_state_counts(
         state,
-        (
-            "photoReferenceCount",
-            "photo_reference_count",
-            "captureReferenceCount",
-            "capture_reference_count",
-            "pageCaptureReferences",
-            "captureReferences",
-            "photoReferences",
-        ),
+        page_activity_signals.BOOKMARK_COUNT_KEYS,
     )
-    memo_page_count = _sum_state_counts(state, ("memoPageCount", "memo_page_count", "memoPages", "generatedMemoPages"))
+    photo_reference_count = page_activity_signals.sum_state_counts(
+        state,
+        page_activity_signals.PHOTO_REFERENCE_COUNT_KEYS,
+    )
+    memo_page_count = page_activity_signals.sum_state_counts(
+        state,
+        page_activity_signals.MEMO_PAGE_COUNT_KEYS,
+    )
     if bookmark_count:
         accumulator.bookmark_count += min(bookmark_count, MAX_BOOKMARKS_PER_PAGE_STATE)
         had_activity = True

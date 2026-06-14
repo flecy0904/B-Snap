@@ -49,6 +49,13 @@ from backend.app.services.handwriting_vision_fallback import (
     vision_min_cluster_strokes,
 )
 from backend.app.services.note_page_content import merge_handwriting_recognition, merge_page_state_content, parse_page_state
+from backend.app.services.page_activity_signals import (
+    capped_bookmark_count,
+    capped_photo_reference_count,
+    page_ink_activity_counts,
+    raw_ink_density_score,
+    study_action_score,
+)
 
 
 router = APIRouter(tags=["notes"])
@@ -56,11 +63,6 @@ logger = logging.getLogger("uvicorn.error")
 VISION_STAR_LIKE_CONFIDENCE_THRESHOLD = 0.45
 VISION_AUXILIARY_SIGNAL_THRESHOLD = 26.0
 PAGE_REFERENCE_PATTERN = re.compile(r"(\d{1,3})\s*(?:페이지|쪽|p(?:age)?\.?)", re.IGNORECASE)
-MAX_STROKES_PER_PAGE_STATE = 28
-MAX_POINTS_PER_PAGE_STATE = 900
-MAX_HIGHLIGHTS_PER_PAGE_STATE = 10
-MAX_BOOKMARKS_PER_PAGE_STATE = 1
-MAX_PHOTO_REFERENCES_PER_PAGE_STATE = 5
 
 
 def _schedule_note_page_structure_reindex(background_tasks: BackgroundTasks, note_id: int, user_id: int) -> None:
@@ -307,72 +309,14 @@ def _recognition_confidence(recognition: dict[str, Any]) -> float:
         return 0.0
 
 
-def _normalize_count(value: Any) -> int:
-    if isinstance(value, bool):
-        return 1 if value else 0
-    if isinstance(value, (int, float)):
-        return max(0, int(value))
-    if isinstance(value, list):
-        return len(value)
-    return 0
-
-
-def _sum_state_counts(state: dict[str, Any], keys: tuple[str, ...]) -> int:
-    return sum(_normalize_count(state.get(key)) for key in keys)
-
-
-def _page_ink_activity_counts(state: dict[str, Any]) -> tuple[int, int, int]:
-    stroke_count = 0
-    point_count = 0
-    highlight_count = 0
-    ink_strokes = state.get("inkStrokes")
-    if not isinstance(ink_strokes, list):
-        return 0, 0, 0
-    for stroke in ink_strokes:
-        if not isinstance(stroke, dict):
-            continue
-        points = stroke.get("points")
-        stroke_count += 1
-        point_count += len(points) if isinstance(points, list) else 0
-        if stroke.get("style") == "highlight" or stroke.get("brush") == "highlighter":
-            highlight_count += 1
-    return (
-        min(stroke_count, MAX_STROKES_PER_PAGE_STATE),
-        min(point_count, MAX_POINTS_PER_PAGE_STATE),
-        min(highlight_count, MAX_HIGHLIGHTS_PER_PAGE_STATE),
-    )
-
-
 def _auxiliary_vision_signal_score(state: dict[str, Any], *, ai_question_count: int = 0) -> float:
-    stroke_count, point_count, highlight_count = _page_ink_activity_counts(state)
-    ink_density = min(1.0, (stroke_count * 0.045) + (point_count * 0.0015))
-    raw_ink_density_score = min(6.0, ink_density * 6)
-    bookmark_count = min(
-        _sum_state_counts(state, ("bookmarked", "bookmarkCount", "bookmark_count", "bookmarks")),
-        MAX_BOOKMARKS_PER_PAGE_STATE,
-    )
-    photo_reference_count = min(
-        _sum_state_counts(
-            state,
-            (
-                "photoReferenceCount",
-                "photo_reference_count",
-                "captureReferenceCount",
-                "capture_reference_count",
-                "pageCaptureReferences",
-                "captureReferences",
-                "photoReferences",
-            ),
-        ),
-        MAX_PHOTO_REFERENCES_PER_PAGE_STATE,
-    )
-    study_action_score = min(28.0, (
-        bookmark_count * 8
-        + min(10.0, highlight_count * 2)
-        + photo_reference_count * 4
-        + max(0, int(ai_question_count)) * 6
-    ))
-    return study_action_score + raw_ink_density_score
+    stroke_count, point_count, highlight_count = page_ink_activity_counts(state)
+    return study_action_score(
+        bookmark_count=capped_bookmark_count(state),
+        highlight_count=highlight_count,
+        photo_reference_count=capped_photo_reference_count(state),
+        ai_question_count=ai_question_count,
+    ) + raw_ink_density_score(stroke_count, point_count)
 
 
 def _cluster_looks_text_like(cluster: dict[str, Any]) -> bool:
@@ -1660,6 +1604,8 @@ def analyze_note_handwriting(
         "pages_analyzed": 0,
         "pages_skipped": 0,
         "pages_failed": 0,
+        "vision_pages_used": 0,
+        "vision_clusters_analyzed": 0,
     }
     vision_pages_used = 0
     ai_question_counts = (
@@ -1681,8 +1627,11 @@ def analyze_note_handwriting(
             vision_skip_reason=vision_skip_reason,
             ai_question_count=ai_question_counts.get(int(page["page_number"]), 0),
         )
-        if use_vision_fallback and vision_allowed and _vision_analyzed_cluster_count(next_content) > 0:
+        vision_cluster_count = _vision_analyzed_cluster_count(next_content)
+        if use_vision_fallback and vision_allowed and vision_cluster_count > 0:
             vision_pages_used += 1
+            summary["vision_pages_used"] = vision_pages_used
+            summary["vision_clusters_analyzed"] += vision_cluster_count
         if status == "skipped":
             summary["pages_skipped"] += 1
             continue

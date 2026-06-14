@@ -581,6 +581,45 @@ class HandwritingVisionFallbackTest(unittest.TestCase):
         self.assertTrue(recognition["visionFallbackUsed"])
         self.assertIn("중요", recognition["keywords"])
 
+    def test_successful_vision_result_skips_second_same_hash_analysis(self):
+        strokes = [
+            *_star_strokes(),
+            *_keyword_like_strokes(190, 24, prefix="converged"),
+        ]
+
+        with patch.dict(
+            "os.environ",
+            {
+                "HANDWRITING_VISION_FALLBACK_ENABLED": "true",
+                "OPENAI_API_KEY": "test",
+                "HANDWRITING_VISION_MAX_CLUSTERS_PER_PAGE": "1",
+                "HANDWRITING_VISION_MIN_CLUSTER_STROKES": "1",
+            },
+            clear=False,
+        ):
+            with patch("backend.app.routes.notes.analyze_handwriting_image_with_openai", return_value={
+                "status": "ready",
+                "text": "중요",
+                "keywords": ["중요"],
+                "symbols": [],
+                "confidence": 0.9,
+            }) as openai_mock:
+                next_content, first_status = _analyze_page_handwriting_content(
+                    _content(strokes),
+                    use_vision_fallback=True,
+                )
+                final_content, second_status = _analyze_page_handwriting_content(
+                    next_content,
+                    use_vision_fallback=True,
+                )
+
+        recognition = parse_page_state(final_content)["handwritingRecognition"]
+        self.assertEqual(first_status, "analyzed")
+        self.assertEqual(second_status, "skipped")
+        self.assertEqual(openai_mock.call_count, 1)
+        self.assertTrue(recognition["visionFallbackUsed"])
+        self.assertIn("중요", recognition["keywords"])
+
     def test_use_vision_fallback_false_never_calls_openai(self):
         with patch("backend.app.routes.notes.analyze_handwriting_image_with_openai") as openai_mock:
             _analyze_page_handwriting_content(

@@ -277,8 +277,11 @@ class HandwritingRecognitionPersistenceEndpointTest(unittest.TestCase):
         self.assertLess(noisy.score(), 35)
 
 
-class AnalyzePagePreservesOnDeviceRecognitionTest(unittest.TestCase):
-    def test_geometry_reanalysis_keeps_mlkit_keywords(self):
+class AnalyzePageReplacesOnDeviceRecognitionTest(unittest.TestCase):
+    def test_geometry_reanalysis_replaces_mlkit_recognition(self):
+        # ML Kit is no longer part of the product flow; a server re-analysis is
+        # authoritative and replaces any persisted ML Kit recognition for the same
+        # strokes (geometry + star-gated Vision), rather than merging it back in.
         strokes = [_stroke([(0, 0), (20, 20)])]
         content = _content(strokes, {
             "status": "ready",
@@ -309,8 +312,31 @@ class AnalyzePagePreservesOnDeviceRecognitionTest(unittest.TestCase):
 
         self.assertEqual(status, "analyzed")
         recognition = parse_page_state(next_content)["handwritingRecognition"]
-        self.assertIn("중요", recognition["keywords"])
-        self.assertEqual(recognition["engine"], "hybrid")
+        self.assertEqual(recognition["engine"], "geometry")
+        self.assertNotIn("중요", recognition["keywords"])
+
+    def test_mlkit_recognition_is_not_skipped_on_reanalysis(self):
+        # A persisted ML Kit result must not short-circuit re-analysis even when the
+        # stroke hash matches, so geometry/Vision can take over.
+        strokes = [_stroke([(0, 0), (20, 20)])]
+        content = _content(strokes, {
+            "status": "ready",
+            "strokeHash": stable_stroke_hash(strokes),
+            "engine": "mlkit-digital-ink",
+            "text": "중요",
+            "keywords": ["중요"],
+            "symbols": [],
+            "confidence": 0.82,
+            "clusters": [],
+        })
+
+        _next_content, status = _analyze_page_handwriting_content(
+            content,
+            force=False,
+            use_vision_fallback=False,
+        )
+
+        self.assertEqual(status, "analyzed")
 
     def test_geometry_only_page_has_no_text_keywords(self):
         strokes = [_stroke([(0, 0), (20, 20)])]
