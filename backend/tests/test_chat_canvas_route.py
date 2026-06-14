@@ -9,6 +9,18 @@ from backend.app.services.ai_context_router import AiContextRoute
 
 
 class ChatCanvasRouteTests(unittest.TestCase):
+    def test_internal_ai_model_follows_selected_provider(self):
+        settings = SimpleNamespace(
+            ai_provider="openai",
+            openai_default_model="gpt-4.1-mini",
+            gemini_default_model="gemini-2.5-flash",
+            default_ai_model="gpt-4.1-mini",
+        )
+        with patch.object(chats, "get_settings", return_value=settings):
+            self.assertEqual(chats.get_internal_ai_model("gpt-5.5"), "gpt-4.1-mini")
+            self.assertEqual(chats.get_internal_ai_model("gemini-3.1-pro"), "gemini-2.5-flash")
+            self.assertEqual(chats.get_internal_ai_model(None), "gpt-4.1-mini")
+
     def test_resolve_ai_chat_execution_plan_handles_mixed_requests(self):
         cases = [
             ("TCP 설명해줘", "chat", True, "chat_only"),
@@ -204,7 +216,12 @@ class ChatCanvasRouteTests(unittest.TestCase):
                 }
             raise AssertionError(f"Unexpected execute_returning query: {normalized_query}")
 
-        generate_chat_answer = MagicMock(return_value="TCP 흐름제어 답변")
+        generate_chat_answer = MagicMock(
+            return_value=(
+                "TCP 흐름제어 답변\n\n"
+                "필요하면 이 내용을 Canvas에 바로 반영해 드리겠습니다."
+            )
+        )
         generate_canvas_operations = MagicMock(return_value=operations)
 
         with (
@@ -214,6 +231,7 @@ class ChatCanvasRouteTests(unittest.TestCase):
             patch.object(chats, "fetch_one", return_value=canvas_note),
             patch.object(chats, "execute_returning", side_effect=fake_execute_returning),
             patch.object(chats, "execute_commit"),
+            patch.object(chats, "get_internal_ai_model", return_value="gpt-4.1-mini"),
             patch.object(chats, "maybe_update_chat_session_summary", return_value=None),
             patch.object(chats, "generate_note_chat_answer", generate_chat_answer),
             patch.object(chats, "generate_ai_canvas_operations_from_chat", generate_canvas_operations),
@@ -224,6 +242,7 @@ class ChatCanvasRouteTests(unittest.TestCase):
                 payload=ChatAiMessageCreate(
                     content="TCP 설명해주고 캔버스에 정리해줘",
                     canvas_note_id=canvas_note["id"],
+                    model="gpt-5.5",
                     rag_scope={"sourceIds": [], "sources": []},
                 ),
                 connection=object(),
@@ -231,10 +250,15 @@ class ChatCanvasRouteTests(unittest.TestCase):
             )
 
         self.assertIn("TCP 흐름제어 답변", result["assistant_message"]["content"])
-        self.assertIn("Canvas에도 반영했습니다", result["assistant_message"]["content"])
+        self.assertNotIn("필요하면 이 내용을 Canvas에 바로 반영해 드리겠습니다", result["assistant_message"]["content"])
+        self.assertIn("‘Canvas Note 1’ Canvas에도 반영했습니다", result["assistant_message"]["content"])
         self.assertEqual(result["canvas_edit"]["operations"], operations)
         generate_chat_answer.assert_called_once()
         generate_canvas_operations.assert_called_once()
+        self.assertEqual(generate_chat_answer.call_args.kwargs["model"], "gpt-5.5")
+        self.assertEqual(generate_canvas_operations.call_args.kwargs["model"], "gpt-5.5")
+        self.assertIn("will apply a Canvas edit", generate_chat_answer.call_args.kwargs["response_guidance"])
+        self.assertIn("Do not promise, offer, or suggest", generate_chat_answer.call_args.kwargs["response_guidance"])
         self.assertEqual(
             generate_chat_answer.call_args.kwargs["context_hint"],
             generate_canvas_operations.call_args.kwargs["context_hint"],
@@ -680,9 +704,12 @@ class ChatCanvasRouteTests(unittest.TestCase):
             raise AssertionError(f"Unexpected execute_returning query: {normalized_query}")
 
         def fake_stream_answer(**kwargs):
+            answer = "TCP answer\n필요하면 이 내용을 Canvas에 바로 반영해 드리겠습니다."
             kwargs["on_delta"]("TCP ")
-            kwargs["on_delta"]("answer")
-            return "TCP answer"
+            kwargs["on_delta"]("answer\n")
+            kwargs["on_delta"]("필요하면 이 내용을 ")
+            kwargs["on_delta"]("Canvas에 바로 반영해 드리겠습니다.")
+            return answer
 
         with (
             patch.object(chats, "get_chat_session", return_value=session),
@@ -710,8 +737,10 @@ class ChatCanvasRouteTests(unittest.TestCase):
             )
 
         self.assertEqual(result["canvas_edit"]["operations"], operations)
-        self.assertIn(("answer_delta", {"delta": "TCP "}), events)
-        self.assertIn(("answer_delta", {"delta": "answer"}), events)
+        answer_deltas = [data["delta"] for event, data in events if event == "answer_delta"]
+        self.assertEqual(answer_deltas, ["TCP answer\n"])
+        self.assertIn("TCP answer", result["assistant_message"]["content"])
+        self.assertNotIn("필요하면 이 내용을 Canvas에 바로 반영해 드리겠습니다", result["assistant_message"]["content"])
         self.assertFalse(any(event == "canvas_done" for event, _data in events))
         self.assertEqual([data["message"] for event, data in events if event == "status"][0], "질문 이해 중...")
         self.assertIn("Canvas 반영 중...", [data["message"] for event, data in events if event == "status"])
@@ -821,6 +850,7 @@ class ChatCanvasRouteTests(unittest.TestCase):
             ),
             patch.object(chats, "maybe_update_chat_session_summary", return_value=None),
             patch.object(chats, "generate_note_chat_answer_stream", side_effect=fake_stream_answer),
+            patch.object(chats, "generate_chat_title", return_value=None),
         ):
             chats._create_ai_chat_message_impl(
                 session_id=session["id"],

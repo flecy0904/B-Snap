@@ -467,6 +467,24 @@ def normalize_generated_canvas_title(title: str | None, fallback_title: str | No
     return normalized[:30]
 
 
+def format_canvas_title_for_message(canvas_note: dict | None) -> str:
+    title = " ".join(str((canvas_note or {}).get("title") or "").split()).strip()
+    return title or DEFAULT_CANVAS_TITLE
+
+
+def build_canvas_success_messages(canvas_action: str, canvas_note: dict | None) -> tuple[str, str]:
+    canvas_title = format_canvas_title_for_message(canvas_note)
+    if canvas_action == "canvas_create":
+        return (
+            f"새 Canvas ‘{canvas_title}’를 만들었습니다. Canvas 패널에서 확인해 주세요.",
+            f"새 Canvas ‘{canvas_title}’도 만들었습니다. Canvas 패널에서 확인해 주세요.",
+        )
+    return (
+        f"‘{canvas_title}’ Canvas에 반영했습니다.",
+        f"‘{canvas_title}’ Canvas에도 반영했습니다.",
+    )
+
+
 def has_canvas_create_keyword(normalized: str) -> bool:
     for keyword in CANVAS_CREATE_KEYWORDS:
         start = 0
@@ -531,6 +549,56 @@ def append_chat_answer_to_canvas_context(context_hint: str | None, chat_answer: 
         if part and part.strip()
     ]
     return "\n\n".join(parts) if parts else None
+
+
+def build_pending_canvas_response_guidance(canvas_action: str) -> str | None:
+    if canvas_action not in {"canvas_edit", "canvas_create"}:
+        return None
+    action_text = "create a new Canvas" if canvas_action == "canvas_create" else "apply a Canvas edit"
+    return (
+        f"This same user request will {action_text} after the chat answer. "
+        "Write only the explanatory chat answer. Do not promise, offer, or suggest a future Canvas action. "
+        "Do not include phrases like 'if needed, I can add this to Canvas', "
+        "'I will reflect this in Canvas', or 'tell me if you want me to create a Canvas'. "
+        "The server will append the verified Canvas success or failure status after the Canvas operation finishes."
+    )
+
+
+CANVAS_FOLLOWUP_OFFER_RE = re.compile(
+    r"(필요하면|필요하다면|원하면|원하시면|원한다면|요청하면|괜찮다면|추가로).{0,80}"
+    r"(Canvas|canvas|캔버스|정리\s*노트).{0,80}"
+    r"(반영|추가|넣|작성|정리|만들|생성|옮겨|저장|해\s*드리|해드리)",
+    re.IGNORECASE,
+)
+
+
+def remove_canvas_followup_offers(answer: str) -> str:
+    lines = answer.splitlines()
+    cleaned_lines = [line for line in lines if not CANVAS_FOLLOWUP_OFFER_RE.search(line)]
+    return "\n".join(cleaned_lines).strip()
+
+
+class CanvasSafeAnswerDeltaEmitter:
+    def __init__(self, emit_event: Callable[[str, dict], None]):
+        self._emit_event = emit_event
+        self._buffer = ""
+
+    def on_delta(self, delta: str) -> None:
+        self._buffer += delta
+        while "\n" in self._buffer:
+            line, separator, rest = self._buffer.partition("\n")
+            self._emit_clean_delta(f"{line}{separator}")
+            self._buffer = rest
+
+    def flush(self) -> None:
+        if self._buffer:
+            self._emit_clean_delta(self._buffer)
+            self._buffer = ""
+
+    def _emit_clean_delta(self, delta: str) -> None:
+        if CANVAS_FOLLOWUP_OFFER_RE.search(delta):
+            return
+        self._emit_event("answer_delta", {"delta": delta})
 
 
 def keyword_canvas_action(content: str, *, target_implied: bool = False) -> str | None:
@@ -808,6 +876,16 @@ def get_note_course_name(connection: Connection, note: dict, user_id: int) -> st
         return None
     name = " ".join(str(row.get("name") or "").split()).strip()
     return name or None
+
+
+def get_internal_ai_model(requested_model: str | None = None) -> str:
+    settings = get_settings()
+    normalized = (requested_model or "").strip()
+    if normalized.startswith("gemini-"):
+        return settings.gemini_default_model or normalized
+    if not normalized and settings.ai_provider.strip().lower() == "gemini":
+        return settings.gemini_default_model
+    return settings.openai_default_model or settings.default_ai_model
 
 
 def material_reference_scope_hint(question: str, *, has_empty_scope: bool) -> str | None:
@@ -1133,6 +1211,7 @@ def _create_ai_chat_message_impl(
         (session_id,),
     )
     model = payload.model or session.get("model") or get_settings().default_ai_model
+    internal_model = get_internal_ai_model(model)
     canvas_edit = None
     canvas_note = None
     created_canvas_note = False
@@ -1140,7 +1219,7 @@ def _create_ai_chat_message_impl(
     execution_plan = resolve_ai_chat_execution_plan(
         payload.content,
         payload.canvas_action,
-        model,
+        internal_model,
         canvas_origin_request=canvas_origin_request,
         canvas_block_context=payload.canvas_block_context,
     )
@@ -1179,7 +1258,7 @@ def _create_ai_chat_message_impl(
     else:
         context_route = route_ai_context(
             question=payload.content,
-            model=model,
+            model=internal_model,
             course_name=get_note_course_name(connection, note, current_user["id"]),
             document_title=str(note.get("title") or ""),
             pinned_reference_titles=rag_scope_titles(rag_scope),
@@ -1267,7 +1346,7 @@ def _create_ai_chat_message_impl(
         connection,
         session=session,
         messages=previous_messages,
-        model=model,
+        model=internal_model,
         recent_message_limit=recent_message_limit,
     )
 
@@ -1297,7 +1376,7 @@ def _create_ai_chat_message_impl(
             connection,
             note=note,
             user_id=current_user["id"],
-            model=model,
+            model=internal_model,
             user_question=payload.content,
             current_page_number=effective_page_number,
             rag_sources=rag_sources,
@@ -1319,7 +1398,7 @@ def _create_ai_chat_message_impl(
         rag_sources=rag_sources,
         rag_debug=rag_debug,
         priority_context_hints=[image_recheck.context_hint],
-        extra_answer_sources_text=image_recheck.answer_sources_text,
+        rechecked_image_sources=image_recheck.items,
     )
     built_context.debug["page_reference"] = page_reference_debug
 
@@ -1352,14 +1431,28 @@ def _create_ai_chat_message_impl(
                     "session_summary": session_summary,
                     "canvas_block_context": payload.canvas_block_context,
                     "rag_image_inputs": image_recheck.image_inputs,
+                    "response_guidance": build_pending_canvas_response_guidance(canvas_action),
                 }
                 if stream_chat_answer and emit_event:
+                    delta_emitter = (
+                        CanvasSafeAnswerDeltaEmitter(emit_event)
+                        if canvas_action in {"canvas_edit", "canvas_create"}
+                        else None
+                    )
                     chat_answer = generate_note_chat_answer_stream(
                         **chat_answer_kwargs,
-                        on_delta=lambda delta: emit_event("answer_delta", {"delta": delta}),
+                        on_delta=(
+                            delta_emitter.on_delta
+                            if delta_emitter
+                            else lambda delta: emit_event("answer_delta", {"delta": delta})
+                        ),
                     )
+                    if delta_emitter:
+                        delta_emitter.flush()
                 else:
                     chat_answer = generate_note_chat_answer(**chat_answer_kwargs)
+                if canvas_action in {"canvas_edit", "canvas_create"}:
+                    chat_answer = remove_canvas_followup_offers(chat_answer)
                 chat_answer_for_canvas = chat_answer
                 if built_context.answer_sources_text:
                     chat_answer = f"{chat_answer.rstrip()}\n\n{built_context.answer_sources_text}"
@@ -1468,16 +1561,7 @@ def _create_ai_chat_message_impl(
             if canvas_error is None:
                 if operations:
                     canvas_changed = True
-                    canvas_status_answer = (
-                        "새 Canvas를 만들고 반영했습니다. Canvas 패널에서 확인해 주세요."
-                        if canvas_action == "canvas_create"
-                        else "Canvas에 반영했습니다."
-                    )
-                    canvas_status_suffix = (
-                        "새 Canvas도 만들고 반영했습니다. Canvas 패널에서 확인해 주세요."
-                        if canvas_action == "canvas_create"
-                        else "Canvas에도 반영했습니다."
-                    )
+                    canvas_status_answer, canvas_status_suffix = build_canvas_success_messages(canvas_action, canvas_note)
                     if canvas_note is not None:
                         canvas_edit = {
                             "action": canvas_action,
@@ -1542,7 +1626,7 @@ def _create_ai_chat_message_impl(
         generated_title = None
         try:
             generated_title = generate_chat_title(
-                model=model,
+                model=internal_model,
                 note=note,
                 user_content=payload.content,
                 assistant_content=answer,
