@@ -25,6 +25,9 @@ Return this exact JSON shape:
 
 Rules:
 - If there are no useful image summary candidates, return needs_image_recheck false.
+- If an image candidate has low confidence, treat its summary as less reliable.
+- When the user asks about details that must be read from the image itself,
+  prefer original image recheck instead of relying only on the summary.
 - Do not use prior conversation topic drift to select a different page. The
   current visible page is the local reference when the current question says
   "this page", "current page", or similar.
