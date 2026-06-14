@@ -16,6 +16,7 @@ from backend.app.db.session import get_database_url
 from backend.app.schemas.rag import RetrievedContext
 from backend.app.services.docling_batch_pipeline import (
     cached_pages_from_batches,
+    mark_page_note_rag_text_ready,
     mark_note_rag_text_ready,
     mark_note_rag_failed,
     parse_and_cache_docling_batches,
@@ -812,6 +813,55 @@ def _delete_obsolete_chunks_for_canvas(
         )
 
 
+def _count_note_pages(connection: Connection, *, note_id: int) -> int:
+    row = fetch_one(
+        connection,
+        "SELECT COUNT(*) AS count FROM note_pages WHERE note_id = %s",
+        (note_id,),
+    )
+    return int(row.get("count") or 0) if row else 0
+
+
+def _count_note_document_chunks(connection: Connection, *, note_id: int, user_id: int) -> int:
+    row = fetch_one(
+        connection,
+        """
+        SELECT COUNT(*) AS count
+        FROM document_chunks
+        WHERE user_id = %s
+          AND note_id = %s
+          AND source_type <> 'canvas_note'
+        """,
+        (user_id, note_id),
+    )
+    return int(row.get("count") or 0) if row else 0
+
+
+def _note_id_for_page(connection: Connection, *, page_id: int, user_id: int) -> int | None:
+    row = fetch_one(
+        connection,
+        """
+        SELECT p.note_id
+        FROM note_pages p
+        JOIN notes n ON n.id = p.note_id
+        WHERE p.id = %s
+          AND n.user_id = %s
+        """,
+        (page_id, user_id),
+    )
+    return int(row["note_id"]) if row else None
+
+
+def _mark_page_based_note_ready_after_index(connection: Connection, *, note_id: int, user_id: int) -> None:
+    mark_page_note_rag_text_ready(
+        connection,
+        note_id=note_id,
+        user_id=user_id,
+        text_chunk_count=_count_note_document_chunks(connection, note_id=note_id, user_id=user_id),
+        processed_page_count=_count_note_pages(connection, note_id=note_id),
+    )
+
+
 def replace_note_chunks(connection: Connection, *, note_id: int, user_id: int) -> int:
     sources = collect_note_index_sources(connection, note_id=note_id, user_id=user_id)
     chunks = [chunk for source in sources for chunk in build_text_chunks(source)]
@@ -821,6 +871,7 @@ def replace_note_chunks(connection: Connection, *, note_id: int, user_id: int) -
         _delete_obsolete_chunks_for_note(connection, user_id=user_id, note_id=note_id, chunks=chunks)
         _insert_chunks(connection, chunks, embedding_model=embedding_model)
         _sync_image_summary_index_flags(connection, note_id=note_id, user_id=user_id, chunks=chunks)
+        _mark_page_based_note_ready_after_index(connection, note_id=note_id, user_id=user_id)
         connection.commit()
     except Exception:
         connection.rollback()
@@ -876,6 +927,7 @@ def delete_note_page_chunks(connection: Connection, *, page_id: int, user_id: in
 
 
 def replace_note_page_chunks(connection: Connection, *, page_id: int, user_id: int) -> int:
+    note_id = _note_id_for_page(connection, page_id=page_id, user_id=user_id)
     sources = collect_note_page_index_sources(connection, page_id=page_id, user_id=user_id)
     chunks = [chunk for source in sources for chunk in build_text_chunks(source)]
     embedding_model = get_settings().openai_embedding_model
@@ -883,6 +935,8 @@ def replace_note_page_chunks(connection: Connection, *, page_id: int, user_id: i
     try:
         _delete_obsolete_chunks_for_page(connection, page_id=page_id, user_id=user_id, chunks=chunks)
         _insert_chunks(connection, chunks, embedding_model=embedding_model)
+        if note_id is not None:
+            _mark_page_based_note_ready_after_index(connection, note_id=note_id, user_id=user_id)
         connection.commit()
     except Exception:
         connection.rollback()
@@ -944,6 +998,7 @@ def replace_note_pages_chunks(
                 chunks=chunks_by_page_id.get(page_id, []),
             )
         _insert_chunks(connection, chunks, embedding_model=embedding_model)
+        _mark_page_based_note_ready_after_index(connection, note_id=note_id, user_id=user_id)
         connection.commit()
     except Exception:
         connection.rollback()

@@ -1535,6 +1535,9 @@ class RAGRetrieverTest(unittest.TestCase):
         with patch("backend.app.services.document_chunk_index.fetch_all", return_value=[]), patch(
             "backend.app.services.document_chunk_index.collect_note_page_index_sources",
             return_value=[],
+        ), patch(
+            "backend.app.services.document_chunk_index._note_id_for_page",
+            return_value=None,
         ):
             count = replace_note_page_chunks(FakeConnection(), page_id=10, user_id=7)
 
@@ -1651,6 +1654,8 @@ class RAGRetrieverTest(unittest.TestCase):
         ), patch(
             "backend.app.services.document_chunk_index.get_settings",
             return_value=SimpleNamespace(openai_embedding_model="test-embedding-model"),
+        ), patch(
+            "backend.app.services.document_chunk_index._mark_page_based_note_ready_after_index",
         ):
             count = replace_note_pages_chunks(FakeConnection(), note_id=3, user_id=7, page_numbers=[1, 2])
 
@@ -1906,6 +1911,8 @@ class RAGRetrieverTest(unittest.TestCase):
                 "content_hash": content_hash(source.content),
                 "embedding_model": "test-embedding-model",
             }],
+        ), patch(
+            "backend.app.services.document_chunk_index._mark_page_based_note_ready_after_index",
         ), patch("backend.app.services.document_chunk_index.generate_embedding") as generate_embedding:
             count = replace_note_chunks(FakeConnection(), note_id=3, user_id=7)
 
