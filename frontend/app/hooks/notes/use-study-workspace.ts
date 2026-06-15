@@ -1257,15 +1257,6 @@ export function useStudyWorkspace(props: {
     return () => clearTimeout(timer);
   }, [activeIncomingBanner]);
 
-  useIncomingAssetSubscription({
-    noteWorkspaceMode,
-    studyDocumentId,
-    subjectId,
-    setCaptureAssetsBySubject,
-    setIncomingBannerQueue,
-    setIncomingAssetSuggestion,
-  });
-
   useEffect(() => {
     if (!workspaceHydrated || !isBackendApiEnabled() || !studyDocumentId || !currentDocumentHasBackendPages || !currentBackendNoteId) return;
 
@@ -1961,8 +1952,8 @@ export function useStudyWorkspace(props: {
       : null;
     const pageWidth = annotation.pageWidth ?? anchoredSelection?.pageWidth;
     const pageHeight = annotation.pageHeight ?? anchoredSelection?.pageHeight;
-    const defaultWidth = pageWidth ? Math.min(280, Math.max(120, pageWidth * 0.38)) : 260;
-    const defaultHeight = Math.max(90, defaultWidth * 0.68);
+    const defaultWidth = pageWidth ? Math.min(220, Math.max(96, pageWidth * 0.28)) : 200;
+    const defaultHeight = Math.max(72, defaultWidth * 0.62);
     const width = Math.max(48, annotation.width ?? anchoredSelection?.width ?? defaultWidth);
     const height = Math.max(48, annotation.height ?? anchoredSelection?.height ?? defaultHeight);
     const x = Math.max(0, Math.min(pageWidth ? Math.max(0, pageWidth - width) : Number.POSITIVE_INFINITY, annotation.x ?? anchoredSelection?.x ?? 42));
@@ -2064,6 +2055,17 @@ export function useStudyWorkspace(props: {
     requestAiAnswerForQuestion,
     onMarkPageDirty: markBackendPageDirty,
   });
+
+  useIncomingAssetSubscription({
+    noteWorkspaceMode,
+    studyDocumentId,
+    subjectId,
+    setCaptureAssetsBySubject,
+    setIncomingBannerQueue,
+    setIncomingAssetSuggestion,
+    onAutoLinkAsset: linkCaptureAssetToCurrentPage,
+  });
+
   const requestAiCanvasCommand = useCallback(async (command: string, options?: {
     selectionImageUri?: string | null;
     canvasAction?: 'auto' | 'chat_only' | 'canvas_edit';

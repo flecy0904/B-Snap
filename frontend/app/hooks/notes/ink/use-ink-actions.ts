@@ -670,8 +670,8 @@ export function useInkActions(params: {
       : null;
     const pageWidth = annotation.pageWidth ?? anchoredSelection?.pageWidth;
     const pageHeight = annotation.pageHeight ?? anchoredSelection?.pageHeight;
-    const defaultWidth = pageWidth ? Math.min(280, Math.max(120, pageWidth * 0.38)) : 260;
-    const defaultHeight = Math.max(90, defaultWidth * 0.68);
+    const defaultWidth = pageWidth ? Math.min(220, Math.max(96, pageWidth * 0.28)) : 200;
+    const defaultHeight = Math.max(72, defaultWidth * 0.62);
     const width = Math.max(48, annotation.width ?? anchoredSelection?.width ?? defaultWidth);
     const height = Math.max(48, annotation.height ?? anchoredSelection?.height ?? defaultHeight);
     const maxX = pageWidth ? Math.max(0, pageWidth - width) : Number.POSITIVE_INFINITY;

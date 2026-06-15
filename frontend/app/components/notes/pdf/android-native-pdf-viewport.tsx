@@ -1482,9 +1482,9 @@ export function AndroidNativePdfViewport(props: {
     const referencePopoverWidth = Math.min(430, pageAnchoredPopoverMaxWidth);
     const referencePopoverMaxHeight = Math.max(220, page.height - 68);
     const referenceImageFrameHeight = Math.max(128, Math.min(340, page.height * 0.36));
-    const incomingPopoverWidth = Math.min(440, pageAnchoredPopoverMaxWidth);
-    const incomingPopoverMaxHeight = Math.max(240, page.height - 68);
-    const incomingImageFrameHeight = Math.max(140, Math.min(380, page.height * 0.38));
+    const incomingPopoverWidth = Math.min(360, pageAnchoredPopoverMaxWidth);
+    const incomingPopoverMaxHeight = Math.max(220, Math.min(page.height - 68, page.height * 0.72));
+    const incomingImageFrameHeight = Math.max(120, Math.min(240, page.height * 0.26));
     const selectionForView = currentPage ? scaleSelectionRectToPageSize(props.selectionRect ?? null, page.width, page.height) : null;
     const selectedObjectCount = selectionForView
       ? (() => {

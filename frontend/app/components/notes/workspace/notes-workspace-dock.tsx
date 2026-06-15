@@ -213,7 +213,7 @@ export function NotesWorkspaceDock() {
             </Text>
             {globalContext.previewImage ? (
               <View style={globalContext.styles.workspaceDockPreviewFrame}>
-                <Image source={globalContext.previewImage} style={globalContext.styles.workspaceDockPreviewImage} resizeMode="cover" />
+                <Image source={globalContext.previewImage} style={globalContext.styles.workspaceDockPreviewImage} resizeMode="contain" />
               </View>
             ) : (
               <View style={globalContext.styles.workspaceDockPreviewFallback}>
