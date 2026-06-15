@@ -1661,8 +1661,8 @@ export function PdfPreview(props: {
                 source={incomingAssetImage}
                 frameStyle={props.styles.pdfIncomingCaptureImageFrame}
                 imageStyle={props.styles.pdfIncomingCaptureImage}
-                minHeight={320}
-                maxHeight={600}
+                minHeight={150}
+                maxHeight={260}
               />
             ) : null}
             <View style={props.styles.pdfIncomingCaptureAnswer}>
