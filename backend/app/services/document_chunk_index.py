@@ -16,6 +16,7 @@ from backend.app.db.session import get_database_url
 from backend.app.schemas.rag import RetrievedContext
 from backend.app.services.docling_batch_pipeline import (
     cached_pages_from_batches,
+    mark_page_note_rag_text_ready,
     mark_note_rag_text_ready,
     mark_note_rag_failed,
     parse_and_cache_docling_batches,
@@ -29,7 +30,8 @@ from backend.app.services.rag_chunker import IndexSource, build_text_chunks, is_
 
 
 logger = logging.getLogger(__name__)
-PAGE_SOURCE_TYPES = ("pdf_page", "pdf_text_box", "image_ocr", "image_ai_summary")
+PAGE_SOURCE_TYPES = ("pdf_page", "pdf_text_box", "image_ocr", "image_ai_summary", "note_page")
+CANVAS_SOURCE_TYPES = ("canvas_note", "ai_canvas_note")
 
 
 def content_hash(content: str) -> str:
@@ -543,6 +545,75 @@ def _insert_chunks(connection: Connection, chunks: list[Any], *, embedding_model
             )
 
 
+def sync_note_rag_metadata(connection: Connection, *, note_id: int, user_id: int, commit: bool = True) -> int:
+    note = fetch_one(
+        connection,
+        """
+        SELECT id, folder_id, title
+        FROM notes
+        WHERE id = %s AND user_id = %s
+        """,
+        (note_id, user_id),
+    )
+    if not note:
+        return 0
+
+    title = str(note["title"])
+    folder_id = note.get("folder_id")
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            UPDATE ai_canvas_notes
+            SET folder_id = %s
+            WHERE note_id = %s
+            """,
+            (folder_id, note_id),
+        )
+        cursor.execute(
+            """
+            UPDATE image_ai_summaries
+            SET folder_id = %s
+            WHERE user_id = %s
+              AND note_id = %s
+            """,
+            (folder_id, user_id, note_id),
+        )
+        cursor.execute(
+            """
+            UPDATE document_chunks AS dc
+            SET folder_id = %s,
+                title = CASE
+                    WHEN dc.source_type = 'canvas_note' THEN
+                        COALESCE(
+                            (
+                                SELECT %s || ' - ' || c.title
+                                FROM ai_canvas_notes AS c
+                                WHERE c.id::text = dc.source_id
+                                  AND c.note_id = %s
+                                LIMIT 1
+                            ),
+                            dc.title
+                        )
+                    WHEN dc.source_type = 'image_ai_summary' AND dc.source_id LIKE '%%:%%' THEN
+                        %s || ' - page ' || COALESCE(dc.page_number::text, '?') || ' image analysis'
+                    WHEN dc.source_type = 'image_ai_summary' THEN
+                        %s || ' - page ' || COALESCE(dc.page_number::text, '?') || ' image summary'
+                    WHEN dc.page_number IS NOT NULL THEN
+                        %s || ' - page ' || dc.page_number::text
+                    ELSE %s
+                END,
+                updated_at = now()
+            WHERE dc.user_id = %s
+              AND dc.note_id = %s
+            """,
+            (folder_id, title, note_id, title, title, title, title, user_id, note_id),
+        )
+        updated_count = cursor.rowcount or 0
+    if commit:
+        connection.commit()
+    return int(updated_count)
+
+
 def _delete_obsolete_chunks_for_note(
     connection: Connection,
     *,
@@ -617,12 +688,28 @@ def _delete_obsolete_chunks_for_page(
 ) -> None:
     page_source_id = str(page_id)
     page_source_prefix = f"{page_source_id}:%"
+    image_summary_source_ids = [
+        str(row["id"])
+        for row in fetch_all(
+            connection,
+            """
+            SELECT s.id
+            FROM image_ai_summaries s
+            JOIN note_pages p ON p.note_id = s.note_id AND p.page_number = s.page_number
+            JOIN notes n ON n.id = p.note_id
+            WHERE p.id = %s
+              AND s.user_id = %s
+              AND n.user_id = %s
+            """,
+            (page_id, user_id, user_id),
+        )
+    ]
     keep_keys = [
         (str(chunk.source.source_type), str(chunk.source.source_id), int(chunk.chunk_index))
         for chunk in chunks
     ]
     with connection.cursor() as cursor:
-        params: list[Any] = [user_id, list(PAGE_SOURCE_TYPES), page_source_id, page_source_prefix]
+        params: list[Any] = [user_id, list(PAGE_SOURCE_TYPES), page_source_id, page_source_prefix, image_summary_source_ids]
         keep_sql = ""
         if keep_keys:
             keep_clauses = []
@@ -634,14 +721,27 @@ def _delete_obsolete_chunks_for_page(
             f"""
             DELETE FROM document_chunks
             WHERE user_id = %s
-              AND source_type = ANY(%s::text[])
               AND (
-                  source_id = %s
-                  OR source_id LIKE %s
+                  (
+                      source_type = ANY(%s::text[])
+                      AND source_type <> 'image_ai_summary'
+                      AND (
+                          source_id = %s
+                          OR source_id LIKE %s
+                      )
+                  )
+                  OR (
+                      source_type = 'image_ai_summary'
+                      AND source_id LIKE %s
+                  )
+                  OR (
+                      source_type = 'image_ai_summary'
+                      AND source_id = ANY(%s::text[])
+                  )
               )
               {keep_sql}
             """,
-            tuple(params),
+            tuple([*params[:4], page_source_prefix, *params[4:]]),
         )
 
 
@@ -689,20 +789,77 @@ def _delete_obsolete_chunks_for_canvas(
     with connection.cursor() as cursor:
         if not keep_indexes:
             cursor.execute(
-                "DELETE FROM document_chunks WHERE user_id = %s AND source_type = 'canvas_note' AND source_id = %s",
-                (user_id, str(canvas_note_id)),
+                """
+                DELETE FROM document_chunks
+                WHERE user_id = %s
+                  AND source_type = ANY(%s::text[])
+                  AND source_id = %s
+                """,
+                (user_id, list(CANVAS_SOURCE_TYPES), str(canvas_note_id)),
             )
             return
         cursor.execute(
             """
             DELETE FROM document_chunks
             WHERE user_id = %s
-              AND source_type = 'canvas_note'
+              AND source_type = ANY(%s::text[])
               AND source_id = %s
-              AND NOT (chunk_index = ANY(%s::int[]))
+              AND (
+                  source_type <> 'canvas_note'
+                  OR NOT (chunk_index = ANY(%s::int[]))
+              )
             """,
-            (user_id, str(canvas_note_id), keep_indexes),
+            (user_id, list(CANVAS_SOURCE_TYPES), str(canvas_note_id), keep_indexes),
         )
+
+
+def _count_note_pages(connection: Connection, *, note_id: int) -> int:
+    row = fetch_one(
+        connection,
+        "SELECT COUNT(*) AS count FROM note_pages WHERE note_id = %s",
+        (note_id,),
+    )
+    return int(row.get("count") or 0) if row else 0
+
+
+def _count_note_document_chunks(connection: Connection, *, note_id: int, user_id: int) -> int:
+    row = fetch_one(
+        connection,
+        """
+        SELECT COUNT(*) AS count
+        FROM document_chunks
+        WHERE user_id = %s
+          AND note_id = %s
+          AND source_type <> 'canvas_note'
+        """,
+        (user_id, note_id),
+    )
+    return int(row.get("count") or 0) if row else 0
+
+
+def _note_id_for_page(connection: Connection, *, page_id: int, user_id: int) -> int | None:
+    row = fetch_one(
+        connection,
+        """
+        SELECT p.note_id
+        FROM note_pages p
+        JOIN notes n ON n.id = p.note_id
+        WHERE p.id = %s
+          AND n.user_id = %s
+        """,
+        (page_id, user_id),
+    )
+    return int(row["note_id"]) if row else None
+
+
+def _mark_page_based_note_ready_after_index(connection: Connection, *, note_id: int, user_id: int) -> None:
+    mark_page_note_rag_text_ready(
+        connection,
+        note_id=note_id,
+        user_id=user_id,
+        text_chunk_count=_count_note_document_chunks(connection, note_id=note_id, user_id=user_id),
+        processed_page_count=_count_note_pages(connection, note_id=note_id),
+    )
 
 
 def replace_note_chunks(connection: Connection, *, note_id: int, user_id: int) -> int:
@@ -714,6 +871,7 @@ def replace_note_chunks(connection: Connection, *, note_id: int, user_id: int) -
         _delete_obsolete_chunks_for_note(connection, user_id=user_id, note_id=note_id, chunks=chunks)
         _insert_chunks(connection, chunks, embedding_model=embedding_model)
         _sync_image_summary_index_flags(connection, note_id=note_id, user_id=user_id, chunks=chunks)
+        _mark_page_based_note_ready_after_index(connection, note_id=note_id, user_id=user_id)
         connection.commit()
     except Exception:
         connection.rollback()
@@ -724,22 +882,52 @@ def replace_note_chunks(connection: Connection, *, note_id: int, user_id: int) -
 def delete_note_page_chunks(connection: Connection, *, page_id: int, user_id: int) -> None:
     page_source_id = str(page_id)
     page_source_prefix = f"{page_source_id}:%"
+    image_summary_source_ids = [
+        str(row["id"])
+        for row in fetch_all(
+            connection,
+            """
+            SELECT s.id
+            FROM image_ai_summaries s
+            JOIN note_pages p ON p.note_id = s.note_id AND p.page_number = s.page_number
+            JOIN notes n ON n.id = p.note_id
+            WHERE p.id = %s
+              AND s.user_id = %s
+              AND n.user_id = %s
+            """,
+            (page_id, user_id, user_id),
+        )
+    ]
     with connection.cursor() as cursor:
         cursor.execute(
             """
             DELETE FROM document_chunks
             WHERE user_id = %s
-              AND source_type = ANY(%s)
               AND (
-                  source_id = %s
-                  OR source_id LIKE %s
+                  (
+                      source_type = ANY(%s::text[])
+                      AND source_type <> 'image_ai_summary'
+                      AND (
+                          source_id = %s
+                          OR source_id LIKE %s
+                      )
+                  )
+                  OR (
+                      source_type = 'image_ai_summary'
+                      AND source_id LIKE %s
+                  )
+                  OR (
+                      source_type = 'image_ai_summary'
+                      AND source_id = ANY(%s::text[])
+                  )
               )
             """,
-            (user_id, list(PAGE_SOURCE_TYPES), page_source_id, page_source_prefix),
+            (user_id, list(PAGE_SOURCE_TYPES), page_source_id, page_source_prefix, page_source_prefix, image_summary_source_ids),
         )
 
 
 def replace_note_page_chunks(connection: Connection, *, page_id: int, user_id: int) -> int:
+    note_id = _note_id_for_page(connection, page_id=page_id, user_id=user_id)
     sources = collect_note_page_index_sources(connection, page_id=page_id, user_id=user_id)
     chunks = [chunk for source in sources for chunk in build_text_chunks(source)]
     embedding_model = get_settings().openai_embedding_model
@@ -747,6 +935,8 @@ def replace_note_page_chunks(connection: Connection, *, page_id: int, user_id: i
     try:
         _delete_obsolete_chunks_for_page(connection, page_id=page_id, user_id=user_id, chunks=chunks)
         _insert_chunks(connection, chunks, embedding_model=embedding_model)
+        if note_id is not None:
+            _mark_page_based_note_ready_after_index(connection, note_id=note_id, user_id=user_id)
         connection.commit()
     except Exception:
         connection.rollback()
@@ -808,6 +998,7 @@ def replace_note_pages_chunks(
                 chunks=chunks_by_page_id.get(page_id, []),
             )
         _insert_chunks(connection, chunks, embedding_model=embedding_model)
+        _mark_page_based_note_ready_after_index(connection, note_id=note_id, user_id=user_id)
         connection.commit()
     except Exception:
         connection.rollback()
@@ -1135,6 +1326,14 @@ def reindex_note_page_background(page_id: int, user_id: int) -> None:
         logger.warning("failed to reindex note page chunks: page_id=%s user_id=%s error=%s", page_id, user_id, exc)
 
 
+def reindex_note_chunks_from_pages_background(note_id: int, user_id: int) -> None:
+    try:
+        with psycopg.connect(get_database_url(), row_factory=dict_row) as connection:
+            replace_note_chunks(connection, note_id=note_id, user_id=user_id)
+    except Exception as exc:
+        logger.warning("failed to reindex note chunks from current pages: note_id=%s user_id=%s error=%s", note_id, user_id, exc)
+
+
 def delete_note_page_chunks_background(page_id: int, user_id: int) -> None:
     try:
         with psycopg.connect(get_database_url(), row_factory=dict_row) as connection:
@@ -1276,14 +1475,17 @@ __all__ = [
     "collect_canvas_index_sources",
     "collect_note_index_sources",
     "collect_note_page_index_sources",
+    "CANVAS_SOURCE_TYPES",
     "delete_note_page_chunks",
     "delete_note_page_chunks_background",
     "extract_pdf_text_and_reindex_background",
     "reindex_canvas_background",
     "reindex_note_background",
+    "reindex_note_chunks_from_pages_background",
     "reindex_note_page_background",
     "replace_canvas_chunks",
     "replace_note_chunks",
     "replace_note_page_chunks",
     "retrieve_chunk_contexts",
+    "sync_note_rag_metadata",
 ]

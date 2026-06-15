@@ -1,4 +1,4 @@
-import type { Dispatch, SetStateAction } from 'react';
+import { useRef, type Dispatch, type SetStateAction } from 'react';
 import * as FileSystem from 'expo-file-system/legacy';
 import {
   createBackendChatSession,
@@ -54,9 +54,54 @@ function getAiContextModeFeedback(
   ].filter(Boolean).join(' · ');
 }
 
+function getCanvasAction(question: string, source: AiRequestSource = 'chat'): CanvasAction {
+  const lowerQuestion = question.toLowerCase();
+  const createKeywords = [
+    'new canvas',
+    '새 canvas',
+    '새 캔버스',
+    '새로운 canvas',
+    '새로운 캔버스',
+    '별도 canvas',
+    '별도 캔버스',
+    '다른 canvas',
+    '다른 캔버스',
+    '새 정리본',
+    '새 요약본',
+    '새 정리 노트',
+    '새 노트',
+  ];
+  if (createKeywords.some((keyword) => lowerQuestion.includes(keyword))) {
+    return 'canvas_create';
+  }
+
+  if (source === 'canvas-mini' || source === 'canvas-block') return 'auto';
+
+  const mentionsCanvas = lowerQuestion.includes('canvas') || question.includes('캔버스') || question.includes('정리 노트');
+  const editKeywords = [
+    '적어',
+    '써',
+    '정리',
+    '요약',
+    '추가',
+    '수정',
+    '반영',
+    '넣어',
+    '만들',
+    '작성',
+    '고쳐',
+  ];
+  if (mentionsCanvas && editKeywords.some((keyword) => question.includes(keyword))) {
+    return 'canvas_edit';
+  }
+
+  return 'auto';
+}
+
 function mightRequestCanvasEdit(question: string, source: AiRequestSource = 'chat') {
   if (source === 'canvas-mini' || source === 'canvas-block') return true;
   const lowerQuestion = question.toLowerCase();
+  if (getCanvasAction(question, source) === 'canvas_edit') return true;
   const mentionsCanvas = lowerQuestion.includes('canvas')
     || question.includes('캔버스')
     || question.includes('정리노트')
@@ -205,6 +250,7 @@ export function useAiChatActions(params: {
   clearSelection?: () => void;
   buildContextHint?: (question: string) => string | null | Promise<string | null>;
 }) {
+  const aiRequestInFlightRef = useRef(false);
   const getCurrentBackendNoteId = () => getStudyDocumentBackendNoteId(params.studyDocument);
   const getSessionDocumentKey = (session: BackendChatSession) => {
     const backendNoteId = getCurrentBackendNoteId();
@@ -474,6 +520,7 @@ export function useAiChatActions(params: {
     canvasRecommendationMode?: AiCanvasRecommendationMode | null;
   }) => {
     if (!params.studyDocumentId) return false;
+    if (aiRequestInFlightRef.current) return false;
     if (params.aiChatReadOnly) {
       params.setAiError('현재 대화는 다른 노트의 대화라서 읽기만 가능해요.');
       return false;
@@ -498,10 +545,11 @@ export function useAiChatActions(params: {
     const shouldHideSelectionAttachment = Boolean(selectionRect || attachedSelectionPreviewUri);
     const rawQuestion = override?.question?.trim() ?? params.aiQuestion.trim();
     if (isCanvasOriginRequest && !rawQuestion) return false;
+    if (!rawQuestion && !hasSelection) return false;
 
     const question = rawQuestion || (hasSelection ? '선택한 영역을 설명해줘' : '현재 페이지를 요약해줘');
     const requestModel = override?.model ?? params.selectedAiChatModelId ?? null;
-    const canvasAction = override?.canvasAction ?? 'auto';
+    const canvasAction = override?.canvasAction ?? getCanvasAction(question, override?.source ?? 'chat');
     if (isCanvasOriginRequest && canvasAction === 'canvas_create') {
       params.setAiError('현재 Canvas를 수정해달라고 요청해 주세요.');
       return false;
@@ -519,6 +567,7 @@ export function useAiChatActions(params: {
       ? `Canvas ${canvasAction === 'canvas_create' ? 'create' : 'edit'}: ${question}`
       : question;
     const messageSource = isCanvasOriginRequest ? override?.source ?? 'canvas-mini' : 'chat';
+    aiRequestInFlightRef.current = true;
     params.setAiLoading(true);
     if (shouldLockCanvas) params.setAiCanvasRequestBusy?.(true);
     params.setAiError(null);
@@ -789,6 +838,7 @@ export function useAiChatActions(params: {
     } finally {
       if (shouldLockCanvas) params.setAiCanvasRequestBusy?.(false);
       params.setAiLoading(false);
+      aiRequestInFlightRef.current = false;
     }
   };
 

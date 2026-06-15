@@ -75,7 +75,7 @@ def _loose_keyword_stroke(x=180, y=24):
     )
 
 
-def _content(strokes, recognition=None):
+def _content(strokes, recognition=None, **extra_state):
     return json.dumps({
         "kind": "bsnap-page-state",
         "version": 1,
@@ -85,6 +85,7 @@ def _content(strokes, recognition=None):
         "bookmarked": False,
         "photoReferenceCount": 0,
         "memoPageCount": 0,
+        **extra_state,
         **({"handwritingRecognition": recognition} if recognition else {}),
     }, ensure_ascii=False)
 
@@ -223,6 +224,97 @@ class HandwritingVisionFallbackTest(unittest.TestCase):
         openai_mock.assert_not_called()
         self.assertFalse(recognition["visionFallbackUsed"])
         self.assertEqual(recognition["visionFallbackSkippedReason"], "no-star-anchor")
+
+    def test_starless_page_with_strong_auxiliary_signals_uses_vision(self):
+        strokes = [
+            *_keyword_like_strokes(180, 24, prefix="aux-text"),
+            _stroke([(12, 120), (120, 120)], id="highlight-1", style="highlight", brush="highlighter"),
+            _stroke([(12, 138), (120, 138)], id="highlight-2", style="highlight", brush="highlighter"),
+        ]
+        with patch.dict(
+            "os.environ",
+            {
+                "HANDWRITING_VISION_FALLBACK_ENABLED": "true",
+                "OPENAI_API_KEY": "test",
+                "HANDWRITING_VISION_MAX_CLUSTERS_PER_PAGE": "4",
+                "HANDWRITING_VISION_MIN_CLUSTER_STROKES": "1",
+            },
+            clear=False,
+        ):
+            with patch("backend.app.routes.notes.analyze_handwriting_image_with_openai", return_value={
+                "status": "ready",
+                "text": "중요",
+                "keywords": ["중요"],
+                "symbols": [],
+                "confidence": 0.9,
+            }) as openai_mock:
+                next_content, status = _analyze_page_handwriting_content(
+                    _content(
+                        strokes,
+                        bookmarked=True,
+                        photoReferenceCount=5,
+                    ),
+                    use_vision_fallback=True,
+                )
+
+        recognition = parse_page_state(next_content)["handwritingRecognition"]
+        self.assertEqual(status, "analyzed")
+        self.assertGreaterEqual(openai_mock.call_count, 1)
+        self.assertTrue(recognition["visionFallbackUsed"])
+        self.assertIn("중요", recognition["keywords"])
+
+    def test_strong_auxiliary_signals_retry_previous_no_star_skip(self):
+        strokes = [
+            *_keyword_like_strokes(180, 24, prefix="retry-text"),
+            _stroke([(12, 120), (120, 120)], id="retry-highlight-1", style="highlight", brush="highlighter"),
+            _stroke([(12, 138), (120, 138)], id="retry-highlight-2", style="highlight", brush="highlighter"),
+        ]
+        stroke_hash = stable_stroke_hash(strokes)
+        content = _content(
+            strokes,
+            {
+                "status": "ready",
+                "strokeHash": stroke_hash,
+                "engine": "geometry",
+                "text": "",
+                "keywords": [],
+                "symbols": [],
+                "confidence": 0.0,
+                "clusters": [],
+                "visionFallbackUsed": False,
+                "visionFallbackSkippedReason": "no-star-anchor",
+            },
+            bookmarked=True,
+            photoReferenceCount=5,
+        )
+
+        with patch.dict(
+            "os.environ",
+            {
+                "HANDWRITING_VISION_FALLBACK_ENABLED": "true",
+                "OPENAI_API_KEY": "test",
+                "HANDWRITING_VISION_MAX_CLUSTERS_PER_PAGE": "4",
+                "HANDWRITING_VISION_MIN_CLUSTER_STROKES": "1",
+            },
+            clear=False,
+        ):
+            with patch("backend.app.routes.notes.analyze_handwriting_image_with_openai", return_value={
+                "status": "ready",
+                "text": "시험",
+                "keywords": ["시험"],
+                "symbols": [],
+                "confidence": 0.9,
+            }) as openai_mock:
+                next_content, status = _analyze_page_handwriting_content(
+                    content,
+                    use_vision_fallback=True,
+                )
+
+        recognition = parse_page_state(next_content)["handwritingRecognition"]
+        self.assertEqual(status, "analyzed")
+        self.assertGreaterEqual(openai_mock.call_count, 1)
+        self.assertTrue(recognition["visionFallbackUsed"])
+        self.assertIn("시험", recognition["keywords"])
 
     def test_star_page_sends_handwriting_clusters_to_vision(self):
         strokes = [
@@ -408,6 +500,39 @@ class HandwritingVisionFallbackTest(unittest.TestCase):
         self.assertEqual(skipped_content, content)
         self.assertEqual(forced_status, "analyzed")
         self.assertNotEqual(forced_content, content)
+
+    def test_backend_analysis_replaces_existing_mlkit_result_for_same_strokes(self):
+        strokes = [_stroke([(0, 0), (40, 20), (80, 0)], id="plain-ink")]
+        stroke_hash = stable_stroke_hash(strokes)
+        content = _content(strokes, {
+            "status": "ready",
+            "strokeHash": stroke_hash,
+            "engine": "mlkit-digital-ink",
+            "text": "중요",
+            "keywords": ["중요"],
+            "symbols": [],
+            "confidence": 0.82,
+            "clusters": [{
+                "id": "mlkit-cluster-1",
+                "pageNumber": 1,
+                "bbox": {"x": 0, "y": 0, "width": 80, "height": 20},
+                "text": "중요",
+                "candidates": [{"text": "중요", "confidence": 0.82}],
+                "keywords": ["중요"],
+                "symbols": [],
+                "confidence": 0.82,
+                "source": "mlkit-digital-ink",
+            }],
+        })
+
+        next_content, status = _analyze_page_handwriting_content(content)
+
+        recognition = parse_page_state(next_content)["handwritingRecognition"]
+        self.assertEqual(status, "analyzed")
+        self.assertEqual(recognition["engine"], "geometry")
+        self.assertEqual(recognition["text"], "")
+        self.assertNotIn("중요", recognition["keywords"])
+        self.assertTrue(all(cluster.get("source") == "geometry" for cluster in recognition["clusters"]))
 
     def test_vision_request_retries_same_hash_when_previous_result_was_geometry_only(self):
         strokes = [

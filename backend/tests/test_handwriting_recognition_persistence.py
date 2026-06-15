@@ -10,6 +10,7 @@ from backend.app.core.auth import get_current_user
 from backend.app.db.session import get_db_connection
 from backend.app.main import app
 from backend.app.routes.class_insights import PageInsightAccumulator, _apply_page_state
+from backend.app.routes.notes import _analyze_page_handwriting_content
 from backend.app.services.handwriting_signals import stable_stroke_hash
 from backend.app.services.note_page_content import parse_page_state
 
@@ -274,6 +275,55 @@ class HandwritingRecognitionPersistenceEndpointTest(unittest.TestCase):
 
         self.assertGreater(semantic.score(), noisy.score())
         self.assertLess(noisy.score(), 35)
+
+
+class AnalyzePagePreservesOnDeviceRecognitionTest(unittest.TestCase):
+    def test_geometry_reanalysis_keeps_mlkit_keywords(self):
+        strokes = [_stroke([(0, 0), (20, 20)])]
+        content = _content(strokes, {
+            "status": "ready",
+            "strokeHash": stable_stroke_hash(strokes),
+            "engine": "mlkit-digital-ink",
+            "text": "중요",
+            "keywords": ["중요"],
+            "symbols": [],
+            "confidence": 0.82,
+            "clusters": [{
+                "id": "mlkit-text",
+                "pageNumber": 3,
+                "bbox": {"x": 0, "y": 0, "width": 80, "height": 28},
+                "text": "중요",
+                "candidates": [{"text": "중요", "confidence": 0.82}],
+                "keywords": ["중요"],
+                "symbols": [],
+                "confidence": 0.82,
+                "source": "mlkit-digital-ink",
+            }],
+        })
+
+        next_content, status = _analyze_page_handwriting_content(
+            content,
+            force=True,
+            use_vision_fallback=False,
+        )
+
+        self.assertEqual(status, "analyzed")
+        recognition = parse_page_state(next_content)["handwritingRecognition"]
+        self.assertIn("중요", recognition["keywords"])
+        self.assertEqual(recognition["engine"], "hybrid")
+
+    def test_geometry_only_page_has_no_text_keywords(self):
+        strokes = [_stroke([(0, 0), (20, 20)])]
+        next_content, status = _analyze_page_handwriting_content(
+            _content(strokes),
+            force=True,
+            use_vision_fallback=False,
+        )
+
+        self.assertEqual(status, "analyzed")
+        recognition = parse_page_state(next_content)["handwritingRecognition"]
+        self.assertEqual(recognition["engine"], "geometry")
+        self.assertEqual(recognition["keywords"], [])
 
 
 if __name__ == "__main__":

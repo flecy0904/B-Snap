@@ -143,6 +143,10 @@ def file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _has_source_file(file_url: Any) -> bool:
+    return bool(str(file_url or "").strip())
+
+
 def note_rag_text_ready(connection: Connection, *, note_ids: list[int], user_id: int) -> tuple[bool, dict[str, Any] | None]:
     if not note_ids:
         return True, None
@@ -165,22 +169,107 @@ def note_rag_text_ready(connection: Connection, *, note_ids: list[int], user_id:
     rows = fetch_all(
         connection,
         """
-        SELECT note_id, text_status, image_status, overall_status, last_error
+        SELECT note_id, parser, text_status, image_status, overall_status, last_error
         FROM note_rag_jobs
         WHERE user_id = %s AND note_id = ANY(%s::int[])
         """,
         (user_id, list(pdf_note_ids)),
     )
     by_note_id = {int(row["note_id"]): row for row in rows}
+    note_rows = fetch_all(
+        connection,
+        """
+        SELECT id, file_url
+        FROM notes
+        WHERE user_id = %s AND id = ANY(%s::int[])
+        """,
+        (user_id, note_ids),
+    )
+    note_file_urls = {int(row["id"]): row.get("file_url") for row in note_rows}
     for note_id in note_ids:
         if int(note_id) not in pdf_note_ids:
             continue
         row = by_note_id.get(int(note_id))
+        note_has_file = _has_source_file(note_file_urls.get(int(note_id)))
         if row is None:
+            if not note_has_file:
+                continue
             return False, {"note_id": note_id, "reason": "missing_job"}
         if str(row.get("text_status")) != "ready":
+            if not note_has_file:
+                continue
             return False, row
     return True, None
+
+
+def mark_page_note_rag_text_ready(
+    connection: Connection,
+    *,
+    note_id: int,
+    user_id: int,
+    text_chunk_count: int,
+    processed_page_count: int,
+) -> None:
+    with connection.cursor() as cursor:
+        cursor.execute(
+            """
+            INSERT INTO note_rag_jobs (
+                user_id, folder_id, note_id, file_hash, parser, parser_config,
+                text_status, image_status, overall_status, page_count,
+                processed_page_count, total_batches, completed_batches,
+                text_chunk_count, image_candidate_count, image_completed_count, image_indexed_count,
+                last_error, started_at, text_ready_at, image_ready_at, created_at, updated_at
+            )
+            SELECT
+                n.user_id, n.folder_id, n.id, NULL, 'note_page', %s,
+                'ready', 'ready', 'ready', %s,
+                %s, 0, 0,
+                %s, 0, 0, 0,
+                NULL, now(), now(), now(), now(), now()
+            FROM notes n
+            WHERE n.id = %s
+              AND n.user_id = %s
+              AND COALESCE(NULLIF(BTRIM(n.file_url), ''), '') = ''
+            ON CONFLICT (user_id, note_id)
+            DO UPDATE SET
+                folder_id = EXCLUDED.folder_id,
+                parser = 'note_page',
+                parser_config = EXCLUDED.parser_config,
+                text_status = 'ready',
+                image_status = CASE
+                    WHEN note_rag_jobs.image_status IN ('failed', 'partial_failed') THEN note_rag_jobs.image_status
+                    ELSE 'ready'
+                END,
+                overall_status = CASE
+                    WHEN note_rag_jobs.image_status IN ('failed', 'partial_failed') THEN 'partial_failed'
+                    ELSE 'ready'
+                END,
+                page_count = EXCLUDED.page_count,
+                processed_page_count = EXCLUDED.processed_page_count,
+                total_batches = 0,
+                completed_batches = 0,
+                text_chunk_count = EXCLUDED.text_chunk_count,
+                last_error = CASE
+                    WHEN note_rag_jobs.image_status IN ('failed', 'partial_failed') THEN note_rag_jobs.last_error
+                    ELSE NULL
+                END,
+                started_at = COALESCE(note_rag_jobs.started_at, now()),
+                text_ready_at = now(),
+                image_ready_at = CASE
+                    WHEN note_rag_jobs.image_status IN ('failed', 'partial_failed') THEN note_rag_jobs.image_ready_at
+                    ELSE COALESCE(note_rag_jobs.image_ready_at, now())
+                END,
+                updated_at = now()
+            """,
+            (
+                Jsonb({"parser": "note_page", "version": 1}),
+                processed_page_count,
+                processed_page_count,
+                text_chunk_count,
+                note_id,
+                user_id,
+            ),
+        )
 
 
 def start_note_rag_job(

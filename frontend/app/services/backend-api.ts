@@ -633,7 +633,7 @@ export type BackendUpload = {
 
 export type BackendCaptureUploadJob = {
   job_id: string;
-  status: 'processing' | 'completed' | 'failed' | string;
+  status: 'processing' | 'needs_user_choice' | 'completed' | 'failed' | string;
   stage: 'target-detecting' | 'preprocessing' | 'ai-commenting' | 'completed' | 'failed' | string;
   message?: string | null;
   upload?: BackendUpload | null;
@@ -922,6 +922,14 @@ export async function createBackendCaptureUploadJob(file: {
 
 export async function getBackendCaptureUploadJob(jobId: string) {
   const job = await request<BackendCaptureUploadJob>(`/uploads/capture-jobs/${encodeURIComponent(jobId)}`, {
+    timeoutMs: 8000,
+  });
+  return normalizeBackendCaptureUploadJob(job);
+}
+
+export async function continueBackendCaptureUploadJob(jobId: string) {
+  const job = await request<BackendCaptureUploadJob>(`/uploads/capture-jobs/${encodeURIComponent(jobId)}/continue`, {
+    method: 'POST',
     timeoutMs: 8000,
   });
   return normalizeBackendCaptureUploadJob(job);

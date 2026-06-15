@@ -51,6 +51,20 @@ CURRENT_CONTEXT_KEYWORDS = (
     "방금",
     "현재 화면",
 )
+GENERAL_KEYWORDS = (
+    "공부법",
+    "암기법",
+    "시간 관리",
+    "집중력",
+    "학습 방법",
+    "효율적으로 공부",
+    "마크다운",
+    "markdown",
+    "플래너",
+)
+FALLBACK_RAG_HINTS = ("노트", "note", "pdf", "문서", "document", "자료", "페이지", "page")
+
+
 ROUTER_INSTRUCTIONS = """
 Classify the user's Korean study assistant question.
 Return JSON only: {"mode":"general|rag","rewritten_query":"short search query or empty string"}.
@@ -155,4 +169,9 @@ def route_ai_context(
         rewritten = "" if mode == "general" else _clean_query(str(parsed.get("rewritten_query") or question))
         return AiContextRoute(mode=mode, rewritten_query=rewritten, reason="llm")
     except Exception:
-        return AiContextRoute(mode="rag", rewritten_query=rewritten_query, reason="fallback")
+        fallback_mode: AiContextMode = (
+            "rag"
+            if current_page_number is not None or _contains_any(normalized, FALLBACK_RAG_HINTS)
+            else "general"
+        )
+        return AiContextRoute(mode=fallback_mode, rewritten_query=rewritten_query, reason="fallback")

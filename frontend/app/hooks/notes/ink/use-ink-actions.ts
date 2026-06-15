@@ -634,7 +634,7 @@ export function useInkActions(params: {
       x: anchorX,
       y: anchorY,
       width: 104,
-      height: 56,
+      height: 96,
       fontSize: 17,
       text: '',
       anchorRect: anchoredSelection,

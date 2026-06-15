@@ -2,8 +2,16 @@ from functools import lru_cache
 from pathlib import Path
 from secrets import token_urlsafe
 
+from dotenv import load_dotenv
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+# Load backend/.env into os.environ so modules that read via os.getenv (e.g. the
+# handwriting Vision fallback) see the same values pydantic-settings reads from
+# the env file. Does not override variables already set in the real environment.
+_ENV_FILE = Path(__file__).resolve().parents[2] / ".env"
+load_dotenv(_ENV_FILE)
 
 
 class Settings(BaseSettings):

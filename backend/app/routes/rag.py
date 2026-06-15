@@ -2,7 +2,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends
 from psycopg import Connection
 
 from backend.app.core.auth import get_current_user
-from backend.app.db.crud import fetch_all, fetch_one, require_row
+from backend.app.db.crud import fetch_one, require_row
 from backend.app.db.session import get_db_connection
 from backend.app.schemas.rag import (
     NoteSummarySection,
@@ -56,27 +56,6 @@ def reindex_note_rag(
     )
     background_tasks.add_task(reindex_note_background, note_id, current_user["id"])
     return {"status": "queued", "note_count": 1}
-
-
-@router.post("/reindex/folders/{folder_id}")
-def reindex_folder_rag(
-    folder_id: int,
-    background_tasks: BackgroundTasks,
-    connection: Connection = Depends(get_db_connection),
-    current_user: dict = Depends(get_current_user),
-):
-    require_row(
-        fetch_one(connection, "SELECT id FROM folders WHERE id = %s AND user_id = %s", (folder_id, current_user["id"])),
-        "folder not found",
-    )
-    notes = fetch_all(
-        connection,
-        "SELECT id FROM notes WHERE folder_id = %s AND user_id = %s ORDER BY id ASC",
-        (folder_id, current_user["id"]),
-    )
-    for note in notes:
-        background_tasks.add_task(reindex_note_background, int(note["id"]), current_user["id"])
-    return {"status": "queued", "note_count": len(notes)}
 
 
 @router.post("/ask", response_model=RAGAnswer)

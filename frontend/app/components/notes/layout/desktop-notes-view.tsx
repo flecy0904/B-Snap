@@ -217,6 +217,7 @@ export type DesktopNotesViewProps = {
   subjects: Subject[];
   query: string;
   sort: 'latest' | 'oldest';
+  backendDocumentSyncing: boolean;
   onChangeMode: (mode: NoteWorkspaceMode) => void;
   onChangeInkTool: (tool: InkTool) => void;
   onToggleFingerDrawing: () => void;
@@ -339,6 +340,7 @@ export type DesktopNotesViewProps = {
   onRestoreNote: (id: number) => void;
   onRestoreStudyDocument: (id: number) => void;
   onRenameStudyDocument: (id: number, title: string) => boolean;
+  onSyncBackendDocuments: (options?: { showFeedback?: boolean }) => void | Promise<boolean>;
   onCreateBlankNote: () => void;
   onUploadPdf: () => void;
   onInsertImageFromLibrary: () => void;
@@ -1049,9 +1051,11 @@ export function DesktopNotesView(props: DesktopNotesViewProps) {
       captureAssetsBySubject={props.captureAssetsBySubject}
       pageCaptureReferences={props.allPageCaptureReferences}
       blueColor={props.blueColor}
+      backendDocumentSyncing={props.backendDocumentSyncing}
       onChangeMode={props.onChangeMode}
       onQuery={props.onQuery}
       onSort={props.onSort}
+      onSyncBackendDocuments={props.onSyncBackendDocuments}
       onCreateBlankNote={props.onCreateBlankNote}
       onUploadPdf={props.onUploadPdf}
       onReset={props.onReset}

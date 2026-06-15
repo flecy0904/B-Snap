@@ -53,9 +53,11 @@ export type NotesBrowserProps = {
   captureAssetsBySubject: Record<number, CaptureAsset[]>;
   pageCaptureReferences: PageCaptureReference[];
   blueColor: string;
+  backendDocumentSyncing: boolean;
   onChangeMode: (mode: NoteWorkspaceMode) => void;
   onQuery: (value: string) => void;
   onSort: () => void;
+  onSyncBackendDocuments: (options?: { showFeedback?: boolean }) => void | Promise<boolean>;
   onCreateBlankNote: () => void;
   onUploadPdf: () => void;
   onReset: () => void;
@@ -435,6 +437,23 @@ export function NotesBrowser(props: NotesBrowserProps) {
           <Text style={props.styles.searchIcon}>⌕</Text>
           <TextInput value={props.query} onChangeText={props.onQuery} placeholder={props.noteMode === 'photo' ? 'Photo 검색' : 'Note 검색'} placeholderTextColor="#C3C8D5" style={props.styles.searchInput} />
         </View>
+        {props.noteMode === 'note' ? (
+          <Pressable
+            accessibilityLabel="클라우드 양방향 동기화"
+            disabled={props.backendDocumentSyncing}
+            style={[
+              props.styles.desktopSyncButton,
+              props.backendDocumentSyncing && props.styles.desktopSyncButtonBusy,
+            ]}
+            onPress={() => props.onSyncBackendDocuments({ showFeedback: true })}
+          >
+            <MaterialCommunityIcons
+              name={props.backendDocumentSyncing ? 'cloud-refresh-outline' : 'cloud-sync-outline'}
+              size={22}
+              color={props.backendDocumentSyncing ? '#8D95A6' : props.blueColor}
+            />
+          </Pressable>
+        ) : null}
         <Pressable style={props.styles.desktopFilterButton} onPress={props.onSort}><Text style={props.styles.desktopFilterButtonText}>{props.sort === 'latest' ? '최신순' : '오래된순'}</Text></Pressable>
         {props.noteMode === 'note' ? renderDocumentViewToggle() : null}
         {recoverableCount ? (

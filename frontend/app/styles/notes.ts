@@ -323,6 +323,8 @@ export const notesStyles = {
   desktopModeButtonTextActive: { color: '#1F2633' },
   desktopFilters: { flexDirection: 'row' as const, flexWrap: 'wrap' as const, gap: 12, marginBottom: 20 },
   desktopSearch: { flex: 1, minWidth: 220, height: 46, borderRadius: 12, backgroundColor: C.card, borderWidth: 1, borderColor: C.line, flexDirection: 'row' as const, alignItems: 'center' as const, paddingHorizontal: 14 },
+  desktopSyncButton: { flexShrink: 0, width: 46, height: 46, borderRadius: 12, alignItems: 'center' as const, justifyContent: 'center' as const, backgroundColor: C.card, borderWidth: 1, borderColor: '#DCE4FF' },
+  desktopSyncButtonBusy: { opacity: 0.62 },
   desktopFilterButton: { flexShrink: 0, height: 46, paddingHorizontal: 18, borderRadius: 12, alignItems: 'center' as const, justifyContent: 'center' as const, backgroundColor: C.card, borderWidth: 1, borderColor: C.line },
   desktopFilterButtonText: { fontSize: 14, fontWeight: '700' as const, color: '#394150' },
   desktopPrimaryAction: { backgroundColor: C.blue, borderColor: C.blue },

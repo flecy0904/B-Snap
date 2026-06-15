@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { Alert } from 'react-native';
+import { Alert, Platform } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as ImagePicker from 'expo-image-picker';
 import { subjects as fallbackSubjects } from '../../app-defaults';
 import { createCaptureAsset, useSyncBridge, useSyncBridgeStatus } from '../use-sync-bridge';
-import { BackendApiError, createBackendCaptureUploadJob, getBackendCaptureUploadJob, isBackendApiEnabled, type BackendCaptureUploadJob, type BackendUpload, uploadBackendFile } from '../../services/backend-api';
+import { BackendApiError, continueBackendCaptureUploadJob, createBackendCaptureUploadJob, getBackendCaptureUploadJob, isBackendApiEnabled, type BackendCaptureUploadJob, type BackendUpload, uploadBackendFile } from '../../services/backend-api';
 import type { CaptureAsset, CaptureProcessingStage, CaptureProcessingState, Subject } from '../../types';
 import { buildEmptyStudyWorkspaceState, loadStudyWorkspaceState, saveStudyWorkspaceState } from '../../storage/local-workspace-store';
 import { cleanAiDisplayText } from '../../ui-helpers';
@@ -13,6 +13,11 @@ type UploadResult = BackendUpload;
 type CapturePendingAction = 'camera' | 'library' | 'drop';
 type PreprocessingFallbackChoice = 'continue' | 'use-original' | 'cancel';
 type ProcessingSource = CaptureProcessingState['source'];
+type CaptureUploadJobResult = {
+  job: BackendCaptureUploadJob;
+  upload: UploadResult;
+  needsUserChoice: boolean;
+};
 export type DroppedCaptureFile = {
   uri: string;
   name: string;
@@ -59,6 +64,17 @@ function isTargetDetectionFallback(upload: UploadResult | null) {
 function resolvePreprocessingFallbackChoice(upload: UploadResult | null): Promise<PreprocessingFallbackChoice> {
   if (!isTargetDetectionFallback(upload)) {
     return Promise.resolve('continue');
+  }
+
+  if (Platform.OS === 'web') {
+    if (typeof window === 'undefined' || typeof window.confirm !== 'function') {
+      return Promise.resolve('cancel');
+    }
+    return Promise.resolve(
+      window.confirm('강의자료/칠판을 찾지 못했어요.\n원본 이미지를 사용할까요?')
+        ? 'use-original'
+        : 'cancel',
+    );
   }
 
   return new Promise((resolve) => {
@@ -174,9 +190,13 @@ export function useCaptureWorkspace(props: {
     if (mappedStage) setProcessingStage(mappedStage);
   };
 
-  const waitForBackendCaptureJob = async (initialJob: BackendCaptureUploadJob): Promise<UploadResult> => {
+  const waitForBackendCaptureJob = async (
+    initialJob: BackendCaptureUploadJob,
+    options?: { stopForUserChoice?: boolean },
+  ): Promise<CaptureUploadJobResult> => {
     let currentJob = initialJob;
     const startedAt = Date.now();
+    const stopForUserChoice = options?.stopForUserChoice ?? true;
 
     while (true) {
       applyBackendCaptureJobStage(currentJob);
@@ -185,7 +205,17 @@ export function useCaptureWorkspace(props: {
         if (!currentJob.upload) {
           throw new BackendApiError('촬영 이미지 처리 결과를 받지 못했습니다.');
         }
-        return currentJob.upload;
+        return { job: currentJob, upload: currentJob.upload, needsUserChoice: false };
+      }
+
+      if (currentJob.status === 'needs_user_choice') {
+        if (!stopForUserChoice) {
+          throw new BackendApiError('원본 이미지 처리를 시작하지 못했습니다.');
+        }
+        if (!currentJob.upload) {
+          throw new BackendApiError('원본 이미지 선택에 필요한 업로드 정보를 받지 못했습니다.');
+        }
+        return { job: currentJob, upload: currentJob.upload, needsUserChoice: true };
       }
 
       if (currentJob.status === 'failed') {
@@ -209,6 +239,13 @@ export function useCaptureWorkspace(props: {
     const job = await createBackendCaptureUploadJob(file);
     applyBackendCaptureJobStage(job);
     return waitForBackendCaptureJob(job);
+  };
+
+  const continueCaptureUploadWithOriginal = async (jobId: string) => {
+    setProcessingStage('ai-commenting');
+    const continuedJob = await continueBackendCaptureUploadJob(jobId);
+    applyBackendCaptureJobStage(continuedJob);
+    return waitForBackendCaptureJob(continuedJob, { stopForUserChoice: false });
   };
 
   useEffect(() => () => clearProcessingTimers(), []);
@@ -294,12 +331,14 @@ export function useCaptureWorkspace(props: {
       });
       let previewUri = picked.uri;
       let backendUpload: UploadResult | null = null;
+      let uploadResult: CaptureUploadJobResult | null = null;
       if (isBackendApiEnabled()) {
-        backendUpload = await uploadCaptureImageWithProgress({
+        uploadResult = await uploadCaptureImageWithProgress({
           uri: picked.uri,
           name: picked.fileName || `${subject.name} 카메라 캡처.jpg`,
           type: picked.mimeType || 'image/jpeg',
         });
+        backendUpload = uploadResult.upload;
         previewUri = backendUpload.url;
       }
       if (isTargetDetectionFallback(backendUpload)) {
@@ -311,6 +350,11 @@ export function useCaptureWorkspace(props: {
         hideProcessingModal();
         setCaptureFeedback('촬영을 취소 했어요.');
         return;
+      }
+      if (fallbackChoice === 'use-original' && uploadResult?.needsUserChoice) {
+        uploadResult = await continueCaptureUploadWithOriginal(uploadResult.job.job_id);
+        backendUpload = uploadResult.upload;
+        previewUri = backendUpload.url;
       }
       const newAsset = createCaptureAsset({
         subjectId: subject.id,
@@ -372,12 +416,14 @@ export function useCaptureWorkspace(props: {
       });
       let previewUri = picked.uri;
       let backendUpload: UploadResult | null = null;
+      let uploadResult: CaptureUploadJobResult | null = null;
       if (isBackendApiEnabled()) {
-        backendUpload = await uploadCaptureImageWithProgress({
+        uploadResult = await uploadCaptureImageWithProgress({
           uri: picked.uri,
           name: picked.fileName || `${subject.name} 갤러리 이미지.jpg`,
           type: picked.mimeType || 'image/jpeg',
         });
+        backendUpload = uploadResult.upload;
         previewUri = backendUpload.url;
       }
       if (isTargetDetectionFallback(backendUpload)) {
@@ -389,6 +435,11 @@ export function useCaptureWorkspace(props: {
         hideProcessingModal();
         setCaptureFeedback('이미지 저장을 취소 할게요.');
         return;
+      }
+      if (fallbackChoice === 'use-original' && uploadResult?.needsUserChoice) {
+        uploadResult = await continueCaptureUploadWithOriginal(uploadResult.job.job_id);
+        backendUpload = uploadResult.upload;
+        previewUri = backendUpload.url;
       }
       const newAsset = createCaptureAsset({
         subjectId: subject.id,
@@ -432,13 +483,15 @@ export function useCaptureWorkspace(props: {
         showProcessingModal('library', file.uri);
         let previewUri = file.uri;
         let backendUpload: UploadResult | null = null;
+        let uploadResult: CaptureUploadJobResult | null = null;
 
         if (isBackendApiEnabled()) {
-          backendUpload = await uploadCaptureImageWithProgress({
+          uploadResult = await uploadCaptureImageWithProgress({
             uri: file.uri,
             name: file.name || `${subject.name} 웹 업로드 이미지.jpg`,
             type: file.type || 'image/jpeg',
           });
+          backendUpload = uploadResult.upload;
           previewUri = backendUpload.url;
         }
 
@@ -451,6 +504,11 @@ export function useCaptureWorkspace(props: {
           hideProcessingModal();
           setCaptureFeedback('이미지 저장을 취소 할게요.');
           return;
+        }
+        if (fallbackChoice === 'use-original' && uploadResult?.needsUserChoice) {
+          uploadResult = await continueCaptureUploadWithOriginal(uploadResult.job.job_id);
+          backendUpload = uploadResult.upload;
+          previewUri = backendUpload.url;
         }
 
         const newAsset = createCaptureAsset({

@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from difflib import SequenceMatcher
 from typing import Any
 
+from backend.app.services.handwriting_keyword_classifier import classify_cluster_keyword
+
 
 CANONICAL_STUDY_KEYWORDS = (
     "중요",
@@ -1296,15 +1298,28 @@ def build_handwriting_recognition_from_geometry(page_state: dict[str, Any]) -> d
             "updatedAt": datetime.now(timezone.utc).isoformat(),
         }
 
-    clusters = [_recognition_cluster(cluster) for cluster in cluster_ink_strokes(strokes)]
+    clusters: list[dict[str, Any]] = []
+    for raw_cluster in cluster_ink_strokes(strokes):
+        recognition_cluster = _recognition_cluster(raw_cluster)
+        prediction = classify_cluster_keyword(raw_cluster)
+        if prediction:
+            keyword = prediction["keyword"]
+            if keyword not in recognition_cluster["keywords"]:
+                recognition_cluster["keywords"] = [*recognition_cluster["keywords"], keyword]
+            recognition_cluster["confidence"] = max(
+                float(recognition_cluster.get("confidence") or 0.0),
+                float(prediction["confidence"]),
+            )
+        clusters.append(recognition_cluster)
     symbols = sorted({symbol for cluster in clusters for symbol in cluster.get("symbols", [])})
+    keywords = sorted({keyword for cluster in clusters for keyword in cluster.get("keywords", [])})
     confidence = max([float(cluster.get("confidence") or 0.0) for cluster in clusters], default=0.0)
     return {
         "status": "ready",
         "strokeHash": stroke_hash,
         "engine": "geometry",
         "text": "",
-        "keywords": [],
+        "keywords": keywords,
         "symbols": symbols,
         "confidence": confidence,
         "clusters": clusters,
