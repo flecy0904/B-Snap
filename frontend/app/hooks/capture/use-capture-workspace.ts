@@ -34,6 +34,11 @@ function getCaptureErrorMessage(error: unknown, fallback: string) {
   return fallback;
 }
 
+function normalizeAnalysisConfidence(confidence: unknown) {
+  if (typeof confidence !== 'number' || Number.isNaN(confidence)) return undefined;
+  return Math.max(0, Math.min(1, confidence));
+}
+
 function applyUploadAnalysis(asset: CaptureAsset, upload: UploadResult, options?: { useOriginalImage?: boolean }) {
   if (options?.useOriginalImage) {
     asset.processedUrl = undefined;
@@ -48,6 +53,7 @@ function applyUploadAnalysis(asset: CaptureAsset, upload: UploadResult, options?
   if (generatedTitle) asset.title = generatedTitle.slice(0, 40);
   asset.analysisSummary = cleanAiDisplayText(upload.analysis.summary ?? asset.summary);
   asset.analysisKeywords = upload.analysis.keywords?.filter(Boolean) ?? asset.analysisKeywords;
+  asset.analysisConfidence = normalizeAnalysisConfidence(upload.analysis.confidence);
   return asset;
 }
 

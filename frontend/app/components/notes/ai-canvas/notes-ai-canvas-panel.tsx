@@ -132,8 +132,6 @@ export function NotesAiCanvasPanel() {
   const hasCanvasContent = hasUsefulAiCanvasMarkdown(canvas.markdownDraft);
   const miniCommandReady = Boolean(miniCommand.trim());
   const canvasManagementDisabled = canvasControlsLocked || canvas.loading || canvas.saving;
-  const canUndoCanvas = Boolean(canvas.activeNote && canvas.canUndo && !canvasControlsLocked);
-  const canRedoCanvas = Boolean(canvas.activeNote && canvas.canRedo && !canvasControlsLocked);
   const resizeWebAiCanvasPanel = workspace.onResizeWebAiCanvasPanel;
   const appKeyboardAvoidingStyle = appKeyboardInset > 0 ? { paddingBottom: appKeyboardInset + 12 } : null;
 
@@ -365,11 +363,6 @@ export function NotesAiCanvasPanel() {
     workspace.styles.aiCanvasHeaderNewButton,
     hoveredTooltipId === id && workspace.styles.aiCanvasHeaderNewButtonHover,
     (canvasManagementDisabled || !canvas.canCreateNote) && workspace.styles.aiCanvasSaveButtonDisabled,
-  ];
-  const getAiCanvasHeaderHistoryButtonStyle = (id: string, enabled: boolean) => [
-    workspace.styles.aiCanvasIconButton,
-    hoveredTooltipId === id && enabled && workspace.styles.aiCanvasIconButtonHover,
-    !enabled && workspace.styles.aiCanvasSaveButtonDisabled,
   ];
   const canRunRecommendationMode = (mode: AiCanvasRecommendationMode) => {
     if (!baseRecommendationAvailable) return false;
@@ -723,9 +716,6 @@ export function NotesAiCanvasPanel() {
             <Text style={workspace.styles.aiCanvasTitle} numberOfLines={1}>
               {formatCanvasNoteTitle(canvas.activeNote, canvas.notes)}
             </Text>
-            {canvas.activeNote ? (
-              <MaterialCommunityIcons name="pencil-outline" size={14} color="#8A95A8" />
-            ) : null}
           </Pressable>
         </View>
         <View style={workspace.styles.aiCanvasHeaderActions}>
@@ -745,36 +735,6 @@ export function NotesAiCanvasPanel() {
               {renderAiTooltip('ai-canvas-mode', canvasEditModeEnabled ? '보기 모드' : '편집 모드')}
             </View>
           ) : null}
-          <View style={workspace.styles.aiTooltipAnchor}>
-            <Pressable
-              {...getTooltipTriggerProps('ai-canvas-undo', 'Canvas 되돌리기')}
-              style={getAiCanvasHeaderHistoryButtonStyle('ai-canvas-undo', canUndoCanvas)}
-              onPress={() => {
-                hideTooltip('ai-canvas-undo');
-                if (!canUndoCanvas) return;
-                canvas.undoCanvasEdit();
-              }}
-              disabled={!canUndoCanvas}
-            >
-              <MaterialCommunityIcons name="undo-variant" size={18} color={canUndoCanvas ? '#303744' : '#A8B0BF'} />
-            </Pressable>
-            {renderAiTooltip('ai-canvas-undo', 'Canvas 되돌리기')}
-          </View>
-          <View style={workspace.styles.aiTooltipAnchor}>
-            <Pressable
-              {...getTooltipTriggerProps('ai-canvas-redo', 'Canvas 다시 실행')}
-              style={getAiCanvasHeaderHistoryButtonStyle('ai-canvas-redo', canRedoCanvas)}
-              onPress={() => {
-                hideTooltip('ai-canvas-redo');
-                if (!canRedoCanvas) return;
-                canvas.redoCanvasEdit();
-              }}
-              disabled={!canRedoCanvas}
-            >
-              <MaterialCommunityIcons name="redo-variant" size={18} color={canRedoCanvas ? '#303744' : '#A8B0BF'} />
-            </Pressable>
-            {renderAiTooltip('ai-canvas-redo', 'Canvas 다시 실행')}
-          </View>
           <View style={workspace.styles.aiTooltipAnchor}>
             <Pressable
               {...getTooltipTriggerProps('ai-canvas-new-note', '새 노트')}

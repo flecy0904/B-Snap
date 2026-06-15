@@ -6,7 +6,10 @@ import {
   isBackendApiEnabled,
   listBackendChatMessages,
   sendBackendAiMessage,
+  sendBackendAiMessageStream,
   updateBackendChatSession,
+  type BackendAiMessagePayload,
+  type BackendAiMessageResponse,
   type BackendAiCanvasNote,
   type BackendAiContextMode,
   type BackendChatMessage,
@@ -99,10 +102,21 @@ function mightRequestCanvasEdit(question: string, source: AiRequestSource = 'cha
   if (source === 'canvas-mini' || source === 'canvas-block') return true;
   const lowerQuestion = question.toLowerCase();
   if (getCanvasAction(question, source) === 'canvas_edit') return true;
+  const mentionsCanvas = lowerQuestion.includes('canvas')
+    || question.includes('캔버스')
+    || question.includes('정리노트')
+    || question.includes('정리 노트');
+  if (!mentionsCanvas) return false;
   const possibleCanvasEditKeywords = [
-    'canvas',
-    '캔버스',
-    '정리 노트',
+    'add',
+    'rewrite',
+    'revise',
+    'shorten',
+    'lengthen',
+    'simplify',
+    'polish',
+    'delete',
+    'remove',
     '정리',
     '요약',
     '추가',
@@ -121,6 +135,8 @@ function mightRequestCanvasEdit(question: string, source: AiRequestSource = 'cha
     '길게',
     '늘려',
     '줄여',
+    '삭제',
+    '빼줘',
     '개선',
   ];
   return possibleCanvasEditKeywords.some((keyword) => lowerQuestion.includes(keyword));
@@ -202,6 +218,7 @@ export function useAiChatActions(params: {
   activeAiChatSessionId: number | null;
   aiChatReadOnly: boolean;
   aiQuestion: string;
+  selectedAiChatModelId?: string | null;
   chatSessionByDocument: Record<number, number>;
   chatSessionsByDocument: Record<number, BackendChatSession[]>;
   allChatSessions: BackendChatSession[];
@@ -458,6 +475,7 @@ export function useAiChatActions(params: {
       const session = await createBackendChatSession({
         noteId: backendNoteId,
         title: params.studyDocument?.title ? `${params.studyDocument.title} AI 채팅` : 'AI 채팅',
+        model: params.selectedAiChatModelId ?? null,
         ragScope: params.activeRagScope ?? null,
       });
       upsertSession(session);
@@ -490,6 +508,7 @@ export function useAiChatActions(params: {
 
   const requestAiAnswerInternal = async (override?: {
     question?: string;
+    model?: string | null;
     selectionImageUri?: string | null;
     pageNumber?: number | null;
     source?: AiRequestSource;
@@ -528,7 +547,8 @@ export function useAiChatActions(params: {
     if (isCanvasOriginRequest && !rawQuestion) return false;
     if (!rawQuestion && !hasSelection) return false;
 
-    const question = rawQuestion || '선택한 영역을 설명해줘';
+    const question = rawQuestion || (hasSelection ? '선택한 영역을 설명해줘' : '현재 페이지를 요약해줘');
+    const requestModel = override?.model ?? params.selectedAiChatModelId ?? null;
     const canvasAction = override?.canvasAction ?? getCanvasAction(question, override?.source ?? 'chat');
     if (isCanvasOriginRequest && canvasAction === 'canvas_create') {
       params.setAiError('현재 Canvas를 수정해달라고 요청해 주세요.');
@@ -585,6 +605,7 @@ export function useAiChatActions(params: {
         const session = await createBackendChatSession({
           noteId: backendNoteId,
           title: buildAiChatTitle(requestContent, params.studyDocument?.title),
+          model: requestModel,
           ragScope: params.activeRagScope ?? null,
         });
         sessionId = session.id;
@@ -607,7 +628,7 @@ export function useAiChatActions(params: {
         content: requestContent,
         source: messageSource,
         selection_image_url: shouldHideSelectionAttachment ? null : selectionPreviewUri,
-        model: null,
+        model: requestModel,
         created_at: new Date().toISOString(),
       };
       params.setAiMessagesBySession((current) => ({
@@ -619,9 +640,10 @@ export function useAiChatActions(params: {
       }
 
       const selectionImage = await buildSelectionImagePayload(selectionPreviewUri);
-      const response = await sendBackendAiMessage({
+      const requestPayload: BackendAiMessagePayload = {
         sessionId,
         content: requestContent,
+        model: requestModel,
         selectionImage,
         selectionImageUri: selectionPreviewUri,
         selectionRect,
@@ -640,76 +662,170 @@ export function useAiChatActions(params: {
         canvasRecommendationMode: override?.canvasRecommendationMode ?? null,
         contextHint,
         ragScope: params.activeRagScope ?? null,
-      });
-      const userMessageWithAttachment = {
-        ...response.user_message,
-        selection_image_url: selectionPreviewUri,
       };
-      if (response.ragScope !== undefined) {
-        params.onSyncRagScope?.(sessionId, response.ragScope ?? null);
-      }
-      const aiContextModeFeedback = getAiContextModeFeedback(
-        response.context_mode,
-        response.debug?.scope_count ?? response.ragScope?.sources.length ?? params.activeRagScope?.sources.length ?? 0,
-        response.debug?.retrieved_source_count ?? response.sources?.length ?? 0,
-        response.debug?.retrieved_chunk_count ?? response.sources?.length ?? 0,
-        response.debug?.context_page_count ?? 0,
-        Boolean(response.debug?.fallback),
-      );
-      if (aiContextModeFeedback) {
-        params.setWorkspaceFeedback?.(aiContextModeFeedback);
-      }
-      params.setLastChatSessionByDocument((current) => ({
-        ...current,
-        [params.studyDocumentId!]: sessionId,
-      }));
-      const content = response.assistant_message.content;
+
+      const pendingAssistantMessage: BackendChatMessage = {
+        id: pendingUserMessage.id - 1,
+        session_id: sessionId,
+        role: 'assistant',
+        content: '',
+        source: messageSource,
+        model: requestModel,
+        created_at: new Date().toISOString(),
+        streaming: true,
+        stream_status: '질문 이해 중...',
+      } as BackendChatMessage;
+      let canvasEditApplied = false;
+      const applyCanvasEditOnce = (canvasEdit: BackendAiMessageResponse['canvas_edit']) => {
+        if (!canvasEdit || canvasEditApplied || !params.onApplyCanvasEditFromChat) return;
+        canvasEditApplied = true;
+        params.onApplyCanvasEditFromChat({
+          action: canvasEdit.action,
+          canvasNote: canvasEdit.canvas_note,
+          operations: canvasEdit.operations,
+        });
+      };
+      const handleFinalResponse = (response: BackendAiMessageResponse) => {
+        const userMessageWithAttachment = {
+          ...response.user_message,
+          selection_image_url: selectionPreviewUri,
+        };
+        if (response.ragScope !== undefined) {
+          params.onSyncRagScope?.(sessionId, response.ragScope ?? null);
+        }
+        const aiContextModeFeedback = getAiContextModeFeedback(
+          response.context_mode,
+          response.debug?.scope_count ?? response.ragScope?.sources.length ?? params.activeRagScope?.sources.length ?? 0,
+          response.debug?.retrieved_source_count ?? response.sources?.length ?? 0,
+          response.debug?.retrieved_chunk_count ?? response.sources?.length ?? 0,
+          response.debug?.context_page_count ?? 0,
+          Boolean(response.debug?.fallback),
+        );
+        if (aiContextModeFeedback) {
+          params.setWorkspaceFeedback?.(aiContextModeFeedback);
+        }
+        params.setLastChatSessionByDocument((current) => ({
+          ...current,
+          [params.studyDocumentId!]: sessionId,
+        }));
+        const content = response.assistant_message.content;
+        params.setAiMessagesBySession((current) => {
+          const messages = current[sessionId] ?? [];
+          const hasPendingUser = messages.some((message) => message.id === pendingUserMessage.id);
+          const hasPendingAssistant = messages.some((message) => message.id === pendingAssistantMessage.id);
+          if (hasPendingUser || hasPendingAssistant) {
+            const nextMessages = messages.flatMap((message) => {
+              if (message.id === pendingUserMessage.id) return [userMessageWithAttachment];
+              if (message.id === pendingAssistantMessage.id) return [response.assistant_message];
+              return [message];
+            });
+            if (!hasPendingUser) nextMessages.push(userMessageWithAttachment);
+            if (!hasPendingAssistant) nextMessages.push(response.assistant_message);
+            return { ...current, [sessionId]: nextMessages };
+          }
+          return {
+            ...current,
+            [sessionId]: [
+              ...messages,
+              userMessageWithAttachment,
+              response.assistant_message,
+            ],
+          };
+        });
+        if (response.chat_session) {
+          upsertSession(response.chat_session);
+        } else {
+          params.setAllChatSessions((current) => {
+            const target = current.find((session) => session.id === sessionId);
+            if (!target) return current;
+            return [target, ...current.filter((session) => session.id !== sessionId)];
+          });
+        }
+        params.setAiAnswer({
+          question: requestContent,
+          response: content,
+          sections: [
+            {
+              title: 'AI 답변',
+              body: content,
+              tone: 'highlight',
+            },
+          ],
+          createdAt: response.assistant_message.created_at,
+        });
+        applyCanvasEditOnce(response.canvas_edit ?? null);
+        if (!response.canvas_edit && isCanvasOriginRequest) {
+          params.onOpenChatForCanvasAnswer?.();
+        }
+      };
+
       params.setAiMessagesBySession((current) => ({
         ...current,
-        [sessionId]: (current[sessionId] ?? []).some((message) => message.id === pendingUserMessage.id)
-          ? (current[sessionId] ?? []).flatMap((message) => (
-            message.id === pendingUserMessage.id
-              ? [userMessageWithAttachment, response.assistant_message]
-              : [message]
-          ))
-          : [
-            ...(current[sessionId] ?? []),
-            userMessageWithAttachment,
-            response.assistant_message,
-          ],
+        [sessionId]: [...(current[sessionId] ?? []), pendingAssistantMessage],
       }));
-      if (response.chat_session) {
-        upsertSession(response.chat_session);
-      } else {
-        params.setAllChatSessions((current) => {
-          const target = current.find((session) => session.id === sessionId);
-          if (!target) return current;
-          return [target, ...current.filter((session) => session.id !== sessionId)];
+
+      let streamReceivedEvent = false;
+      try {
+        const streamResult = await sendBackendAiMessageStream(requestPayload, (event) => {
+          streamReceivedEvent = true;
+          if (event.type === 'status') {
+            params.setAiMessagesBySession((current) => ({
+              ...current,
+              [sessionId]: (current[sessionId] ?? []).map((message) => (
+                message.id === pendingAssistantMessage.id
+                  ? { ...message, stream_status: event.message, streaming: true }
+                  : message
+              )),
+            }));
+          } else if (event.type === 'answer_delta') {
+            params.setAiMessagesBySession((current) => ({
+              ...current,
+              [sessionId]: (current[sessionId] ?? []).map((message) => (
+                message.id === pendingAssistantMessage.id
+                  ? { ...message, content: `${message.content}${event.delta}`, stream_status: null, streaming: true }
+                  : message
+              )),
+            }));
+          } else if (event.type === 'canvas_done') {
+            applyCanvasEditOnce(event.canvas_edit);
+          } else if (event.type === 'error') {
+            throw new Error(event.message);
+          }
         });
+        if (streamResult.finalResponse) {
+          handleFinalResponse(streamResult.finalResponse);
+          return true;
+        }
+        if (streamResult.receivedEvent) {
+          throw new Error('AI 응답을 끝까지 받아오지 못했습니다.');
+        }
+      } catch (streamError) {
+        if (streamReceivedEvent) {
+          params.setAiMessagesBySession((current) => ({
+            ...current,
+            [sessionId]: (current[sessionId] ?? []).map((message) => (
+              message.id === pendingAssistantMessage.id
+                ? {
+                    ...message,
+                    content: message.content || 'AI 응답을 끝까지 받아오지 못했습니다. 잠시 후 다시 시도해 주세요.',
+                    stream_status: null,
+                    streaming: false,
+                    stream_error: true,
+                  }
+                : message
+            )),
+          }));
+          params.setAiError(getAiBackendErrorMessage(streamError, 'AI 응답을 끝까지 받아오지 못했습니다.'));
+          return false;
+        }
+        params.setAiMessagesBySession((current) => ({
+          ...current,
+          [sessionId]: (current[sessionId] ?? []).filter((message) => message.id !== pendingAssistantMessage.id),
+        }));
       }
-      params.setAiAnswer({
-        question: requestContent,
-        response: content,
-        sections: [
-          {
-            title: 'AI 답변',
-            body: content,
-            tone: 'highlight',
-          },
-        ],
-        createdAt: response.assistant_message.created_at,
-      });
-      if (response.canvas_edit && params.onApplyCanvasEditFromChat) {
-        params.onApplyCanvasEditFromChat({
-          action: response.canvas_edit.action,
-          canvasNote: response.canvas_edit.canvas_note,
-          operations: response.canvas_edit.operations,
-        });
-      } else if (canvasAction === 'canvas_edit' || canvasAction === 'canvas_create') {
-        params.setAiError('Canvas 수정 중 서버와 연결 상태가 좋지 않아 문제가 발생했어요. 잠시 후 다시 시도해 주세요.');
-      } else if (isCanvasOriginRequest) {
-        params.onOpenChatForCanvasAnswer?.();
-      }
+
+      const response = await sendBackendAiMessage(requestPayload);
+      handleFinalResponse(response);
       return true;
     } catch (error) {
       params.setAiError(getAiBackendErrorMessage(
@@ -728,6 +844,7 @@ export function useAiChatActions(params: {
 
   const requestAiAnswer = async (options?: {
     question?: string;
+    model?: string | null;
     source?: AiRequestSource;
     canvasAction?: CanvasAction;
     selectionImageUri?: string | null;

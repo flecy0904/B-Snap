@@ -110,6 +110,9 @@ export type BackendChatMessage = {
   selection_image_url?: string | null;
   model: string | null;
   created_at: string;
+  streaming?: boolean;
+  stream_status?: string | null;
+  stream_error?: boolean;
 };
 
 export type BackendNotePage = {
@@ -216,6 +219,43 @@ export type BackendAiMessageResponse = {
     image_recheck?: BackendImageRecheckDebug | null;
   } | null;
 };
+
+export type BackendAiMessagePayload = {
+  sessionId: number;
+  content: string;
+  model?: string | null;
+  selectionImage?: string | null;
+  selectionRect?: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    mode?: 'rect' | 'lasso';
+    pageWidth?: number;
+    pageHeight?: number;
+  } | null;
+  pageNumber?: number | null;
+  selectionImageUri?: string | null;
+  contextHint?: string | null;
+  source?: 'chat' | 'canvas-mini' | 'canvas-block';
+  canvasNoteId?: number | null;
+  canvasAction?: 'auto' | 'chat_only' | 'canvas_edit' | 'canvas_create';
+  canvasNoteNeedsTitle?: boolean;
+  canvasMarkdown?: string | null;
+  canvasDocumentJson?: AiCanvasDocumentJson | null;
+  canvasBlockContext?: AiCanvasBlockContext | null;
+  ragScope?: BackendRagScope | null;
+  useRag?: boolean;
+  topK?: number;
+  canvasRecommendationMode?: AiCanvasRecommendationMode | null;
+};
+
+export type BackendAiMessageStreamEvent =
+  | { type: 'status'; message: string }
+  | { type: 'answer_delta'; delta: string }
+  | { type: 'canvas_done'; canvas_edit: NonNullable<BackendAiMessageResponse['canvas_edit']> | null }
+  | { type: 'final'; response: BackendAiMessageResponse }
+  | { type: 'error'; message: string; status?: number | null };
 
 export type BackendImageRecheckDebug = {
   enabled?: boolean;
@@ -519,6 +559,7 @@ export type BackendNoteRagStatusResponse = {
     updated_at?: string | null;
   } | null;
   current_note_chunk_count: number;
+  analysis_required?: boolean;
   image_summary_error?: string | null;
 };
 
@@ -1286,59 +1327,176 @@ export function listBackendChatMessages(sessionId: number) {
   return request<BackendChatMessage[]>(`/chat-sessions/${sessionId}/messages`);
 }
 
-export async function sendBackendAiMessage(payload: {
-  sessionId: number;
-  content: string;
-  model?: string | null;
-  selectionImage?: string | null;
-  selectionRect?: {
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-    mode?: 'rect' | 'lasso';
-    pageWidth?: number;
-    pageHeight?: number;
-  } | null;
-  pageNumber?: number | null;
-  selectionImageUri?: string | null;
-  contextHint?: string | null;
-  source?: 'chat' | 'canvas-mini' | 'canvas-block';
-  canvasNoteId?: number | null;
-  canvasAction?: 'auto' | 'chat_only' | 'canvas_edit' | 'canvas_create';
-  canvasNoteNeedsTitle?: boolean;
-  canvasMarkdown?: string | null;
-  canvasDocumentJson?: AiCanvasDocumentJson | null;
-  canvasBlockContext?: AiCanvasBlockContext | null;
-  ragScope?: BackendRagScope | null;
-  useRag?: boolean;
-  topK?: number;
-  canvasRecommendationMode?: AiCanvasRecommendationMode | null;
-}) {
+function buildBackendAiMessageBody(payload: BackendAiMessagePayload) {
+  return {
+    content: payload.content,
+    model: payload.model ?? null,
+    selection_image: payload.selectionImage ?? payload.selectionImageUri ?? null,
+    selection_rect: payload.selectionRect ?? null,
+    page_number: payload.pageNumber ?? null,
+    selection_image_url: payload.selectionImageUri ?? null,
+    context_hint: payload.contextHint ?? null,
+    source: payload.source ?? 'chat',
+    canvas_note_id: payload.canvasNoteId ?? null,
+    canvas_action: payload.canvasAction ?? 'auto',
+    canvas_note_needs_title: payload.canvasNoteNeedsTitle ?? false,
+    canvas_markdown: payload.canvasMarkdown ?? null,
+    canvas_document_json: payload.canvasDocumentJson ?? null,
+    canvas_block_context: payload.canvasBlockContext ?? null,
+    rag_scope: payload.ragScope ?? null,
+    use_rag: payload.useRag ?? false,
+    top_k: payload.topK ?? 5,
+    canvas_recommendation_mode: payload.canvasRecommendationMode ?? null,
+  };
+}
+
+export async function sendBackendAiMessage(payload: BackendAiMessagePayload) {
   return request<BackendAiMessageResponse>(`/chat-sessions/${payload.sessionId}/ai-messages`, {
     method: 'POST',
     timeoutMs: AI_MESSAGE_TIMEOUT_MS,
-    body: {
-      content: payload.content,
-      model: payload.model ?? null,
-      selection_image: payload.selectionImage ?? payload.selectionImageUri ?? null,
-      selection_rect: payload.selectionRect ?? null,
-      page_number: payload.pageNumber ?? null,
-      selection_image_url: payload.selectionImageUri ?? null,
-      context_hint: payload.contextHint ?? null,
-      source: payload.source ?? 'chat',
-      canvas_note_id: payload.canvasNoteId ?? null,
-      canvas_action: payload.canvasAction ?? 'auto',
-      canvas_note_needs_title: payload.canvasNoteNeedsTitle ?? false,
-      canvas_markdown: payload.canvasMarkdown ?? null,
-      canvas_document_json: payload.canvasDocumentJson ?? null,
-      canvas_block_context: payload.canvasBlockContext ?? null,
-      rag_scope: payload.ragScope ?? null,
-      use_rag: payload.useRag ?? false,
-      top_k: payload.topK ?? 5,
-      canvas_recommendation_mode: payload.canvasRecommendationMode ?? null,
-    },
+    body: buildBackendAiMessageBody(payload),
   }).then(normalizeBackendAiMessageResponse);
+}
+
+function parseSseBlock(block: string): { event: string; data: unknown } | null {
+  let event = 'message';
+  const dataLines: string[] = [];
+  block.split(/\r?\n/).forEach((line) => {
+    if (line.startsWith('event:')) {
+      event = line.slice('event:'.length).trim();
+    } else if (line.startsWith('data:')) {
+      dataLines.push(line.slice('data:'.length).trimStart());
+    }
+  });
+  if (!dataLines.length) return null;
+  const dataText = dataLines.join('\n');
+  try {
+    return { event, data: JSON.parse(dataText) };
+  } catch {
+    return { event, data: dataText };
+  }
+}
+
+function normalizeBackendAiMessageStreamEvent(event: string, data: any): BackendAiMessageStreamEvent | null {
+  if (event === 'status') {
+    return { type: 'status', message: typeof data?.message === 'string' ? data.message : '' };
+  }
+  if (event === 'answer_delta') {
+    return { type: 'answer_delta', delta: typeof data?.delta === 'string' ? data.delta : '' };
+  }
+  if (event === 'canvas_done') {
+    const canvasEdit = data?.canvas_edit
+      ? {
+          ...data.canvas_edit,
+          operations: Array.isArray(data.canvas_edit.operations) ? data.canvas_edit.operations : [],
+          canvas_note: normalizeBackendAiCanvasNote(data.canvas_edit.canvas_note),
+        }
+      : null;
+    return { type: 'canvas_done', canvas_edit: canvasEdit };
+  }
+  if (event === 'final') {
+    return { type: 'final', response: normalizeBackendAiMessageResponse(data as BackendAiMessageResponse) };
+  }
+  if (event === 'error') {
+    return {
+      type: 'error',
+      message: typeof data?.message === 'string' ? data.message : 'AI 요청 처리 중 오류가 발생했습니다.',
+      status: typeof data?.status === 'number' ? data.status : null,
+    };
+  }
+  return null;
+}
+
+export async function sendBackendAiMessageStream(
+  payload: BackendAiMessagePayload,
+  onEvent: (event: BackendAiMessageStreamEvent) => void,
+) {
+  const baseUrl = getBackendUrl();
+  if (!baseUrl) {
+    throw new BackendApiError('Backend URL is not configured.');
+  }
+
+  let response: Response;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), AI_MESSAGE_TIMEOUT_MS);
+  try {
+    response = await fetch(`${baseUrl}/chat-sessions/${payload.sessionId}/ai-messages/stream`, {
+      method: 'POST',
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'text/event-stream',
+        ...(backendAuthToken ? { Authorization: `Bearer ${backendAuthToken}` } : {}),
+      },
+      body: JSON.stringify(buildBackendAiMessageBody(payload)),
+    });
+  } catch (error: any) {
+    clearTimeout(timeout);
+    if (error?.name === 'AbortError') {
+      throw new BackendApiError('Backend request timed out.');
+    }
+    throw new BackendApiError('Backend server is unreachable.');
+  }
+
+  if (!response.ok) {
+    clearTimeout(timeout);
+    let detail: string | null = null;
+    try {
+      const body = await response.json();
+      detail = parseBackendErrorDetail(body);
+    } catch {
+      detail = null;
+    }
+    throw new BackendApiError(`Backend request failed: ${response.status}`, response.status, detail);
+  }
+
+  if (!response.body) {
+    clearTimeout(timeout);
+    throw new BackendApiError('Backend streaming is not supported in this environment.');
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let receivedEvent = false;
+  let finalResponse: BackendAiMessageResponse | null = null;
+
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const blocks = buffer.split(/\r?\n\r?\n/);
+      buffer = blocks.pop() ?? '';
+      for (const block of blocks) {
+        const parsed = parseSseBlock(block);
+        if (!parsed) continue;
+        const normalized = normalizeBackendAiMessageStreamEvent(parsed.event, parsed.data);
+        if (!normalized) continue;
+        receivedEvent = true;
+        if (normalized.type === 'final') {
+          finalResponse = normalized.response;
+        }
+        onEvent(normalized);
+      }
+    }
+    buffer += decoder.decode();
+    const parsed = buffer.trim() ? parseSseBlock(buffer) : null;
+    if (parsed) {
+      const normalized = normalizeBackendAiMessageStreamEvent(parsed.event, parsed.data);
+      if (normalized) {
+        receivedEvent = true;
+        if (normalized.type === 'final') {
+          finalResponse = normalized.response;
+        }
+        onEvent(normalized);
+      }
+    }
+  } finally {
+    clearTimeout(timeout);
+  }
+
+  return { receivedEvent, finalResponse };
 }
 
 export function getBackendRagDebugParserCompare(noteId: number, parserName: BackendRagDebugParserName) {

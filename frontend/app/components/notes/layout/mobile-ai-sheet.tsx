@@ -116,7 +116,7 @@ export function MobileAiSheet(props: MobileNotesViewProps) {
                   disabled={props.aiLoading || active}
                 >
                   <Text style={[props.styles.aiChatListItemTitle, active && props.styles.aiChatListItemTitleActive]} numberOfLines={1}>{session.title}</Text>
-                  <Text style={props.styles.aiChatListItemMeta} numberOfLines={1}>{session.model ?? '모델 미선택'}</Text>
+                  <Text style={props.styles.aiChatListItemMeta} numberOfLines={1}>{props.selectedAiChatModelId}</Text>
                 </Pressable>
               );
             })}
@@ -159,7 +159,7 @@ export function MobileAiSheet(props: MobileNotesViewProps) {
           />
           <Pressable
             style={[props.styles.aiSendButton, (props.aiLoading || props.aiChatReadOnly || !canSubmitAiQuestion) && props.styles.aiSendButtonDisabled]}
-            onPress={props.onRequestAiAnswer}
+            onPress={() => props.onRequestAiAnswer()}
             disabled={props.aiLoading || props.aiChatReadOnly || !canSubmitAiQuestion}
           >
             {props.aiLoading ? (

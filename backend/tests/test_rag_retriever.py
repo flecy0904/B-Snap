@@ -23,7 +23,8 @@ from backend.app.schemas.chats import RagScope, RagScopeSource
 from backend.app.services.ai_context_builder import build_ai_context, format_answer_sources, select_rag_context_pages
 from backend.app.services.ai_context_router import AiContextRoute, route_ai_context
 from backend.app.services.docling_crop_debug import _should_use_full_page_context
-from backend.app.services.pdf_image_recheck import _image_recheck_candidates, _selected_recheck_contexts, _server_image_mode
+from backend.app.services.docling_batch_pipeline import note_rag_text_ready
+from backend.app.services.pdf_image_recheck import ImageRecheckItem, _image_recheck_candidates, _selected_recheck_contexts, _server_image_mode
 from backend.app.services.pdf_image_recheck import maybe_recheck_pdf_images_for_chat
 from backend.app.services.document_chunk_index import (
     collect_canvas_index_sources,
@@ -70,6 +71,30 @@ from backend.app.services.openai_service import build_response_input, judge_pdf_
 
 
 class RAGRetrieverTest(unittest.TestCase):
+    def test_note_rag_text_ready_does_not_block_non_pdf_note_without_job(self):
+        with patch("backend.app.services.docling_batch_pipeline.fetch_all") as fetch_all_mock:
+            fetch_all_mock.side_effect = [
+                [{"id": 10, "file_url": None}],
+            ]
+
+            ready, pending = note_rag_text_ready(object(), note_ids=[10], user_id=7)
+
+        self.assertTrue(ready)
+        self.assertIsNone(pending)
+
+    def test_note_rag_text_ready_blocks_pdf_note_without_job(self):
+        with patch("backend.app.services.docling_batch_pipeline.fetch_all") as fetch_all_mock:
+            fetch_all_mock.side_effect = [
+                [{"id": 10, "file_url": "/uploads/notes/sample.pdf"}],
+                [],
+                [{"id": 10, "file_url": "/uploads/notes/sample.pdf"}],
+            ]
+
+            ready, pending = note_rag_text_ready(object(), note_ids=[10], user_id=7)
+
+        self.assertFalse(ready)
+        self.assertEqual(pending, {"note_id": 10, "reason": "missing_job"})
+
     def test_full_page_context_ignores_tiny_far_apart_visual_candidate(self):
         page = SimpleNamespace(
             page_width=960.0,
@@ -111,12 +136,17 @@ class RAGRetrieverTest(unittest.TestCase):
         self.assertTrue(_should_use_full_page_context(page))
 
     def test_router_uses_rules_before_llm(self):
-        general = route_ai_context(question="스택이 뭐야?", model="test-model")
+        with patch(
+            "backend.app.services.ai_context_router.generate_text_response",
+            return_value='{"mode":"general","rewritten_query":""}',
+        ):
+            general = route_ai_context(question="스택이 뭐야?", model="test-model")
         current_page = route_ai_context(question="이 페이지 설명해줘", model="test-model", current_page_number=3)
         current_pdf = route_ai_context(question="이 PDF 전체에서 큐를 찾아줘", model="test-model")
         subject = route_ai_context(question="이 과목 전체 시험 포인트 찾아줘", model="test-model")
 
         self.assertEqual(general.mode, "general")
+        self.assertEqual(general.rewritten_query, "")
         self.assertEqual(current_page.mode, "rag")
         self.assertEqual(current_pdf.mode, "rag")
         self.assertEqual(subject.mode, "rag")
@@ -132,12 +162,49 @@ class RAGRetrieverTest(unittest.TestCase):
         self.assertEqual(route.rewritten_query, "큐 설명")
         self.assertEqual(route.reason, "llm")
 
+    def test_router_sends_scope_metadata_to_llm_classifier(self):
+        captured = {}
+
+        def fake_generate_text_response(**kwargs):
+            captured["input_items"] = kwargs["input_items"]
+            return '{"mode":"rag","rewritten_query":"process thread"}'
+
+        with patch("backend.app.services.ai_context_router.generate_text_response", side_effect=fake_generate_text_response):
+            route = route_ai_context(
+                question="process thread difference",
+                model="test-model",
+                course_name="Operating Systems",
+                document_title="Process and Thread",
+                pinned_reference_titles=["OS week 3", "OS week 3"],
+            )
+
+        payload = json.loads(captured["input_items"][0]["content"])
+        self.assertEqual(route.mode, "rag")
+        self.assertEqual(payload["course_name"], "Operating Systems")
+        self.assertEqual(payload["document_title"], "Process and Thread")
+        self.assertEqual(payload["pinned_reference_titles"], ["OS week 3"])
+        self.assertNotIn("has_current_page", payload)
+
+    def test_router_does_not_use_current_page_or_canvas_context_as_rag_rules(self):
+        with patch(
+            "backend.app.services.ai_context_router.generate_text_response",
+            return_value='{"mode":"general","rewritten_query":""}',
+        ) as classifier:
+            current_page = route_ai_context(question="study plan", model="test-model", current_page_number=3)
+            canvas_context = route_ai_context(question="study plan", model="test-model", has_canvas_context=True)
+
+        self.assertEqual(current_page.mode, "general")
+        self.assertEqual(current_page.rewritten_query, "")
+        self.assertEqual(canvas_context.mode, "general")
+        self.assertEqual(canvas_context.rewritten_query, "")
+        self.assertEqual(classifier.call_count, 2)
+
     def test_router_falls_back_to_rag_when_note_router_fails(self):
         with patch(
             "backend.app.services.ai_context_router.generate_text_response",
             side_effect=RuntimeError("router unavailable"),
         ):
-            route = route_ai_context(question="노트에 있는 큐 설명해줘", model="test-model")
+            route = route_ai_context(question="note content explain", model="test-model")
 
         self.assertEqual(route.mode, "rag")
         self.assertEqual(route.reason, "fallback")
@@ -549,7 +616,7 @@ class RAGRetrieverTest(unittest.TestCase):
 
         self.assertLess(
             (context.context_hint or "").find("Vision Recheck Result"),
-            (context.context_hint or "").find("RAG support context"),
+            (context.context_hint or "").find("Scoped RAG reference context"),
         )
 
     def test_retrieve_rag_contexts_with_debug_does_not_keyword_fallback_on_empty_vector_results(self):
@@ -737,6 +804,9 @@ class RAGRetrieverTest(unittest.TestCase):
         with patch("backend.app.routes.rag_debug.fetch_one") as fetch_one, patch("backend.app.routes.rag_debug.fetch_all") as debug_fetch_all, patch(
             "backend.app.routes.chats.fetch_all",
         ) as chats_fetch_all, patch(
+            "backend.app.routes.chats.fetch_one",
+            return_value={"name": "Computer Networks"},
+        ), patch(
             "backend.app.routes.rag_debug.route_ai_context",
             return_value=AiContextRoute(mode="rag", rewritten_query="TCP congestion", reason="rule"),
         ), patch(
@@ -777,6 +847,138 @@ class RAGRetrieverTest(unittest.TestCase):
         self.assertEqual(result["results"][0]["score"], 0.82)
         self.assertEqual(result["results"][0]["content"], "TCP congestion control text.")
 
+    def test_rag_debug_evaluate_skips_router_and_retrieval_for_explicit_empty_scope(self):
+        with patch("backend.app.routes.rag_debug.fetch_one") as fetch_one, patch("backend.app.routes.rag_debug.fetch_all") as debug_fetch_all, patch(
+            "backend.app.routes.rag_debug.route_ai_context",
+        ) as router, patch(
+            "backend.app.routes.rag_debug.retrieve_rag_contexts_with_debug",
+        ) as retrieve:
+            fetch_one.return_value = {
+                "id": 2,
+                "note_id": 3,
+                "title": "Chat",
+                "model": None,
+                "rag_scope": None,
+                "folder_id": 2,
+                "note_title": "Network",
+            }
+            debug_fetch_all.return_value = []
+
+            result = evaluate_chat_session_rag_debug(
+                2,
+                RagDebugEvaluateCreate(
+                    content="이 PDF에서 TCP 찾아줘",
+                    rag_scope=RagScope(sources=[]),
+                    use_rag=True,
+                ),
+                connection=object(),
+                current_user={"id": 7},
+                settings=Settings(app_env="local"),
+            )
+
+        router.assert_not_called()
+        retrieve.assert_not_called()
+        self.assertEqual(result["mode"], "general")
+        self.assertEqual(result["rewritten_query"], "")
+        self.assertEqual(result["router_reason"], "empty_rag_scope")
+        self.assertEqual(result["search_targets"], {"note_ids": [], "canvas_note_ids": []})
+        self.assertIn("No pinned reference materials", result["context"]["context_preview"])
+
+    def test_rag_debug_evaluate_use_rag_requires_non_empty_scope(self):
+        retrieved = RetrievedContext(
+            source_type="pdf_page",
+            source_id="10",
+            title="Network - page 1",
+            content="TCP text.",
+            score=0.82,
+            note_id=3,
+            page_number=1,
+            chunk_index=1,
+        )
+        with patch("backend.app.routes.rag_debug.fetch_one") as fetch_one, patch("backend.app.routes.rag_debug.fetch_all") as debug_fetch_all, patch(
+            "backend.app.routes.chats.fetch_all",
+        ) as chats_fetch_all, patch(
+            "backend.app.routes.chats.fetch_one",
+            return_value={"name": "Computer Networks"},
+        ), patch(
+            "backend.app.routes.rag_debug.route_ai_context",
+            return_value=AiContextRoute(mode="general", rewritten_query="", reason="llm"),
+        ), patch(
+            "backend.app.routes.rag_debug.retrieve_rag_contexts_with_debug",
+            return_value=([retrieved], {"fallback": False, "fallback_reason": None, "retrieved_source_count": 1, "retrieved_chunk_count": 1}),
+        ) as retrieve:
+            fetch_one.return_value = {
+                "id": 2,
+                "note_id": 3,
+                "title": "Chat",
+                "model": None,
+                "rag_scope": None,
+                "folder_id": 2,
+                "note_title": "Network",
+            }
+            debug_fetch_all.return_value = []
+            chats_fetch_all.side_effect = [[{"id": 3, "title": "Network"}], []]
+
+            result = evaluate_chat_session_rag_debug(
+                2,
+                RagDebugEvaluateCreate(
+                    content="일반 공부 계획 짜줘",
+                    rag_scope=RagScope(sources=[RagScopeSource(id="3", type="note", title="Network")]),
+                    use_rag=True,
+                ),
+                connection=object(),
+                current_user={"id": 7},
+                settings=Settings(app_env="local"),
+            )
+
+        retrieve.assert_called_once()
+        self.assertEqual(retrieve.call_args.kwargs["question"], "일반 공부 계획 짜줘")
+        self.assertEqual(result["mode"], "rag")
+        self.assertEqual(result["rewritten_query"], "일반 공부 계획 짜줘")
+        self.assertEqual(result["router_reason"], "explicit_use_rag")
+
+    def test_rag_debug_evaluate_passes_pinned_reference_titles_to_router(self):
+        with patch("backend.app.routes.rag_debug.fetch_one") as fetch_one, patch("backend.app.routes.rag_debug.fetch_all") as debug_fetch_all, patch(
+            "backend.app.routes.chats.fetch_all",
+        ) as chats_fetch_all, patch(
+            "backend.app.routes.chats.fetch_one",
+            return_value={"name": "Computer Networks"},
+        ), patch(
+            "backend.app.routes.rag_debug.route_ai_context",
+            return_value=AiContextRoute(mode="general", rewritten_query="", reason="llm"),
+        ) as router:
+            fetch_one.return_value = {
+                "id": 2,
+                "note_id": 3,
+                "title": "Chat",
+                "model": None,
+                "rag_scope": None,
+                "folder_id": 2,
+                "note_title": "Network",
+            }
+            debug_fetch_all.return_value = []
+            chats_fetch_all.side_effect = [
+                [{"id": 3, "title": "Network"}],
+                [{"id": 9, "title": "Canvas", "note_title": "Network"}],
+            ]
+
+            evaluate_chat_session_rag_debug(
+                2,
+                RagDebugEvaluateCreate(
+                    content="공부 계획 짜줘",
+                    rag_scope=RagScope(sources=[
+                        RagScopeSource(id="3", type="note", title="old"),
+                        RagScopeSource(id="9", type="canvas_note", title="old canvas"),
+                    ]),
+                ),
+                connection=object(),
+                current_user={"id": 7},
+                settings=Settings(app_env="local"),
+            )
+
+        self.assertEqual(router.call_args.kwargs["document_title"], "Network")
+        self.assertEqual(router.call_args.kwargs["pinned_reference_titles"], ["Network", "Network - Canvas"])
+
     def test_normalize_rag_scope_keeps_current_folder_sources_only(self):
         with patch("backend.app.routes.chats.fetch_all") as fetch_all:
             fetch_all.side_effect = [
@@ -802,7 +1004,7 @@ class RAGRetrieverTest(unittest.TestCase):
         self.assertEqual(scope["sources"][1]["title"], "Chapter 3 - Canvas")
         self.assertEqual(rag_scope_search_targets(scope), ([3], [9]))
 
-    def test_normalize_rag_scope_falls_back_to_current_note_when_empty(self):
+    def test_normalize_rag_scope_keeps_explicit_empty_scope(self):
         with patch("backend.app.routes.chats.fetch_all") as fetch_all:
             fetch_all.side_effect = [[], []]
 
@@ -812,6 +1014,18 @@ class RAGRetrieverTest(unittest.TestCase):
                 default_note={"id": 3, "folder_id": 2, "title": "Chapter 3"},
                 user_id=7,
             )
+
+        self.assertEqual(scope["sourceIds"], [])
+        self.assertEqual(scope["sources"], [])
+        self.assertEqual(rag_scope_search_targets(scope), ([], []))
+
+    def test_normalize_rag_scope_uses_current_note_when_scope_is_missing(self):
+        scope = normalize_rag_scope(
+            object(),
+            requested_scope=None,
+            default_note={"id": 3, "folder_id": 2, "title": "Chapter 3"},
+            user_id=7,
+        )
 
         self.assertEqual(scope["sourceIds"], ["note:3"])
 
@@ -900,7 +1114,68 @@ class RAGRetrieverTest(unittest.TestCase):
             )
         ])
 
-        self.assertEqual(source_text, "참고 자료\n- 자료구조 - 3페이지")
+        self.assertEqual(source_text, "참고 자료\n- 자료구조 · 3페이지")
+
+    def test_answer_sources_group_same_page_text_image_and_recheck(self):
+        source_text = format_answer_sources(
+            [
+                RetrievedContext(
+                    source_type="pdf_page",
+                    source_id="page-31",
+                    title="[Lecture Note] Chapter 2. Application Layer (wide).pdf - 31페이지",
+                    content="HTTP text",
+                    page_number=31,
+                ),
+                RetrievedContext(
+                    source_type="image_ai_summary",
+                    source_id="image-31",
+                    title="[Lecture Note] Chapter 2. Application Layer (wide).pdf - 31페이지 이미지 요약",
+                    content="HTTP figure",
+                    page_number=31,
+                ),
+                RetrievedContext(
+                    source_type="image_ai_summary",
+                    source_id="image-32",
+                    title="[Lecture Note] Chapter 2. Application Layer (wide).pdf - 32페이지 이미지 요약",
+                    content="Another figure",
+                    page_number=32,
+                ),
+            ],
+            rechecked_image_sources=[
+                ImageRecheckItem(
+                    image_ai_summary_id="image-31",
+                    page_number=31,
+                    title="[Lecture Note] Chapter 2. Application Layer (wide).pdf - 31페이지 이미지 요약",
+                    image_mode="context_crop",
+                    image_data_uri="data:image/png;base64,test",
+                    image_summary="HTTP figure",
+                )
+            ],
+        )
+
+        self.assertEqual(
+            source_text,
+            "참고 자료\n"
+            "- [Lecture Note] Chapter 2. Application Layer (wide).pdf · 31페이지 (본문, 이미지)\n"
+            "- [Lecture Note] Chapter 2. Application Layer (wide).pdf · 32페이지 (이미지)",
+        )
+
+    def test_answer_sources_hide_internal_english_image_summary_title(self):
+        source_text = format_answer_sources([
+            RetrievedContext(
+                source_type="image_ai_summary",
+                source_id="image-2",
+                title="[Lecture Note] Chapter 3. Transport Layer (3.1-3.7) (wide).pdf - page 2 image summary",
+                content="Transport figure",
+                page_number=2,
+            )
+        ])
+
+        self.assertEqual(
+            source_text,
+            "참고 자료\n"
+            "- [Lecture Note] Chapter 3. Transport Layer (3.1-3.7) (wide).pdf · 2페이지 (이미지)",
+        )
 
     def test_chunker_uses_default_metadata_and_chunk_index(self):
         source = IndexSource(
@@ -2177,7 +2452,8 @@ class RAGRetrieverTest(unittest.TestCase):
         )
         text_items = [item["content"] for item in input_items if isinstance(item["content"], str)]
 
-        self.assertIn("Use this note context", text_items[0])
+        self.assertIn("Local note/page context follows", text_items[0])
+        self.assertIn("scoped RAG reference context", text_items[0])
         self.assertIn("Compressed summary of older conversation", text_items[1])
         self.assertIn("Internal assistant-only study context", text_items[2])
         self.assertEqual(CHAT_RECENT_MESSAGE_LIMIT, 16)

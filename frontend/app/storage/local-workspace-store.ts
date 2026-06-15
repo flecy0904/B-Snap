@@ -32,6 +32,7 @@ export type PersistedStudyWorkspaceState = {
   chatSidebarOpenByDocument?: Record<number, boolean>;
   aiPanelMode?: 'floating' | 'sidebar';
   aiFloatingPanelSize?: AiFloatingPanelSize;
+  selectedAiChatModelId?: string;
   appSidebarPosition?: 'left' | 'right';
   studyInteractionMode?: 'edit' | 'read';
 };
@@ -92,6 +93,7 @@ export function buildEmptyStudyWorkspaceState(): PersistedStudyWorkspaceState {
     chatSidebarOpenByDocument: {},
     aiPanelMode: 'floating',
     aiFloatingPanelSize: { width: 380, height: 620 },
+    selectedAiChatModelId: 'gpt-4.1-mini',
     appSidebarPosition: 'right',
     studyInteractionMode: 'edit',
   };

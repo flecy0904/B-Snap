@@ -7,12 +7,23 @@ type PageReferenceTextProps = {
   textStyle?: any;
   linkStyle?: any;
   boldStyle?: any;
+  italicStyle?: any;
+  strikeStyle?: any;
+  inlineCodeStyle?: any;
   onOpenPage?: (pageNumber: number) => void;
 };
 
 const PAGE_REFERENCE_PATTERN = /(\d{1,3})(?:\s*[-~–—]\s*(\d{1,3}))?\s*(페이지|쪽|p(?:age)?\.?)/gi;
-const BOLD_PATTERN = /\*\*([^*]+)\*\*/g;
+const INLINE_MARKDOWN_PATTERN = /(\*\*[^*\n]+\*\*|~~[^~\n]+~~|`[^`\n]+`|\*[^*\n]+\*|_[^_\n]+_)/g;
 const DEFAULT_BOLD_STYLE = { fontWeight: '900' as const };
+const DEFAULT_ITALIC_STYLE = { fontStyle: 'italic' as const };
+const DEFAULT_STRIKE_STYLE = { textDecorationLine: 'line-through' as const };
+const DEFAULT_INLINE_CODE_STYLE = {
+  fontFamily: 'monospace',
+  fontWeight: '700' as const,
+  backgroundColor: '#EEF2F7',
+  color: '#263144',
+};
 
 function normalizeLine(line: string) {
   return line
@@ -22,10 +33,9 @@ function normalizeLine(line: string) {
 
 function renderPageSegments(params: {
   text: string;
-  bold: boolean;
   maxPage: number;
   linkStyle?: any;
-  boldStyle?: any;
+  segmentStyle?: any;
   onOpenPage?: (pageNumber: number) => void;
   keyPrefix: string;
 }) {
@@ -48,8 +58,8 @@ function renderPageSegments(params: {
 
     if (match.index > lastIndex) {
       const plainText = params.text.slice(lastIndex, match.index);
-      nodes.push(params.bold ? (
-        <Text key={`${params.keyPrefix}-plain-${lastIndex}`} style={params.boldStyle}>{plainText}</Text>
+      nodes.push(params.segmentStyle ? (
+        <Text key={`${params.keyPrefix}-plain-${lastIndex}`} style={params.segmentStyle}>{plainText}</Text>
       ) : plainText);
     }
 
@@ -57,7 +67,7 @@ function renderPageSegments(params: {
       <Text
         key={`${params.keyPrefix}-page-${match.index}-${matchedText}`}
         style={[
-          params.bold ? params.boldStyle : null,
+          params.segmentStyle,
           validPage ? params.linkStyle : null,
         ]}
         onPress={validPage ? () => params.onOpenPage?.(pageNumber) : undefined}
@@ -70,16 +80,37 @@ function renderPageSegments(params: {
 
   if (lastIndex < params.text.length) {
     const plainText = params.text.slice(lastIndex);
-    nodes.push(params.bold ? (
-      <Text key={`${params.keyPrefix}-plain-${lastIndex}`} style={params.boldStyle}>{plainText}</Text>
+    nodes.push(params.segmentStyle ? (
+      <Text key={`${params.keyPrefix}-plain-${lastIndex}`} style={params.segmentStyle}>{plainText}</Text>
     ) : plainText);
   }
 
   if (nodes.length) return nodes;
 
-  return params.bold
-    ? [<Text key={`${params.keyPrefix}-plain`} style={params.boldStyle}>{params.text}</Text>]
+  return params.segmentStyle
+    ? [<Text key={`${params.keyPrefix}-plain`} style={params.segmentStyle}>{params.text}</Text>]
     : [params.text];
+}
+
+function parseInlineMarkdownToken(token: string, styles: {
+  boldStyle?: any;
+  italicStyle?: any;
+  strikeStyle?: any;
+  inlineCodeStyle?: any;
+}) {
+  if (token.startsWith('**') && token.endsWith('**')) {
+    return { text: token.slice(2, -2), style: styles.boldStyle };
+  }
+  if (token.startsWith('~~') && token.endsWith('~~')) {
+    return { text: token.slice(2, -2), style: styles.strikeStyle };
+  }
+  if (token.startsWith('`') && token.endsWith('`')) {
+    return { text: token.slice(1, -1), style: styles.inlineCodeStyle };
+  }
+  if ((token.startsWith('*') && token.endsWith('*')) || (token.startsWith('_') && token.endsWith('_'))) {
+    return { text: token.slice(1, -1), style: styles.italicStyle };
+  }
+  return { text: token, style: null };
 }
 
 function renderInlineSegments(params: {
@@ -88,10 +119,13 @@ function renderInlineSegments(params: {
   maxPage: number;
   linkStyle?: any;
   boldStyle?: any;
+  italicStyle?: any;
+  strikeStyle?: any;
+  inlineCodeStyle?: any;
   onOpenPage?: (pageNumber: number) => void;
 }) {
   const nodes: React.ReactNode[] = [];
-  const pattern = new RegExp(BOLD_PATTERN);
+  const pattern = new RegExp(INLINE_MARKDOWN_PATTERN);
   let lastIndex = 0;
   let match: RegExpExecArray | null;
 
@@ -99,21 +133,24 @@ function renderInlineSegments(params: {
     if (match.index > lastIndex) {
       nodes.push(...renderPageSegments({
         text: params.text.slice(lastIndex, match.index),
-        bold: false,
         maxPage: params.maxPage,
         linkStyle: params.linkStyle,
-        boldStyle: params.boldStyle,
         onOpenPage: params.onOpenPage,
         keyPrefix: `${params.lineIndex}-${lastIndex}`,
       }));
     }
 
+    const parsed = parseInlineMarkdownToken(match[0], {
+      boldStyle: params.boldStyle,
+      italicStyle: params.italicStyle,
+      strikeStyle: params.strikeStyle,
+      inlineCodeStyle: params.inlineCodeStyle,
+    });
     nodes.push(...renderPageSegments({
-      text: match[1],
-      bold: true,
+      text: parsed.text,
       maxPage: params.maxPage,
       linkStyle: params.linkStyle,
-      boldStyle: params.boldStyle,
+      segmentStyle: parsed.style,
       onOpenPage: params.onOpenPage,
       keyPrefix: `${params.lineIndex}-bold-${match.index}`,
     }));
@@ -123,16 +160,14 @@ function renderInlineSegments(params: {
   if (lastIndex < params.text.length) {
     nodes.push(...renderPageSegments({
       text: params.text.slice(lastIndex),
-      bold: false,
       maxPage: params.maxPage,
       linkStyle: params.linkStyle,
-      boldStyle: params.boldStyle,
       onOpenPage: params.onOpenPage,
       keyPrefix: `${params.lineIndex}-${lastIndex}`,
     }));
   }
 
-  return nodes.length ? nodes : [params.text.replace(/\*\*/g, '')];
+  return nodes.length ? nodes : [params.text];
 }
 
 export function PageReferenceText({
@@ -141,6 +176,9 @@ export function PageReferenceText({
   textStyle,
   linkStyle,
   boldStyle = DEFAULT_BOLD_STYLE,
+  italicStyle = DEFAULT_ITALIC_STYLE,
+  strikeStyle = DEFAULT_STRIKE_STYLE,
+  inlineCodeStyle = DEFAULT_INLINE_CODE_STYLE,
   onOpenPage,
 }: PageReferenceTextProps) {
   const maxPage = pageCount && pageCount > 0 ? pageCount : Number.POSITIVE_INFINITY;
@@ -157,6 +195,9 @@ export function PageReferenceText({
             maxPage,
             linkStyle,
             boldStyle,
+            italicStyle,
+            strikeStyle,
+            inlineCodeStyle,
             onOpenPage,
           })}
         </React.Fragment>

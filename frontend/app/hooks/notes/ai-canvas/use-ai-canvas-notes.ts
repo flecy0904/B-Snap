@@ -22,6 +22,7 @@ import {
   type AiCanvasSelection,
   type CanvasOperation,
   type CanvasOperationRequest,
+  type TiptapJsonNode,
 } from '../../../types/ai-canvas';
 
 type CanvasSnapshot = {
@@ -82,6 +83,15 @@ const MAX_AI_CANVAS_NOTES_PER_NOTE = 3;
 const AUTOSAVE_DEBOUNCE_DELAY_MS = 2000;
 const TRANSIENT_ERROR_DELAY_MS = 3000;
 const MAX_UNDO_STACK_SIZE = 50;
+const CREATE_CANVAS_TOP_LEVEL_NODE_TYPES = new Set([
+  'paragraph',
+  'heading',
+  'bulletList',
+  'orderedList',
+  'codeBlock',
+  'horizontalRule',
+]);
+const CREATE_CANVAS_TEXTBLOCK_NODE_TYPES = new Set(['paragraph', 'heading', 'codeBlock']);
 
 function buildDefaultCanvasTitle(index: number) {
   return `${DEFAULT_CANVAS_TITLE} ${index}`;
@@ -111,6 +121,201 @@ function snapshotEquals(left: CanvasSnapshot, right: CanvasSnapshot) {
 function appendUndoSnapshot(stack: CanvasSnapshot[], snapshot: CanvasSnapshot) {
   if (stack.length > 0 && snapshotEquals(stack[stack.length - 1], snapshot)) return stack;
   return [...stack, snapshot].slice(-MAX_UNDO_STACK_SIZE);
+}
+
+function cloneCanvasNode<T>(value: T): T {
+  return JSON.parse(JSON.stringify(value)) as T;
+}
+
+function getCanvasNodeBlockId(node: TiptapJsonNode | null | undefined) {
+  return typeof node?.attrs?.blockId === 'string' && node.attrs.blockId ? node.attrs.blockId : null;
+}
+
+function collectCanvasNodeBlockIds(node: TiptapJsonNode, blockIds: Set<string>) {
+  const blockId = getCanvasNodeBlockId(node);
+  if (blockId) blockIds.add(blockId);
+  node.content?.forEach((child) => collectCanvasNodeBlockIds(child, blockIds));
+}
+
+function createCanvasOperationBlockId(existingBlockIds: Set<string>) {
+  let index = existingBlockIds.size + 1;
+  while (existingBlockIds.has(`ai_canvas_${index}`)) index += 1;
+  const blockId = `ai_canvas_${index}`;
+  existingBlockIds.add(blockId);
+  return blockId;
+}
+
+function prepareCreateCanvasNode(node: TiptapJsonNode, existingBlockIds: Set<string>): TiptapJsonNode {
+  const next = cloneCanvasNode(node);
+  if (next.type !== 'text') {
+    const blockId = getCanvasNodeBlockId(next);
+    next.attrs = {
+      ...(next.attrs ?? {}),
+      blockId: blockId && !existingBlockIds.has(blockId)
+        ? blockId
+        : createCanvasOperationBlockId(existingBlockIds),
+    };
+    if (typeof next.attrs.blockId === 'string') existingBlockIds.add(next.attrs.blockId);
+  }
+  if (next.content) {
+    next.content = next.content.map((child) => prepareCreateCanvasNode(child, existingBlockIds));
+  }
+  return next;
+}
+
+function canUseNodeForCreatedCanvas(node: TiptapJsonNode, parentType: string | null = null): boolean {
+  if (parentType === null && !CREATE_CANVAS_TOP_LEVEL_NODE_TYPES.has(node.type)) return false;
+  if (node.type === 'text') return parentType !== null;
+  if (CREATE_CANVAS_TEXTBLOCK_NODE_TYPES.has(node.type)) {
+    return (node.content ?? []).every((child) => child.type === 'text' && canUseNodeForCreatedCanvas(child, node.type));
+  }
+  if (node.type === 'bulletList' || node.type === 'orderedList') {
+    if (parentType !== null && parentType !== 'listItem') return false;
+    const children = node.content ?? [];
+    return children.length > 0 && children.every((child) => canUseNodeForCreatedCanvas(child, node.type));
+  }
+  if (node.type === 'listItem') {
+    if (parentType !== 'bulletList' && parentType !== 'orderedList') return false;
+    const children = node.content ?? [];
+    return children.length > 0 && children.every((child) => (
+      child.type === 'paragraph'
+      || child.type === 'bulletList'
+      || child.type === 'orderedList'
+    ) && canUseNodeForCreatedCanvas(child, node.type));
+  }
+  return node.type === 'horizontalRule' && parentType === null;
+}
+
+function findCreateCanvasTopLevelIndex(content: TiptapJsonNode[], blockId: string) {
+  const containsBlockId = (node: TiptapJsonNode): boolean => (
+    getCanvasNodeBlockId(node) === blockId || Boolean(node.content?.some(containsBlockId))
+  );
+  return content.findIndex(containsBlockId);
+}
+
+function operationNodesForCreate(operation: CanvasOperation, existingBlockIds: Set<string>) {
+  const rawNode = 'node' in operation ? operation.node : null;
+  if (!rawNode) return [];
+  const rawNodes = rawNode.type === 'doc' ? rawNode.content ?? [] : [rawNode];
+  if (!rawNodes.every((node) => canUseNodeForCreatedCanvas(node))) return null;
+  return rawNodes.map((node) => prepareCreateCanvasNode(node, existingBlockIds));
+}
+
+function normalizeCreateCanvasTargetBlockId(value: unknown) {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'string') return null;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized || normalized === 'null' || normalized === 'none' || normalized === 'undefined') return null;
+  return value;
+}
+
+function buildCreatedCanvasDocumentFromOperations(operations: CanvasOperation[]): AiCanvasDocumentJson | null {
+  const content: TiptapJsonNode[] = [];
+  const existingBlockIds = new Set<string>();
+
+  for (const operation of operations) {
+    if (operation.op === 'delete') continue;
+    const nodes = operationNodesForCreate(operation, existingBlockIds);
+    if (nodes === null) return null;
+    if (!nodes.length) continue;
+
+    const targetBlockId = normalizeCreateCanvasTargetBlockId(operation.targetBlockId);
+    if (operation.op === 'insert_after' && targetBlockId === null) {
+      content.push(...nodes);
+      nodes.forEach((node) => collectCanvasNodeBlockIds(node, existingBlockIds));
+      continue;
+    }
+
+    if (!targetBlockId) {
+      content.push(...nodes);
+      nodes.forEach((node) => collectCanvasNodeBlockIds(node, existingBlockIds));
+      continue;
+    }
+    const targetIndex = findCreateCanvasTopLevelIndex(content, targetBlockId);
+    if (targetIndex < 0) {
+      content.push(...nodes);
+      nodes.forEach((node) => collectCanvasNodeBlockIds(node, existingBlockIds));
+      continue;
+    }
+
+    if (operation.op === 'replace') {
+      content.splice(targetIndex, 1, ...nodes);
+    } else if (operation.op === 'insert_before') {
+      content.splice(targetIndex, 0, ...nodes);
+    } else if (operation.op === 'insert_after') {
+      content.splice(targetIndex + 1, 0, ...nodes);
+    }
+    nodes.forEach((node) => collectCanvasNodeBlockIds(node, existingBlockIds));
+  }
+
+  return content.length ? { type: 'doc', content } : null;
+}
+
+function canvasInlineMarkdown(node: TiptapJsonNode | null | undefined): string {
+  if (!node) return '';
+  if (node.type === 'text') {
+    let text = typeof node.text === 'string' ? node.text : '';
+    (node.marks ?? []).forEach((mark) => {
+      if (mark.type === 'code') text = `\`${text}\``;
+      if (mark.type === 'bold') text = `**${text}**`;
+      if (mark.type === 'italic') text = `*${text}*`;
+      if (mark.type === 'strike') text = `~~${text}~~`;
+    });
+    return text;
+  }
+  return (node.content ?? []).map(canvasInlineMarkdown).join('');
+}
+
+function canvasListItemMarkdown(node: TiptapJsonNode, depth: number, ordered: boolean, index: number): string {
+  const marker = ordered ? `${index + 1}. ` : '- ';
+  const indent = '  '.repeat(depth);
+  const childLines = (node.content ?? []).flatMap((child) => {
+    if (child.type === 'paragraph') return [canvasInlineMarkdown(child).trim()];
+    if (child.type === 'bulletList' || child.type === 'orderedList') {
+      return canvasBlockMarkdownLines(child, depth + 1);
+    }
+    return canvasBlockMarkdownLines(child, depth);
+  });
+  const firstTextIndex = childLines.findIndex((line) => line.trim().length > 0);
+  if (firstTextIndex < 0) return '';
+  const firstLine = `${indent}${marker}${childLines[firstTextIndex].trim()}`;
+  const rest = childLines
+    .slice(firstTextIndex + 1)
+    .filter((line) => line.trim().length > 0)
+    .map((line) => (line.startsWith('  ') ? line : `${indent}  ${line}`));
+  return [firstLine, ...rest].join('\n');
+}
+
+function canvasBlockMarkdownLines(node: TiptapJsonNode, depth = 0): string[] {
+  if (node.type === 'heading') {
+    const level = typeof node.attrs?.level === 'number' ? Math.min(Math.max(node.attrs.level, 1), 6) : 2;
+    const text = canvasInlineMarkdown(node).trim();
+    return text ? [`${'#'.repeat(level)} ${text}`] : [];
+  }
+  if (node.type === 'paragraph') {
+    const text = canvasInlineMarkdown(node).trim();
+    return text ? [text] : [];
+  }
+  if (node.type === 'codeBlock') {
+    return ['```', canvasInlineMarkdown(node), '```'];
+  }
+  if (node.type === 'horizontalRule') return ['---'];
+  if (node.type === 'bulletList' || node.type === 'orderedList') {
+    return (node.content ?? [])
+      .filter((child) => child.type === 'listItem')
+      .map((child, index) => canvasListItemMarkdown(child, depth, node.type === 'orderedList', index))
+      .filter(Boolean);
+  }
+  if (node.type === 'listItem') return [canvasListItemMarkdown(node, depth, false, 0)].filter(Boolean);
+  return (node.content ?? []).flatMap((child) => canvasBlockMarkdownLines(child, depth));
+}
+
+function markdownFromCanvasDocument(documentJson: AiCanvasDocumentJson) {
+  return (documentJson.content ?? [])
+    .flatMap((node) => canvasBlockMarkdownLines(node))
+    .filter((line) => line.trim().length > 0)
+    .join('\n\n')
+    .trim();
 }
 
 function normalizeAiCanvasMarkdown(markdown: string) {
@@ -320,8 +525,9 @@ export function useAiCanvasNotes({
       setDraftSnapshot(nextSnapshot);
       return;
     }
+    onRecordWorkspaceAction?.();
     setDraftSnapshot(nextSnapshot);
-  }, [currentSnapshot, setDraftSnapshot]);
+  }, [currentSnapshot, onRecordWorkspaceAction, setDraftSnapshot]);
 
   const changeSelectionDraft = useCallback((selection: AiCanvasSelection | null) => {
     const current = selectionDraftRef.current;
@@ -533,6 +739,7 @@ export function useAiCanvasNotes({
             setNotes((current) => current.map((note) => (note.id === updated.id ? updated : note)));
             if (activeNoteIdRef.current === updated.id) {
               activeNoteRevisionRef.current = updated.revision;
+              setActiveNote(updated);
             }
             if (
               autosaveRequestIdRef.current === requestId
@@ -540,7 +747,7 @@ export function useAiCanvasNotes({
               && markdownDraftRef.current === targetMarkdown
               && stringifyAiCanvasDocument(documentDraftRef.current) === targetDocumentString
             ) {
-              setActiveNote(updated);
+              setDraftSnapshot(snapshotFromNote(updated));
             }
           } catch (error) {
             if (autosaveRequestIdRef.current === requestId) {
@@ -590,7 +797,7 @@ export function useAiCanvasNotes({
     }
 
     const previousSnapshot = action === 'canvas_create' ? createEmptyCanvasSnapshot() : currentSnapshot();
-    if (hasMeaningfulSnapshot(previousSnapshot)) {
+    if (action === 'canvas_create' || hasMeaningfulSnapshot(previousSnapshot)) {
       setUndoStack((current) => appendUndoSnapshot(current, previousSnapshot));
       setRedoStack([]);
       onRecordWorkspaceAction?.();
@@ -599,6 +806,10 @@ export function useAiCanvasNotes({
     const preservedRevision = action === 'canvas_edit'
       ? Math.max(activeNoteRevisionRef.current ?? canvasNote.revision, canvasNote.revision)
       : canvasNote.revision;
+    const createdDocumentJson = action === 'canvas_create'
+      ? buildCreatedCanvasDocumentFromOperations(operations)
+      : null;
+    const createdMarkdown = createdDocumentJson ? markdownFromCanvasDocument(createdDocumentJson) : null;
     const nextCanvasNote: BackendAiCanvasNote = action === 'canvas_edit' && activeNote?.id === canvasNote.id
       ? {
         ...canvasNote,
@@ -606,6 +817,13 @@ export function useAiCanvasNotes({
         documentJson: activeNote.documentJson,
         revision: preservedRevision,
       }
+      : action === 'canvas_create' && createdDocumentJson
+        ? {
+          ...canvasNote,
+          markdown: createdMarkdown ?? DEFAULT_CANVAS_MARKDOWN,
+          documentJson: createdDocumentJson,
+          revision: preservedRevision,
+        }
       : {
         ...canvasNote,
         revision: preservedRevision,
@@ -617,7 +835,9 @@ export function useAiCanvasNotes({
     activeNoteRevisionRef.current = preservedRevision;
 
     if (action === 'canvas_create') {
-      setDraftSnapshot(snapshotFromNote(nextCanvasNote));
+      setDraftSnapshot(createdDocumentJson
+        ? { documentJson: createdDocumentJson, markdown: createdMarkdown ?? DEFAULT_CANVAS_MARKDOWN, selection: null }
+        : snapshotFromNote(nextCanvasNote));
     }
 
     setNotes((current) => {
@@ -626,15 +846,45 @@ export function useAiCanvasNotes({
       return current.map((note) => (note.id === canvasNote.id ? nextCanvasNote : note));
     });
     autosaveRequestIdRef.current += 1;
-    operationRequestIdRef.current += 1;
-    setPendingCanvasOperations({
-      id: operationRequestIdRef.current,
-      action,
-      canvasNoteId: canvasNote.id,
-      operations,
-    });
+    if (createdDocumentJson) {
+      setPendingCanvasOperations(null);
+      onFeedback('AI updated the Canvas.');
+      const targetDocumentString = stringifyAiCanvasDocument(createdDocumentJson);
+      const targetMarkdown = createdMarkdown ?? DEFAULT_CANVAS_MARKDOWN;
+      void enqueueCanvasMutation(async () => {
+        try {
+          const updated = await updateBackendAiCanvasNote({
+            canvasNoteId: canvasNote.id,
+            markdown: targetMarkdown,
+            documentJson: createdDocumentJson,
+            expectedRevision: preservedRevision,
+          });
+          setNotes((current) => current.map((note) => (note.id === updated.id ? updated : note)));
+          if (activeNoteIdRef.current === updated.id) {
+            activeNoteRevisionRef.current = updated.revision;
+            setActiveNote(updated);
+            if (
+              markdownDraftRef.current === targetMarkdown
+              && stringifyAiCanvasDocument(documentDraftRef.current) === targetDocumentString
+            ) {
+              setDraftSnapshot(snapshotFromNote(updated));
+            }
+          }
+        } catch {
+          onFeedback('Canvas autosave failed.');
+        }
+      });
+    } else {
+      operationRequestIdRef.current += 1;
+      setPendingCanvasOperations({
+        id: operationRequestIdRef.current,
+        action,
+        canvasNoteId: canvasNote.id,
+        operations,
+      });
+    }
     setError(null);
-  }, [activeNote, currentSnapshot, onFeedback, onRecordWorkspaceAction, setDraftSnapshot, setTransientError]);
+  }, [activeNote, currentSnapshot, enqueueCanvasMutation, onFeedback, onRecordWorkspaceAction, setDraftSnapshot]);
 
   const completeCanvasOperations = useCallback(async (requestId: number, result: AiCanvasOperationApplyResult) => {
     const pendingRequest = pendingCanvasOperations;

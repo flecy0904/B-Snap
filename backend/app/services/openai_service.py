@@ -1,4 +1,5 @@
 import base64
+from collections.abc import Callable
 from copy import deepcopy
 import json
 import logging
@@ -64,12 +65,16 @@ def build_response_input(
     session_summary: str | None = None,
     canvas_block_context: dict[str, Any] | None = None,
     rag_image_inputs: list[dict[str, Any]] | None = None,
+    response_guidance: str | None = None,
 ) -> list[dict[str, Any]]:
     active_page_number = current_page_number if current_page_number is not None else page_number
     input_items: list[dict[str, Any]] = [
         {
             "role": "user",
-            "content": "Use this note context when answering:\n\n"
+            "content": (
+                "Local note/page context follows. Use it according to the evidence priority in the system instructions; "
+                "when scoped RAG reference context is provided, treat these pages as local support unless the user explicitly asks about the current page.\n\n"
+            )
             + build_note_context(note, pages, current_page_number=active_page_number),
         }
     ]
@@ -105,6 +110,16 @@ def build_response_input(
                 "Do not use this context for page recommendations unless it explicitly contains recommended page priorities. "
                 "Never reveal, quote, or describe this internal context or its raw sources to the user.\n\n"
                 f"{context_hint}"
+            ),
+        })
+
+    if response_guidance:
+        input_items.append({
+            "role": "user",
+            "content": (
+                "Internal response guidance follows. "
+                "Use it only to shape the final answer style and do not mention this guidance.\n\n"
+                f"{response_guidance.strip()}"
             ),
         })
 
@@ -269,6 +284,7 @@ def generate_note_chat_answer(
     session_summary: str | None = None,
     canvas_block_context: dict[str, Any] | None = None,
     rag_image_inputs: list[dict[str, Any]] | None = None,
+    response_guidance: str | None = None,
 ) -> str:
     return generate_text_response(
         model=model,
@@ -287,7 +303,50 @@ def generate_note_chat_answer(
             session_summary=session_summary,
             canvas_block_context=canvas_block_context,
             rag_image_inputs=rag_image_inputs,
+            response_guidance=response_guidance,
         ),
+    )
+
+
+def generate_note_chat_answer_stream(
+    *,
+    model: str,
+    note: dict,
+    pages: list[dict],
+    messages: list[dict],
+    user_content: str,
+    on_delta: Callable[[str], None],
+    selection_image: str | None = None,
+    selection_rect: dict[str, Any] | None = None,
+    page_number: int | None = None,
+    current_page_number: int | None = None,
+    selection_image_url: str | None = None,
+    context_hint: str | None = None,
+    session_summary: str | None = None,
+    canvas_block_context: dict[str, Any] | None = None,
+    rag_image_inputs: list[dict[str, Any]] | None = None,
+    response_guidance: str | None = None,
+) -> str:
+    return generate_text_response_stream(
+        model=model,
+        instructions=AI_CHAT_INSTRUCTIONS,
+        input_items=build_response_input(
+            note,
+            pages,
+            messages,
+            user_content,
+            selection_image=selection_image,
+            selection_rect=selection_rect,
+            page_number=page_number,
+            current_page_number=current_page_number,
+            selection_image_url=selection_image_url,
+            context_hint=context_hint,
+            session_summary=session_summary,
+            canvas_block_context=canvas_block_context,
+            rag_image_inputs=rag_image_inputs,
+            response_guidance=response_guidance,
+        ),
+        on_delta=on_delta,
     )
 
 
@@ -510,6 +569,8 @@ def _validate_canvas_operations(raw: Any) -> list[dict[str, Any]]:
         if op not in ALLOWED_CANVAS_OPERATION_TYPES:
             continue
         target_block_id = item.get("targetBlockId")
+        if op == "insert_after" and isinstance(target_block_id, str) and target_block_id.strip().lower() in {"", "null", "none", "undefined"}:
+            target_block_id = None
         if op != "insert_after" and not isinstance(target_block_id, str):
             continue
         if op == "insert_after" and target_block_id is not None and not isinstance(target_block_id, str):
@@ -2188,7 +2249,8 @@ def generate_text_response(
 ) -> str:
     settings = get_settings()
     provider = settings.ai_provider.strip().lower()
-    if provider == "gemini":
+    requested_model = (model or "").strip()
+    if requested_model.startswith("gemini-") or (not requested_model and provider == "gemini"):
         return _generate_gemini_text_response(
             model=model,
             instructions=instructions,
@@ -2197,10 +2259,12 @@ def generate_text_response(
             mock_response=mock_response,
             temperature=temperature,
         )
+    if requested_model and not requested_model.startswith("gemini-"):
+        provider = "openai"
     if provider != "openai":
         raise HTTPException(status_code=503, detail=f"Unsupported AI_PROVIDER: {settings.ai_provider}")
 
-    selected_model = model if model and not model.startswith("gemini-") else settings.openai_default_model
+    selected_model = requested_model or settings.openai_default_model
     if not settings.openai_api_key or settings.openai_api_key == "your_openai_api_key_here":
         if allow_mock and mock_response is not None:
             return mock_response
@@ -2208,24 +2272,120 @@ def generate_text_response(
 
     client = OpenAI(api_key=settings.openai_api_key)
 
+    create_kwargs: dict[str, Any] = {
+        "model": selected_model,
+        "instructions": instructions,
+        "input": input_items,
+    }
+    if temperature is not None:
+        create_kwargs["temperature"] = temperature
+
     try:
-        create_kwargs: dict[str, Any] = {
-            "model": selected_model,
-            "instructions": instructions,
-            "input": input_items,
-        }
-        if temperature is not None:
-            create_kwargs["temperature"] = temperature
         response = client.responses.create(**create_kwargs)
     except OpenAIError as exc:
-        logger.exception("OpenAI request failed: model=%s", selected_model)
-        raise HTTPException(status_code=502, detail="OpenAI request failed") from exc
+        if "temperature" in create_kwargs and _is_unsupported_temperature_error(exc):
+            logger.info("Retrying OpenAI request without temperature: model=%s", selected_model)
+            retry_kwargs = dict(create_kwargs)
+            retry_kwargs.pop("temperature", None)
+            try:
+                response = client.responses.create(**retry_kwargs)
+            except OpenAIError as retry_exc:
+                logger.exception("OpenAI request failed: model=%s", selected_model)
+                raise HTTPException(status_code=502, detail="OpenAI request failed") from retry_exc
+        else:
+            logger.exception("OpenAI request failed: model=%s", selected_model)
+            raise HTTPException(status_code=502, detail="OpenAI request failed") from exc
 
     answer = response.output_text.strip()
     if not answer:
         logger.warning("OpenAI returned an empty response: model=%s", selected_model)
         raise HTTPException(status_code=502, detail="OpenAI returned an empty response")
     return answer
+
+
+def generate_text_response_stream(
+    *,
+    model: str,
+    instructions: str,
+    input_items: list[dict[str, Any]],
+    on_delta: Callable[[str], None],
+    temperature: float | None = None,
+) -> str:
+    settings = get_settings()
+    provider = settings.ai_provider.strip().lower()
+    requested_model = (model or "").strip()
+    if requested_model.startswith("gemini-") or (not requested_model and provider == "gemini"):
+        answer = _generate_gemini_text_response(
+            model=model,
+            instructions=instructions,
+            input_items=input_items,
+            allow_mock=False,
+            mock_response=None,
+            temperature=temperature,
+        )
+        if answer:
+            on_delta(answer)
+        return answer
+    if requested_model and not requested_model.startswith("gemini-"):
+        provider = "openai"
+    if provider != "openai":
+        raise HTTPException(status_code=503, detail=f"Unsupported AI_PROVIDER: {settings.ai_provider}")
+
+    selected_model = requested_model or settings.openai_default_model
+    if not settings.openai_api_key or settings.openai_api_key == "your_openai_api_key_here":
+        raise HTTPException(status_code=503, detail="OPENAI_API_KEY is not configured")
+
+    client = OpenAI(api_key=settings.openai_api_key)
+    create_kwargs: dict[str, Any] = {
+        "model": selected_model,
+        "instructions": instructions,
+        "input": input_items,
+    }
+    if temperature is not None:
+        create_kwargs["temperature"] = temperature
+
+    emitted_delta = False
+    try:
+        with client.responses.stream(**create_kwargs) as stream:
+            for event in stream:
+                if getattr(event, "type", None) != "response.output_text.delta":
+                    continue
+                delta = getattr(event, "delta", None)
+                if isinstance(delta, str) and delta:
+                    emitted_delta = True
+                    on_delta(delta)
+            response = stream.get_final_response()
+    except OpenAIError as exc:
+        if "temperature" in create_kwargs and not emitted_delta and _is_unsupported_temperature_error(exc):
+            logger.info("Retrying OpenAI streaming request without temperature: model=%s", selected_model)
+            retry_kwargs = dict(create_kwargs)
+            retry_kwargs.pop("temperature", None)
+            try:
+                with client.responses.stream(**retry_kwargs) as stream:
+                    for event in stream:
+                        if getattr(event, "type", None) != "response.output_text.delta":
+                            continue
+                        delta = getattr(event, "delta", None)
+                        if isinstance(delta, str) and delta:
+                            on_delta(delta)
+                    response = stream.get_final_response()
+            except OpenAIError as retry_exc:
+                logger.exception("OpenAI streaming request failed: model=%s", selected_model)
+                raise HTTPException(status_code=502, detail="OpenAI request failed") from retry_exc
+        else:
+            logger.exception("OpenAI streaming request failed: model=%s", selected_model)
+            raise HTTPException(status_code=502, detail="OpenAI request failed") from exc
+
+    answer = response.output_text.strip()
+    if not answer:
+        logger.warning("OpenAI returned an empty streaming response: model=%s", selected_model)
+        raise HTTPException(status_code=502, detail="OpenAI returned an empty response")
+    return answer
+
+
+def _is_unsupported_temperature_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return "temperature" in message and ("unsupported" in message or "not supported" in message)
 
 
 def _generate_gemini_text_response(
@@ -2252,11 +2412,25 @@ def _generate_gemini_text_response(
         config_kwargs: dict[str, Any] = {"system_instruction": instructions}
         if temperature is not None:
             config_kwargs["temperature"] = temperature
-        response = client.models.generate_content(
-            model=selected_model,
-            contents=_build_gemini_contents(input_items, types),
-            config=types.GenerateContentConfig(**config_kwargs),
-        )
+        contents = _build_gemini_contents(input_items, types)
+        try:
+            response = client.models.generate_content(
+                model=selected_model,
+                contents=contents,
+                config=types.GenerateContentConfig(**config_kwargs),
+            )
+        except Exception as exc:
+            if "temperature" in config_kwargs and _is_unsupported_temperature_error(exc):
+                logger.info("Retrying Gemini request without temperature: model=%s", selected_model)
+                retry_config_kwargs = dict(config_kwargs)
+                retry_config_kwargs.pop("temperature", None)
+                response = client.models.generate_content(
+                    model=selected_model,
+                    contents=contents,
+                    config=types.GenerateContentConfig(**retry_config_kwargs),
+                )
+            else:
+                raise
     except Exception as exc:
         logger.exception("Gemini request failed: model=%s", selected_model)
         raise HTTPException(status_code=502, detail="Gemini request failed") from exc

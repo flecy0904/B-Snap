@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -21,8 +22,9 @@ def format_context_mode_instruction(mode: str, *, has_rag_sources: bool) -> str:
         )
     return (
         "Router mode: rag.\n"
-        "Answer from the chat's pinned reference scope. Prioritize selected region, Canvas/block, current page, and adjacent pages first, "
-        "then use scoped RAG support context as secondary evidence."
+        "Answer mainly from the chat's pinned reference scope and scoped RAG support context. "
+        "Use selected region or Canvas/block first when the user directly asks about them. "
+        "Use current page and adjacent pages as local support, not as the main basis, unless the user explicitly asks about the current page."
         if has_rag_sources
         else
         "Router mode: rag.\n"
@@ -51,7 +53,10 @@ def format_rag_support_context(contexts: list[RetrievedContext]) -> str | None:
     if not contexts:
         return None
 
-    lines = ["RAG support context. Use only as supporting material after current selection/page/Canvas/current page context:"]
+    lines = [
+        "Scoped RAG reference context from the user's selected materials. "
+        "Use this as the main study evidence for RAG questions unless the user specifically asks about a selected image, Canvas block, or current page:"
+    ]
     for index, context in enumerate(contexts, start=1):
         page_label = f", page {context.page_number}" if context.page_number else ""
         lines.append(
@@ -61,24 +66,67 @@ def format_rag_support_context(contexts: list[RetrievedContext]) -> str | None:
     return "\n\n".join(lines)
 
 
-def format_answer_sources(contexts: list[RetrievedContext], *, max_sources: int = 4) -> str | None:
-    if not contexts:
-        return None
+def _answer_source_title(title: str, page_number: int | None) -> str:
+    label = " ".join(title.split()).strip()
+    if not page_number:
+        return label
 
-    source_lines = []
-    seen: set[str] = set()
-    for context in contexts:
-        label = context.title.strip()
-        page_label = f"{context.page_number}페이지" if context.page_number else ""
-        if page_label and page_label not in label:
-            label = f"{label} {page_label}".strip()
-        key = f"{label}:{context.page_number}"
-        if key in seen:
-            continue
-        seen.add(key)
-        source_lines.append(f"- {label}")
-        if len(source_lines) >= max_sources:
+    page_pattern = re.escape(str(page_number))
+    suffix_patterns = (
+        rf"\s*[-–—]?\s*{page_pattern}\s*페이지\s*(?:이미지\s*요약|이미지|본문)?\s*$",
+        rf"\s*[-–—]?\s*(?:p\.?|page)\s*{page_pattern}\s*(?:image\s*summary|image|text|body)?\s*$",
+    )
+    for pattern in suffix_patterns:
+        next_label = re.sub(pattern, "", label, flags=re.IGNORECASE).strip()
+        if next_label != label:
+            label = next_label
             break
+    label = label.rstrip(" -–—·").strip()
+    return f"{label} · {page_number}페이지" if label else f"{page_number}페이지"
+
+
+def _answer_source_kind(source_type: str) -> str:
+    return "image" if source_type == "image_ai_summary" else "text"
+
+
+def _format_answer_source_kinds(kinds: set[str]) -> str:
+    if kinds == {"text"}:
+        return ""
+    labels = []
+    if "text" in kinds:
+        labels.append("본문")
+    if "image" in kinds or "image_recheck" in kinds:
+        labels.append("이미지")
+    return f" ({', '.join(labels)})" if labels else ""
+
+
+def format_answer_sources(
+    contexts: list[RetrievedContext],
+    *,
+    max_sources: int = 4,
+    rechecked_image_sources: list[Any] | None = None,
+) -> str | None:
+    source_groups: dict[tuple[str, int | None], dict[str, Any]] = {}
+
+    for context in contexts:
+        label = _answer_source_title(context.title, context.page_number)
+        key = (label, context.page_number)
+        if key not in source_groups:
+            source_groups[key] = {"label": label, "kinds": set()}
+        source_groups[key]["kinds"].add(_answer_source_kind(context.source_type))
+
+    for item in rechecked_image_sources or []:
+        page_number = getattr(item, "page_number", None)
+        label = _answer_source_title(str(getattr(item, "title", "")), page_number)
+        key = (label, page_number)
+        if key not in source_groups:
+            source_groups[key] = {"label": label, "kinds": set()}
+        source_groups[key]["kinds"].add("image_recheck")
+
+    source_lines = [
+        f"- {group['label']}{_format_answer_source_kinds(group['kinds'])}"
+        for group in source_groups.values()
+    ][:max_sources]
 
     if not source_lines:
         return None
@@ -95,6 +143,7 @@ def build_ai_context(
     rag_debug: dict[str, Any] | None = None,
     priority_context_hints: list[str | None] | None = None,
     extra_answer_sources_text: str | None = None,
+    rechecked_image_sources: list[Any] | None = None,
 ) -> BuiltAiContext:
     context_pages = [] if mode == "general" else select_rag_context_pages(pages, page_number)
     rag_support_hint = format_rag_support_context(rag_sources) if mode == "rag" else None
@@ -114,7 +163,11 @@ def build_ai_context(
     if rag_debug:
         debug.update(rag_debug)
     source_display_max = max(1, int(get_settings().rag_source_display_max or 4))
-    answer_sources_text = format_answer_sources(rag_sources, max_sources=source_display_max) if mode == "rag" else None
+    answer_sources_text = format_answer_sources(
+        rag_sources,
+        max_sources=source_display_max,
+        rechecked_image_sources=rechecked_image_sources,
+    ) if mode == "rag" else None
     if extra_answer_sources_text and mode == "rag":
         answer_sources_text = "\n".join(
             part

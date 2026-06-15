@@ -56,13 +56,28 @@ function buildPdfPagesForLabel(pageCount: number) {
   }));
 }
 
-function buildPageCaptureReferenceQuestion(reference: PageCaptureReference) {
+function buildCaptureConfidenceInstruction(confidence: number | undefined) {
+  if (typeof confidence !== 'number' || Number.isNaN(confidence)) return '';
+  const normalizedConfidence = Math.max(0, Math.min(1, confidence));
+  if (normalizedConfidence < 0.45) {
+    return '사진 설명 신뢰도: 낮음\n주의: 위 설명은 불확실할 수 있으므로, 첨부된 원본 이미지를 우선 확인해서 답변하세요.';
+  }
+  if (normalizedConfidence < 0.75) {
+    return '사진 설명 신뢰도: 보통\n주의: 일부 내용이 불확실할 수 있으므로, 필요한 경우 첨부된 원본 이미지를 확인하세요.';
+  }
+  return '';
+}
+
+function buildPageCaptureReferenceQuestion(reference: PageCaptureReference, options?: { includeConfidenceInstruction?: boolean }) {
   return [
     `${reference.pageLabel}에 연결한 자료 "${reference.title}"를 수업 맥락에 맞춰 설명해줘.`,
     `자료 설명: ${cleanAiDisplayText(reference.aiSummary || reference.summary)}`,
     reference.keywords.length ? `키워드: ${reference.keywords.join(', ')}` : '',
     '핵심 개념, 시험 포인트, 원본 PDF 페이지와 연결해서 볼 부분을 정리해줘.',
-  ].filter(Boolean).join('\n');
+  ]
+    .concat(options?.includeConfidenceInstruction ? buildCaptureConfidenceInstruction(reference.analysisConfidence) : '')
+    .filter(Boolean)
+    .join('\n');
 }
 
 export function usePageCaptureReferenceActions(params: PageCaptureReferenceActionsParams) {
@@ -304,8 +319,10 @@ export function usePageCaptureReferenceActions(params: PageCaptureReferenceActio
       return;
     }
 
-    const question = buildPageCaptureReferenceQuestion(reference);
     const referenceImageUri = resolveBackendAssetUrl(reference.processedUrl ?? reference.fileUrl ?? reference.thumbnailUrl ?? '') || null;
+    const question = buildPageCaptureReferenceQuestion(reference, {
+      includeConfidenceInstruction: Boolean(referenceImageUri),
+    });
     params.setAiPanelOpen(true);
     params.setViewingAiChatSessionId(null);
     void params.requestAiAnswerForQuestion(question, {

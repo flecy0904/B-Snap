@@ -109,6 +109,7 @@ export interface CaptureAsset {
   analysisStatus?: 'pending' | 'ready' | 'failed';
   analysisSummary?: string;
   analysisKeywords?: string[];
+  analysisConfidence?: number;
 }
 
 export interface CaptureProcessingState {
@@ -164,6 +165,7 @@ export interface PageCaptureReference {
   summary: string;
   aiSummary: string;
   keywords: string[];
+  analysisConfidence?: number;
   createdAt: string;
   sourceDeviceLabel: string;
   previewImageKey?: string;
