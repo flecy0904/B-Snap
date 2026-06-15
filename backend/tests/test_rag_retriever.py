@@ -1114,7 +1114,7 @@ class RAGRetrieverTest(unittest.TestCase):
             )
         ])
 
-        self.assertEqual(source_text, "참고 자료\n- 자료구조 - 3페이지")
+        self.assertEqual(source_text, "참고 자료\n- 자료구조 · 3페이지")
 
     def test_answer_sources_group_same_page_text_image_and_recheck(self):
         source_text = format_answer_sources(
@@ -1156,8 +1156,25 @@ class RAGRetrieverTest(unittest.TestCase):
         self.assertEqual(
             source_text,
             "참고 자료\n"
-            "- [Lecture Note] Chapter 2. Application Layer (wide).pdf - 31페이지 (본문, 이미지 확인)\n"
-            "- [Lecture Note] Chapter 2. Application Layer (wide).pdf - 32페이지 (이미지)",
+            "- [Lecture Note] Chapter 2. Application Layer (wide).pdf · 31페이지 (본문, 이미지)\n"
+            "- [Lecture Note] Chapter 2. Application Layer (wide).pdf · 32페이지 (이미지)",
+        )
+
+    def test_answer_sources_hide_internal_english_image_summary_title(self):
+        source_text = format_answer_sources([
+            RetrievedContext(
+                source_type="image_ai_summary",
+                source_id="image-2",
+                title="[Lecture Note] Chapter 3. Transport Layer (3.1-3.7) (wide).pdf - page 2 image summary",
+                content="Transport figure",
+                page_number=2,
+            )
+        ])
+
+        self.assertEqual(
+            source_text,
+            "참고 자료\n"
+            "- [Lecture Note] Chapter 3. Transport Layer (3.1-3.7) (wide).pdf · 2페이지 (이미지)",
         )
 
     def test_chunker_uses_default_metadata_and_chunk_index(self):

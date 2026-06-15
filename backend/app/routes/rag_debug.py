@@ -881,6 +881,7 @@ def evaluate_chat_session_rag_debug(
             document_title=str(note.get("title") or ""),
             pinned_reference_titles=rag_scope_titles(rag_scope),
             has_selection=has_selection_context,
+            current_page_number=effective_page_number,
         )
     if rag_scope.get("sources") and payload.use_rag and context_route.mode == "general":
         context_route = AiContextRoute(

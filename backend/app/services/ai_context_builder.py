@@ -1,3 +1,4 @@
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -70,21 +71,18 @@ def _answer_source_title(title: str, page_number: int | None) -> str:
     if not page_number:
         return label
 
-    suffixes = (
-        f" - {page_number}페이지 이미지 요약",
-        f" - {page_number}페이지 이미지",
-        f" - {page_number}페이지 본문",
-        f" - {page_number}페이지",
-        f" {page_number}페이지 이미지 요약",
-        f" {page_number}페이지 이미지",
-        f" {page_number}페이지 본문",
-        f" {page_number}페이지",
+    page_pattern = re.escape(str(page_number))
+    suffix_patterns = (
+        rf"\s*[-–—]?\s*{page_pattern}\s*페이지\s*(?:이미지\s*요약|이미지|본문)?\s*$",
+        rf"\s*[-–—]?\s*(?:p\.?|page)\s*{page_pattern}\s*(?:image\s*summary|image|text|body)?\s*$",
     )
-    for suffix in suffixes:
-        if label.endswith(suffix):
-            label = label[: -len(suffix)].strip()
+    for pattern in suffix_patterns:
+        next_label = re.sub(pattern, "", label, flags=re.IGNORECASE).strip()
+        if next_label != label:
+            label = next_label
             break
-    return f"{label} - {page_number}페이지" if label else f"{page_number}페이지"
+    label = label.rstrip(" -–—·").strip()
+    return f"{label} · {page_number}페이지" if label else f"{page_number}페이지"
 
 
 def _answer_source_kind(source_type: str) -> str:
@@ -97,9 +95,7 @@ def _format_answer_source_kinds(kinds: set[str]) -> str:
     labels = []
     if "text" in kinds:
         labels.append("본문")
-    if "image_recheck" in kinds:
-        labels.append("이미지 확인")
-    elif "image" in kinds:
+    if "image" in kinds or "image_recheck" in kinds:
         labels.append("이미지")
     return f" ({', '.join(labels)})" if labels else ""
 
